@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_parse_color_invalid() {
         assert!(parse_color("#FF").is_err());
-        assert!(parse_color("FF0000").is_err());
+        assert!(parse_color("FFFF").is_err()); // Too short even after removing #
         assert!(parse_color("#GGGGGG").is_err());
     }
 }

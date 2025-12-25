@@ -1045,8 +1045,35 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     let content = scrollable(
         column![
             // Header
-            text("Advanced Security Settings")
+            text("Settings")
                 .size(24)
+                .color(TEXT_BRIGHT),
+
+            // Theme Selector
+            row![
+                column![
+                    text("Theme").size(16).color(TEXT_BRIGHT),
+                    text("Choose your preferred color scheme")
+                        .size(13)
+                        .color(TEXT_DIM),
+                ]
+                .width(Length::Fill),
+                pick_list(
+                    crate::theme::ThemeChoice::all_builtin(),
+                    Some(state.current_theme),
+                    Message::ThemeChanged,
+                )
+                .width(200)
+                .text_size(14),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+
+            horizontal_rule(1),
+
+            // Advanced Security Header
+            text("Advanced Security Settings")
+                .size(20)
                 .color(TEXT_BRIGHT),
             text("⚠️  These settings may break common applications. Defaults are suitable for most users.")
                 .size(14)

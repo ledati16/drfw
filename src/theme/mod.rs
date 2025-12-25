@@ -5,7 +5,7 @@ use iced::Color;
 use serde::{Deserialize, Serialize};
 
 /// Complete theme definition with semantic color naming
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppTheme {
     pub name: String,
 
@@ -158,18 +158,18 @@ impl ThemeChoice {
         ]
     }
 
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> String {
         match self {
-            Self::Nord => "Nord",
-            Self::Gruvbox => "Gruvbox",
-            Self::Dracula => "Dracula",
-            Self::Monokai => "Monokai",
-            Self::Everforest => "Everforest",
-            Self::TokyoNight => "Tokyo Night",
-            Self::CatppuccinMocha => "Catppuccin Mocha",
-            Self::OneDark => "One Dark",
-            Self::SolarizedDark => "Solarized Dark",
-            Self::Custom(idx) => return &format!("Custom {}", idx),
+            Self::Nord => "Nord".to_string(),
+            Self::Gruvbox => "Gruvbox".to_string(),
+            Self::Dracula => "Dracula".to_string(),
+            Self::Monokai => "Monokai".to_string(),
+            Self::Everforest => "Everforest".to_string(),
+            Self::TokyoNight => "Tokyo Night".to_string(),
+            Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
+            Self::OneDark => "One Dark".to_string(),
+            Self::SolarizedDark => "Solarized Dark".to_string(),
+            Self::Custom(idx) => format!("Custom {}", idx),
         }
     }
 
