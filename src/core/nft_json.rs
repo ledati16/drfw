@@ -152,9 +152,8 @@ pub async fn restore_snapshot(snapshot: &Value) -> Result<()> {
 
 /// Saves a snapshot to disk with a timestamp
 pub fn save_snapshot_to_disk(snapshot: &Value) -> Result<std::path::PathBuf> {
-    let state_dir = crate::utils::get_state_dir().ok_or_else(|| {
-        Error::Internal("Failed to get state directory".to_string())
-    })?;
+    let state_dir = crate::utils::get_state_dir()
+        .ok_or_else(|| Error::Internal("Failed to get state directory".to_string()))?;
 
     crate::utils::ensure_dirs()?;
 
@@ -166,8 +165,8 @@ pub fn save_snapshot_to_disk(snapshot: &Value) -> Result<std::path::PathBuf> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
         use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
 
         // Create file with restrictive permissions
         let file = std::fs::OpenOptions::new()
@@ -197,9 +196,8 @@ pub fn save_snapshot_to_disk(snapshot: &Value) -> Result<std::path::PathBuf> {
 
 /// Lists all available snapshots sorted by modification time (newest first)
 pub fn list_snapshots() -> Result<Vec<std::path::PathBuf>> {
-    let state_dir = crate::utils::get_state_dir().ok_or_else(|| {
-        Error::Internal("Failed to get state directory".to_string())
-    })?;
+    let state_dir = crate::utils::get_state_dir()
+        .ok_or_else(|| Error::Internal("Failed to get state directory".to_string()))?;
 
     let mut snapshots: Vec<std::path::PathBuf> = std::fs::read_dir(&state_dir)?
         .filter_map(|entry| entry.ok())
@@ -248,41 +246,47 @@ pub async fn restore_with_fallback() -> Result<()> {
     let snapshots = list_snapshots()?;
 
     if snapshots.is_empty() {
-        return Err(Error::Snapshot(crate::core::error::SnapshotError::NotFound(
-            "No snapshots available for restoration".to_string(),
-        )));
+        return Err(Error::Snapshot(
+            crate::core::error::SnapshotError::NotFound(
+                "No snapshots available for restoration".to_string(),
+            ),
+        ));
     }
 
-    info!("Found {} snapshot(s), attempting cascade restore", snapshots.len());
+    info!(
+        "Found {} snapshot(s), attempting cascade restore",
+        snapshots.len()
+    );
 
     let mut last_error = None;
 
     for (i, snapshot_path) in snapshots.iter().enumerate() {
-        info!("Attempting restore from snapshot {}/{}: {:?}", i + 1, snapshots.len(), snapshot_path);
+        info!(
+            "Attempting restore from snapshot {}/{}: {:?}",
+            i + 1,
+            snapshots.len(),
+            snapshot_path
+        );
 
         match std::fs::read_to_string(snapshot_path) {
-            Ok(json_str) => {
-                match serde_json::from_str::<Value>(&json_str) {
-                    Ok(snapshot) => {
-                        match restore_snapshot(&snapshot).await {
-                            Ok(_) => {
-                                info!("Successfully restored from snapshot: {:?}", snapshot_path);
-                                return Ok(());
-                            }
-                            Err(e) => {
-                                warn!("Failed to restore from {:?}: {}", snapshot_path, e);
-                                last_error = Some(e);
-                                continue;
-                            }
-                        }
+            Ok(json_str) => match serde_json::from_str::<Value>(&json_str) {
+                Ok(snapshot) => match restore_snapshot(&snapshot).await {
+                    Ok(_) => {
+                        info!("Successfully restored from snapshot: {:?}", snapshot_path);
+                        return Ok(());
                     }
                     Err(e) => {
-                        warn!("Failed to parse snapshot {:?}: {}", snapshot_path, e);
-                        last_error = Some(Error::Serialization(e));
+                        warn!("Failed to restore from {:?}: {}", snapshot_path, e);
+                        last_error = Some(e);
                         continue;
                     }
+                },
+                Err(e) => {
+                    warn!("Failed to parse snapshot {:?}: {}", snapshot_path, e);
+                    last_error = Some(Error::Serialization(e));
+                    continue;
                 }
-            }
+            },
             Err(e) => {
                 warn!("Failed to read snapshot {:?}: {}", snapshot_path, e);
                 last_error = Some(Error::Io(e));

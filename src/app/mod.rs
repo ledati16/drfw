@@ -569,9 +569,7 @@ impl State {
                     }
                     #[cfg(target_os = "macos")]
                     {
-                        let _ = std::process::Command::new("open")
-                            .arg(&path_str)
-                            .spawn();
+                        let _ = std::process::Command::new("open").arg(&path_str).spawn();
                     }
                     #[cfg(target_os = "windows")]
                     {
@@ -645,13 +643,13 @@ impl State {
                     old_rule,
                     new_rule: rule,
                 };
-                self.command_history.execute(Box::new(command), &mut self.ruleset);
+                self.command_history
+                    .execute(Box::new(command), &mut self.ruleset);
             } else {
                 // Adding new rule
-                let command = crate::command::AddRuleCommand {
-                    rule,
-                };
-                self.command_history.execute(Box::new(command), &mut self.ruleset);
+                let command = crate::command::AddRuleCommand { rule };
+                self.command_history
+                    .execute(Box::new(command), &mut self.ruleset);
             }
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
@@ -679,7 +677,8 @@ impl State {
                 rule_id: id,
                 was_enabled: rule.enabled,
             };
-            self.command_history.execute(Box::new(command), &mut self.ruleset);
+            self.command_history
+                .execute(Box::new(command), &mut self.ruleset);
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
         }
@@ -694,7 +693,8 @@ impl State {
                 old_index: pos,
                 new_index: pos - 1,
             };
-            self.command_history.execute(Box::new(command), &mut self.ruleset);
+            self.command_history
+                .execute(Box::new(command), &mut self.ruleset);
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
         }
@@ -709,7 +709,8 @@ impl State {
                 old_index: pos,
                 new_index: pos + 1,
             };
-            self.command_history.execute(Box::new(command), &mut self.ruleset);
+            self.command_history
+                .execute(Box::new(command), &mut self.ruleset);
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
         }
@@ -724,7 +725,8 @@ impl State {
                 old_index: pos,
                 new_index: 0,
             };
-            self.command_history.execute(Box::new(command), &mut self.ruleset);
+            self.command_history
+                .execute(Box::new(command), &mut self.ruleset);
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
         }
@@ -740,7 +742,8 @@ impl State {
                 old_index: pos,
                 new_index,
             };
-            self.command_history.execute(Box::new(command), &mut self.ruleset);
+            self.command_history
+                .execute(Box::new(command), &mut self.ruleset);
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
         }
@@ -749,11 +752,9 @@ impl State {
     fn handle_delete_rule(&mut self, id: uuid::Uuid) {
         if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == id) {
             let rule = self.ruleset.rules[pos].clone();
-            let command = crate::command::DeleteRuleCommand {
-                rule,
-                index: pos,
-            };
-            self.command_history.execute(Box::new(command), &mut self.ruleset);
+            let command = crate::command::DeleteRuleCommand { rule, index: pos };
+            self.command_history
+                .execute(Box::new(command), &mut self.ruleset);
             let _ = crate::config::save_ruleset(&self.ruleset);
             self.update_cached_text();
         }
@@ -1034,8 +1035,8 @@ impl State {
     }
 
     fn handle_export_json(&self) -> Task<Message> {
-        let json = serde_json::to_string_pretty(&self.ruleset.to_nftables_json())
-            .unwrap_or_default();
+        let json =
+            serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("drfw_rules_{}.json", timestamp);
 
@@ -1043,7 +1044,9 @@ impl State {
             async move {
                 // Try to save to Downloads folder first, fall back to data dir
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                let downloads_path = std::path::PathBuf::from(&home).join("Downloads").join(&filename);
+                let downloads_path = std::path::PathBuf::from(&home)
+                    .join("Downloads")
+                    .join(&filename);
 
                 let path = if downloads_path.parent().map(|p| p.exists()).unwrap_or(false) {
                     downloads_path
@@ -1072,7 +1075,9 @@ impl State {
         Task::perform(
             async move {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                let downloads_path = std::path::PathBuf::from(&home).join("Downloads").join(&filename);
+                let downloads_path = std::path::PathBuf::from(&home)
+                    .join("Downloads")
+                    .join(&filename);
 
                 let path = if downloads_path.parent().map(|p| p.exists()).unwrap_or(false) {
                     downloads_path

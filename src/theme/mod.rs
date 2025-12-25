@@ -10,31 +10,31 @@ pub struct AppTheme {
     pub name: String,
 
     // === Background Layers (progressive depth) ===
-    pub bg_base: Color,        // App background (deepest)
-    pub bg_sidebar: Color,     // Sidebar background
-    pub bg_surface: Color,     // Cards, containers
-    pub bg_elevated: Color,    // Inputs, buttons
-    pub bg_hover: Color,       // Hover states
-    pub bg_active: Color,      // Active/selected states
+    pub bg_base: Color,     // App background (deepest)
+    pub bg_sidebar: Color,  // Sidebar background
+    pub bg_surface: Color,  // Cards, containers
+    pub bg_elevated: Color, // Inputs, buttons
+    pub bg_hover: Color,    // Hover states
+    pub bg_active: Color,   // Active/selected states
 
     // === Foreground/Text ===
-    pub fg_primary: Color,     // Main text
-    pub fg_secondary: Color,   // Less important text
-    pub fg_muted: Color,       // Disabled/placeholder text
-    pub fg_on_accent: Color,   // Text on accent colors
+    pub fg_primary: Color,   // Main text
+    pub fg_secondary: Color, // Less important text
+    pub fg_muted: Color,     // Disabled/placeholder text
+    pub fg_on_accent: Color, // Text on accent colors
 
     // === Semantic Colors ===
-    pub accent: Color,         // Brand/primary actions
-    pub accent_hover: Color,   // Hovered accent
-    pub success: Color,        // Positive actions/states
-    pub warning: Color,        // Warnings
-    pub danger: Color,         // Destructive actions
-    pub info: Color,           // Informational
+    pub accent: Color,       // Brand/primary actions
+    pub accent_hover: Color, // Hovered accent
+    pub success: Color,      // Positive actions/states
+    pub warning: Color,      // Warnings
+    pub danger: Color,       // Destructive actions
+    pub info: Color,         // Informational
 
     // === Borders & Dividers ===
-    pub border: Color,         // Default borders
-    pub border_strong: Color,  // Emphasized borders
-    pub divider: Color,        // Separators
+    pub border: Color,        // Default borders
+    pub border_strong: Color, // Emphasized borders
+    pub divider: Color,       // Separators
 
     // === Syntax Highlighting (for nftables preview) ===
     pub syntax_keyword: Color,  // Keywords (table, chain, etc.)
@@ -45,8 +45,8 @@ pub struct AppTheme {
     pub syntax_operator: Color, // Operators, punctuation
 
     // === Shadows ===
-    pub shadow_color: Color,   // Shadow color (transparent black usually)
-    pub shadow_strong: Color,  // Stronger shadow for modals
+    pub shadow_color: Color,  // Shadow color (transparent black usually)
+    pub shadow_strong: Color, // Stronger shadow for modals
 }
 
 impl AppTheme {

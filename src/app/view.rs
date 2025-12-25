@@ -13,10 +13,11 @@ use iced::widget::{
     button, checkbox, column, container, horizontal_rule, pick_list, row, scrollable, stack, text,
     text_input, toggler, vertical_rule,
 };
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length, Theme};
 
 #[allow(clippy::too_many_lines)]
 pub fn view(state: &State) -> Element<'_, Message> {
+    let theme = &state.theme;
     let sidebar = view_sidebar(state);
 
     // Compute diff if needed (before match to extend lifetime)
@@ -48,7 +49,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
     let overlay = if let Some(warning) = &state.pending_warning {
         Some(
-            container(view_warning_modal(warning))
+            container(view_warning_modal(warning, theme))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -64,6 +65,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 form,
                 state.form_errors.as_ref(),
                 &state.interfaces,
+                theme,
             ))
             .style(|_| container::Style {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
@@ -77,7 +79,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
         match &state.status {
             AppStatus::AwaitingApply => Some(
-                container(view_awaiting_apply())
+                container(view_awaiting_apply(theme))
                     .style(|_| container::Style {
                         background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                         ..Default::default()
@@ -88,7 +90,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     .center_y(Length::Fill),
             ),
             AppStatus::PendingConfirmation { .. } => Some(
-                container(view_pending_confirmation(state.countdown_remaining))
+                container(view_pending_confirmation(state.countdown_remaining, theme))
                     .style(|_| container::Style {
                         background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.95).into()),
                         ..Default::default()
@@ -105,7 +107,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let base = container(content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(main_container);
+        .style(move |_| main_container(theme));
 
     let with_overlay = if let Some(overlay) = overlay {
         stack![base, overlay].into()
@@ -117,7 +119,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_diagnostics = if state.show_diagnostics {
         stack![
             with_overlay,
-            container(view_diagnostics_modal())
+            container(view_diagnostics_modal(theme))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -136,7 +138,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_export = if state.show_export_modal {
         stack![
             with_diagnostics,
-            container(view_export_modal())
+            container(view_export_modal(theme))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -155,7 +157,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state.show_shortcuts_help {
         stack![
             with_export,
-            container(view_shortcuts_help())
+            container(view_shortcuts_help(theme))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -173,6 +175,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 #[allow(clippy::too_many_lines)]
 fn view_sidebar(state: &State) -> Element<'_, Message> {
+    let theme = &state.theme;
     let branding = container(column![
         row![
             container(text("🛡️").size(28).color(GRUV_PURPLE)).padding(4),
@@ -196,13 +199,13 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .size(10)
                 .color(TEXT_DIM)
                 .font(FONT_REGULAR),
-            view_status_pill(&state.status),
-            view_persistence_pill(state.persistence_status),
+            view_status_pill(&state.status, theme),
+            view_persistence_pill(state.persistence_status, theme),
         ]
         .spacing(8),
     )
     .padding(16)
-    .style(section_header_container);
+    .style(move |_| section_header_container(theme));
 
     let search_bar = column![
         text_input("Search rules...", &state.rule_search)
@@ -219,7 +222,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     )
     .width(Length::Fill)
     .padding(12)
-    .style(primary_button)
+    .style(move |_, status| primary_button(theme, status))
     .on_press(Message::AddRuleClicked);
 
     let filtered_rules: Vec<_> = state
@@ -290,7 +293,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         button(text("Yes").size(11))
                             .on_press(Message::DeleteRule(rule.id))
                             .padding(6)
-                            .style(danger_button),
+                            .style(move |_, status| danger_button(theme, status)),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center)
@@ -410,7 +413,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 col.push(
                     button(container(card_content))
                         .padding(0)
-                        .style(move |theme, status| {
+                        .style(move |_, status| {
                             if is_editing {
                                 active_card_button(theme, status)
                             } else if status == button::Status::Hovered {
@@ -444,7 +447,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     )
     .width(Length::Fixed(320.0))
     .height(Length::Fill)
-    .style(sidebar_container)
+    .style(move |_| sidebar_container(theme))
     .into()
 }
 
@@ -453,10 +456,16 @@ fn view_workspace<'a>(
     state: &'a State,
     preview_content: Element<'a, Message>,
 ) -> Element<'a, Message> {
+    let theme = &state.theme;
     let tab_bar = row![
-        view_tab_button("nftables.conf", WorkspaceTab::Nftables, state.active_tab),
-        view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab),
-        view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab),
+        view_tab_button(
+            "nftables.conf",
+            WorkspaceTab::Nftables,
+            state.active_tab,
+            theme
+        ),
+        view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab, theme),
+        view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
     ]
     .spacing(2);
 
@@ -516,7 +525,7 @@ fn view_workspace<'a>(
 
     let save_to_system = if state.status == AppStatus::Confirmed {
         button(text("Permanently Save to System").font(FONT_REGULAR))
-            .style(primary_button)
+            .style(move |_, status| primary_button(theme, status))
             .padding([12, 24])
             .on_press(Message::SaveToSystemClicked)
     } else {
@@ -546,9 +555,9 @@ fn view_workspace<'a>(
         let mut btn = button(text(button_text).font(FONT_REGULAR)).padding([12, 32]);
 
         if is_dirty && !is_busy {
-            btn = btn.style(dirty_button);
+            btn = btn.style(move |_, status| dirty_button(theme, status));
         } else {
-            btn = btn.style(primary_button);
+            btn = btn.style(move |_, status| primary_button(theme, status));
         }
 
         if !is_busy {
@@ -592,7 +601,7 @@ fn view_workspace<'a>(
         save_to_system,
         horizontal_rule(1),
         if let Some(ref err) = state.last_error {
-            view_error_display(err)
+            view_error_display(err, theme)
         } else {
             row![].into()
         },
@@ -612,18 +621,21 @@ fn view_workspace<'a>(
     .into()
 }
 
-fn view_tab_button(
-    label: &str,
+fn view_tab_button<'a>(
+    label: &'static str,
     tab: WorkspaceTab,
     active_tab: WorkspaceTab,
-) -> Element<'_, Message> {
+    theme: &'a crate::theme::AppTheme,
+) -> Element<'a, Message> {
     let is_active = tab == active_tab;
     button(text(label).size(13))
         .padding([8, 16])
-        .style(if is_active {
-            active_tab_button
-        } else {
-            button::secondary
+        .style(move |_, status| {
+            if is_active {
+                active_tab_button(theme, status)
+            } else {
+                button::secondary(&Theme::default(), status)
+            }
         })
         .on_press(Message::TabChanged(tab))
         .into()
@@ -714,9 +726,9 @@ fn view_diff_text(diff_content: &str) -> iced::widget::Column<'static, Message> 
 
         // Determine color based on diff prefix and own the string
         let (color, content) = if line.starts_with("+ ") {
-            (SUCCESS, line.to_string())  // Green for additions
+            (SUCCESS, line.to_string()) // Green for additions
         } else if line.starts_with("- ") {
-            (DANGER, line.to_string())   // Red for deletions
+            (DANGER, line.to_string()) // Red for deletions
         } else {
             (GRUV_FG0, line.to_string()) // Normal for unchanged
         };
@@ -738,6 +750,7 @@ fn view_pill<'a>(
     label: &'a str,
     color: Color,
     action: Option<(&'a str, Message)>,
+    theme: &'a crate::theme::AppTheme,
 ) -> Element<'a, Message> {
     let content = row![
         container(column![]).width(8).height(8).style(move |_| {
@@ -755,7 +768,9 @@ fn view_pill<'a>(
     .spacing(10)
     .align_y(Alignment::Center);
 
-    let pill = container(content).padding([6, 12]).style(pill_container);
+    let pill = container(content)
+        .padding([6, 12])
+        .style(move |_| pill_container(theme));
 
     if let Some((action_label, msg)) = action {
         column![
@@ -772,7 +787,10 @@ fn view_pill<'a>(
     }
 }
 
-fn view_status_pill(status: &AppStatus) -> Element<'_, Message> {
+fn view_status_pill<'a>(
+    status: &'a AppStatus,
+    theme: &'a crate::theme::AppTheme,
+) -> Element<'a, Message> {
     let (label, color) = match status {
         AppStatus::Idle => ("System Protected", SUCCESS),
         AppStatus::Verifying => ("Verifying Rules...", ACCENT),
@@ -782,10 +800,13 @@ fn view_status_pill(status: &AppStatus) -> Element<'_, Message> {
         AppStatus::Error(_) => ("Error Detected", DANGER),
         _ => ("Operational", SUCCESS),
     };
-    view_pill(label, color, None)
+    view_pill(label, color, None, theme)
 }
 
-fn view_persistence_pill(status: PersistenceStatus) -> Element<'static, Message> {
+fn view_persistence_pill(
+    status: PersistenceStatus,
+    theme: &crate::theme::AppTheme,
+) -> Element<'_, Message> {
     let (label, color, action) = match status {
         PersistenceStatus::Enabled => ("Boot Persistence: ON", SUCCESS, None),
         PersistenceStatus::Disabled => (
@@ -796,7 +817,7 @@ fn view_persistence_pill(status: PersistenceStatus) -> Element<'static, Message>
         PersistenceStatus::NotInstalled => ("nftables not found", DANGER, None),
         PersistenceStatus::Unknown => ("Checking Persistence...", TEXT_DIM, None),
     };
-    view_pill(label, color, action)
+    view_pill(label, color, action, theme)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -804,6 +825,7 @@ fn view_rule_form<'a>(
     form: &'a RuleForm,
     errors: Option<&'a crate::app::FormErrors>,
     interfaces: &'a [String],
+    theme: &'a crate::theme::AppTheme,
 ) -> Element<'a, Message> {
     let title_text = if form.id.is_some() {
         "Edit Rule"
@@ -834,7 +856,7 @@ fn view_rule_form<'a>(
         column![
             container(text("BASIC INFO").size(10).color(TEXT_BRIGHT))
                 .padding([4, 8])
-                .style(section_header_container),
+                .style(move |_| section_header_container(theme)),
             column![
                 text("DESCRIPTION").size(10).color(TEXT_DIM),
                 text_input("e.g. Local Web Server", &form.label)
@@ -859,7 +881,7 @@ fn view_rule_form<'a>(
         column![
             container(text("TECHNICAL DETAILS").size(10).color(TEXT_BRIGHT))
                 .padding([4, 8])
-                .style(section_header_container),
+                .style(move |_| section_header_container(theme)),
             row![
                 column![
                     text("PROTOCOL").size(10).color(TEXT_DIM),
@@ -897,7 +919,7 @@ fn view_rule_form<'a>(
         column![
             container(text("CONTEXT").size(10).color(TEXT_BRIGHT))
                 .padding([4, 8])
-                .style(section_header_container),
+                .style(move |_| section_header_container(theme)),
             column![
                 text("SOURCE ADDRESS (OPTIONAL)").size(10).color(TEXT_DIM),
                 text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
@@ -940,7 +962,7 @@ fn view_rule_form<'a>(
             button(text(button_text).size(14))
                 .on_press(Message::SaveRuleForm)
                 .padding([10, 24])
-                .style(primary_button),
+                .style(move |_, status| primary_button(theme, status)),
         ]
         .spacing(16)
         .align_y(Alignment::Center)
@@ -949,7 +971,7 @@ fn view_rule_form<'a>(
     .padding(32);
     container(form_box)
         .max_width(520)
-        .style(card_container)
+        .style(move |_| card_container(theme))
         .into()
 }
 
@@ -984,17 +1006,20 @@ fn view_port_inputs<'a>(form: &RuleForm, _has_error: Option<&String>) -> Element
     }
 }
 
-fn view_awaiting_apply() -> Element<'static, Message> {
+fn view_awaiting_apply(app_theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(FONT_REGULAR).color(TEXT_BRIGHT),
                       text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(TEXT_DIM).width(360).align_x(Alignment::Center),
                       row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(button::secondary),
-                           button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(primary_button),
+                           button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
     ].spacing(20).padding(32).align_x(Alignment::Center))
-    .style(|theme| { let mut style = card_container(theme); style.shadow = iced::Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.8), offset: iced::Vector::new(0.0, 10.0), blur_radius: 20.0 }; style }).into()
+    .style(move |_| { let mut style = card_container(app_theme); style.shadow = iced::Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.8), offset: iced::Vector::new(0.0, 10.0), blur_radius: 20.0 }; style }).into()
 }
 
-fn view_pending_confirmation(remaining: u32) -> Element<'static, Message> {
+fn view_pending_confirmation(
+    remaining: u32,
+    app_theme: &crate::theme::AppTheme,
+) -> Element<'_, Message> {
     container(
         column![
             text("⏳").size(36),
@@ -1013,11 +1038,11 @@ fn view_pending_confirmation(remaining: u32) -> Element<'static, Message> {
                 button(text("Rollback").size(14))
                     .on_press(Message::RevertClicked)
                     .padding([10, 20])
-                    .style(danger_button),
+                    .style(move |_, status| danger_button(app_theme, status)),
                 button(text("Confirm & Stay").size(14))
                     .on_press(Message::ConfirmClicked)
                     .padding([10, 24])
-                    .style(primary_button),
+                    .style(move |_, status| primary_button(app_theme, status)),
             ]
             .spacing(16)
         ]
@@ -1025,8 +1050,8 @@ fn view_pending_confirmation(remaining: u32) -> Element<'static, Message> {
         .padding(32)
         .align_x(Alignment::Center),
     )
-    .style(|theme| {
-        let mut style = card_container(theme);
+    .style(move |_| {
+        let mut style = card_container(app_theme);
         style.shadow = iced::Shadow {
             color: Color::from_rgba(0.0, 0.0, 0.0, 0.8),
             offset: iced::Vector::new(0.0, 10.0),
@@ -1203,12 +1228,12 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     .on_press(Message::EgressProfileRequested(
                         crate::core::firewall::EgressProfile::Desktop
                     ))
-                    .style(if advanced.egress_profile
+                    .style(move |_, status| if advanced.egress_profile
                         == crate::core::firewall::EgressProfile::Desktop
                     {
-                        active_card_button
+                        active_card_button(&state.theme, status)
                     } else {
-                        card_button
+                        card_button(&state.theme, status)
                     }),
                     button(
                         text(if advanced.egress_profile
@@ -1223,12 +1248,12 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     .on_press(Message::EgressProfileRequested(
                         crate::core::firewall::EgressProfile::Server
                     ))
-                    .style(if advanced.egress_profile
+                    .style(move |_, status| if advanced.egress_profile
                         == crate::core::firewall::EgressProfile::Server
                     {
-                        active_card_button
+                        active_card_button(&state.theme, status)
                     } else {
-                        card_button
+                        card_button(&state.theme, status)
                     }),
                 ]
                 .spacing(12),
@@ -1257,7 +1282,10 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     content.into()
 }
 
-fn view_warning_modal(warning: &PendingWarning) -> Element<'_, Message> {
+fn view_warning_modal<'a>(
+    warning: &'a PendingWarning,
+    theme: &'a crate::theme::AppTheme,
+) -> Element<'a, Message> {
     let (title, message, confirm_msg) = match warning {
         PendingWarning::EnableRpf => (
             "⚠️ WARNING: Anti-Spoofing Mode",
@@ -1295,11 +1323,11 @@ fn view_warning_modal(warning: &PendingWarning) -> Element<'_, Message> {
                 button(text("Cancel").size(14))
                     .on_press(Message::CancelWarning)
                     .padding(12)
-                    .style(card_button),
+                    .style(move |_, status| card_button(theme, status)),
                 button(text("Yes, I understand").size(14))
                     .on_press(confirm_msg)
                     .padding(12)
-                    .style(danger_button),
+                    .style(move |_, status| danger_button(theme, status)),
             ]
             .spacing(12),
         ]
@@ -1307,7 +1335,7 @@ fn view_warning_modal(warning: &PendingWarning) -> Element<'_, Message> {
         .padding(30)
         .max_width(600),
     )
-    .style(|theme| {
+    .style(move |_| {
         let mut style = card_container(theme);
         style.shadow = iced::Shadow {
             color: Color::from_rgba(0.0, 0.0, 0.0, 0.8),
@@ -1324,7 +1352,10 @@ fn view_warning_modal(warning: &PendingWarning) -> Element<'_, Message> {
     .into()
 }
 
-fn view_error_display(err: &crate::core::error::ErrorInfo) -> Element<'_, Message> {
+fn view_error_display<'a>(
+    err: &'a crate::core::error::ErrorInfo,
+    theme: &'a crate::theme::AppTheme,
+) -> Element<'a, Message> {
     let mut elements: Vec<Element<'_, Message>> = vec![
         row![
             text("⚠️").size(16),
@@ -1332,7 +1363,7 @@ fn view_error_display(err: &crate::core::error::ErrorInfo) -> Element<'_, Messag
             button("Copy Details")
                 .on_press(Message::CopyErrorClicked)
                 .padding([4, 10])
-                .style(danger_button)
+                .style(move |_, status| danger_button(theme, status))
         ]
         .spacing(12)
         .align_y(Alignment::Center)
@@ -1354,10 +1385,10 @@ fn view_error_display(err: &crate::core::error::ErrorInfo) -> Element<'_, Messag
     column(elements).spacing(6).into()
 }
 
-fn view_diagnostics_modal() -> Element<'static, Message> {
+fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     // Read recent audit log entries
     let audit_entries = std::fs::read_to_string(
-        crate::utils::get_state_dir()
+        crate::utils::get_data_dir()
             .map(|mut p| {
                 p.push("audit.log");
                 p
@@ -1375,7 +1406,7 @@ fn view_diagnostics_modal() -> Element<'static, Message> {
         .collect();
 
     // Get recovery commands as owned strings
-    let state_dir = crate::utils::get_state_dir()
+    let state_dir = crate::utils::get_data_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "~/.local/state/drfw".to_string());
 
@@ -1394,34 +1425,32 @@ fn view_diagnostics_modal() -> Element<'static, Message> {
             .spacing(12)
             .align_y(Alignment::Center)
             .width(Length::Fill),
-
             // Audit log section
             column![
-                text("Recent Audit Log Entries:").size(14).color(TEXT_BRIGHT),
-                container(
-                    scrollable(
-                        column(
-                            if recent_entries.is_empty() {
-                                vec![text("No audit entries found").size(12).color(TEXT_DIM).into()]
-                            } else {
-                                recent_entries
-                                    .into_iter()
-                                    .map(|entry| {
-                                        text(entry)
-                                            .size(11)
-                                            .font(FONT_MONO)
-                                            .color(GRUV_FG0)
-                                            .into()
-                                    })
-                                    .collect()
-                            }
-                        )
-                        .spacing(4)
-                    )
-                )
+                text("Recent Audit Log Entries:")
+                    .size(14)
+                    .color(TEXT_BRIGHT),
+                container(scrollable(
+                    column(if recent_entries.is_empty() {
+                        vec![
+                            text("No audit entries found")
+                                .size(12)
+                                .color(TEXT_DIM)
+                                .into(),
+                        ]
+                    } else {
+                        recent_entries
+                            .into_iter()
+                            .map(|entry| {
+                                text(entry).size(11).font(FONT_MONO).color(GRUV_FG0).into()
+                            })
+                            .collect()
+                    })
+                    .spacing(4)
+                ))
                 .height(200)
-                .style(|_| container::Style {
-                    background: Some(GRUV_BG2.into()),
+                .style(move |_| container::Style {
+                    background: Some(theme.bg_elevated.into()),
                     border: Border {
                         radius: 4.0.into(),
                         ..Default::default()
@@ -1431,25 +1460,30 @@ fn view_diagnostics_modal() -> Element<'static, Message> {
                 .padding(12),
             ]
             .spacing(8),
-
             // Recovery commands section
             column![
-                text("Manual Recovery Commands:").size(14).color(TEXT_BRIGHT),
+                text("Manual Recovery Commands:")
+                    .size(14)
+                    .color(TEXT_BRIGHT),
                 container(
                     column![
-                        text("Emergency flush (removes all rules):").size(12).color(TEXT_DIM),
-                        text(recovery_cmd).size(12).font(FONT_MONO).color(GRUV_YELLOW),
-
+                        text("Emergency flush (removes all rules):")
+                            .size(12)
+                            .color(TEXT_DIM),
+                        text(recovery_cmd)
+                            .size(12)
+                            .font(FONT_MONO)
+                            .color(theme.warning),
                         text("Restore from snapshot:").size(12).color(TEXT_DIM),
                         text(snapshot_restore_cmd)
                             .size(12)
                             .font(FONT_MONO)
-                            .color(GRUV_YELLOW),
+                            .color(theme.warning),
                     ]
                     .spacing(6)
                 )
-                .style(|_| container::Style {
-                    background: Some(GRUV_BG2.into()),
+                .style(move |_| container::Style {
+                    background: Some(theme.bg_elevated.into()),
                     border: Border {
                         radius: 4.0.into(),
                         ..Default::default()
@@ -1459,41 +1493,36 @@ fn view_diagnostics_modal() -> Element<'static, Message> {
                 .padding(12),
             ]
             .spacing(8),
-
             // Action buttons
             row![
                 button(text("Open Logs Folder").size(14))
                     .on_press(Message::OpenLogsFolder)
                     .padding([10, 20])
-                    .style(primary_button),
+                    .style(move |_, status| primary_button(theme, status)),
                 button(text("Close").size(14))
                     .on_press(Message::ToggleDiagnostics(false))
                     .padding([10, 20])
-                    .style(card_button),
+                    .style(move |_, status| card_button(theme, status)),
             ]
             .spacing(12)
             .align_y(Alignment::Center),
         ]
         .spacing(20)
         .padding(32)
-        .max_width(700)
+        .max_width(700),
     )
-    .style(section_header_container)
+    .style(move |_| section_header_container(theme))
     .into()
 }
 
-fn view_export_modal() -> Element<'static, Message> {
+fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     container(
         column![
             text("📤 Export Rules")
                 .size(24)
                 .font(FONT_REGULAR)
                 .color(GRUV_ORANGE),
-
-            text("Choose the export format:")
-                .size(14)
-                .color(TEXT_DIM),
-
+            text("Choose the export format:").size(14).color(TEXT_DIM),
             column![
                 button(
                     row![
@@ -1514,9 +1543,8 @@ fn view_export_modal() -> Element<'static, Message> {
                     .padding(16)
                 )
                 .on_press(Message::ExportAsJson)
-                .style(card_button)
+                .style(move |_, status| card_button(theme, status))
                 .width(Length::Fill),
-
                 button(
                     row![
                         text("📝").size(20),
@@ -1536,15 +1564,13 @@ fn view_export_modal() -> Element<'static, Message> {
                     .padding(16)
                 )
                 .on_press(Message::ExportAsNft)
-                .style(card_button)
+                .style(move |_, status| card_button(theme, status))
                 .width(Length::Fill),
             ]
             .spacing(12),
-
             text("Files will be saved to ~/Downloads/ or your data directory")
                 .size(11)
                 .color(TEXT_DIM),
-
             button(text("Cancel").size(14))
                 .on_press(Message::ExportClicked) // Toggle to close
                 .padding([10, 20])
@@ -1553,29 +1579,31 @@ fn view_export_modal() -> Element<'static, Message> {
         .spacing(20)
         .padding(32)
         .max_width(500)
-        .align_x(Alignment::Center)
+        .align_x(Alignment::Center),
     )
-    .style(section_header_container)
+    .style(move |_| section_header_container(theme))
     .into()
 }
 
-fn view_shortcuts_help() -> Element<'static, Message> {
+fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     container(
         column![
             text("⌨️ Keyboard Shortcuts")
                 .size(24)
                 .font(FONT_REGULAR)
                 .color(GRUV_ORANGE),
-
             column![
                 text("General").size(16).color(TEXT_BRIGHT),
                 row![
-                    container(text("F1").size(13).font(FONT_MONO).color(GRUV_YELLOW))
+                    container(text("F1").size(13).font(FONT_MONO).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                        .style(move |_| container::Style {
+                            background: Some(theme.bg_elevated.into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         }),
                     text("Show this help").size(13).color(TEXT_BRIGHT)
@@ -1583,12 +1611,15 @@ fn view_shortcuts_help() -> Element<'static, Message> {
                 .spacing(16)
                 .align_y(Alignment::Center),
                 row![
-                    container(text("Esc").size(13).font(FONT_MONO).color(GRUV_YELLOW))
+                    container(text("Esc").size(13).font(FONT_MONO).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                        .style(move |_| container::Style {
+                            background: Some(theme.bg_elevated.into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         }),
                     text("Close modals / Cancel").size(13).color(TEXT_BRIGHT)
@@ -1597,29 +1628,39 @@ fn view_shortcuts_help() -> Element<'static, Message> {
                 .align_y(Alignment::Center),
             ]
             .spacing(8),
-
             column![
                 text("Rules").size(16).color(TEXT_BRIGHT),
                 row![
-                    container(text("Ctrl + N").size(13).font(FONT_MONO).color(GRUV_YELLOW))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                    container(
+                        text("Ctrl + N")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
                             ..Default::default()
-                        }),
+                        },
+                        ..Default::default()
+                    }),
                     text("Add new rule").size(13).color(TEXT_BRIGHT)
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center),
                 row![
-                    container(text("Enter").size(13).font(FONT_MONO).color(GRUV_YELLOW))
+                    container(text("Enter").size(13).font(FONT_MONO).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                        .style(move |_| container::Style {
+                            background: Some(theme.bg_elevated.into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                ..Default::default()
+                            },
                             ..Default::default()
                         }),
                     text("Save rule (when editing)").size(13).color(TEXT_BRIGHT)
@@ -1628,96 +1669,132 @@ fn view_shortcuts_help() -> Element<'static, Message> {
                 .align_y(Alignment::Center),
             ]
             .spacing(8),
-
             column![
                 text("Actions").size(16).color(TEXT_BRIGHT),
                 row![
-                    container(text("Ctrl + S").size(13).font(FONT_MONO).color(GRUV_YELLOW))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                    container(
+                        text("Ctrl + S")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
                             ..Default::default()
-                        }),
+                        },
+                        ..Default::default()
+                    }),
                     text("Apply changes").size(13).color(TEXT_BRIGHT)
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center),
                 row![
-                    container(text("Ctrl + E").size(13).font(FONT_MONO).color(GRUV_YELLOW))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                    container(
+                        text("Ctrl + E")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
                             ..Default::default()
-                        }),
+                        },
+                        ..Default::default()
+                    }),
                     text("Export rules").size(13).color(TEXT_BRIGHT)
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center),
             ]
             .spacing(8),
-
             column![
                 text("Editing").size(16).color(TEXT_BRIGHT),
                 row![
-                    container(text("Ctrl + Z").size(13).font(FONT_MONO).color(GRUV_YELLOW))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                    container(
+                        text("Ctrl + Z")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
                             ..Default::default()
-                        }),
+                        },
+                        ..Default::default()
+                    }),
                     text("Undo last change").size(13).color(TEXT_BRIGHT)
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center),
                 row![
-                    container(text("Ctrl + Y").size(13).font(FONT_MONO).color(GRUV_YELLOW))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                    container(
+                        text("Ctrl + Y")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
                             ..Default::default()
-                        }),
+                        },
+                        ..Default::default()
+                    }),
                     text("Redo last undone change").size(13).color(TEXT_BRIGHT)
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center),
                 row![
-                    container(text("Ctrl + Shift + Z").size(13).font(FONT_MONO).color(GRUV_YELLOW))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(|_| container::Style {
-                            background: Some(GRUV_BG2.into()),
-                            border: Border { radius: 4.0.into(), ..Default::default() },
+                    container(
+                        text("Ctrl + Shift + Z")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
                             ..Default::default()
-                        }),
+                        },
+                        ..Default::default()
+                    }),
                     text("Redo (alternative)").size(13).color(TEXT_BRIGHT)
                 ]
                 .spacing(16)
                 .align_y(Alignment::Center),
             ]
             .spacing(8),
-
             text("💡 Tip: Most buttons can be clicked instead of using shortcuts")
                 .size(11)
                 .color(TEXT_DIM),
-
             button(text("Close").size(14))
                 .on_press(Message::ToggleShortcutsHelp(false))
                 .padding([10, 20])
-                .style(primary_button),
+                .style(move |_, status| primary_button(theme, status)),
         ]
         .spacing(20)
         .padding(32)
         .max_width(550)
-        .align_x(Alignment::Center)
+        .align_x(Alignment::Center),
     )
-    .style(section_header_container)
+    .style(move |_| section_header_container(theme))
     .into()
 }

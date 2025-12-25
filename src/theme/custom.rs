@@ -59,8 +59,8 @@ impl ThemeToml {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read theme file: {}", e))?;
 
-        let toml: ThemeToml = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse theme TOML: {}", e))?;
+        let toml: ThemeToml =
+            toml::from_str(&content).map_err(|e| format!("Failed to parse theme TOML: {}", e))?;
 
         toml.into_app_theme()
     }
@@ -158,8 +158,8 @@ pub fn load_custom_themes() -> Vec<AppTheme> {
 
 /// Create an example custom theme file in the themes directory
 pub fn create_example_theme() -> Result<PathBuf, String> {
-    let mut config_dir = crate::utils::get_data_dir()
-        .ok_or_else(|| "Failed to get config directory".to_string())?;
+    let mut config_dir =
+        crate::utils::get_data_dir().ok_or_else(|| "Failed to get config directory".to_string())?;
 
     config_dir.push("themes");
     std::fs::create_dir_all(&config_dir)

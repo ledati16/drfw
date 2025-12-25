@@ -167,7 +167,11 @@ impl Command for ReorderRuleCommand {
     }
 
     fn description(&self) -> String {
-        format!("Reorder rule (position {} → {})", self.old_index + 1, self.new_index + 1)
+        format!(
+            "Reorder rule (position {} → {})",
+            self.old_index + 1,
+            self.new_index + 1
+        )
     }
 
     fn box_clone(&self) -> Box<dyn Command> {
@@ -411,8 +415,18 @@ mod tests {
         let rule2 = create_test_rule("Rule 2");
 
         // Execute commands
-        history.execute(Box::new(AddRuleCommand { rule: rule1.clone() }), &mut ruleset);
-        history.execute(Box::new(AddRuleCommand { rule: rule2.clone() }), &mut ruleset);
+        history.execute(
+            Box::new(AddRuleCommand {
+                rule: rule1.clone(),
+            }),
+            &mut ruleset,
+        );
+        history.execute(
+            Box::new(AddRuleCommand {
+                rule: rule2.clone(),
+            }),
+            &mut ruleset,
+        );
 
         assert_eq!(ruleset.rules.len(), 2);
         assert!(history.can_undo());

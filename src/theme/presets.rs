@@ -4,8 +4,7 @@ use super::AppTheme;
 /// Clean, modern, excellent for professional tools
 pub fn nord() -> AppTheme {
     AppTheme::from_hex(
-        "Nord",
-        0x2E3440, // bg_base - Polar Night 0
+        "Nord", 0x2E3440, // bg_base - Polar Night 0
         0x242933, // bg_sidebar - Slightly darker
         0x3B4252, // bg_surface - Polar Night 1
         0x434C5E, // bg_elevated - Polar Night 2
@@ -37,8 +36,7 @@ pub fn nord() -> AppTheme {
 /// Original DRFW theme, beloved by terminal enthusiasts
 pub fn gruvbox() -> AppTheme {
     AppTheme::from_hex(
-        "Gruvbox",
-        0x282828, // bg_base - bg0_h
+        "Gruvbox", 0x282828, // bg_base - bg0_h
         0x1D2021, // bg_sidebar - bg0
         0x3C3836, // bg_surface - bg1
         0x504945, // bg_elevated - bg2
@@ -70,8 +68,7 @@ pub fn gruvbox() -> AppTheme {
 /// High contrast, vibrant, modern
 pub fn dracula() -> AppTheme {
     AppTheme::from_hex(
-        "Dracula",
-        0x282A36, // bg_base - Background
+        "Dracula", 0x282A36, // bg_base - Background
         0x21222C, // bg_sidebar - Darker
         0x313341, // bg_surface - Current line (lightened)
         0x393B4D, // bg_elevated - Lighter
@@ -103,8 +100,7 @@ pub fn dracula() -> AppTheme {
 /// Vibrant highlights on dark warm background
 pub fn monokai() -> AppTheme {
     AppTheme::from_hex(
-        "Monokai",
-        0x272822, // bg_base - Background
+        "Monokai", 0x272822, // bg_base - Background
         0x1E1F1C, // bg_sidebar - Darker
         0x363731, // bg_surface - Lighter
         0x3E3D32, // bg_elevated - Even lighter
@@ -235,8 +231,7 @@ pub fn catppuccin_mocha() -> AppTheme {
 /// Well-balanced, professional, widely loved
 pub fn one_dark() -> AppTheme {
     AppTheme::from_hex(
-        "One Dark",
-        0x282C34, // bg_base - Background
+        "One Dark", 0x282C34, // bg_base - Background
         0x21252B, // bg_sidebar - Darker
         0x2C313A, // bg_surface - Lighter
         0x3E4451, // bg_elevated - Gutter gray
