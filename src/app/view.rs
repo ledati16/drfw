@@ -38,7 +38,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         WorkspaceTab::Json => {
             let json = serde_json::to_string_pretty(&state.ruleset.to_nftables_json())
                 .unwrap_or_else(|e| e.to_string());
-            text(json).font(FONT_MONO).size(13).color(GRUV_FG0).into()
+            view_highlighted_json(&json).into()
         }
         WorkspaceTab::Settings => view_settings(state),
     };
@@ -230,13 +230,30 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         .rules
         .iter()
         .filter(|r| {
-            state.rule_search.is_empty()
+            // Text search filter
+            let matches_search = state.rule_search.is_empty()
                 || r.label
                     .to_lowercase()
                     .contains(&state.rule_search.to_lowercase())
                 || r.protocol
                     .to_string()
-                    .contains(&state.rule_search.to_lowercase())
+                    .contains(&state.rule_search.to_lowercase());
+
+            // Group filter
+            let matches_group = if let Some(ref filter_group) = state.filter_group {
+                r.group.as_ref() == Some(filter_group)
+            } else {
+                true
+            };
+
+            // Tag filter
+            let matches_tag = if let Some(ref filter_tag) = state.filter_tag {
+                r.tags.contains(filter_tag)
+            } else {
+                true
+            };
+
+            matches_search && matches_group && matches_tag
         })
         .collect();
 
@@ -359,6 +376,30 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                     .size(10)
                                     .color(TEXT_DIM)
                                     .font(FONT_MONO),
+                                    row![if let Some(ref group) = rule.group {
+                                        text(format!("📁 {}", group))
+                                            .size(9)
+                                            .color(GRUV_AQUA)
+                                            .font(FONT_MONO)
+                                    } else {
+                                        text("").size(0)
+                                    }],
+                                    if !rule.tags.is_empty() {
+                                        row(rule.tags.iter().map(|tag| {
+                                            container(text(tag).size(8).color(theme.fg_on_accent))
+                                                .padding([2, 6])
+                                                .style(move |t| {
+                                                    let mut style = container::rounded_box(t);
+                                                    style.background = Some(theme.info.into());
+                                                    style
+                                                })
+                                                .into()
+                                        }))
+                                        .spacing(4)
+                                        .wrap()
+                                    } else {
+                                        row(std::iter::empty()).spacing(4).wrap()
+                                    },
                                 ]
                                 .width(Length::Fill)
                                 .spacing(1),
@@ -639,6 +680,127 @@ fn view_tab_button<'a>(
         })
         .on_press(Message::TabChanged(tab))
         .into()
+}
+
+fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message> {
+    let mut lines = column![].spacing(2);
+
+    for (i, line) in content.lines().enumerate() {
+        let mut row_content = row![].spacing(0);
+
+        // Line number
+        row_content = row_content.push(
+            container(
+                text(format!("{:3} ", i + 1))
+                    .font(FONT_MONO)
+                    .size(11)
+                    .color(Color::from_rgb(0.4, 0.4, 0.4)),
+            )
+            .padding(iced::Padding::new(0.0).right(10.0)),
+        );
+
+        row_content = row_content.push(vertical_rule(1));
+
+        // Preserve indentation
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if !line.is_empty() {
+            row_content = row_content.push(
+                text(format!("  {}", " ".repeat(indent)))
+                    .font(FONT_MONO)
+                    .size(13),
+            );
+        }
+
+        // Syntax highlight JSON tokens
+        let mut chars = trimmed.chars().peekable();
+        let mut current_token = String::new();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' => {
+                    if !current_token.is_empty() {
+                        let token = current_token.clone();
+                        row_content =
+                            row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
+                        current_token.clear();
+                    }
+
+                    // Read the full string
+                    let mut string_content = String::from('"');
+                    while let Some(&next_ch) = chars.peek() {
+                        chars.next();
+                        string_content.push(next_ch);
+                        if next_ch == '"' && !string_content.ends_with("\\\"") {
+                            break;
+                        }
+                    }
+
+                    // Check if this is a key (followed by colon)
+                    let mut temp_chars = chars.clone();
+                    let mut is_key = false;
+                    while let Some(&next_ch) = temp_chars.peek() {
+                        if next_ch.is_whitespace() {
+                            temp_chars.next();
+                        } else {
+                            is_key = next_ch == ':';
+                            break;
+                        }
+                    }
+
+                    let color = if is_key { GRUV_BLUE } else { GRUV_YELLOW };
+                    row_content = row_content
+                        .push(text(string_content).font(FONT_MONO).size(13).color(color));
+                }
+                ':' | ',' => {
+                    if !current_token.is_empty() {
+                        let token = current_token.clone();
+                        row_content =
+                            row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
+                        current_token.clear();
+                    }
+                    row_content = row_content.push(
+                        text(ch.to_string())
+                            .font(FONT_MONO)
+                            .size(13)
+                            .color(GRUV_FG0),
+                    );
+                }
+                '{' | '}' | '[' | ']' => {
+                    if !current_token.is_empty() {
+                        let token = current_token.clone();
+                        row_content =
+                            row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
+                        current_token.clear();
+                    }
+                    row_content = row_content.push(
+                        text(ch.to_string())
+                            .font(FONT_MONO)
+                            .size(13)
+                            .color(GRUV_AQUA),
+                    );
+                }
+                _ => {
+                    current_token.push(ch);
+                }
+            }
+        }
+
+        // Flush remaining token
+        if !current_token.is_empty() {
+            let token_trimmed = current_token.trim();
+            let color = match token_trimmed {
+                "true" | "false" | "null" => GRUV_PURPLE,
+                _ if token_trimmed.parse::<f64>().is_ok() => GRUV_ORANGE,
+                _ => GRUV_FG0,
+            };
+            row_content =
+                row_content.push(text(current_token).font(FONT_MONO).size(13).color(color));
+        }
+
+        lines = lines.push(row_content);
+    }
+    lines
 }
 
 fn view_highlighted_nft(content: &str) -> iced::widget::Column<'_, Message> {
@@ -951,6 +1113,62 @@ fn view_rule_form<'a>(
                 .padding(10)
             ]
             .spacing(6),
+        ]
+        .spacing(12),
+        column![
+            container(text("ORGANIZATION").size(10).color(TEXT_BRIGHT))
+                .padding([4, 8])
+                .style(move |_| section_header_container(theme)),
+            column![
+                text("GROUP (OPTIONAL)").size(10).color(TEXT_DIM),
+                text_input("e.g. Web Services", &form.group)
+                    .on_input(Message::RuleFormGroupChanged)
+                    .padding(10),
+            ]
+            .spacing(6),
+            column![
+                text("TAGS").size(10).color(TEXT_DIM),
+                row![
+                    text_input("Add a tag...", &form.tag_input)
+                        .on_input(Message::RuleFormTagInputChanged)
+                        .on_submit(Message::RuleFormAddTag)
+                        .padding(10),
+                    button(text("+").size(16))
+                        .on_press(Message::RuleFormAddTag)
+                        .padding([8, 16])
+                        .style(move |_, status| primary_button(theme, status)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                if !form.tags.is_empty() {
+                    row(form.tags.iter().map(|tag| {
+                        let tag_theme = theme.clone();
+                        container(
+                            row![
+                                text(tag).size(12).color(theme.fg_on_accent),
+                                button(text("×").size(14))
+                                    .on_press(Message::RuleFormRemoveTag(tag.clone()))
+                                    .padding([2, 6])
+                                    .style(button::text),
+                            ]
+                            .spacing(6)
+                            .align_y(Alignment::Center),
+                        )
+                        .padding([4, 10])
+                        .style(move |t| {
+                            let mut style = container::rounded_box(t);
+                            style.background = Some(tag_theme.accent.into());
+                            style
+                        })
+                        .into()
+                    }))
+                    .spacing(8)
+                    .wrap()
+                } else {
+                    row(std::iter::empty()).spacing(8).wrap()
+                },
+            ]
+            .spacing(8),
         ]
         .spacing(12),
         row![

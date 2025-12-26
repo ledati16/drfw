@@ -63,6 +63,12 @@ pub struct Rule {
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Tags for organizing and filtering rules
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional group name for visual organization
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 fn default_true() -> bool {

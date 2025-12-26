@@ -36,6 +36,8 @@ pub struct State {
     pub theme: crate::theme::AppTheme,
     #[allow(dead_code)] // TODO: Add custom themes to theme picker UI
     pub custom_themes: Vec<crate::theme::AppTheme>,
+    pub filter_group: Option<String>,
+    pub filter_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,6 +96,9 @@ pub struct RuleForm {
     pub source: String,
     pub interface: String,
     pub selected_preset: Option<crate::core::firewall::ServicePreset>,
+    pub tags: Vec<String>,
+    pub group: String,
+    pub tag_input: String,
 }
 
 impl Default for RuleForm {
@@ -107,6 +112,9 @@ impl Default for RuleForm {
             source: String::new(),
             interface: String::new(),
             selected_preset: None,
+            tags: Vec::new(),
+            group: String::new(),
+            tag_input: String::new(),
         }
     }
 }
@@ -251,9 +259,26 @@ pub enum Message {
     Redo,
     // Theme
     ThemeChanged(crate::theme::ThemeChoice),
+    // Rule Grouping/Tagging
+    RuleFormGroupChanged(String),
+    RuleFormTagInputChanged(String),
+    RuleFormAddTag,
+    RuleFormRemoveTag(String),
+    #[allow(dead_code)] // TODO: Add filter UI buttons
+    FilterByGroup(Option<String>),
+    #[allow(dead_code)] // TODO: Add filter UI buttons
+    FilterByTag(Option<String>),
 }
 
 impl State {
+    /// Validates the current form and updates form_errors in real-time
+    fn validate_form_realtime(&mut self) {
+        if let Some(form) = &self.rule_form {
+            let (_, _, errors) = form.validate();
+            self.form_errors = errors;
+        }
+    }
+
     pub fn new() -> (Self, Task<Message>) {
         // Load complete config including theme choice
         let config = crate::config::load_config();
@@ -293,6 +318,8 @@ impl State {
                 current_theme,
                 theme,
                 custom_themes,
+                filter_group: None,
+                filter_tag: None,
             },
             Task::batch(vec![
                 iced::font::load(
@@ -373,31 +400,38 @@ impl State {
                 if let Some(f) = &mut self.rule_form {
                     f.label = s;
                 }
+                // No validation needed for label (auto-sanitized)
             }
             Message::RuleFormProtocolChanged(p) => {
                 if let Some(f) = &mut self.rule_form {
                     f.protocol = p;
                 }
+                // Revalidate in case port/source validation changes with protocol
+                self.validate_form_realtime();
             }
             Message::RuleFormPortStartChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.port_start = s;
                 }
+                self.validate_form_realtime();
             }
             Message::RuleFormPortEndChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.port_end = s;
                 }
+                self.validate_form_realtime();
             }
             Message::RuleFormSourceChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.source = s;
                 }
+                self.validate_form_realtime();
             }
             Message::RuleFormInterfaceChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.interface = s;
                 }
+                self.validate_form_realtime();
             }
             Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(preset),
             Message::RuleSearchChanged(s) => self.rule_search = s,
@@ -566,6 +600,36 @@ impl State {
                 tracing::info!("Theme changed to: {}", choice.name());
                 return self.save_config();
             }
+            Message::RuleFormGroupChanged(s) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.group = s;
+                }
+            }
+            Message::RuleFormTagInputChanged(s) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.tag_input = s;
+                }
+            }
+            Message::RuleFormAddTag => {
+                if let Some(f) = &mut self.rule_form {
+                    let tag = f.tag_input.trim().to_string();
+                    if !tag.is_empty() && !f.tags.contains(&tag) {
+                        f.tags.push(tag);
+                        f.tag_input.clear();
+                    }
+                }
+            }
+            Message::RuleFormRemoveTag(tag) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.tags.retain(|t| t != &tag);
+                }
+            }
+            Message::FilterByGroup(group) => {
+                self.filter_group = group;
+            }
+            Message::FilterByTag(tag) => {
+                self.filter_tag = tag;
+            }
             Message::OpenLogsFolder => {
                 if let Some(state_dir) = crate::utils::get_state_dir() {
                     let path_str = state_dir.to_string_lossy().to_string();
@@ -611,6 +675,9 @@ impl State {
                     .map_or_else(String::new, std::string::ToString::to_string),
                 interface: rule.interface.clone().unwrap_or_default(),
                 selected_preset: None,
+                tags: rule.tags.clone(),
+                group: rule.group.clone().unwrap_or_default(),
+                tag_input: String::new(),
             });
             self.form_errors = None;
         }
@@ -641,6 +708,12 @@ impl State {
                 ipv6_only: false,
                 enabled: true,
                 created_at: Utc::now(),
+                tags: form.tags.clone(),
+                group: if form.group.is_empty() {
+                    None
+                } else {
+                    Some(form.group)
+                },
             };
 
             // Use command pattern for undo/redo support

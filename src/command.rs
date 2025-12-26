@@ -301,6 +301,8 @@ mod tests {
             ipv6_only: false,
             enabled: true,
             created_at: chrono::Utc::now(),
+            tags: Vec::new(),
+            group: None,
         }
     }
 

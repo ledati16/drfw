@@ -31,6 +31,8 @@ mod tests_impl {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -64,6 +66,8 @@ mod tests_impl {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -84,6 +88,8 @@ mod tests_impl {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -213,6 +219,8 @@ mod property_tests {
                 interface: None,
                 ipv6_only: false,
                 enabled: true,
+            tags: Vec::new(),
+            group: None,
                 created_at: Utc::now(),
             }
         }
@@ -329,6 +337,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
         ruleset
@@ -396,6 +406,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -432,6 +444,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -519,6 +533,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -531,6 +547,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -543,6 +561,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -587,6 +607,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -600,6 +622,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
@@ -613,6 +637,8 @@ mod integration_tests {
             interface: None,
             ipv6_only: false,
             enabled: true,
+            tags: Vec::new(),
+            group: None,
             created_at: Utc::now(),
         });
 
