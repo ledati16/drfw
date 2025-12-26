@@ -36,9 +36,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
             }
         }
         WorkspaceTab::Json => {
-            let json = serde_json::to_string_pretty(&state.ruleset.to_nftables_json())
-                .unwrap_or_else(|e| e.to_string());
-            view_highlighted_json(&json).into()
+            // Use cached JSON to avoid regenerating on every frame
+            view_highlighted_json(&state.cached_json_text).into()
         }
         WorkspaceTab::Settings => view_settings(state),
     };

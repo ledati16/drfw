@@ -24,6 +24,7 @@ pub struct State {
     pub interfaces: Vec<String>,
     pub persistence_status: PersistenceStatus,
     pub cached_nft_text: String,
+    pub cached_json_text: String,
     pub rule_search: String,
     pub deleting_id: Option<uuid::Uuid>,
     pub pending_warning: Option<PendingWarning>,
@@ -287,6 +288,8 @@ impl State {
 
         let interfaces = crate::utils::list_interfaces();
         let cached_nft_text = ruleset.to_nft_text();
+        let cached_json_text =
+            serde_json::to_string_pretty(&ruleset.to_nftables_json()).unwrap_or_default();
 
         // Apply the theme
         let theme = current_theme.to_theme();
@@ -307,6 +310,7 @@ impl State {
                 interfaces,
                 persistence_status: PersistenceStatus::Unknown,
                 cached_nft_text,
+                cached_json_text,
                 rule_search: String::new(),
                 deleting_id: None,
                 pending_warning: None,
@@ -333,6 +337,8 @@ impl State {
 
     fn update_cached_text(&mut self) {
         self.cached_nft_text = self.ruleset.to_nft_text();
+        self.cached_json_text =
+            serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
     }
 
     fn save_config(&self) -> Task<Message> {
@@ -660,7 +666,7 @@ impl State {
             self.rule_form = Some(RuleForm {
                 id: Some(rule.id),
                 label: rule.label.clone(),
-                protocol: rule.protocol.clone(),
+                protocol: rule.protocol,  // Copy, not clone
                 port_start: rule
                     .ports
                     .as_ref()
@@ -684,12 +690,16 @@ impl State {
     }
 
     fn handle_save_rule_form(&mut self) -> Task<Message> {
-        if let Some(form) = self.rule_form.clone() {
-            let (ports, source, errors) = form.validate();
+        // First validate without taking ownership
+        if let Some(form_ref) = &self.rule_form {
+            let (ports, source, errors) = form_ref.validate();
             if let Some(errs) = errors {
                 self.form_errors = Some(errs);
                 return Task::none();
             }
+
+            // Validation succeeded - now take ownership to avoid clone
+            let form = self.rule_form.take().unwrap();
 
             // Sanitize label to prevent injection attacks
             let sanitized_label = crate::validators::sanitize_label(&form.label);
@@ -708,7 +718,7 @@ impl State {
                 ipv6_only: false,
                 enabled: true,
                 created_at: Utc::now(),
-                tags: form.tags.clone(),
+                tags: form.tags,  // No clone needed - we own form
                 group: if form.group.is_empty() {
                     None
                 } else {
@@ -734,7 +744,6 @@ impl State {
             }
             let _ = self.save_config();
             self.update_cached_text();
-            self.rule_form = None;
             self.form_errors = None;
         }
         Task::none()
@@ -1116,8 +1125,8 @@ impl State {
     }
 
     fn handle_export_json(&self) -> Task<Message> {
-        let json =
-            serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
+        // Use cached JSON to avoid regenerating
+        let json = self.cached_json_text.clone();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("drfw_rules_{}.json", timestamp);
 

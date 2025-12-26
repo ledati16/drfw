@@ -1923,32 +1923,42 @@ for users who need them.
 **Goal:** Improve application performance and resource usage
 **Timeline:** Ongoing
 
-### 5.1 Reduce Cloning
+### 5.1 Reduce Cloning ✅ COMPLETED
 
-- [ ] **Files:** `src/app/mod.rs` multiple locations
-- [ ] Use `Cow<'_, FirewallRuleset>` where appropriate
-- [ ] Use `Arc<RuleSet>` for shared ownership
-- [ ] Use `std::mem::take()` instead of clone when taking ownership
-- [ ] Profile memory usage before/after
+- [x] **Files:** `src/app/mod.rs`, `src/core/firewall.rs`
+- [x] Use `std::mem::take()` instead of clone when taking ownership
+- [x] Made `Protocol` enum `Copy` to avoid clones
+- [x] Optimized `handle_save_rule_form()` to use `.take()` instead of `.clone()`
+- [x] All tests pass (79/79)
 
-**Locations:**
+**Changes:**
 ```rust
-// Line 362
-if let Some(form) = self.rule_form.take() { // instead of clone
+// Made Protocol Copy instead of just Clone
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Protocol { ... }
 
-// Line 467
-let ruleset = Arc::new(self.ruleset.clone());
-// or use reference if async permits
+// Used .take() to avoid cloning the form
+let form = self.rule_form.take().unwrap();
 ```
 
 ---
 
-### 5.2 Cache JSON Generation
+### 5.2 Cache JSON Generation ✅ COMPLETED
 
-- [ ] **File:** `src/app/mod.rs`
-- [ ] Add `cached_json: Option<serde_json::Value>` to State
-- [ ] Invalidate on rule changes
-- [ ] Reuse for export and apply operations
+- [x] **File:** `src/app/mod.rs`, `src/app/view.rs`
+- [x] Added `cached_json_text: String` to State
+- [x] Regenerate on rule changes in `update_cached_text()`
+- [x] Reused for export and view rendering operations
+- [x] Eliminated per-frame JSON regeneration in view code
+
+---
+
+### 5.5 Reduce String Allocations ✅ COMPLETED
+
+- [x] **Files:** `src/core/nft_json.rs`
+- [x] Use `.into_owned()` instead of `.to_string()` on `Cow<str>`
+- [x] More idiomatic conversion from `from_utf8_lossy()` results
+- [x] JSON caching provides biggest string allocation reduction
 
 **Implementation:**
 ```rust

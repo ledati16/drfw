@@ -46,7 +46,7 @@ pub async fn apply_with_snapshot(ruleset: &FirewallRuleset) -> Result<Value> {
         })?;
         Ok(val)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         error!("Combined apply failed: {stderr}");
         Err(Error::Nftables {
             message: stderr.clone(),
@@ -140,7 +140,7 @@ pub async fn restore_snapshot(snapshot: &Value) -> Result<()> {
         info!("Restore successful");
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         error!("Restore failed: {}", stderr);
         Err(Error::Nftables {
             message: stderr.clone(),
