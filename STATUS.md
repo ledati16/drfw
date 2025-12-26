@@ -273,15 +273,21 @@ With v1.0 complete, here's the status of FUTURE_PLAN.md:
   - Organized and documented
 - **Phase 4.5:** ✅ Advanced UI features - **COMPLETE!**
   - ✅ Keyboard shortcuts (implemented in v1.0)
-  - ✅ Theming system - Phase 1 (Infrastructure) - **COMPLETE!**
-    - 9 preset themes (Nord, Gruvbox, Dracula, Monokai, Everforest, Tokyo Night, Catppuccin, One Dark, Solarized)
-    - Custom theme loading from `~/.config/drfw/themes/*.toml`
-    - Theme selector in Settings tab
-  - ✅ Theming system - Phase 2 (UI migration) - **COMPLETE!**
-    - All 18 view helper functions migrated to use AppTheme
-    - All style functions (containers, buttons) use semantic color names
-    - Dynamic theme switching fully functional
-    - All components respond to theme changes in real-time
+  - ✅ Theming system - **COMPLETE!**
+    - **Phase 1 (Infrastructure):**
+      - 9 preset themes (Nord, Gruvbox, Dracula, Monokai, Everforest, Tokyo Night, Catppuccin, One Dark, Solarized)
+      - Custom theme loading from `~/.config/drfw/themes/*.toml`
+      - Theme selector in Settings tab
+    - **Phase 2 (UI migration):**
+      - All 18 view helper functions migrated to use AppTheme
+      - All style functions (containers, buttons) use semantic color names
+      - Dynamic theme switching fully functional
+      - All components respond to theme changes in real-time
+    - **Phase 3 (Persistence):**
+      - Theme choice persists across application restarts
+      - Unified config.json format for ruleset + settings
+      - Backward compatible with legacy ruleset.json
+    - **Note:** Some inline text colors still use Gruvbox constants (technical debt)
 - **Phase 4.6:** Testing and simulation mode
 - **Phase 4.7:** Advanced firewall features (NAT, port forwarding)
 - **Phase 5:** Performance optimizations
