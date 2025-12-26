@@ -68,23 +68,6 @@ pub fn section_header_container(theme: &AppTheme) -> container::Style {
     }
 }
 
-pub fn pill_container(theme: &AppTheme) -> container::Style {
-    container::Style {
-        background: Some(
-            Color {
-                a: 0.05,
-                ..theme.fg_primary
-            }
-            .into(),
-        ),
-        border: Border {
-            radius: 20.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
 pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style {
     let base = button::Style {
         background: Some(theme.accent.into()),

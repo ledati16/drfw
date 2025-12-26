@@ -21,7 +21,6 @@ pub struct State {
     pub countdown_remaining: u32,
     pub form_errors: Option<FormErrors>,
     pub interfaces: Vec<String>,
-    pub persistence_status: PersistenceStatus,
     pub cached_nft_text: String,
     pub cached_json_text: String,
     pub rule_search: String,
@@ -68,15 +67,6 @@ pub enum AppStatus {
     Confirmed,
     Reverting,
     Error(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PersistenceStatus {
-    #[default]
-    Unknown,
-    Enabled,
-    Disabled,
-    NotInstalled,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -221,9 +211,6 @@ pub enum Message {
     CopyErrorClicked,
     SaveToSystemClicked,
     SaveToSystemResult(Result<(), String>),
-    CheckPersistence,
-    PersistenceStatusResult(PersistenceStatus),
-    EnablePersistenceClicked,
     EventOccurred(iced::Event),
     FontsLoaded,
     ToggleDiff(bool),
@@ -304,7 +291,6 @@ impl State {
                 countdown_remaining: 15,
                 form_errors: None,
                 interfaces,
-                persistence_status: PersistenceStatus::Unknown,
                 cached_nft_text,
                 cached_json_text,
                 rule_search: String::new(),
@@ -326,7 +312,6 @@ impl State {
                     include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(),
                 )
                 .map(|_| Message::FontsLoaded),
-                Task::done(Message::CheckPersistence),
             ]),
         )
     }
@@ -501,12 +486,8 @@ impl State {
             Message::SaveToSystemClicked => return self.handle_save_to_system(),
             Message::SaveToSystemResult(Ok(())) => {
                 self.last_error = None;
-                return Task::done(Message::CheckPersistence);
             }
             Message::SaveToSystemResult(Err(e)) => self.last_error = Some(ErrorInfo::new(e)),
-            Message::CheckPersistence => return Self::handle_check_persistence(),
-            Message::PersistenceStatusResult(status) => self.persistence_status = status,
-            Message::EnablePersistenceClicked => return Self::handle_enable_persistence(),
             Message::EventOccurred(event) => return self.handle_event(event),
             Message::FontsLoaded => {}
             Message::ToggleDiff(enabled) => self.show_diff = enabled,
@@ -1025,43 +1006,6 @@ impl State {
                 }
             },
             Message::SaveToSystemResult,
-        )
-    }
-
-    fn handle_check_persistence() -> Task<Message> {
-        Task::perform(
-            async move {
-                let output = tokio::process::Command::new("systemctl")
-                    .args(["is-enabled", "nftables"])
-                    .output()
-                    .await;
-                match output {
-                    Ok(out) => {
-                        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        if s == "enabled" {
-                            PersistenceStatus::Enabled
-                        } else if s == "disabled" || s == "static" {
-                            PersistenceStatus::Disabled
-                        } else {
-                            PersistenceStatus::Unknown
-                        }
-                    }
-                    Err(_) => PersistenceStatus::NotInstalled,
-                }
-            },
-            Message::PersistenceStatusResult,
-        )
-    }
-
-    fn handle_enable_persistence() -> Task<Message> {
-        Task::perform(
-            async move {
-                let _ = tokio::process::Command::new("pkexec")
-                    .args(["systemctl", "enable", "--now", "nftables"])
-                    .status()
-                    .await;
-            },
-            |()| Message::CheckPersistence,
         )
     }
 

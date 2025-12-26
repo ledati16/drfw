@@ -1,10 +1,10 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
-    danger_button, dirty_button, main_container, pill_container, primary_button,
+    danger_button, dirty_button, main_container, primary_button,
     section_header_container, sidebar_container,
 };
 use crate::app::{
-    AppStatus, FONT_MONO, FONT_REGULAR, Message, PendingWarning, PersistenceStatus, RuleForm,
+    AppStatus, FONT_MONO, FONT_REGULAR, Message, PendingWarning, RuleForm,
     State, WorkspaceTab,
 };
 use crate::core::firewall::{PRESETS, Protocol};
@@ -199,20 +199,6 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         .align_y(Alignment::Center)
     ])
     .padding(iced::Padding::new(0.0).bottom(10.0));
-
-    let system_health = container(
-        column![
-            text("SYSTEM STATUS")
-                .size(10)
-                .color(theme.fg_muted)
-                .font(FONT_REGULAR),
-            view_status_pill(&state.status, theme),
-            view_persistence_pill(state.persistence_status, theme),
-        ]
-        .spacing(8),
-    )
-    .padding(16)
-    .style(move |_| section_header_container(theme));
 
     let search_bar = column![
         text_input("Search rules...", &state.rule_search)
@@ -538,8 +524,6 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     container(
         column![
             branding,
-            system_health,
-            rule::horizontal(1),
             text("NETWORK ACCESS")
                 .size(10)
                 .color(theme.fg_muted)
@@ -1096,80 +1080,6 @@ fn view_diff_text(
     }
 
     lines
-}
-
-fn view_pill<'a>(
-    label: &'a str,
-    color: Color,
-    action: Option<(&'a str, Message)>,
-    theme: &'a crate::theme::AppTheme,
-) -> Element<'a, Message> {
-    let content = row![
-        container(column![]).width(8).height(8).style(move |_| {
-            container::Style {
-                background: Some(color.into()),
-                border: Border {
-                    radius: 4.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        }),
-        text(label).size(12).font(FONT_REGULAR).color(color),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-
-    let pill = container(content)
-        .padding([6, 12])
-        .style(move |_| pill_container(theme));
-
-    if let Some((action_label, msg)) = action {
-        column![
-            pill,
-            button(text(action_label).size(11))
-                .on_press(msg)
-                .style(button::text)
-        ]
-        .spacing(4)
-        .align_x(Alignment::Center)
-        .into()
-    } else {
-        pill.into()
-    }
-}
-
-fn view_status_pill<'a>(
-    status: &'a AppStatus,
-    theme: &'a crate::theme::AppTheme,
-) -> Element<'a, Message> {
-    let (label, color) = match status {
-        AppStatus::Idle => ("System Protected", theme.success),
-        AppStatus::Verifying => ("Verifying Rules...", theme.accent),
-        AppStatus::Applying => ("Applying...", theme.accent),
-        AppStatus::AwaitingApply => ("Ready to Commit", theme.accent),
-        AppStatus::PendingConfirmation { .. } => ("Pending Verification", theme.accent),
-        AppStatus::Error(_) => ("Error Detected", theme.danger),
-        _ => ("Operational", theme.success),
-    };
-    view_pill(label, color, None, theme)
-}
-
-fn view_persistence_pill(
-    status: PersistenceStatus,
-    theme: &crate::theme::AppTheme,
-) -> Element<'_, Message> {
-    let (label, color, action) = match status {
-        PersistenceStatus::Enabled => ("Boot Persistence: ON", theme.success, None),
-        PersistenceStatus::Disabled => (
-            "Boot Persistence: OFF",
-            theme.warning,
-            Some(("Enable at Boot", Message::EnablePersistenceClicked)),
-        ),
-        PersistenceStatus::NotInstalled => ("nftables not found", theme.danger, None),
-        PersistenceStatus::Unknown => ("Checking Persistence...", theme.fg_muted, None),
-    };
-    view_pill(label, color, action, theme)
 }
 
 #[allow(clippy::too_many_lines)]
