@@ -883,13 +883,12 @@ fn view_highlighted_json(
             container(
                 text(format!("{:3} ", i + 1))
                     .font(mono_font)
-                    .size(11)
+                    .size(14)
                     .color(Color::from_rgb(0.4, 0.4, 0.4)),
             )
-            .padding(iced::Padding::new(0.0).right(10.0)),
+            .width(iced::Length::Fixed(50.0))
+            .padding(iced::Padding::new(0.0).right(8.0)),
         );
-
-        row_content = row_content.push(rule::vertical(1));
 
         // Preserve indentation
         let trimmed = line.trim_start();
@@ -900,10 +899,10 @@ fn view_highlighted_json(
                 const SPACES: &str = "                                ";
                 let spaces = &SPACES[..indent];
                 row_content = row_content
-                    .push(text("  ").font(mono_font).size(13))
-                    .push(text(spaces).font(mono_font).size(13));
+                    .push(text("  ").font(mono_font).size(14))
+                    .push(text(spaces).font(mono_font).size(14));
             } else {
-                row_content = row_content.push(text("  ").font(mono_font).size(13));
+                row_content = row_content.push(text("  ").font(mono_font).size(14));
             }
         }
 
@@ -917,7 +916,7 @@ fn view_highlighted_json(
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
                         row_content = row_content
-                            .push(text(token).font(mono_font).size(13).color(theme.fg_primary));
+                            .push(text(token).font(mono_font).size(14).color(theme.fg_primary));
                     }
 
                     // Read the full string
@@ -948,19 +947,19 @@ fn view_highlighted_json(
                         theme.syntax_string
                     };
                     row_content = row_content
-                        .push(text(string_content).font(mono_font).size(13).color(color));
+                        .push(text(string_content).font(mono_font).size(14).color(color));
                 }
                 ':' | ',' => {
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
                         row_content = row_content
-                            .push(text(token).font(mono_font).size(13).color(theme.fg_primary));
+                            .push(text(token).font(mono_font).size(14).color(theme.fg_primary));
                     }
                     let ch_str = if ch == ':' { ":" } else { "," };
                     row_content = row_content.push(
                         text(ch_str)
                             .font(mono_font)
-                            .size(13)
+                            .size(14)
                             .color(theme.fg_primary),
                     );
                 }
@@ -968,7 +967,7 @@ fn view_highlighted_json(
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
                         row_content = row_content
-                            .push(text(token).font(mono_font).size(13).color(theme.fg_primary));
+                            .push(text(token).font(mono_font).size(14).color(theme.fg_primary));
                     }
                     let ch_str = match ch {
                         '{' => "{",
@@ -978,7 +977,7 @@ fn view_highlighted_json(
                         _ => unreachable!(),
                     };
                     row_content = row_content
-                        .push(text(ch_str).font(mono_font).size(13).color(theme.info));
+                        .push(text(ch_str).font(mono_font).size(14).color(theme.info));
                 }
                 _ => {
                     current_token.push(ch);
@@ -995,7 +994,7 @@ fn view_highlighted_json(
                 _ => theme.fg_primary,
             };
             row_content = row_content
-                .push(text(current_token).font(mono_font).size(13).color(color));
+                .push(text(current_token).font(mono_font).size(14).color(color));
         }
 
         lines = lines.push(row_content);
@@ -1018,21 +1017,11 @@ fn view_highlighted_nft(
             container(
                 text(format!("{:4}", i + 1))
                     .font(mono_font)
-                    .size(11)
+                    .size(14)
                     .color(Color::from_rgb(0.25, 0.25, 0.25)),
             )
-            .width(Length::Fixed(40.0))
+            .width(Length::Fixed(50.0))
             .padding(iced::Padding::new(0.0).right(8.0)),
-        );
-
-        // Separator (subtle)
-        row_content = row_content.push(
-            container(rule::vertical(1))
-                .style(move |_| container::Style {
-                    background: Some(Color::from_rgb(0.2, 0.2, 0.2).into()),
-                    ..Default::default()
-                })
-                .padding(iced::Padding::new(0.0).right(12.0)),
         );
 
         // Preserve indentation
@@ -1108,21 +1097,11 @@ fn view_diff_text(
             container(
                 text(format!("{:4}", i + 1))
                     .font(mono_font)
-                    .size(11)
+                    .size(14)
                     .color(Color::from_rgb(0.25, 0.25, 0.25)),
             )
-            .width(Length::Fixed(40.0))
+            .width(Length::Fixed(50.0))
             .padding(iced::Padding::new(0.0).right(8.0)),
-        );
-
-        // Separator (subtle)
-        row_content = row_content.push(
-            container(rule::vertical(1))
-                .style(move |_| container::Style {
-                    background: Some(Color::from_rgb(0.2, 0.2, 0.2).into()),
-                    ..Default::default()
-                })
-                .padding(iced::Padding::new(0.0).right(12.0)),
         );
 
         // Determine if this is an added, removed, or unchanged line
