@@ -484,33 +484,45 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 );
                             }
 
-                            let content = column![
-                                // Row 1: Label
-                                container(
-                                    text(if rule.label.is_empty() {
-                                        "Unnamed Rule"
-                                    } else {
-                                        &rule.label
-                                    })
-                                    .size(12)
-                                    .font(FONT_REGULAR)
-                                    .wrapping(Wrapping::None)
-                                    .color(if rule.enabled {
-                                        theme.fg_primary
-                                    } else {
-                                        theme.fg_muted
-                                    })
-                                )
-                                .width(Length::Fill)
-                                .clip(true),
+                            // Build content column - only add tag row if tags exist
+                            let label_widget = container(
+                                text(if rule.label.is_empty() {
+                                    "Unnamed Rule"
+                                } else {
+                                    &rule.label
+                                })
+                                .size(12)
+                                .font(FONT_REGULAR)
+                                .wrapping(Wrapping::None)
+                                .color(if rule.enabled {
+                                    theme.fg_primary
+                                } else {
+                                    theme.fg_muted
+                                })
+                            )
+                            .width(Length::Fill)
+                            .clip(true);
 
-                                // Row 2: Tags only (port is now under protocol badge)
-                                row(tag_items)
-                                    .spacing(4)
-                                    .align_y(Alignment::Center),
-                            ]
-                            .spacing(4)
-                            .width(Length::Fill);
+                            let content = if tag_items.is_empty() {
+                                // No tags: add spacer to maintain consistent card height
+                                column![
+                                    label_widget,
+                                    container(row![])
+                                        .height(Length::Fixed(12.0)),  // Match tag row height (8px text + 2px padding + 2px spacing)
+                                ]
+                                .spacing(4)
+                                .width(Length::Fill)
+                            } else {
+                                // Has tags: show label + tags with spacing
+                                column![
+                                    label_widget,
+                                    row(tag_items)
+                                        .spacing(4)
+                                        .align_y(Alignment::Center),
+                                ]
+                                .spacing(4)
+                                .width(Length::Fill)
+                            };
 
                             let btn = button(content)
                                 .padding(0)
@@ -537,7 +549,6 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         },
                     ]
                     .spacing(8)
-                    .align_y(Alignment::Center)
                     .padding(iced::Padding {
                         top: 6.0,
                         right: 8.0,
