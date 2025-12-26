@@ -651,6 +651,7 @@ fn view_workspace<'a>(
     preview_content: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let theme = &state.theme;
+    // Tabs at top (Option A layout)
     let tab_bar = row![
         view_tab_button(
             "nftables.conf",
@@ -661,44 +662,46 @@ fn view_workspace<'a>(
         view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab, theme),
         view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
     ]
-    .spacing(2);
+    .spacing(4);
 
-    let mut preview_header_row = row![
+    // Title and description row with optional diff checkbox
+    let mut title_row = row![
         column![
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Active Configuration",
                 WorkspaceTab::Json => "JSON Export",
                 WorkspaceTab::Settings => "Advanced Security",
             })
-            .size(20)
+            .size(18)
             .font(FONT_REGULAR)
-            .color(theme.warning),
+            .color(theme.fg_primary),
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Current nftables ruleset generated from your rules.",
                 WorkspaceTab::Json => "Low-level JSON representation for debugging or automation.",
                 WorkspaceTab::Settings =>
                     "Optional security features for advanced users and server deployments.",
             })
-            .size(12)
+            .size(11)
             .color(theme.fg_muted),
         ]
-        .spacing(4)
+        .spacing(3)
         .width(Length::Fill),
     ];
 
     // Add diff toggle when on Nftables tab and we have a previous version
     if state.active_tab == WorkspaceTab::Nftables && state.last_applied_ruleset.is_some() {
-        preview_header_row = preview_header_row.push(
+        title_row = title_row.push(
             checkbox(state.show_diff)
                 .label("Show diff")
                 .on_toggle(Message::ToggleDiff)
                 .size(16)
-                .text_size(13)
-                .spacing(8),
+                .text_size(12)
+                .spacing(6),
         );
     }
 
-    let preview_header = preview_header_row.push(tab_bar).align_y(Alignment::Center);
+    let preview_header = column![tab_bar, title_row]
+        .spacing(16);
 
     let editor = container(
         scrollable(
@@ -982,23 +985,32 @@ fn view_highlighted_nft(
     content: &str,
     theme: &crate::theme::AppTheme,
 ) -> iced::widget::Column<'static, Message> {
-    let mut lines = column![].spacing(2);
+    let mut lines = column![].spacing(1);
 
     for (i, line) in content.lines().enumerate() {
         let mut row_content = row![].spacing(0);
 
-        // Line number
+        // Line number (more subtle)
         row_content = row_content.push(
             container(
-                text(format!("{:3} ", i + 1))
+                text(format!("{:4}", i + 1))
                     .font(FONT_MONO)
                     .size(11)
-                    .color(Color::from_rgb(0.4, 0.4, 0.4)),
+                    .color(Color::from_rgb(0.25, 0.25, 0.25)),
             )
-            .padding(iced::Padding::new(0.0).right(10.0)),
+            .width(Length::Fixed(40.0))
+            .padding(iced::Padding::new(0.0).right(8.0)),
         );
 
-        row_content = row_content.push(rule::vertical(1));
+        // Separator (subtle)
+        row_content = row_content.push(
+            container(rule::vertical(1))
+                .style(move |_| container::Style {
+                    background: Some(Color::from_rgb(0.2, 0.2, 0.2).into()),
+                    ..Default::default()
+                })
+                .padding(iced::Padding::new(0.0).right(12.0)),
+        );
 
         // Preserve indentation
         let trimmed = line.trim_start();
@@ -1007,11 +1019,7 @@ fn view_highlighted_nft(
             if indent > 0 {
                 const SPACES: &str = "                                ";
                 let spaces = &SPACES[..indent];
-                row_content = row_content
-                    .push(text("  ").font(FONT_MONO).size(13))
-                    .push(text(spaces).font(FONT_MONO).size(13));
-            } else {
-                row_content = row_content.push(text("  ").font(FONT_MONO).size(13));
+                row_content = row_content.push(text(spaces).font(FONT_MONO).size(14));
             }
         }
 
@@ -1021,7 +1029,7 @@ fn view_highlighted_nft(
         for (idx, word) in words.into_iter().enumerate() {
             // Add space between words (except first word)
             if idx > 0 {
-                row_content = row_content.push(text(" ").font(FONT_MONO).size(13));
+                row_content = row_content.push(text(" ").font(FONT_MONO).size(14));
             }
 
             // Determine color based on token type
@@ -1051,7 +1059,7 @@ fn view_highlighted_nft(
             row_content = row_content.push(
                 text(word)
                     .font(FONT_MONO)
-                    .size(13)
+                    .size(14)
                     .color(color)
             );
         }
@@ -1066,23 +1074,32 @@ fn view_diff_text(
     diff_content: &str,
     theme: &crate::theme::AppTheme,
 ) -> iced::widget::Column<'static, Message> {
-    let mut lines = column![].spacing(2);
+    let mut lines = column![].spacing(1);
 
     for (i, line) in diff_content.lines().enumerate() {
         let mut row_content = row![].spacing(0);
 
-        // Line number
+        // Line number (more subtle)
         row_content = row_content.push(
             container(
-                text(format!("{:3} ", i + 1))
+                text(format!("{:4}", i + 1))
                     .font(FONT_MONO)
                     .size(11)
-                    .color(Color::from_rgb(0.4, 0.4, 0.4)),
+                    .color(Color::from_rgb(0.25, 0.25, 0.25)),
             )
-            .padding(iced::Padding::new(0.0).right(10.0)),
+            .width(Length::Fixed(40.0))
+            .padding(iced::Padding::new(0.0).right(8.0)),
         );
 
-        row_content = row_content.push(rule::vertical(1));
+        // Separator (subtle)
+        row_content = row_content.push(
+            container(rule::vertical(1))
+                .style(move |_| container::Style {
+                    background: Some(Color::from_rgb(0.2, 0.2, 0.2).into()),
+                    ..Default::default()
+                })
+                .padding(iced::Padding::new(0.0).right(12.0)),
+        );
 
         // Determine if this is an added, removed, or unchanged line
         let (diff_prefix, content_line) = if let Some(content) = line.strip_prefix("+ ") {
@@ -1100,16 +1117,16 @@ fn view_diff_text(
         let trimmed = content_line.trim_start();
         let indent = content_line.len().saturating_sub(trimmed.len()).min(32);
         if !content_line.is_empty() {
-            // Add diff indicator as the base spacing
+            // Add diff indicator
             let diff_color = match diff_prefix {
                 "+" => theme.success,
                 "-" => theme.danger,
-                _ => theme.fg_muted,
+                _ => Color::from_rgb(0.3, 0.3, 0.3),
             };
             row_content = row_content.push(
                 text(format!("{diff_prefix} "))
                     .font(FONT_MONO)
-                    .size(13)
+                    .size(14)
                     .color(diff_color),
             );
 
@@ -1117,7 +1134,7 @@ fn view_diff_text(
             if indent > 0 {
                 const SPACES: &str = "                                ";
                 let spaces = &SPACES[..indent];
-                row_content = row_content.push(text(spaces).font(FONT_MONO).size(13));
+                row_content = row_content.push(text(spaces).font(FONT_MONO).size(14));
             }
         }
 
@@ -1127,7 +1144,7 @@ fn view_diff_text(
         for (idx, word) in words.into_iter().enumerate() {
             // Add space between words (except first word)
             if idx > 0 {
-                row_content = row_content.push(text(" ").font(FONT_MONO).size(13));
+                row_content = row_content.push(text(" ").font(FONT_MONO).size(14));
             }
 
             // Determine base color based on token type
@@ -1170,7 +1187,7 @@ fn view_diff_text(
             row_content = row_content.push(
                 text(word)
                     .font(FONT_MONO)
-                    .size(13)
+                    .size(14)
                     .color(color)
             );
         }

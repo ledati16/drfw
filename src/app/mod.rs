@@ -299,7 +299,7 @@ impl State {
                 rule_search: String::new(),
                 deleting_id: None,
                 pending_warning: None,
-                show_diff: false,
+                show_diff: true,
                 show_diagnostics: false,
                 show_export_modal: false,
                 show_shortcuts_help: false,

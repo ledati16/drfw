@@ -1,0 +1,18 @@
+[Unit]
+Description=DRFW Firewall Rules
+Documentation=https://github.com/yourusername/drfw
+After=network-pre.target
+Before=network.target
+Wants=network-pre.target
+ConditionPathExists=/etc/drfw/config.toml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/drfw apply --system-config
+ExecReload=/usr/bin/drfw apply --system-config
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
