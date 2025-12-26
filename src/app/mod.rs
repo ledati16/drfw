@@ -37,6 +37,7 @@ pub struct State {
     pub custom_themes: Vec<crate::theme::AppTheme>,
     pub filter_tag: Option<String>,
     pub dragged_rule_id: Option<uuid::Uuid>,
+    pub hovered_drop_target_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,6 +249,8 @@ pub enum Message {
     // Drag and Drop
     RuleDragStart(uuid::Uuid),
     RuleDropped(uuid::Uuid),
+    RuleHoverStart(uuid::Uuid),
+    RuleHoverEnd,
 }
 
 impl State {
@@ -306,6 +309,7 @@ impl State {
                 custom_themes,
                 filter_tag: None,
                 dragged_rule_id: None,
+                hovered_drop_target_id: None,
             },
             Task::batch(vec![
                 iced::font::load(
@@ -622,6 +626,7 @@ impl State {
             }
             Message::RuleDragStart(id) => {
                 self.dragged_rule_id = Some(id);
+                self.hovered_drop_target_id = None;
             }
             Message::RuleDropped(target_id) => {
                 if let Some(dragged_id) = self.dragged_rule_id {
@@ -646,6 +651,15 @@ impl State {
                     }
                 }
                 self.dragged_rule_id = None;
+                self.hovered_drop_target_id = None;
+            }
+            Message::RuleHoverStart(id) => {
+                if self.dragged_rule_id.is_some() {
+                    self.hovered_drop_target_id = Some(id);
+                }
+            }
+            Message::RuleHoverEnd => {
+                self.hovered_drop_target_id = None;
             }
         }
         Task::none()

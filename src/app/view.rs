@@ -9,8 +9,8 @@ use crate::app::{
 };
 use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, rule, scrollable, stack, text, text_input,
-    toggler,
+    button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, stack, text, text_input,
+    toggler, tooltip,
 };
 use iced::widget::text::Wrapping;
 use iced::{Alignment, Border, Color, Element, Length, Theme};
@@ -285,6 +285,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 let is_deleting = state.deleting_id == Some(rule.id);
                 let is_being_dragged = state.dragged_rule_id == Some(rule.id);
                 let any_drag_active = state.dragged_rule_id.is_some();
+                let is_hover_target = state.hovered_drop_target_id == Some(rule.id);
 
                 let card_content: Element<'_, Message> = if is_deleting {
                     row![
@@ -322,16 +323,42 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
                     // Compact card design, REVERTED truncation/icons
                     row![
-                        // Drag Handle (Button)
-                        button(
-                            container(text("::").size(12).color(handle_color))
-                                .width(Length::Fixed(20.0))
-                                .center_x(Length::Fixed(20.0))
-                        )
-                        .on_press(handle_action)
-                        .padding([0, 2])
-                        .style(button::text),
-                        
+                        // Drag Handle (Button) with tooltip
+                        tooltip(
+                            button(
+                                container(text("::").size(12).color(handle_color))
+                                    .width(Length::Fixed(20.0))
+                                    .center_x(Length::Fixed(20.0))
+                            )
+                            .on_press(handle_action)
+                            .padding([0, 2])
+                            .style(button::text),
+                            container(
+                                text(if any_drag_active && !is_being_dragged {
+                                    "Click to move here"
+                                } else {
+                                    "Click to move rule"
+                                })
+                                .size(11)
+                            )
+                            .padding(6)
+                            .style(move |_| container::Style {
+                                background: Some(Color::from_rgb(0.15, 0.15, 0.15).into()),
+                                border: Border {
+                                    color: theme.border,
+                                    width: 1.0,
+                                    radius: 4.0.into(),
+                                },
+                                shadow: iced::Shadow {
+                                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                                    offset: iced::Vector::new(0.0, 2.0),
+                                    blur_radius: 4.0,
+                                },
+                                ..Default::default()
+                            }),
+                            tooltip::Position::Right
+                        ),
+
                         // Status Strip
                         container(column![])
                             .width(Length::Fixed(3.0))
@@ -352,12 +379,19 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 ..Default::default()
                             }),
 
-                        // Toggle
-                        toggler(rule.enabled)
-                            .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
-                            .size(12)
-                            .width(Length::Shrink)
-                            .spacing(0),
+                        // Toggle - make non-interactive when drag is active
+                        {
+                            let toggle = toggler(rule.enabled)
+                                .size(12)
+                                .width(Length::Shrink)
+                                .spacing(0);
+
+                            if any_drag_active && !is_being_dragged {
+                                toggle  // No on_toggle handler when drag active
+                            } else {
+                                toggle.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
+                            }
+                        },
 
                         // Protocol Badge + Port (vertical stack)
                         column![
@@ -419,8 +453,8 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         .spacing(2)
                         .align_x(Alignment::Center),  // Center the column contents
 
-                        // Info Column
-                        button({
+                        // Info Column - make non-interactive when drag is active
+                        {
                             // Build tag badges - no limit, just let them flow and clip naturally
                             let mut tag_items = vec![];
 
@@ -450,7 +484,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 );
                             }
 
-                            column![
+                            let content = column![
                                 // Row 1: Label
                                 container(
                                     text(if rule.label.is_empty() {
@@ -476,17 +510,31 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                     .align_y(Alignment::Center),
                             ]
                             .spacing(4)
-                            .width(Length::Fill)
-                        })
-                        .padding(0)
-                        .style(button::text)
-                        .on_press(Message::EditRuleClicked(rule.id)),
+                            .width(Length::Fill);
 
-                        // Actions
-                        button(text("×").size(14).color(theme.fg_muted))
-                            .on_press(Message::DeleteRuleRequested(rule.id))
-                            .padding(4)
-                            .style(button::text),
+                            let btn = button(content)
+                                .padding(0)
+                                .style(button::text);
+
+                            if any_drag_active && !is_being_dragged {
+                                btn  // No on_press when drag active
+                            } else {
+                                btn.on_press(Message::EditRuleClicked(rule.id))
+                            }
+                        },
+
+                        // Actions - make non-interactive when drag is active
+                        {
+                            let btn = button(text("×").size(14).color(theme.fg_muted))
+                                .padding(4)
+                                .style(button::text);
+
+                            if any_drag_active && !is_being_dragged {
+                                btn  // No on_press when drag active
+                            } else {
+                                btn.on_press(Message::DeleteRuleRequested(rule.id))
+                            }
+                        },
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center)
@@ -499,24 +547,46 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .into()
                 };
 
-                col.push(
-                    container(card_content)
-                        .style(move |_| if is_editing {
-                            active_card_container(theme)
-                        } else if is_being_dragged {
-                            container::Style {
-                                background: Some(theme.bg_active.into()),
-                                border: Border {
-                                    color: theme.accent,
-                                    width: 1.0,
-                                    radius: 8.0.into(),
-                                },
-                                ..Default::default()
-                            }
-                        } else {
-                            card_container(theme)
-                        })
-                )
+                // Wrap card in mouse_area when dragging to detect hover
+                let card = container(card_content)
+                    .style(move |_| if is_editing {
+                        active_card_container(theme)
+                    } else if is_being_dragged {
+                        container::Style {
+                            background: Some(theme.bg_active.into()),
+                            border: Border {
+                                color: theme.accent,
+                                width: 2.0,
+                                radius: 8.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    } else if is_hover_target {
+                        container::Style {
+                            background: Some(theme.bg_surface.into()),
+                            border: Border {
+                                color: theme.success,
+                                width: 2.0,
+                                radius: 8.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    } else {
+                        card_container(theme)
+                    });
+
+                let card_element: Element<'_, Message> = if any_drag_active && !is_being_dragged {
+                    // Make entire card clickable and hoverable when drag is active
+                    mouse_area(card)
+                        .on_enter(Message::RuleHoverStart(rule.id))
+                        .on_exit(Message::RuleHoverEnd)
+                        .on_press(Message::RuleDropped(rule.id))
+                        .into()
+                } else {
+                    card.into()
+                };
+
+                col.push(card_element)
             })
             .into()
     };
