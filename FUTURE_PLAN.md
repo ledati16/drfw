@@ -2016,14 +2016,21 @@ fn update_cached_text(&mut self) {
 **Goal:** Complete documentation and prepare for public release
 **Timeline:** Before v1.0
 
-### 6.1 Code Documentation
+### 6.1 Code Documentation ✅ PARTIALLY COMPLETE
 
-- [ ] Add module-level documentation
-- [ ] Document all public functions with examples
-- [ ] Document panic conditions
-- [ ] Document error conditions
-- [ ] Add safety documentation for unsafe code (if any)
-- [ ] Generate and review rustdoc output
+- [x] Add module-level documentation
+  - [x] `core/mod.rs` - Core firewall management overview
+  - [x] `core/firewall.rs` - Rule structures and nftables generation
+  - [x] `command.rs` - Command pattern for undo/redo
+  - [x] `elevation.rs` - Privilege escalation security
+  - [x] `utils.rs` - XDG directory management
+  - [x] `validators.rs` - Input validation (already documented)
+  - [x] `audit.rs` - Security audit logging (already documented)
+  - [x] `main.rs` - Application overview
+- [ ] Document remaining public functions with examples
+- [ ] Document panic conditions where applicable
+- [ ] Document error conditions in Result-returning functions
+- [x] Generate and review rustdoc output
 
 ---
 

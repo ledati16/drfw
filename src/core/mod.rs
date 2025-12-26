@@ -1,3 +1,13 @@
+//! Core firewall management functionality
+//!
+//! This module contains the core types and logic for managing nftables firewall rules.
+//! It provides:
+//!
+//! - [`firewall`]: Data structures for representing firewall rules and rulesets
+//! - [`nft_json`]: JSON-based nftables rule application and snapshot management
+//! - [`verify`]: Ruleset validation and syntax checking
+//! - [`error`]: Error types for firewall operations
+
 pub mod error;
 pub mod firewall;
 pub mod nft_json;

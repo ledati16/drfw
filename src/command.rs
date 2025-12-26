@@ -1,10 +1,52 @@
+//! Command pattern implementation for undo/redo functionality
+//!
+//! This module implements the Command design pattern to enable robust undo/redo
+//! capabilities for all firewall rule modifications.
+//!
+//! # Architecture
+//!
+//! Each modification to the firewall ruleset is encapsulated as a [`Command`]:
+//! - [`AddRuleCommand`]: Adds a new rule
+//! - [`DeleteRuleCommand`]: Removes an existing rule
+//! - [`EditRuleCommand`]: Modifies an existing rule
+//! - [`ToggleRuleCommand`]: Enables/disables a rule
+//! - [`ReorderRuleCommand`]: Changes rule priority order
+//!
+//! The [`CommandHistory`] manages the undo/redo stacks with configurable depth.
+//!
+//! # Example
+//!
+//! ```
+//! use drfw::command::{CommandHistory, AddRuleCommand};
+//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol};
+//! use uuid::Uuid;
+//!
+//! let mut ruleset = FirewallRuleset::new();
+//! let mut history = CommandHistory::default();
+//!
+//! let rule = Rule {
+//!     id: Uuid::new_v4(),
+//!     label: "Allow HTTP".to_string(),
+//!     protocol: Protocol::Tcp,
+//!     ports: Some("80".to_string()),
+//!     // ... other fields
+//! };
+//!
+//! let cmd = Box::new(AddRuleCommand { rule });
+//! history.execute(cmd, &mut ruleset);
+//!
+//! // Later: undo the operation
+//! history.undo(&mut ruleset);
+//! ```
+
 use crate::core::firewall::{FirewallRuleset, Rule};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Command pattern for undo/redo functionality
+/// Command pattern trait for undo/redo functionality
 ///
 /// Each command encapsulates a state change operation and knows how to undo it.
+/// Commands are serializable to enable persistence of command history.
 pub trait Command: std::fmt::Debug {
     /// Executes the command, applying changes to the ruleset
     fn execute(&self, ruleset: &mut FirewallRuleset);

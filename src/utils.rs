@@ -1,3 +1,27 @@
+//! Utility functions for directory management and system integration
+//!
+//! This module provides helper functions following the XDG Base Directory specification
+//! for portable configuration and data storage across Linux distributions.
+//!
+//! # Directory Structure
+//!
+//! - Config: `~/.config/drfw/` - User configuration files
+//! - Data: `~/.local/share/drfw/` - Application data (saved rulesets)
+//! - State: `~/.local/state/drfw/` - Runtime state (snapshots, audit logs)
+//!
+//! # Example
+//!
+//! ```
+//! use drfw::utils::{get_config_dir, get_state_dir, ensure_dirs};
+//!
+//! // Ensure directories exist before use
+//! ensure_dirs().expect("Failed to create directories");
+//!
+//! if let Some(config_path) = get_config_dir() {
+//!     // Load configuration from config_path
+//! }
+//! ```
+
 use directories::ProjectDirs;
 use std::path::PathBuf;
 

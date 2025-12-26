@@ -1,14 +1,60 @@
+//! Firewall rule data structures and nftables code generation
+//!
+//! This module defines the core data structures for representing firewall rules
+//! and provides functionality to convert them into nftables configuration format.
+//!
+//! # Rule Structure
+//!
+//! A [`Rule`] represents a single firewall rule with:
+//! - Protocol filtering (TCP, UDP, ICMP, etc.)
+//! - Port ranges for applicable protocols
+//! - Source IP/network filtering
+//! - Network interface filtering
+//! - IPv6-only mode
+//! - Enable/disable state
+//! - Tags and grouping for organization
+//!
+//! # Example
+//!
+//! ```
+//! use drfw::core::firewall::{Rule, Protocol};
+//! use uuid::Uuid;
+//!
+//! let rule = Rule {
+//!     id: Uuid::new_v4(),
+//!     label: "Allow SSH".to_string(),
+//!     protocol: Protocol::Tcp,
+//!     ports: Some("22".to_string()),
+//!     source: None,
+//!     interface: None,
+//!     ipv6_only: false,
+//!     enabled: true,
+//!     created_at: chrono::Utc::now(),
+//!     tags: vec![],
+//!     group: None,
+//! };
+//! ```
+
 use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
 
+/// Network protocol type for firewall rules
+///
+/// Supports common protocols used in nftables filtering.
+/// `Copy` trait allows efficient passing by value for this small enum.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Protocol {
+    /// Match all protocols
     Any,
+    /// Transmission Control Protocol
     Tcp,
+    /// User Datagram Protocol
     Udp,
+    /// Internet Control Message Protocol (IPv4)
     Icmp,
+    /// Internet Control Message Protocol version 6
     Icmpv6,
 }
 

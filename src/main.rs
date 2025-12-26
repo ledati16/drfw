@@ -1,3 +1,42 @@
+//! DRFW - Dumb Rust Firewall
+//!
+//! A user-friendly GUI application for managing Linux firewall rules via nftables.
+//!
+//! # Features
+//!
+//! - Visual rule management with real-time preview
+//! - Undo/redo support for all operations
+//! - Rule grouping and tagging
+//! - Snapshot and restore functionality
+//! - Syntax-highlighted nftables configuration
+//! - IPv4/IPv6 support
+//! - Boot persistence management
+//! - Audit logging for security operations
+//!
+//! # Architecture
+//!
+//! DRFW follows a modular architecture:
+//! - `core`: Firewall rule logic and nftables integration
+//! - `app`: GUI application state and event handling
+//! - `command`: Undo/redo command pattern implementation
+//! - `validators`: Input validation and sanitization
+//! - `elevation`: Privilege escalation via pkexec
+//! - `audit`: Security audit logging
+//!
+//! # Security
+//!
+//! - Runs as unprivileged user, elevates only for rule application
+//! - All inputs validated before elevation
+//! - Audit trail of all privileged operations
+//! - Atomic rule application with automatic snapshots
+//!
+//! # Usage
+//!
+//! ```bash
+//! # Run the GUI application
+//! drfw
+//! ```
+
 mod app;
 mod audit;
 mod command;
