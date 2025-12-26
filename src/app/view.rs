@@ -1036,9 +1036,45 @@ fn view_highlighted_nft(
         }
 
         // Syntax highlight nftables tokens
-        let words: Vec<String> = trimmed.split_whitespace().map(String::from).collect();
+        let mut tokens = Vec::new();
+        let mut chars = trimmed.chars().peekable();
 
-        for (idx, word) in words.into_iter().enumerate() {
+        while let Some(&ch) = chars.peek() {
+            if ch.is_whitespace() {
+                chars.next();
+                continue;
+            }
+
+            if ch == '"' {
+                // Parse string
+                let mut s = String::new();
+                s.push(chars.next().unwrap()); // consume opening quote
+                while let Some(_) = chars.peek() {
+                    s.push(chars.next().unwrap());
+                    if s.ends_with('"') && !s.ends_with("\\\"") {
+                        break;
+                    }
+                }
+                tokens.push(s);
+            } else if ch == '#' {
+                // Parse comment (rest of line)
+                let s: String = chars.collect();
+                tokens.push(s);
+                break;
+            } else {
+                // Parse word
+                let mut s = String::new();
+                while let Some(&next_ch) = chars.peek() {
+                    if next_ch.is_whitespace() {
+                        break;
+                    }
+                    s.push(chars.next().unwrap());
+                }
+                tokens.push(s);
+            }
+        }
+
+        for (idx, word) in tokens.into_iter().enumerate() {
             // Add space between words (except first word)
             if idx > 0 {
                 row_content = row_content.push(text(" ").font(mono_font).size(14));
@@ -1048,19 +1084,22 @@ fn view_highlighted_nft(
             let color = if matches!(
                 word.as_str(),
                 "table" | "chain" | "type" | "hook" | "priority" | "policy"
-                | "counter" | "accept" | "drop" | "reject" | "jump" | "goto"
-                | "meta" | "iif" | "oif" | "saddr" | "daddr" | "sport" | "dport"
-                | "tcp" | "udp" | "icmp" | "icmpv6" | "ip" | "ip6" | "inet"
+                | "counter" | "accept" | "drop" | "reject" | "jump" | "goto" | "return"
+                | "meta" | "iif" | "oif" | "iifname" | "oifname"
+                | "saddr" | "daddr" | "sport" | "dport"
+                | "tcp" | "udp" | "icmp" | "icmpv6" | "ip" | "ip6" | "inet" | "arp" | "bridge"
                 | "filter" | "nat" | "route" | "input" | "output" | "forward"
-                | "prerouting" | "postrouting" | "ct" | "state" | "established"
-                | "related" | "invalid" | "new"
+                | "prerouting" | "postrouting" | "ingress"
+                | "ct" | "state" | "established" | "related" | "invalid" | "new" | "untracked"
+                | "log" | "limit" | "rate" | "second" | "minute" | "hour" | "day"
+                | "snat" | "dnat" | "masquerade" | "redirect"
             ) {
                 theme.syntax_keyword
             } else if word.starts_with('"') || word.ends_with('"') {
                 theme.syntax_string
             } else if word.parse::<u16>().is_ok() || word.contains('.') || word.contains(':') {
                 theme.warning // Numbers, IPs
-            } else if matches!(word.as_str(), "{" | "}" | "(" | ")") {
+            } else if matches!(word.as_str(), "{" | "}" | "(" | ")" | "," | ";") {
                 theme.info
             } else if word.starts_with('#') {
                 theme.fg_muted // Comments
@@ -1142,9 +1181,45 @@ fn view_diff_text(
         }
 
         // Syntax highlight nftables tokens with slight tinting based on diff status
-        let words: Vec<String> = trimmed.split_whitespace().map(String::from).collect();
+        let mut tokens = Vec::new();
+        let mut chars = trimmed.chars().peekable();
 
-        for (idx, word) in words.into_iter().enumerate() {
+        while let Some(&ch) = chars.peek() {
+            if ch.is_whitespace() {
+                chars.next();
+                continue;
+            }
+
+            if ch == '"' {
+                // Parse string
+                let mut s = String::new();
+                s.push(chars.next().unwrap()); // consume opening quote
+                while let Some(_) = chars.peek() {
+                    s.push(chars.next().unwrap());
+                    if s.ends_with('"') && !s.ends_with("\\\"") {
+                        break;
+                    }
+                }
+                tokens.push(s);
+            } else if ch == '#' {
+                // Parse comment (rest of line)
+                let s: String = chars.collect();
+                tokens.push(s);
+                break;
+            } else {
+                // Parse word
+                let mut s = String::new();
+                while let Some(&next_ch) = chars.peek() {
+                    if next_ch.is_whitespace() {
+                        break;
+                    }
+                    s.push(chars.next().unwrap());
+                }
+                tokens.push(s);
+            }
+        }
+
+        for (idx, word) in tokens.into_iter().enumerate() {
             // Add space between words (except first word)
             if idx > 0 {
                 row_content = row_content.push(text(" ").font(mono_font).size(14));
@@ -1154,19 +1229,22 @@ fn view_diff_text(
             let base_color = if matches!(
                 word.as_str(),
                 "table" | "chain" | "type" | "hook" | "priority" | "policy"
-                | "counter" | "accept" | "drop" | "reject" | "jump" | "goto"
-                | "meta" | "iif" | "oif" | "saddr" | "daddr" | "sport" | "dport"
-                | "tcp" | "udp" | "icmp" | "icmpv6" | "ip" | "ip6" | "inet"
+                | "counter" | "accept" | "drop" | "reject" | "jump" | "goto" | "return"
+                | "meta" | "iif" | "oif" | "iifname" | "oifname"
+                | "saddr" | "daddr" | "sport" | "dport"
+                | "tcp" | "udp" | "icmp" | "icmpv6" | "ip" | "ip6" | "inet" | "arp" | "bridge"
                 | "filter" | "nat" | "route" | "input" | "output" | "forward"
-                | "prerouting" | "postrouting" | "ct" | "state" | "established"
-                | "related" | "invalid" | "new"
+                | "prerouting" | "postrouting" | "ingress"
+                | "ct" | "state" | "established" | "related" | "invalid" | "new" | "untracked"
+                | "log" | "limit" | "rate" | "second" | "minute" | "hour" | "day"
+                | "snat" | "dnat" | "masquerade" | "redirect"
             ) {
                 theme.syntax_keyword
             } else if word.starts_with('"') || word.ends_with('"') {
                 theme.syntax_string
             } else if word.parse::<u16>().is_ok() || word.contains('.') || word.contains(':') {
                 theme.warning
-            } else if matches!(word.as_str(), "{" | "}" | "(" | ")") {
+            } else if matches!(word.as_str(), "{" | "}" | "(" | ")" | "," | ";") {
                 theme.info
             } else if word.starts_with('#') {
                 theme.fg_muted
@@ -1195,7 +1273,21 @@ fn view_diff_text(
             );
         }
 
-        lines = lines.push(row_content);
+        // Add subtle background for added/removed lines
+        let bg_color = match diff_prefix {
+            "+" => Some(Color { a: 0.1, ..theme.success }),
+            "-" => Some(Color { a: 0.1, ..theme.danger }),
+            _ => None,
+        };
+
+        lines = lines.push(
+            container(row_content)
+                .width(Length::Fill)
+                .style(move |_| container::Style {
+                    background: bg_color.map(Into::into),
+                    ..Default::default()
+                })
+        );
     }
 
     lines
