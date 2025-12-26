@@ -47,22 +47,21 @@ pub async fn verify_ruleset(ruleset: &FirewallRuleset) -> Result<VerifyResult> {
     let json_payload = ruleset.to_nftables_json();
     let json_string = serde_json::to_string(&json_payload)?;
 
-    info!("Verifying ruleset via nft --json --check");
+    info!("Verifying ruleset via nft --json --check (elevated)");
 
-    let mut child = tokio::process::Command::new("nft")
-        .args(["--json", "--check", "-f", "-"])
+    let mut child = crate::elevation::create_elevated_nft_command(&["--json", "--check", "-f", "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Internal(format!("Failed to spawn nft: {}", e)))?;
+        .map_err(|e| Error::Internal(format!("Failed to spawn nft: {e}")))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
         stdin
             .write_all(json_string.as_bytes())
             .await
-            .map_err(|e| Error::Internal(format!("Failed to write to nft stdin: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("Failed to write to nft stdin: {e}")))?;
     }
 
     let output = child.wait_with_output().await?;

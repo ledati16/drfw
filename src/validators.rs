@@ -14,6 +14,8 @@
 /// # Examples
 ///
 /// ```
+/// use drfw::validators::sanitize_label;
+///
 /// let safe = sanitize_label("Normal Label");
 /// assert_eq!(safe, "Normal Label");
 ///
@@ -263,7 +265,7 @@ mod property_tests {
         #[test]
         fn test_sanitize_label_no_control_chars(input in "\\PC*") {
             let sanitized = sanitize_label(&input);
-            prop_assert!(!sanitized.chars().any(|c| c.is_control()));
+            prop_assert!(!sanitized.chars().any(char::is_control));
         }
 
         #[test]
@@ -320,7 +322,7 @@ mod property_tests {
             valid_prefix in "[a-zA-Z0-9._-]{1,10}",
             invalid_char in "[^a-zA-Z0-9._-]"
         ) {
-            let invalid_name = format!("{}{}", valid_prefix, invalid_char);
+            let invalid_name = format!("{valid_prefix}{invalid_char}");
             let result = validate_interface(&invalid_name);
             prop_assert!(result.is_err());
         }

@@ -56,16 +56,16 @@ pub struct ThemeColors {
 impl ThemeToml {
     /// Load a custom theme from a TOML file
     pub fn load(path: &PathBuf) -> Result<AppTheme, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read theme file: {}", e))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read theme file: {e}"))?;
 
         let toml: ThemeToml =
-            toml::from_str(&content).map_err(|e| format!("Failed to parse theme TOML: {}", e))?;
+            toml::from_str(&content).map_err(|e| format!("Failed to parse theme TOML: {e}"))?;
 
         toml.into_app_theme()
     }
 
-    /// Convert TOML theme to AppTheme
+    /// Convert TOML theme to `AppTheme`
     fn into_app_theme(self) -> Result<AppTheme, String> {
         Ok(AppTheme {
             name: self.theme.name,
@@ -105,15 +105,15 @@ fn parse_color(hex: &str) -> Result<Color, String> {
     let hex = hex.trim_start_matches('#');
 
     if hex.len() != 6 {
-        return Err(format!("Invalid color format: {}, expected #RRGGBB", hex));
+        return Err(format!("Invalid color format: {hex}, expected #RRGGBB"));
     }
 
     let r = u8::from_str_radix(&hex[0..2], 16)
-        .map_err(|_| format!("Invalid red component in color: {}", hex))?;
+        .map_err(|_| format!("Invalid red component in color: {hex}"))?;
     let g = u8::from_str_radix(&hex[2..4], 16)
-        .map_err(|_| format!("Invalid green component in color: {}", hex))?;
+        .map_err(|_| format!("Invalid green component in color: {hex}"))?;
     let b = u8::from_str_radix(&hex[4..6], 16)
-        .map_err(|_| format!("Invalid blue component in color: {}", hex))?;
+        .map_err(|_| format!("Invalid blue component in color: {hex}"))?;
 
     Ok(Color::from_rgb(
         f32::from(r) / 255.0,
@@ -164,7 +164,7 @@ pub fn create_example_theme() -> Result<PathBuf, String> {
 
     config_dir.push("themes");
     std::fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create themes directory: {}", e))?;
+        .map_err(|e| format!("Failed to create themes directory: {e}"))?;
 
     config_dir.push("example.toml");
 
@@ -217,7 +217,7 @@ syntax_operator = "#d4d4d4"
 "##;
 
     std::fs::write(&config_dir, example)
-        .map_err(|e| format!("Failed to write example theme: {}", e))?;
+        .map_err(|e| format!("Failed to write example theme: {e}"))?;
 
     Ok(config_dir)
 }
@@ -227,6 +227,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_parse_color() {
         let color = parse_color("#FF0000").unwrap();
         assert_eq!(color.r, 1.0);

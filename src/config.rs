@@ -6,20 +6,13 @@ use std::io::Write;
 
 /// Complete application configuration including ruleset and UI settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     pub ruleset: FirewallRuleset,
     #[serde(default)]
     pub theme_choice: crate::theme::ThemeChoice,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            ruleset: FirewallRuleset::new(),
-            theme_choice: crate::theme::ThemeChoice::default(),
-        }
-    }
-}
 
 /// Saves the complete app config to disk using an atomic write pattern.
 /// 1. Writes to a temporary file.

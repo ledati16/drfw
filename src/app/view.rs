@@ -1,8 +1,7 @@
 use crate::app::ui_components::{
-    ACCENT, DANGER, GRUV_AQUA, GRUV_BG2, GRUV_BLUE, GRUV_FG0, GRUV_ORANGE, GRUV_PURPLE,
-    GRUV_YELLOW, SUCCESS, TEXT_BRIGHT, TEXT_DIM, active_card_button, active_tab_button,
-    card_button, card_container, danger_button, dirty_button, hovered_card_button, main_container,
-    pill_container, primary_button, section_header_container, sidebar_container,
+    active_card_button, active_card_container, active_tab_button, card_button, card_container,
+    danger_button, dirty_button, main_container, pill_container, primary_button,
+    section_header_container, sidebar_container,
 };
 use crate::app::{
     AppStatus, FONT_MONO, FONT_REGULAR, Message, PendingWarning, PersistenceStatus, RuleForm,
@@ -10,9 +9,10 @@ use crate::app::{
 };
 use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, pick_list, row, scrollable, stack, text,
-    text_input, toggler, vertical_rule,
+    button, checkbox, column, container, pick_list, row, rule, scrollable, stack, text, text_input,
+    toggler,
 };
+use iced::widget::text::Wrapping;
 use iced::{Alignment, Border, Color, Element, Length, Theme};
 
 #[allow(clippy::too_many_lines)]
@@ -30,16 +30,24 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let preview_content: Element<'_, Message> = match state.active_tab {
         WorkspaceTab::Nftables => {
             if let Some(ref diff) = diff_text {
-                view_diff_text(diff).into()
+                container(view_diff_text(diff, theme))
+                    .width(Length::Fill)
+                    .into()
             } else {
-                view_highlighted_nft(&state.cached_nft_text).into()
+                container(view_highlighted_nft(&state.cached_nft_text, theme))
+                    .width(Length::Fill)
+                    .into()
             }
         }
         WorkspaceTab::Json => {
             // Use cached JSON to avoid regenerating on every frame
-            view_highlighted_json(&state.cached_json_text).into()
+            container(view_highlighted_json(&state.cached_json_text, theme))
+                .width(Length::Fill)
+                .into()
         }
-        WorkspaceTab::Settings => view_settings(state),
+        WorkspaceTab::Settings => container(view_settings(state))
+            .width(Length::Fill)
+            .into(),
     };
 
     let workspace = view_workspace(state, preview_content);
@@ -177,12 +185,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
     let branding = container(column![
         row![
-            container(text("🛡️").size(28).color(GRUV_PURPLE)).padding(4),
+            container(text("🛡️").size(28).color(theme.accent)).padding(4),
             column![
-                text("DRFW").size(24).font(FONT_REGULAR).color(GRUV_PURPLE),
+                text("DRFW").size(24).font(FONT_REGULAR).color(theme.accent),
                 text("DUMB RUST FIREWALL")
                     .size(9)
-                    .color(TEXT_DIM)
+                    .color(theme.fg_muted)
                     .font(FONT_MONO),
             ]
             .spacing(0)
@@ -196,7 +204,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         column![
             text("SYSTEM STATUS")
                 .size(10)
-                .color(TEXT_DIM)
+                .color(theme.fg_muted)
                 .font(FONT_REGULAR),
             view_status_pill(&state.status, theme),
             view_persistence_pill(state.persistence_status, theme),
@@ -230,20 +238,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         .iter()
         .filter(|r| {
             // Text search filter
+            let search_term = state.rule_search.to_lowercase();
             let matches_search = state.rule_search.is_empty()
-                || r.label
-                    .to_lowercase()
-                    .contains(&state.rule_search.to_lowercase())
-                || r.protocol
-                    .to_string()
-                    .contains(&state.rule_search.to_lowercase());
-
-            // Group filter
-            let matches_group = if let Some(ref filter_group) = state.filter_group {
-                r.group.as_ref() == Some(filter_group)
-            } else {
-                true
-            };
+                || r.label.to_lowercase().contains(&search_term)
+                || r.protocol.to_string().to_lowercase().contains(&search_term)
+                || r.interface.as_ref().is_some_and(|i| i.to_lowercase().contains(&search_term))
+                || r.tags.iter().any(|tag| tag.to_lowercase().contains(&search_term));
 
             // Tag filter
             let matches_tag = if let Some(ref filter_tag) = state.filter_tag {
@@ -252,7 +252,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 true
             };
 
-            matches_search && matches_group && matches_tag
+            matches_search && matches_tag
         })
         .collect();
 
@@ -263,7 +263,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             state.ruleset.rules.len()
         ))
         .size(10)
-        .color(TEXT_DIM)
+        .color(theme.fg_muted)
         .font(FONT_MONO),
     ]
     .width(Length::Fill)
@@ -274,34 +274,38 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             column![
                 text("No matching rules.")
                     .size(13)
-                    .color(TEXT_DIM)
+                    .color(theme.fg_muted)
                     .font(FONT_REGULAR),
                 if state.ruleset.rules.is_empty() {
                     text("Click '+' to add your first rule.")
                         .size(11)
-                        .color(TEXT_DIM)
+                        .color(theme.fg_muted)
                 } else {
-                    text("").size(0)
+                    text("")
                 }
             ]
             .spacing(10)
             .align_x(Alignment::Center),
         )
         .width(Length::Fill)
-        .height(Length::Fill)
+        .padding(40)
         .center_x(Length::Fill)
-        .center_y(Length::Fill)
         .into()
     } else {
         filtered_rules
             .into_iter()
-            .fold(column![].spacing(12), |col, rule| {
+            .fold(column![].spacing(8), |col, rule| {
                 let is_editing = state.rule_form.as_ref().and_then(|f| f.id) == Some(rule.id);
                 let is_deleting = state.deleting_id == Some(rule.id);
+                let is_being_dragged = state.dragged_rule_id == Some(rule.id);
+                let any_drag_active = state.dragged_rule_id.is_some();
 
                 let card_content: Element<'_, Message> = if is_deleting {
                     row![
-                        text("Delete?").size(12).color(DANGER).width(Length::Fill),
+                        text("Delete?")
+                            .size(12)
+                            .color(theme.danger)
+                            .width(Length::Fill),
                         button(text("No").size(11))
                             .on_press(Message::CancelDelete)
                             .padding(6)
@@ -316,13 +320,44 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .padding(iced::Padding::new(10.0))
                     .into()
                 } else {
+                    let handle_action = if any_drag_active {
+                        Message::RuleDropped(rule.id)
+                    } else {
+                        Message::RuleDragStart(rule.id)
+                    };
+
+                    let handle_color = if is_being_dragged {
+                        theme.accent
+                    } else if any_drag_active {
+                        theme.success
+                    } else {
+                        theme.fg_muted
+                    };
+
+                    // Compact card design, REVERTED truncation/icons
                     row![
+                        // Drag Handle (Button)
+                        button(
+                            container(text("::").size(12).color(handle_color))
+                                .width(Length::Fixed(20.0))
+                                .center_x(Length::Fixed(20.0))
+                        )
+                        .on_press(handle_action)
+                        .padding([0, 2])
+                        .style(button::text),
+                        
+                        // Status Strip
                         container(column![])
-                            .width(Length::Fixed(4.0))
-                            .height(Length::Fill)
+                            .width(Length::Fixed(3.0))
+                            .height(Length::Fixed(24.0))
                             .style(move |_| container::Style {
                                 background: Some(
-                                    (if rule.enabled { GRUV_AQUA } else { TEXT_DIM }).into()
+                                    (if rule.enabled {
+                                        theme.info
+                                    } else {
+                                        theme.fg_muted
+                                    })
+                                    .into()
                                 ),
                                 border: Border {
                                     radius: 2.0.into(),
@@ -330,139 +365,171 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 },
                                 ..Default::default()
                             }),
+
+                        // Toggle
                         toggler(rule.enabled)
                             .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
-                            .size(14)
-                            .width(Length::Shrink),
-                        button(
-                            row![
-                                container(
-                                    text(match rule.protocol {
-                                        Protocol::Tcp => "🌐",
-                                        Protocol::Udp => "⚡",
-                                        Protocol::Any => "🔗",
-                                        _ => "🛠️",
-                                    })
-                                    .size(14)
-                                    .color(if rule.enabled { GRUV_BLUE } else { TEXT_DIM })
-                                )
-                                .padding(6)
-                                .style(|_| container::Style {
-                                    background: Some(GRUV_BG2.into()),
-                                    border: Border {
-                                        radius: 6.0.into(),
+                            .size(12)
+                            .width(Length::Shrink)
+                            .spacing(0),
+
+                        // Protocol Badge + Port (vertical stack)
+                        column![
+                            container(
+                                text(match rule.protocol {
+                                    Protocol::Tcp => "TCP",
+                                    Protocol::Udp => "UDP",
+                                    Protocol::Any => "ANY",
+                                    _ => "PROTO",
+                                })
+                                .size(9)
+                                .font(FONT_MONO)
+                                .color(if rule.enabled {
+                                    theme.syntax_type
+                                } else {
+                                    theme.fg_muted
+                                })
+                            )
+                            .padding([2, 4])
+                            .style(move |_| container::Style {
+                                background: Some(theme.bg_base.into()),
+                                border: Border {
+                                    radius: 4.0.into(),
+                                    color: theme.border,
+                                    width: 1.0,
+                                },
+                                ..Default::default()
+                            }),
+
+                            // Port number below protocol - split range if too long
+                            container({
+                                let port_display = rule.ports.as_ref().map_or_else(
+                                    || column![text("All").size(8).color(theme.fg_muted).font(FONT_MONO)],
+                                    |p| if p.start == p.end {
+                                        // Single port
+                                        column![text(p.start.to_string()).size(8).color(theme.fg_muted).font(FONT_MONO)]
+                                    } else {
+                                        // Port range - check if it needs wrapping
+                                        let range_str = format!("{}-{}", p.start, p.end);
+                                        if range_str.len() > 8 {
+                                            // Split across two lines for long ranges
+                                            column![
+                                                text(p.start.to_string()).size(8).color(theme.fg_muted).font(FONT_MONO),
+                                                text(p.end.to_string()).size(8).color(theme.fg_muted).font(FONT_MONO),
+                                            ]
+                                            .spacing(0)
+                                            .align_x(Alignment::Center)
+                                        } else {
+                                            // Fits on one line
+                                            column![text(range_str).size(8).color(theme.fg_muted).font(FONT_MONO)]
+                                        }
+                                    }
+                                );
+                                port_display.align_x(Alignment::Center)
+                            })
+                            .width(Length::Fixed(50.0))  // Fixed width prevents alignment shift
+                            .center_x(Length::Fixed(50.0)),
+                        ]
+                        .spacing(2)
+                        .align_x(Alignment::Center),  // Center the column contents
+
+                        // Info Column
+                        button({
+                            // Build tag badges - no limit, just let them flow and clip naturally
+                            let mut tag_items = vec![];
+
+                            for tag in rule.tags.iter() {
+                                let tag_theme = theme.clone();
+                                tag_items.push(
+                                    container(
+                                        container(
+                                            text(tag)
+                                                .size(8)
+                                                .color(theme.fg_on_accent)
+                                                .wrapping(Wrapping::None)
+                                        )
+                                        .max_width(80)  // Max width for tag text, but shrinks to fit
+                                        .clip(true)  // Clip text at badge edge if over max
+                                    )
+                                    .padding([1, 4])
+                                    .style(move |_| container::Style {
+                                        background: Some(tag_theme.accent.into()),
+                                        border: Border {
+                                            radius: 3.0.into(),
+                                            ..Default::default()
+                                        },
                                         ..Default::default()
-                                    },
-                                    ..Default::default()
-                                }),
-                                column![
+                                    })
+                                    .into()
+                                );
+                            }
+
+                            column![
+                                // Row 1: Label
+                                container(
                                     text(if rule.label.is_empty() {
                                         "Unnamed Rule"
                                     } else {
                                         &rule.label
                                     })
-                                    .size(13)
+                                    .size(12)
                                     .font(FONT_REGULAR)
-                                    .color(if rule.enabled { GRUV_YELLOW } else { TEXT_DIM }),
-                                    text(format!(
-                                        "{}/{}",
-                                        rule.protocol,
-                                        rule.ports.as_ref().map_or_else(
-                                            || "any".to_string(),
-                                            std::string::ToString::to_string
-                                        )
-                                    ))
-                                    .size(10)
-                                    .color(TEXT_DIM)
-                                    .font(FONT_MONO),
-                                    row![if let Some(ref group) = rule.group {
-                                        text(format!("📁 {}", group))
-                                            .size(9)
-                                            .color(GRUV_AQUA)
-                                            .font(FONT_MONO)
+                                    .wrapping(Wrapping::None)
+                                    .color(if rule.enabled {
+                                        theme.fg_primary
                                     } else {
-                                        text("").size(0)
-                                    }],
-                                    if !rule.tags.is_empty() {
-                                        row(rule.tags.iter().map(|tag| {
-                                            container(text(tag).size(8).color(theme.fg_on_accent))
-                                                .padding([2, 6])
-                                                .style(move |t| {
-                                                    let mut style = container::rounded_box(t);
-                                                    style.background = Some(theme.info.into());
-                                                    style
-                                                })
-                                                .into()
-                                        }))
-                                        .spacing(4)
-                                        .wrap()
-                                    } else {
-                                        row(std::iter::empty()).spacing(4).wrap()
-                                    },
-                                ]
+                                        theme.fg_muted
+                                    })
+                                )
                                 .width(Length::Fill)
-                                .spacing(1),
+                                .clip(true),
+
+                                // Row 2: Tags only (port is now under protocol badge)
+                                row(tag_items)
+                                    .spacing(4)
+                                    .align_y(Alignment::Center),
                             ]
-                            .spacing(10)
-                            .align_y(Alignment::Center)
-                        )
+                            .spacing(4)
+                            .width(Length::Fill)
+                        })
                         .padding(0)
                         .style(button::text)
                         .on_press(Message::EditRuleClicked(rule.id)),
-                        row![
-                            column![
-                                button(text("⏫").size(8))
-                                    .on_press(Message::MoveRuleToTop(rule.id))
-                                    .padding(2)
-                                    .style(button::text),
-                                button(text("▲").size(10))
-                                    .on_press(Message::MoveRuleUp(rule.id))
-                                    .padding(2)
-                                    .style(button::text),
-                            ]
-                            .spacing(1),
-                            column![
-                                button(text("▼").size(10))
-                                    .on_press(Message::MoveRuleDown(rule.id))
-                                    .padding(2)
-                                    .style(button::text),
-                                button(text("⏬").size(8))
-                                    .on_press(Message::MoveRuleToBottom(rule.id))
-                                    .padding(2)
-                                    .style(button::text),
-                            ]
-                            .spacing(1),
-                        ]
-                        .spacing(4),
-                        button(text("×").size(14))
+
+                        // Actions
+                        button(text("×").size(14).color(theme.fg_muted))
                             .on_press(Message::DeleteRuleRequested(rule.id))
                             .padding(4)
                             .style(button::text),
                     ]
-                    .padding(iced::Padding {
-                        top: 8.0,
-                        right: 12.0,
-                        bottom: 8.0,
-                        left: 8.0,
-                    })
-                    .align_y(Alignment::Center)
                     .spacing(8)
+                    .align_y(Alignment::Center)
+                    .padding(iced::Padding {
+                        top: 6.0,
+                        right: 8.0,
+                        bottom: 6.0,
+                        left: 4.0,
+                    })
                     .into()
                 };
 
                 col.push(
-                    button(container(card_content))
-                        .padding(0)
-                        .style(move |_, status| {
-                            if is_editing {
-                                active_card_button(theme, status)
-                            } else if status == button::Status::Hovered {
-                                hovered_card_button(theme, status)
-                            } else {
-                                card_button(theme, status)
+                    container(card_content)
+                        .style(move |_| if is_editing {
+                            active_card_container(theme)
+                        } else if is_being_dragged {
+                            container::Style {
+                                background: Some(theme.bg_active.into()),
+                                border: Border {
+                                    color: theme.accent,
+                                    width: 1.0,
+                                    radius: 8.0.into(),
+                                },
+                                ..Default::default()
                             }
+                        } else {
+                            card_container(theme)
                         })
-                        .on_press(Message::EditRuleClicked(rule.id)),
                 )
             })
             .into()
@@ -472,14 +539,18 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         column![
             branding,
             system_health,
-            horizontal_rule(1),
+            rule::horizontal(1),
             text("NETWORK ACCESS")
                 .size(10)
-                .color(TEXT_DIM)
+                .color(theme.fg_muted)
                 .font(FONT_REGULAR),
             search_bar,
             metrics,
-            scrollable(rule_list).height(Length::Fill),
+            container(
+                scrollable(container(rule_list).height(Length::Shrink))
+                    .height(Length::Fill)
+            )
+            .max_height(800),
             add_button,
         ]
         .spacing(20)
@@ -518,7 +589,7 @@ fn view_workspace<'a>(
             })
             .size(20)
             .font(FONT_REGULAR)
-            .color(GRUV_ORANGE),
+            .color(theme.warning),
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Current nftables ruleset generated from your rules.",
                 WorkspaceTab::Json => "Low-level JSON representation for debugging or automation.",
@@ -526,7 +597,7 @@ fn view_workspace<'a>(
                     "Optional security features for advanced users and server deployments.",
             })
             .size(12)
-            .color(TEXT_DIM),
+            .color(theme.fg_muted),
         ]
         .spacing(4)
         .width(Length::Fill),
@@ -535,7 +606,8 @@ fn view_workspace<'a>(
     // Add diff toggle when on Nftables tab and we have a previous version
     if state.active_tab == WorkspaceTab::Nftables && state.last_applied_ruleset.is_some() {
         preview_header_row = preview_header_row.push(
-            checkbox("Show diff", state.show_diff)
+            checkbox(state.show_diff)
+                .label("Show diff")
                 .on_toggle(Message::ToggleDiff)
                 .size(16)
                 .text_size(13)
@@ -545,23 +617,31 @@ fn view_workspace<'a>(
 
     let preview_header = preview_header_row.push(tab_bar).align_y(Alignment::Center);
 
-    let editor = container(scrollable(container(preview_content).padding(24)))
+    let editor = container(
+        scrollable(
+            container(preview_content)
+                .padding(24)
+                .width(Length::Fill)
+                .height(Length::Shrink)
+        )
         .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.11, 0.11, 0.11).into()),
-            border: Border {
-                radius: 12.0.into(),
-                color: GRUV_BG2,
-                width: 1.0,
-            },
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
-                offset: iced::Vector::new(0.0, 4.0),
-                blur_radius: 10.0,
-            },
-            ..Default::default()
-        });
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(Color::from_rgb(0.11, 0.11, 0.11).into()),
+        border: Border {
+            radius: 12.0.into(),
+            color: theme.border,
+            width: 1.0,
+        },
+        shadow: iced::Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 10.0,
+        },
+        ..Default::default()
+    });
 
     let save_to_system = if state.status == AppStatus::Confirmed {
         button(text("Permanently Save to System").font(FONT_REGULAR))
@@ -639,13 +719,13 @@ fn view_workspace<'a>(
         undo_button,
         redo_button,
         save_to_system,
-        horizontal_rule(1),
+        rule::horizontal(1),
         if let Some(ref err) = state.last_error {
             view_error_display(err, theme)
         } else {
             row![].into()
         },
-        horizontal_rule(1),
+        rule::horizontal(1),
         apply_button,
     ]
     .spacing(16)
@@ -657,7 +737,6 @@ fn view_workspace<'a>(
             .padding(32),
     )
     .width(Length::Fill)
-    .height(Length::Fill)
     .into()
 }
 
@@ -674,14 +753,18 @@ fn view_tab_button<'a>(
             if is_active {
                 active_tab_button(theme, status)
             } else {
-                button::secondary(&Theme::default(), status)
+                button::secondary(&Theme::Dark, status)
             }
         })
         .on_press(Message::TabChanged(tab))
         .into()
 }
 
-fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message> {
+#[allow(clippy::too_many_lines)]
+fn view_highlighted_json(
+    content: &str,
+    theme: &crate::theme::AppTheme,
+) -> iced::widget::Column<'static, Message> {
     let mut lines = column![].spacing(2);
 
     for (i, line) in content.lines().enumerate() {
@@ -698,30 +781,22 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
             .padding(iced::Padding::new(0.0).right(10.0)),
         );
 
-        row_content = row_content.push(vertical_rule(1));
+        row_content = row_content.push(rule::vertical(1));
 
         // Preserve indentation
         let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if !line.is_empty() && indent > 0 {
-            // Use a static string for common indentation levels (up to 32 spaces)
-            const SPACES: &str = "                                ";
-            let indent_str = if indent <= 32 {
-                &SPACES[..indent]
+        let indent = line.len().saturating_sub(trimmed.len()).min(32);
+        if !line.is_empty() {
+            if indent > 0 {
+                // Use a static string for common indentation levels (up to 32 spaces)
+                const SPACES: &str = "                                ";
+                let spaces = &SPACES[..indent];
+                row_content = row_content
+                    .push(text("  ").font(FONT_MONO).size(13))
+                    .push(text(spaces).font(FONT_MONO).size(13));
             } else {
-                SPACES // Fallback for deeply nested content
-            };
-            row_content = row_content.push(
-                text(format!("  {}", indent_str))
-                    .font(FONT_MONO)
-                    .size(13),
-            );
-        } else if !line.is_empty() {
-            row_content = row_content.push(
-                text("  ")
-                    .font(FONT_MONO)
-                    .size(13),
-            );
+                row_content = row_content.push(text("  ").font(FONT_MONO).size(13));
+            }
         }
 
         // Syntax highlight JSON tokens
@@ -733,8 +808,8 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
                 '"' => {
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
-                        row_content =
-                            row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
+                        row_content = row_content
+                            .push(text(token).font(FONT_MONO).size(13).color(theme.fg_primary));
                     }
 
                     // Read the full string
@@ -759,29 +834,33 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
                         }
                     }
 
-                    let color = if is_key { GRUV_BLUE } else { GRUV_YELLOW };
+                    let color = if is_key {
+                        theme.syntax_type
+                    } else {
+                        theme.syntax_string
+                    };
                     row_content = row_content
                         .push(text(string_content).font(FONT_MONO).size(13).color(color));
                 }
                 ':' | ',' => {
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
-                        row_content =
-                            row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
+                        row_content = row_content
+                            .push(text(token).font(FONT_MONO).size(13).color(theme.fg_primary));
                     }
                     let ch_str = if ch == ':' { ":" } else { "," };
                     row_content = row_content.push(
                         text(ch_str)
                             .font(FONT_MONO)
                             .size(13)
-                            .color(GRUV_FG0),
+                            .color(theme.fg_primary),
                     );
                 }
                 '{' | '}' | '[' | ']' => {
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
-                        row_content =
-                            row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
+                        row_content = row_content
+                            .push(text(token).font(FONT_MONO).size(13).color(theme.fg_primary));
                     }
                     let ch_str = match ch {
                         '{' => "{",
@@ -790,12 +869,8 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
                         ']' => "]",
                         _ => unreachable!(),
                     };
-                    row_content = row_content.push(
-                        text(ch_str)
-                            .font(FONT_MONO)
-                            .size(13)
-                            .color(GRUV_AQUA),
-                    );
+                    row_content = row_content
+                        .push(text(ch_str).font(FONT_MONO).size(13).color(theme.info));
                 }
                 _ => {
                     current_token.push(ch);
@@ -807,12 +882,12 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
         if !current_token.is_empty() {
             let token_trimmed = current_token.trim();
             let color = match token_trimmed {
-                "true" | "false" | "null" => GRUV_PURPLE,
-                _ if token_trimmed.parse::<f64>().is_ok() => GRUV_ORANGE,
-                _ => GRUV_FG0,
+                "true" | "false" | "null" => theme.syntax_keyword,
+                _ if token_trimmed.parse::<f64>().is_ok() => theme.warning,
+                _ => theme.fg_primary,
             };
-            row_content =
-                row_content.push(text(current_token).font(FONT_MONO).size(13).color(color));
+            row_content = row_content
+                .push(text(current_token).font(FONT_MONO).size(13).color(color));
         }
 
         lines = lines.push(row_content);
@@ -820,11 +895,16 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
     lines
 }
 
-fn view_highlighted_nft(content: &str) -> iced::widget::Column<'_, Message> {
+fn view_highlighted_nft(
+    content: &str,
+    theme: &crate::theme::AppTheme,
+) -> iced::widget::Column<'static, Message> {
     let mut lines = column![].spacing(2);
+
     for (i, line) in content.lines().enumerate() {
         let mut row_content = row![].spacing(0);
 
+        // Line number
         row_content = row_content.push(
             container(
                 text(format!("{:3} ", i + 1))
@@ -835,78 +915,83 @@ fn view_highlighted_nft(content: &str) -> iced::widget::Column<'_, Message> {
             .padding(iced::Padding::new(0.0).right(10.0)),
         );
 
-        row_content = row_content.push(vertical_rule(1));
+        row_content = row_content.push(rule::vertical(1));
 
+        // Preserve indentation
         let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if !line.is_empty() && indent > 0 {
-            // Use a static string for common indentation levels (up to 32 spaces)
-            const SPACES: &str = "                                ";
-            let indent_str = if indent <= 32 {
-                &SPACES[..indent]
+        let indent = line.len().saturating_sub(trimmed.len()).min(32);
+        if !line.is_empty() {
+            if indent > 0 {
+                const SPACES: &str = "                                ";
+                let spaces = &SPACES[..indent];
+                row_content = row_content
+                    .push(text("  ").font(FONT_MONO).size(13))
+                    .push(text(spaces).font(FONT_MONO).size(13));
             } else {
-                SPACES // Fallback for deeply nested content
-            };
-            row_content = row_content.push(
-                text(format!("  {}", indent_str))
-                    .font(FONT_MONO)
-                    .size(13),
-            );
-        } else if !line.is_empty() {
-            row_content = row_content.push(
-                text("  ")
-                    .font(FONT_MONO)
-                    .size(13),
-            );
-        }
-
-        if trimmed.starts_with('#') {
-            row_content = row_content.push(text(trimmed).font(FONT_MONO).size(13).color(TEXT_DIM));
-        } else {
-            for word in trimmed.split_inclusive(' ') {
-                let word_trim = word.trim();
-                let color = match word_trim {
-                    "table" | "chain" | "type" | "hook" | "priority" | "policy" => GRUV_AQUA,
-                    "accept" => SUCCESS,
-                    "drop" | "reject" => DANGER,
-                    "ip" | "ip6" | "tcp" | "udp" | "icmp" | "icmpv6" | "meta" | "ct" | "inet" => {
-                        GRUV_BLUE
-                    }
-                    "dport" | "saddr" | "iifname" | "state" | "comment" => GRUV_YELLOW,
-                    _ if word_trim.contains('"')
-                        || word_trim.parse::<u16>().is_ok()
-                        || word_trim.contains('/') =>
-                    {
-                        GRUV_YELLOW
-                    }
-                    _ => GRUV_FG0,
-                };
-                let is_keyword =
-                    matches!(word_trim, "table" | "chain" | "accept" | "drop" | "reject");
-                row_content = row_content.push(
-                    text(word)
-                        .font(if is_keyword { FONT_REGULAR } else { FONT_MONO })
-                        .size(13)
-                        .color(color),
-                );
+                row_content = row_content.push(text("  ").font(FONT_MONO).size(13));
             }
         }
+
+        // Syntax highlight nftables tokens
+        let words: Vec<String> = trimmed.split_whitespace().map(String::from).collect();
+
+        for (idx, word) in words.into_iter().enumerate() {
+            // Add space between words (except first word)
+            if idx > 0 {
+                row_content = row_content.push(text(" ").font(FONT_MONO).size(13));
+            }
+
+            // Determine color based on token type
+            let color = if matches!(
+                word.as_str(),
+                "table" | "chain" | "type" | "hook" | "priority" | "policy"
+                | "counter" | "accept" | "drop" | "reject" | "jump" | "goto"
+                | "meta" | "iif" | "oif" | "saddr" | "daddr" | "sport" | "dport"
+                | "tcp" | "udp" | "icmp" | "icmpv6" | "ip" | "ip6" | "inet"
+                | "filter" | "nat" | "route" | "input" | "output" | "forward"
+                | "prerouting" | "postrouting" | "ct" | "state" | "established"
+                | "related" | "invalid" | "new"
+            ) {
+                theme.syntax_keyword
+            } else if word.starts_with('"') || word.ends_with('"') {
+                theme.syntax_string
+            } else if word.parse::<u16>().is_ok() || word.contains('.') || word.contains(':') {
+                theme.warning // Numbers, IPs
+            } else if matches!(word.as_str(), "{" | "}" | "(" | ")") {
+                theme.info
+            } else if word.starts_with('#') {
+                theme.fg_muted // Comments
+            } else {
+                theme.fg_primary
+            };
+
+            row_content = row_content.push(
+                text(word)
+                    .font(FONT_MONO)
+                    .size(13)
+                    .color(color)
+            );
+        }
+
         lines = lines.push(row_content);
     }
+
     lines
 }
 
-fn view_diff_text(diff_content: &str) -> iced::widget::Column<'static, Message> {
+fn view_diff_text(
+    diff_content: &str,
+    theme: &crate::theme::AppTheme,
+) -> iced::widget::Column<'static, Message> {
     let mut lines = column![].spacing(2);
 
     for (i, line) in diff_content.lines().enumerate() {
         let mut row_content = row![].spacing(0);
 
         // Line number
-        let line_num = format!("{:3} ", i + 1);
         row_content = row_content.push(
             container(
-                text(line_num)
+                text(format!("{:3} ", i + 1))
                     .font(FONT_MONO)
                     .size(11)
                     .color(Color::from_rgb(0.4, 0.4, 0.4)),
@@ -914,23 +999,98 @@ fn view_diff_text(diff_content: &str) -> iced::widget::Column<'static, Message> 
             .padding(iced::Padding::new(0.0).right(10.0)),
         );
 
-        row_content = row_content.push(vertical_rule(1));
+        row_content = row_content.push(rule::vertical(1));
 
-        // Determine color based on diff prefix
-        let color = if line.starts_with("+ ") {
-            SUCCESS // Green for additions
-        } else if line.starts_with("- ") {
-            DANGER // Red for deletions
+        // Determine if this is an added, removed, or unchanged line
+        let (diff_prefix, content_line) = if let Some(content) = line.strip_prefix("+ ") {
+            ("+", content)
+        } else if let Some(content) = line.strip_prefix("- ") {
+            ("-", content)
+        } else if let Some(content) = line.strip_prefix("  ") {
+            (" ", content)
         } else {
-            GRUV_FG0 // Normal for unchanged
+            // Fallback for lines without any prefix
+            (" ", line)
         };
 
-        row_content = row_content.push(
-            text(format!("  {}", line))
-                .font(FONT_MONO)
-                .size(13)
-                .color(color),
-        );
+        // Preserve indentation (matching regular view structure)
+        let trimmed = content_line.trim_start();
+        let indent = content_line.len().saturating_sub(trimmed.len()).min(32);
+        if !content_line.is_empty() {
+            // Add diff indicator as the base spacing
+            let diff_color = match diff_prefix {
+                "+" => theme.success,
+                "-" => theme.danger,
+                _ => theme.fg_muted,
+            };
+            row_content = row_content.push(
+                text(format!("{diff_prefix} "))
+                    .font(FONT_MONO)
+                    .size(13)
+                    .color(diff_color),
+            );
+
+            // Add additional indentation if needed
+            if indent > 0 {
+                const SPACES: &str = "                                ";
+                let spaces = &SPACES[..indent];
+                row_content = row_content.push(text(spaces).font(FONT_MONO).size(13));
+            }
+        }
+
+        // Syntax highlight nftables tokens with slight tinting based on diff status
+        let words: Vec<String> = trimmed.split_whitespace().map(String::from).collect();
+
+        for (idx, word) in words.into_iter().enumerate() {
+            // Add space between words (except first word)
+            if idx > 0 {
+                row_content = row_content.push(text(" ").font(FONT_MONO).size(13));
+            }
+
+            // Determine base color based on token type
+            let base_color = if matches!(
+                word.as_str(),
+                "table" | "chain" | "type" | "hook" | "priority" | "policy"
+                | "counter" | "accept" | "drop" | "reject" | "jump" | "goto"
+                | "meta" | "iif" | "oif" | "saddr" | "daddr" | "sport" | "dport"
+                | "tcp" | "udp" | "icmp" | "icmpv6" | "ip" | "ip6" | "inet"
+                | "filter" | "nat" | "route" | "input" | "output" | "forward"
+                | "prerouting" | "postrouting" | "ct" | "state" | "established"
+                | "related" | "invalid" | "new"
+            ) {
+                theme.syntax_keyword
+            } else if word.starts_with('"') || word.ends_with('"') {
+                theme.syntax_string
+            } else if word.parse::<u16>().is_ok() || word.contains('.') || word.contains(':') {
+                theme.warning
+            } else if matches!(word.as_str(), "{" | "}" | "(" | ")") {
+                theme.info
+            } else if word.starts_with('#') {
+                theme.fg_muted
+            } else {
+                theme.fg_primary
+            };
+
+            // Tint the color based on diff status
+            let color = match diff_prefix {
+                "+" => Color {
+                    g: (base_color.g * 1.2).min(1.0),
+                    ..base_color
+                },
+                "-" => Color {
+                    r: (base_color.r * 1.2).min(1.0),
+                    ..base_color
+                },
+                _ => base_color,
+            };
+
+            row_content = row_content.push(
+                text(word)
+                    .font(FONT_MONO)
+                    .size(13)
+                    .color(color)
+            );
+        }
 
         lines = lines.push(row_content);
     }
@@ -984,13 +1144,13 @@ fn view_status_pill<'a>(
     theme: &'a crate::theme::AppTheme,
 ) -> Element<'a, Message> {
     let (label, color) = match status {
-        AppStatus::Idle => ("System Protected", SUCCESS),
-        AppStatus::Verifying => ("Verifying Rules...", ACCENT),
-        AppStatus::Applying => ("Applying...", ACCENT),
-        AppStatus::AwaitingApply => ("Ready to Commit", ACCENT),
-        AppStatus::PendingConfirmation { .. } => ("Pending Verification", ACCENT),
-        AppStatus::Error(_) => ("Error Detected", DANGER),
-        _ => ("Operational", SUCCESS),
+        AppStatus::Idle => ("System Protected", theme.success),
+        AppStatus::Verifying => ("Verifying Rules...", theme.accent),
+        AppStatus::Applying => ("Applying...", theme.accent),
+        AppStatus::AwaitingApply => ("Ready to Commit", theme.accent),
+        AppStatus::PendingConfirmation { .. } => ("Pending Verification", theme.accent),
+        AppStatus::Error(_) => ("Error Detected", theme.danger),
+        _ => ("Operational", theme.success),
     };
     view_pill(label, color, None, theme)
 }
@@ -1000,14 +1160,14 @@ fn view_persistence_pill(
     theme: &crate::theme::AppTheme,
 ) -> Element<'_, Message> {
     let (label, color, action) = match status {
-        PersistenceStatus::Enabled => ("Boot Persistence: ON", SUCCESS, None),
+        PersistenceStatus::Enabled => ("Boot Persistence: ON", theme.success, None),
         PersistenceStatus::Disabled => (
             "Boot Persistence: OFF",
-            GRUV_ORANGE,
+            theme.warning,
             Some(("Enable at Boot", Message::EnablePersistenceClicked)),
         ),
-        PersistenceStatus::NotInstalled => ("nftables not found", DANGER, None),
-        PersistenceStatus::Unknown => ("Checking Persistence...", TEXT_DIM, None),
+        PersistenceStatus::NotInstalled => ("nftables not found", theme.danger, None),
+        PersistenceStatus::Unknown => ("Checking Persistence...", theme.fg_muted, None),
     };
     view_pill(label, color, action, theme)
 }
@@ -1039,25 +1199,25 @@ fn view_rule_form<'a>(
             text(title_text)
                 .size(22)
                 .font(FONT_REGULAR)
-                .color(GRUV_AQUA),
+                .color(theme.info),
             text("Define allowed traffic patterns.")
                 .size(12)
-                .color(TEXT_DIM)
+                .color(theme.fg_muted)
         ]
         .spacing(4),
         column![
-            container(text("BASIC INFO").size(10).color(TEXT_BRIGHT))
+            container(text("BASIC INFO").size(10).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
             column![
-                text("DESCRIPTION").size(10).color(TEXT_DIM),
+                text("DESCRIPTION").size(10).color(theme.fg_muted),
                 text_input("e.g. Local Web Server", &form.label)
                     .on_input(Message::RuleFormLabelChanged)
                     .padding(10)
             ]
             .spacing(6),
             column![
-                text("SERVICE PRESET").size(10).color(TEXT_DIM),
+                text("SERVICE PRESET").size(10).color(theme.fg_muted),
                 pick_list(
                     PRESETS,
                     form.selected_preset.clone(),
@@ -1071,12 +1231,12 @@ fn view_rule_form<'a>(
         ]
         .spacing(12),
         column![
-            container(text("TECHNICAL DETAILS").size(10).color(TEXT_BRIGHT))
+            container(text("TECHNICAL DETAILS").size(10).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
             row![
                 column![
-                    text("PROTOCOL").size(10).color(TEXT_DIM),
+                    text("PROTOCOL").size(10).color(theme.fg_muted),
                     pick_list(
                         vec![
                             Protocol::Any,
@@ -1085,7 +1245,7 @@ fn view_rule_form<'a>(
                             Protocol::Icmp,
                             Protocol::Icmpv6
                         ],
-                        Some(form.protocol.clone()),
+                        Some(form.protocol),
                         Message::RuleFormProtocolChanged
                     )
                     .width(Length::Fill)
@@ -1094,10 +1254,10 @@ fn view_rule_form<'a>(
                 .spacing(6)
                 .width(Length::Fill),
                 column![
-                    text("PORT RANGE").size(10).color(TEXT_DIM),
-                    view_port_inputs(form, port_error),
+                    text("PORT RANGE").size(10).color(theme.fg_muted),
+                    view_port_inputs(form, port_error, theme),
                     if let Some(err) = port_error {
-                        text(err).size(11).color(DANGER)
+                        text(err).size(11).color(theme.danger)
                     } else {
                         text("")
                     }
@@ -1109,23 +1269,25 @@ fn view_rule_form<'a>(
         ]
         .spacing(12),
         column![
-            container(text("CONTEXT").size(10).color(TEXT_BRIGHT))
+            container(text("CONTEXT").size(10).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
             column![
-                text("SOURCE ADDRESS (OPTIONAL)").size(10).color(TEXT_DIM),
+                text("SOURCE ADDRESS (OPTIONAL)")
+                    .size(10)
+                    .color(theme.fg_muted),
                 text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
                     .on_input(Message::RuleFormSourceChanged)
                     .padding(10),
                 if let Some(err) = source_error {
-                    text(err).size(11).color(DANGER)
+                    text(err).size(11).color(theme.danger)
                 } else {
                     text("")
                 }
             ]
             .spacing(6),
             column![
-                text("INTERFACE (OPTIONAL)").size(10).color(TEXT_DIM),
+                text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted),
                 pick_list(
                     iface_options,
                     Some(if form.interface.is_empty() {
@@ -1146,18 +1308,11 @@ fn view_rule_form<'a>(
         ]
         .spacing(12),
         column![
-            container(text("ORGANIZATION").size(10).color(TEXT_BRIGHT))
+            container(text("ORGANIZATION").size(10).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
             column![
-                text("GROUP (OPTIONAL)").size(10).color(TEXT_DIM),
-                text_input("e.g. Web Services", &form.group)
-                    .on_input(Message::RuleFormGroupChanged)
-                    .padding(10),
-            ]
-            .spacing(6),
-            column![
-                text("TAGS").size(10).color(TEXT_DIM),
+                text("TAGS").size(10).color(theme.fg_muted),
                 row![
                     text_input("Add a tag...", &form.tag_input)
                         .on_input(Message::RuleFormTagInputChanged)
@@ -1170,7 +1325,9 @@ fn view_rule_form<'a>(
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
-                if !form.tags.is_empty() {
+                if form.tags.is_empty() {
+                    row(std::iter::empty()).spacing(8).wrap()
+                } else {
                     row(form.tags.iter().map(|tag| {
                         let tag_theme = theme.clone();
                         container(
@@ -1194,8 +1351,6 @@ fn view_rule_form<'a>(
                     }))
                     .spacing(8)
                     .wrap()
-                } else {
-                    row(std::iter::empty()).spacing(8).wrap()
                 },
             ]
             .spacing(8),
@@ -1206,7 +1361,7 @@ fn view_rule_form<'a>(
                 .on_press(Message::CancelRuleForm)
                 .padding([10, 20])
                 .style(button::secondary),
-            horizontal_rule(1),
+            rule::horizontal(1),
             button(text(button_text).size(14))
                 .on_press(Message::SaveRuleForm)
                 .padding([10, 24])
@@ -1223,14 +1378,18 @@ fn view_rule_form<'a>(
         .into()
 }
 
-fn view_port_inputs<'a>(form: &RuleForm, _has_error: Option<&String>) -> Element<'a, Message> {
+fn view_port_inputs<'a>(
+    form: &RuleForm,
+    _has_error: Option<&String>,
+    theme: &'a crate::theme::AppTheme,
+) -> Element<'a, Message> {
     if matches!(form.protocol, Protocol::Tcp | Protocol::Udp) {
         row![
             text_input("80", &form.port_start)
                 .on_input(Message::RuleFormPortStartChanged)
                 .padding(10)
                 .width(Length::Fill),
-            text("-").size(16).color(TEXT_DIM),
+            text("-").size(16).color(theme.fg_muted),
             text_input("80", &form.port_end)
                 .on_input(Message::RuleFormPortEndChanged)
                 .padding(10)
@@ -1243,7 +1402,7 @@ fn view_port_inputs<'a>(form: &RuleForm, _has_error: Option<&String>) -> Element
         container(
             text("Not applicable")
                 .size(12)
-                .color(TEXT_DIM)
+                .color(theme.fg_muted)
                 .font(FONT_MONO),
         )
         .padding(10)
@@ -1255,8 +1414,8 @@ fn view_port_inputs<'a>(form: &RuleForm, _has_error: Option<&String>) -> Element
 }
 
 fn view_awaiting_apply(app_theme: &crate::theme::AppTheme) -> Element<'_, Message> {
-    container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(FONT_REGULAR).color(TEXT_BRIGHT),
-                      text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(TEXT_DIM).width(360).align_x(Alignment::Center),
+    container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(FONT_REGULAR).color(app_theme.fg_primary),
+                      text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
                       row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(button::secondary),
                            button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
@@ -1274,12 +1433,12 @@ fn view_pending_confirmation(
             text("Confirm Safety")
                 .size(24)
                 .font(FONT_REGULAR)
-                .color(TEXT_BRIGHT),
+                .color(app_theme.fg_primary),
             text(format!(
                 "Firewall updated. Automatic rollback in {remaining} seconds if not confirmed."
             ))
             .size(14)
-            .color(ACCENT)
+            .color(app_theme.accent)
             .width(360)
             .align_x(Alignment::Center),
             row![
@@ -1310,25 +1469,26 @@ fn view_pending_confirmation(
     .into()
 }
 
+#[allow(clippy::too_many_lines)]
 fn view_settings(state: &State) -> Element<'_, Message> {
     use iced::widget::slider;
 
+    let theme = &state.theme;
     let advanced = &state.ruleset.advanced_security;
 
-    let content = scrollable(
-        column![
+    column![
             // Header
             text("Settings")
                 .size(24)
-                .color(TEXT_BRIGHT),
+                .color(theme.fg_primary),
 
             // Theme Selector
             row![
                 column![
-                    text("Theme").size(16).color(TEXT_BRIGHT),
+                    text("Theme").size(16).color(theme.fg_primary),
                     text("Choose your preferred color scheme")
                         .size(13)
-                        .color(TEXT_DIM),
+                        .color(theme.fg_muted),
                 ]
                 .width(Length::Fill),
                 pick_list(
@@ -1342,29 +1502,29 @@ fn view_settings(state: &State) -> Element<'_, Message> {
             .spacing(16)
             .align_y(Alignment::Center),
 
-            horizontal_rule(1),
+            rule::horizontal(1),
 
             // Advanced Security Header
             text("Advanced Security Settings")
                 .size(20)
-                .color(TEXT_BRIGHT),
+                .color(theme.fg_primary),
             text("⚠️  These settings may break common applications. Defaults are suitable for most users.")
                 .size(14)
-                .color(GRUV_YELLOW),
-            horizontal_rule(1),
+                .color(theme.syntax_string),
+            rule::horizontal(1),
             // Strict ICMP Mode
             row![
                 toggler(advanced.strict_icmp)
                     .on_toggle(Message::ToggleStrictIcmp)
                     .width(40),
                 column![
-                    text("Strict ICMP filtering").size(16).color(TEXT_BRIGHT),
+                    text("Strict ICMP filtering").size(16).color(theme.fg_primary),
                     text("Only allow essential ICMP types")
                         .size(13)
-                        .color(TEXT_DIM),
+                        .color(theme.fg_muted),
                     text("ℹ️  May break network tools and games")
                         .size(12)
-                        .color(GRUV_AQUA),
+                        .color(theme.info),
                 ]
                 .spacing(4),
             ]
@@ -1378,25 +1538,23 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     })
                     .width(40),
                 column![
-                    text("ICMP rate limiting").size(16).color(TEXT_BRIGHT),
+                    text("ICMP rate limiting").size(16).color(theme.fg_primary),
                     row![
-                        text("Rate:").size(13).color(TEXT_DIM),
+                        text("Rate:").size(13).color(theme.fg_muted),
                         slider(
-                            0..=50,
-                            advanced.icmp_rate_limit,
-                            Message::IcmpRateLimitChanged
+                            0..=50, advanced.icmp_rate_limit, Message::IcmpRateLimitChanged
                         )
                         .width(200),
                         text(format!("{}/sec", advanced.icmp_rate_limit))
                             .size(13)
-                            .color(TEXT_BRIGHT),
-                        text("(0 = disabled)").size(12).color(TEXT_DIM),
+                            .color(theme.fg_primary),
+                        text("(0 = disabled)").size(12).color(theme.fg_muted),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
                     text("ℹ️  May interfere with monitoring tools")
                         .size(12)
-                        .color(GRUV_AQUA),
+                        .color(theme.info),
                 ]
                 .spacing(4),
             ]
@@ -1408,13 +1566,13 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     .on_toggle(Message::ToggleRpfRequested)
                     .width(40),
                 column![
-                    text("Anti-spoofing (RPF)").size(16).color(TEXT_BRIGHT),
+                    text("Anti-spoofing (RPF)").size(16).color(theme.fg_primary),
                     text("Reverse path filtering via FIB lookup")
                         .size(13)
-                        .color(TEXT_DIM),
+                        .color(theme.fg_muted),
                     text("⚠️  WILL BREAK: Docker, VPNs, cloud instances")
                         .size(12)
-                        .color(DANGER),
+                        .color(theme.danger),
                 ]
                 .spacing(4),
             ]
@@ -1426,23 +1584,21 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     .on_toggle(Message::ToggleDroppedLogging)
                     .width(40),
                 column![
-                    text("Log dropped packets").size(16).color(TEXT_BRIGHT),
+                    text("Log dropped packets").size(16).color(theme.fg_primary),
                     row![
-                        text("Rate:").size(13).color(TEXT_DIM),
+                        text("Rate:").size(13).color(theme.fg_muted),
                         slider(
-                            1..=100,
-                            advanced.log_rate_per_minute,
-                            Message::LogRateChanged
+                            1..=100, advanced.log_rate_per_minute, Message::LogRateChanged
                         )
                         .width(200),
                         text(format!("{}/min", advanced.log_rate_per_minute))
                             .size(13)
-                            .color(TEXT_BRIGHT),
+                            .color(theme.fg_primary),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
                     row![
-                        text("Prefix:").size(13).color(TEXT_DIM),
+                        text("Prefix:").size(13).color(theme.fg_muted),
                         text_input("DRFW-DROP: ", &advanced.log_prefix)
                             .on_input(Message::LogPrefixChanged)
                             .width(200),
@@ -1451,7 +1607,7 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     .align_y(Alignment::Center),
                     text("ℹ️  Privacy: Logs network activity")
                         .size(12)
-                        .color(GRUV_AQUA),
+                        .color(theme.info),
                 ]
                 .spacing(4),
             ]
@@ -1461,7 +1617,7 @@ fn view_settings(state: &State) -> Element<'_, Message> {
             column![
                 text("Egress Filtering Profile")
                     .size(16)
-                    .color(TEXT_BRIGHT),
+                    .color(theme.fg_primary),
                 row![
                     button(
                         text(if advanced.egress_profile
@@ -1516,18 +1672,16 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                 .color(if advanced.egress_profile
                     == crate::core::firewall::EgressProfile::Desktop
                 {
-                    TEXT_DIM
+                    theme.fg_muted
                 } else {
-                    DANGER
+                    theme.danger
                 }),
             ]
             .spacing(8),
         ]
         .spacing(20)
-        .padding(20),
-    );
-
-    content.into()
+        .padding(20)
+        .into()
 }
 
 fn view_warning_modal<'a>(
@@ -1537,36 +1691,23 @@ fn view_warning_modal<'a>(
     let (title, message, confirm_msg) = match warning {
         PendingWarning::EnableRpf => (
             "⚠️ WARNING: Anti-Spoofing Mode",
-            "Enabling this feature may break:\n\
-            • Docker containers\n\
-            • VPN connections (WireGuard, OpenVPN)\n\
-            • Multi-homed systems\n\
-            • AWS/GCP cloud instances\n\n\
-            Only enable if:\n\
-            ✓ You don't use Docker or VPNs\n\
-            ✓ This is a single-interface server\n\
-            ✓ You understand reverse path filtering\n\n\
-            Alternative: Use kernel RPF instead:\n  \
-            sudo sysctl net.ipv4.conf.all.rp_filter=1",
+            "Enabling this feature may break:\n\n    • Docker containers\n    • VPN connections (WireGuard, OpenVPN)\n    • Multi-homed systems\n    • AWS/GCP cloud instances\n\nOnly enable if:\n    ✓ You don't use Docker or VPNs\n    ✓ This is a single-interface server\n    ✓ You understand reverse path filtering\n\nAlternative: Use kernel RPF instead:\n  \n      sudo sysctl net.ipv4.conf.all.rp_filter=1",
             Message::ConfirmEnableRpf,
         ),
         PendingWarning::EnableServerMode => (
             "⚠️ Server Mode: Egress Filtering",
-            "This will BLOCK all outbound connections by default.\n\n\
-            You'll need to explicitly allow:\n\
-            • Web browsing (HTTP/HTTPS)\n\
-            • DNS queries\n\
-            • Software updates\n\
-            • Any services your applications use\n\n\
-            This mode is designed for servers, not desktop use.",
+            "This will BLOCK all outbound connections by default.\n\nYou'll need to explicitly allow:\n    • Web browsing (HTTP/HTTPS)\n    • DNS queries\n    • Software updates\n    • Any services your applications use\n\nThis mode is designed for servers, not desktop use.",
             Message::ConfirmServerMode,
         ),
     };
 
     container(
         column![
-            text(title).size(20).color(DANGER),
-            text(message).size(14).color(TEXT_BRIGHT).font(FONT_MONO),
+            text(title).size(20).color(theme.danger),
+            text(message)
+                .size(14)
+                .color(theme.fg_primary)
+                .font(FONT_MONO),
             row![
                 button(text("Cancel").size(14))
                     .on_press(Message::CancelWarning)
@@ -1591,7 +1732,7 @@ fn view_warning_modal<'a>(
             blur_radius: 20.0,
         };
         style.border = Border {
-            color: DANGER,
+            color: theme.danger,
             width: 2.0,
             ..Default::default()
         };
@@ -1607,7 +1748,10 @@ fn view_error_display<'a>(
     let mut elements: Vec<Element<'_, Message>> = vec![
         row![
             text("⚠️").size(16),
-            text(&err.message).size(13).color(DANGER).font(FONT_REGULAR),
+            text(&err.message)
+                .size(13)
+                .color(theme.danger)
+                .font(FONT_REGULAR),
             button("Copy Details")
                 .on_press(Message::CopyErrorClicked)
                 .padding([4, 10])
@@ -1622,8 +1766,11 @@ fn view_error_display<'a>(
     for suggestion in &err.suggestions {
         elements.push(
             row![
-                text("→").size(12).color(GRUV_AQUA),
-                text(suggestion).size(12).color(TEXT_BRIGHT).font(FONT_MONO),
+                text("→").size(12).color(theme.info),
+                text(suggestion)
+                    .size(12)
+                    .color(theme.fg_primary)
+                    .font(FONT_MONO),
             ]
             .spacing(6)
             .into(),
@@ -1633,6 +1780,7 @@ fn view_error_display<'a>(
     column(elements).spacing(6).into()
 }
 
+#[allow(clippy::too_many_lines)]
 fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     // Read recent audit log entries
     let audit_entries = std::fs::read_to_string(
@@ -1650,16 +1798,17 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
         .lines()
         .rev()
         .take(10)
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     // Get recovery commands as owned strings
-    let state_dir = crate::utils::get_data_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "~/.local/state/drfw".to_string());
+    let state_dir = crate::utils::get_data_dir().map_or_else(
+        || "~/.local/state/drfw".to_string(),
+        |p| p.to_string_lossy().to_string(),
+    );
 
     let recovery_cmd = "sudo nft flush ruleset".to_string();
-    let snapshot_restore_cmd = format!("sudo nft --json -f {}/snapshot-*.json", state_dir);
+    let snapshot_restore_cmd = format!("sudo nft --json -f {state_dir}/snapshot-*.json");
 
     container(
         column![
@@ -1667,8 +1816,8 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
                 text("📊 Diagnostics & Logs")
                     .size(24)
                     .font(FONT_REGULAR)
-                    .color(GRUV_ORANGE),
-                horizontal_rule(0),
+                    .color(theme.warning),
+                rule::horizontal(0),
             ]
             .spacing(12)
             .align_y(Alignment::Center)
@@ -1677,20 +1826,24 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
             column![
                 text("Recent Audit Log Entries:")
                     .size(14)
-                    .color(TEXT_BRIGHT),
+                    .color(theme.fg_primary),
                 container(scrollable(
                     column(if recent_entries.is_empty() {
                         vec![
                             text("No audit entries found")
                                 .size(12)
-                                .color(TEXT_DIM)
+                                .color(theme.fg_muted)
                                 .into(),
                         ]
                     } else {
                         recent_entries
                             .into_iter()
                             .map(|entry| {
-                                text(entry).size(11).font(FONT_MONO).color(GRUV_FG0).into()
+                                text(entry)
+                                    .size(11)
+                                    .font(FONT_MONO)
+                                    .color(theme.fg_primary)
+                                    .into()
                             })
                             .collect()
                     })
@@ -1712,17 +1865,19 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
             column![
                 text("Manual Recovery Commands:")
                     .size(14)
-                    .color(TEXT_BRIGHT),
+                    .color(theme.fg_primary),
                 container(
                     column![
                         text("Emergency flush (removes all rules):")
                             .size(12)
-                            .color(TEXT_DIM),
+                            .color(theme.fg_muted),
                         text(recovery_cmd)
                             .size(12)
                             .font(FONT_MONO)
                             .color(theme.warning),
-                        text("Restore from snapshot:").size(12).color(TEXT_DIM),
+                        text("Restore from snapshot:")
+                            .size(12)
+                            .color(theme.fg_muted),
                         text(snapshot_restore_cmd)
                             .size(12)
                             .font(FONT_MONO)
@@ -1769,8 +1924,10 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
             text("📤 Export Rules")
                 .size(24)
                 .font(FONT_REGULAR)
-                .color(GRUV_ORANGE),
-            text("Choose the export format:").size(14).color(TEXT_DIM),
+                .color(theme.warning),
+            text("Choose the export format:")
+                .size(14)
+                .color(theme.fg_muted),
             column![
                 button(
                     row![
@@ -1779,10 +1936,10 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                             text("Export as JSON")
                                 .size(16)
                                 .font(FONT_REGULAR)
-                                .color(TEXT_BRIGHT),
+                                .color(theme.fg_primary),
                             text("Structured data format for automation and backup")
                                 .size(12)
-                                .color(TEXT_DIM),
+                                .color(theme.fg_muted),
                         ]
                         .spacing(4),
                     ]
@@ -1800,10 +1957,10 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                             text("Export as nftables text")
                                 .size(16)
                                 .font(FONT_REGULAR)
-                                .color(TEXT_BRIGHT),
+                                .color(theme.fg_primary),
                             text("Human-readable .nft format for manual editing")
                                 .size(12)
-                                .color(TEXT_DIM),
+                                .color(theme.fg_muted),
                         ]
                         .spacing(4),
                     ]
@@ -1818,7 +1975,7 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
             .spacing(12),
             text("Files will be saved to ~/Downloads/ or your data directory")
                 .size(11)
-                .color(TEXT_DIM),
+                .color(theme.fg_muted),
             button(text("Cancel").size(14))
                 .on_press(Message::ExportClicked) // Toggle to close
                 .padding([10, 20])
@@ -1833,15 +1990,16 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     .into()
 }
 
+#[allow(clippy::too_many_lines)]
 fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     container(
         column![
             text("⌨️ Keyboard Shortcuts")
                 .size(24)
                 .font(FONT_REGULAR)
-                .color(GRUV_ORANGE),
+                .color(theme.warning),
             column![
-                text("General").size(16).color(TEXT_BRIGHT),
+                text("General").size(16).color(theme.fg_primary),
                 row![
                     container(text("F1").size(13).font(FONT_MONO).color(theme.warning))
                         .width(150)
@@ -1854,10 +2012,9 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                             },
                             ..Default::default()
                         }),
-                    text("Show this help").size(13).color(TEXT_BRIGHT)
+                    text("Show this help").size(13).color(theme.fg_primary)
                 ]
-                .spacing(16)
-                .align_y(Alignment::Center),
+                .spacing(16),
                 row![
                     container(text("Esc").size(13).font(FONT_MONO).color(theme.warning))
                         .width(150)
@@ -1870,14 +2027,13 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                             },
                             ..Default::default()
                         }),
-                    text("Close modals / Cancel").size(13).color(TEXT_BRIGHT)
+                    text("Close any modal or form").size(13).color(theme.fg_primary)
                 ]
-                .spacing(16)
-                .align_y(Alignment::Center),
+                .spacing(16),
             ]
-            .spacing(8),
+            .spacing(12),
             column![
-                text("Rules").size(16).color(TEXT_BRIGHT),
+                text("Rules").size(16).color(theme.fg_primary),
                 row![
                     container(
                         text("Ctrl + N")
@@ -1895,30 +2051,9 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                         },
                         ..Default::default()
                     }),
-                    text("Add new rule").size(13).color(TEXT_BRIGHT)
+                    text("Add new rule").size(13).color(theme.fg_primary)
                 ]
-                .spacing(16)
-                .align_y(Alignment::Center),
-                row![
-                    container(text("Enter").size(13).font(FONT_MONO).color(theme.warning))
-                        .width(150)
-                        .padding([4, 8])
-                        .style(move |_| container::Style {
-                            background: Some(theme.bg_elevated.into()),
-                            border: Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }),
-                    text("Save rule (when editing)").size(13).color(TEXT_BRIGHT)
-                ]
-                .spacing(16)
-                .align_y(Alignment::Center),
-            ]
-            .spacing(8),
-            column![
-                text("Actions").size(16).color(TEXT_BRIGHT),
+                .spacing(16),
                 row![
                     container(
                         text("Ctrl + S")
@@ -1936,35 +2071,9 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                         },
                         ..Default::default()
                     }),
-                    text("Apply changes").size(13).color(TEXT_BRIGHT)
+                    text("Apply changes").size(13).color(theme.fg_primary)
                 ]
-                .spacing(16)
-                .align_y(Alignment::Center),
-                row![
-                    container(
-                        text("Ctrl + E")
-                            .size(13)
-                            .font(FONT_MONO)
-                            .color(theme.warning)
-                    )
-                    .width(150)
-                    .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                    text("Export rules").size(13).color(TEXT_BRIGHT)
-                ]
-                .spacing(16)
-                .align_y(Alignment::Center),
-            ]
-            .spacing(8),
-            column![
-                text("Editing").size(16).color(TEXT_BRIGHT),
+                .spacing(16),
                 row![
                     container(
                         text("Ctrl + Z")
@@ -1982,31 +2091,9 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                         },
                         ..Default::default()
                     }),
-                    text("Undo last change").size(13).color(TEXT_BRIGHT)
+                    text("Undo last modification").size(13).color(theme.fg_primary)
                 ]
-                .spacing(16)
-                .align_y(Alignment::Center),
-                row![
-                    container(
-                        text("Ctrl + Y")
-                            .size(13)
-                            .font(FONT_MONO)
-                            .color(theme.warning)
-                    )
-                    .width(150)
-                    .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                    text("Redo last undone change").size(13).color(TEXT_BRIGHT)
-                ]
-                .spacing(16)
-                .align_y(Alignment::Center),
+                .spacing(16),
                 row![
                     container(
                         text("Ctrl + Shift + Z")
@@ -2024,24 +2111,45 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                         },
                         ..Default::default()
                     }),
-                    text("Redo (alternative)").size(13).color(TEXT_BRIGHT)
+                    text("Redo last undone modification")
+                        .size(13)
+                        .color(theme.fg_primary)
                 ]
-                .spacing(16)
-                .align_y(Alignment::Center),
+                .spacing(16),
             ]
-            .spacing(8),
-            text("💡 Tip: Most buttons can be clicked instead of using shortcuts")
-                .size(11)
-                .color(TEXT_DIM),
+            .spacing(12),
+            column![
+                text("Workspace").size(16).color(theme.fg_primary),
+                row![
+                    container(
+                        text("Ctrl + E")
+                            .size(13)
+                            .font(FONT_MONO)
+                            .color(theme.warning)
+                    )
+                    .width(150)
+                    .padding([4, 8])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_elevated.into()),
+                        border: Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    text("Export rules").size(13).color(theme.fg_primary)
+                ]
+                .spacing(16),
+            ]
+            .spacing(12),
             button(text("Close").size(14))
                 .on_press(Message::ToggleShortcutsHelp(false))
                 .padding([10, 20])
-                .style(move |_, status| primary_button(theme, status)),
+                .style(move |_, status| card_button(theme, status)),
         ]
-        .spacing(20)
+        .spacing(24)
         .padding(32)
-        .max_width(550)
-        .align_x(Alignment::Center),
+        .max_width(600),
     )
     .style(move |_| section_header_container(theme))
     .into()

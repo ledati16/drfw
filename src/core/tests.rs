@@ -1,4 +1,6 @@
 #[cfg(test)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(clippy::cast_possible_truncation)]
 mod tests_impl {
     use crate::core::firewall::{FirewallRuleset, PortRange, Protocol, Rule};
     use chrono::Utc;
@@ -32,7 +34,6 @@ mod tests_impl {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -67,7 +68,6 @@ mod tests_impl {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -89,7 +89,6 @@ mod tests_impl {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -125,7 +124,7 @@ mod tests_impl {
 
         // Get the base rule comments
         let mut rule_comments = Vec::new();
-        for item in nft.iter() {
+        for item in nft {
             if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
                 && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
             {
@@ -163,7 +162,7 @@ mod tests_impl {
         // Extract from JSON
         let nft = json["nftables"].as_array().unwrap();
         let mut comments = Vec::new();
-        for item in nft.iter() {
+        for item in nft {
             if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
                 && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
             {
@@ -175,6 +174,304 @@ mod tests_impl {
         assert_eq!(comments[0], "allow from loopback");
         assert_eq!(comments[1], "early drop of invalid connections");
         assert_eq!(comments[2], "allow tracked connections");
+    }
+
+    #[test]
+    fn test_text_json_complete_consistency() {
+        // Comprehensive test: verify ALL rules appear in same order in both formats
+        let mut ruleset = FirewallRuleset::new();
+
+        // Add several user rules with different configurations
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "SSH Access".to_string(),
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange::single(22)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec!["secure".to_string()],
+            created_at: Utc::now(),
+        });
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "Web Server".to_string(),
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange {
+                start: 80,
+                end: 443,
+            }),
+            source: Some("0.0.0.0/0".parse().unwrap()),
+            interface: Some("eth0".to_string()),
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "DNS".to_string(),
+            protocol: Protocol::Udp,
+            ports: Some(PortRange::single(53)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        let text = ruleset.to_nft_text();
+        let json = ruleset.to_nftables_json();
+
+        // Extract all rule comments from JSON (in order)
+        let nft = json["nftables"].as_array().unwrap();
+        let mut json_comments = Vec::new();
+        for item in nft {
+            if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
+                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
+            {
+                json_comments.push(comment);
+            }
+        }
+
+        // Verify text contains all comments in the same relative order
+        let mut last_pos = 0;
+        for comment in &json_comments {
+            if let Some(pos) = text.find(comment) {
+                assert!(
+                    pos > last_pos,
+                    "Comment '{}' appears out of order in text output. Expected after position {}, found at {}",
+                    comment,
+                    last_pos,
+                    pos
+                );
+                last_pos = pos;
+            } else {
+                panic!("Comment '{}' found in JSON but not in text output", comment);
+            }
+        }
+
+        // Verify all expected rules are present
+        assert_eq!(
+            json_comments.len(),
+            10,
+            "Should have 7 base rules + 3 user rules"
+        );
+        assert_eq!(json_comments[7], "SSH Access");
+        assert_eq!(json_comments[8], "Web Server");
+        assert_eq!(json_comments[9], "DNS");
+    }
+
+    #[test]
+    fn test_user_rule_ordering_preserved() {
+        // Test that user rules maintain their insertion order in both formats
+        let mut ruleset = FirewallRuleset::new();
+
+        let rule_labels = vec![
+            "First Rule",
+            "Second Rule",
+            "Third Rule",
+            "Fourth Rule",
+            "Fifth Rule",
+        ];
+
+        for (i, label) in rule_labels.iter().enumerate() {
+            ruleset.rules.push(Rule {
+                id: Uuid::new_v4(),
+                label: label.to_string(),
+                protocol: Protocol::Tcp,
+                ports: Some(PortRange::single(8000 + i as u16)),
+                source: None,
+                interface: None,
+                ipv6_only: false,
+                enabled: true,
+                tags: vec![],
+                created_at: Utc::now(),
+            });
+        }
+
+        let text = ruleset.to_nft_text();
+        let json = ruleset.to_nftables_json();
+
+        // Extract user rule comments from JSON (skip base rules)
+        let nft = json["nftables"].as_array().unwrap();
+        let mut json_user_rules = Vec::new();
+        for item in nft.iter().skip(12) {
+            // Skip table, flush, chains, base rules
+            if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
+                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
+                && !comment.starts_with("allow")  // Skip base rule comments
+                && !comment.starts_with("drop")
+                && !comment.starts_with("early")
+            {
+                json_user_rules.push(comment);
+            }
+        }
+
+        // Verify order in JSON
+        assert_eq!(json_user_rules, rule_labels);
+
+        // Verify same order in text
+        let mut last_pos = 0;
+        for label in &rule_labels {
+            let pos = text.find(label).unwrap_or_else(|| {
+                panic!("User rule '{}' not found in text output", label);
+            });
+            assert!(
+                pos > last_pos,
+                "User rule '{}' appears out of order in text",
+                label
+            );
+            last_pos = pos;
+        }
+    }
+
+    #[test]
+    fn test_disabled_rules_excluded_from_both_formats() {
+        // Verify that disabled rules are excluded from both text and JSON
+        let mut ruleset = FirewallRuleset::new();
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "Enabled Rule".to_string(),
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange::single(80)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "Disabled Rule".to_string(),
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange::single(443)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: false, // DISABLED
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "Another Enabled".to_string(),
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange::single(22)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        let text = ruleset.to_nft_text();
+        let json = ruleset.to_nftables_json();
+
+        // Verify text excludes disabled rule
+        assert!(text.contains("Enabled Rule"));
+        assert!(!text.contains("Disabled Rule"));
+        assert!(text.contains("Another Enabled"));
+
+        // Verify JSON excludes disabled rule
+        let nft = json["nftables"].as_array().unwrap();
+        let mut comments = Vec::new();
+        for item in nft {
+            if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
+                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
+            {
+                comments.push(comment);
+            }
+        }
+
+        let comments_str = comments.join(", ");
+        assert!(comments_str.contains("Enabled Rule"));
+        assert!(!comments_str.contains("Disabled Rule"));
+        assert!(comments_str.contains("Another Enabled"));
+    }
+
+    #[test]
+    fn test_protocol_representation_consistency() {
+        // Verify protocol matching is consistent between text and JSON
+        let mut ruleset = FirewallRuleset::new();
+
+        // Add rules for each protocol type
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "TCP Rule".to_string(),
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange::single(80)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "UDP Rule".to_string(),
+            protocol: Protocol::Udp,
+            ports: Some(PortRange::single(53)),
+            source: None,
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        ruleset.rules.push(Rule {
+            id: Uuid::new_v4(),
+            label: "Any Protocol".to_string(),
+            protocol: Protocol::Any,
+            ports: None,
+            source: Some("192.168.0.0/16".parse().unwrap()),
+            interface: None,
+            ipv6_only: false,
+            enabled: true,
+            tags: vec![],
+            created_at: Utc::now(),
+        });
+
+        let text = ruleset.to_nft_text();
+        let json = ruleset.to_nftables_json();
+
+        // Verify text has correct protocol syntax
+        assert!(
+            text.contains("tcp dport 80"),
+            "Text should specify TCP protocol"
+        );
+        assert!(
+            text.contains("udp dport 53"),
+            "Text should specify UDP protocol"
+        );
+
+        // For "Any" protocol, should not have protocol match
+        let any_rule_section = text.split("Any Protocol").nth(1).unwrap();
+        assert!(!any_rule_section.contains("tcp dport"));
+        assert!(!any_rule_section.contains("udp dport"));
+
+        // Verify JSON has correct protocol matches
+        let _nft = json["nftables"].as_array().unwrap();
+        let json_str = serde_json::to_string(&json).unwrap();
+
+        // TCP rule should have l4proto match
+        assert!(json_str.contains(r#""l4proto""#));
+        assert!(json_str.contains(r#""tcp""#));
+
+        // UDP rule should have l4proto match
+        assert!(json_str.contains(r#""udp""#));
     }
 }
 
@@ -219,8 +516,7 @@ mod property_tests {
                 interface: None,
                 ipv6_only: false,
                 enabled: true,
-            tags: Vec::new(),
-            group: None,
+                tags: Vec::new(),
                 created_at: Utc::now(),
             }
         }
@@ -338,7 +634,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
         ruleset
@@ -407,7 +702,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -445,7 +739,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -534,7 +827,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -548,7 +840,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -562,7 +853,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -608,7 +898,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -623,7 +912,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 
@@ -638,7 +926,6 @@ mod integration_tests {
             ipv6_only: false,
             enabled: true,
             tags: Vec::new(),
-            group: None,
             created_at: Utc::now(),
         });
 

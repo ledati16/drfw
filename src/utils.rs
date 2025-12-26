@@ -12,13 +12,13 @@
 //! # Example
 //!
 //! ```
-//! use drfw::utils::{get_config_dir, get_state_dir, ensure_dirs};
+//! use drfw::utils::{get_data_dir, get_state_dir, ensure_dirs};
 //!
 //! // Ensure directories exist before use
 //! ensure_dirs().expect("Failed to create directories");
 //!
-//! if let Some(config_path) = get_config_dir() {
-//!     // Load configuration from config_path
+//! if let Some(data_path) = get_data_dir() {
+//!     // Load configuration from data_path
 //! }
 //! ```
 
@@ -80,4 +80,21 @@ pub fn list_interfaces() -> Vec<String> {
     }
     interfaces.sort();
     interfaces
+}
+
+/// Truncates a string to a maximum length and adds an ellipsis if needed
+#[allow(dead_code)]
+pub fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        // Find the nearest character boundary to avoid splitting multi-byte characters
+        let end = s
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .take_while(|&idx| idx <= max_len.saturating_sub(3))
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &s[..end])
+    }
 }

@@ -64,12 +64,12 @@ fn main() -> iced::Result {
         tracing_subscriber::fmt::init();
     }
 
-    iced::application("DRFW — Dumb Rust Firewall", app::State::update, app::view)
+    iced::application(app::State::new, app::State::update, app::State::view)
         .subscription(app::State::subscription)
         .window(iced::window::Settings {
             size: Size::new(1000.0, 700.0),
             ..Default::default()
         })
-        .theme(|_| iced::Theme::Dark)
-        .run_with(app::State::new)
+        .theme(|_state: &app::State| iced::Theme::Dark)
+        .run()
 }

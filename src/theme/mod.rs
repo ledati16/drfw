@@ -114,6 +114,7 @@ impl AppTheme {
 }
 
 /// Converts hex color (0xRRGGBB) to iced Color
+#[allow(clippy::cast_precision_loss)]
 fn hex_to_color(hex: u32) -> Color {
     Color::from_rgb(
         ((hex >> 16) & 0xFF) as f32 / 255.0,
@@ -164,10 +165,13 @@ impl ThemeChoice {
             Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
             Self::OneDark => "One Dark".to_string(),
             Self::SolarizedDark => "Solarized Dark".to_string(),
-            Self::Custom(idx) => format!("Custom {}", idx),
+            Self::Custom(idx) => format!("Custom {idx}"),
         }
     }
 
+    // Each match arm intentionally calls a different theme function
+    // The Custom variant temporarily falls back to Nord until custom theme loading is implemented
+    #[allow(clippy::match_same_arms)]
     pub fn to_theme(self) -> AppTheme {
         match self {
             Self::Nord => presets::nord(),
@@ -186,6 +190,6 @@ impl ThemeChoice {
 
 impl std::fmt::Display for ThemeChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
+        f.write_str(&self.name())
     }
 }

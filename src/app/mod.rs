@@ -1,17 +1,16 @@
 pub mod ui_components;
 pub mod view;
 
-pub use view::view;
-
 use crate::core::error::ErrorInfo;
 use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
-use iced::Task;
+use iced::{Element, Task};
 use std::time::Duration;
 
 pub const FONT_REGULAR: iced::Font = iced::Font::DEFAULT;
 pub const FONT_MONO: iced::Font = iced::Font::MONOSPACE;
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct State {
     pub ruleset: FirewallRuleset,
     pub last_applied_ruleset: Option<FirewallRuleset>,
@@ -37,8 +36,8 @@ pub struct State {
     pub theme: crate::theme::AppTheme,
     #[allow(dead_code)] // TODO: Add custom themes to theme picker UI
     pub custom_themes: Vec<crate::theme::AppTheme>,
-    pub filter_group: Option<String>,
     pub filter_tag: Option<String>,
+    pub dragged_rule_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,7 +97,6 @@ pub struct RuleForm {
     pub interface: String,
     pub selected_preset: Option<crate::core::firewall::ServicePreset>,
     pub tags: Vec<String>,
-    pub group: String,
     pub tag_input: String,
 }
 
@@ -114,7 +112,6 @@ impl Default for RuleForm {
             interface: String::new(),
             selected_preset: None,
             tags: Vec::new(),
-            group: String::new(),
             tag_input: String::new(),
         }
     }
@@ -139,20 +136,19 @@ impl RuleForm {
                 self.port_end.parse::<u16>()
             };
 
-            match (port_start, port_end) {
-                (Ok(s), Ok(e)) => match crate::validators::validate_port_range(s, e) {
+            if let (Ok(s), Ok(e)) = (port_start, port_end) {
+                match crate::validators::validate_port_range(s, e) {
                     Ok((start, end)) => Some(crate::core::firewall::PortRange { start, end }),
                     Err(msg) => {
                         errors.port = Some(msg);
                         has_errors = true;
                         None
                     }
-                },
-                _ => {
-                    errors.port = Some("Invalid port number".to_string());
-                    has_errors = true;
-                    None
                 }
+            } else {
+                errors.port = Some("Invalid port number".to_string());
+                has_errors = true;
+                None
             }
         } else {
             None
@@ -209,10 +205,6 @@ pub enum Message {
     RuleFormPresetSelected(crate::core::firewall::ServicePreset),
     RuleSearchChanged(String),
     ToggleRuleEnabled(uuid::Uuid),
-    MoveRuleUp(uuid::Uuid),
-    MoveRuleDown(uuid::Uuid),
-    MoveRuleToTop(uuid::Uuid),
-    MoveRuleToBottom(uuid::Uuid),
     DeleteRuleRequested(uuid::Uuid),
     CancelDelete,
     DeleteRule(uuid::Uuid),
@@ -260,19 +252,23 @@ pub enum Message {
     Redo,
     // Theme
     ThemeChanged(crate::theme::ThemeChoice),
-    // Rule Grouping/Tagging
-    RuleFormGroupChanged(String),
+    // Rule Tagging
     RuleFormTagInputChanged(String),
     RuleFormAddTag,
     RuleFormRemoveTag(String),
     #[allow(dead_code)] // TODO: Add filter UI buttons
-    FilterByGroup(Option<String>),
-    #[allow(dead_code)] // TODO: Add filter UI buttons
     FilterByTag(Option<String>),
+    // Drag and Drop
+    RuleDragStart(uuid::Uuid),
+    RuleDropped(uuid::Uuid),
 }
 
 impl State {
-    /// Validates the current form and updates form_errors in real-time
+    pub fn view(&self) -> Element<'_, Message> {
+        view::view(self)
+    }
+
+    /// Validates the current form and updates `form_errors` in real-time
     fn validate_form_realtime(&mut self) {
         if let Some(form) = &self.rule_form {
             let (_, _, errors) = form.validate();
@@ -322,8 +318,8 @@ impl State {
                 current_theme,
                 theme,
                 custom_themes,
-                filter_group: None,
                 filter_tag: None,
+                dragged_rule_id: None,
             },
             Task::batch(vec![
                 iced::font::load(
@@ -347,7 +343,7 @@ impl State {
             theme_choice: self.current_theme,
         };
         if let Err(e) = crate::config::save_config(&config) {
-            eprintln!("Failed to save configuration: {}", e);
+            eprintln!("Failed to save configuration: {e}");
         }
         Task::none()
     }
@@ -361,6 +357,7 @@ impl State {
 
     /// Computes a diff between the last applied ruleset and current ruleset
     pub fn compute_diff(&self) -> Option<String> {
+        use std::fmt::Write;
         if let Some(ref last) = self.last_applied_ruleset {
             let old_text = last.to_nft_text();
             let new_text = self.cached_nft_text.clone();
@@ -374,7 +371,7 @@ impl State {
                     similar::ChangeTag::Insert => "+ ",
                     similar::ChangeTag::Equal => "  ",
                 };
-                result.push_str(&format!("{}{}", sign, change));
+                let _ = write!(result, "{sign}{change}");
             }
 
             if result.is_empty() || !self.is_dirty() {
@@ -387,6 +384,7 @@ impl State {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::AddRuleClicked => {
@@ -439,20 +437,16 @@ impl State {
                 }
                 self.validate_form_realtime();
             }
-            Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(preset),
+            Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(&preset),
             Message::RuleSearchChanged(s) => self.rule_search = s,
             Message::ToggleRuleEnabled(id) => self.handle_toggle_rule(id),
-            Message::MoveRuleUp(id) => self.handle_move_up(id),
-            Message::MoveRuleDown(id) => self.handle_move_down(id),
-            Message::MoveRuleToTop(id) => self.handle_move_to_top(id),
-            Message::MoveRuleToBottom(id) => self.handle_move_to_bottom(id),
             Message::DeleteRuleRequested(id) => self.deleting_id = Some(id),
             Message::CancelDelete => self.deleting_id = None,
             Message::DeleteRule(id) => self.handle_delete_rule(id),
             Message::ApplyClicked => return self.handle_apply_clicked(),
             Message::VerifyCompleted(result) => return self.handle_verify_completed(result),
             Message::ProceedToApply => return self.handle_proceed_to_apply(),
-            Message::ApplyResult(Err(e)) => {
+            Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
                 self.status = AppStatus::Error(e.clone());
                 self.last_error = Some(ErrorInfo::new(e));
             }
@@ -479,10 +473,6 @@ impl State {
                     .timeout(5000)
                     .show();
             }
-            Message::RevertResult(Err(e)) => {
-                self.status = AppStatus::Error(e.clone());
-                self.last_error = Some(ErrorInfo::new(e));
-            }
             Message::CountdownTick => return self.handle_countdown_tick(),
             Message::TabChanged(tab) => self.active_tab = tab,
             Message::ExportClicked => {
@@ -495,7 +485,7 @@ impl State {
                 // Could show a success notification here
                 let _ = notify_rust::Notification::new()
                     .summary("✅ DRFW — Export Successful")
-                    .body(&format!("Rules exported to: {}", path))
+                    .body(&format!("Rules exported to: {path}"))
                     .timeout(5000)
                     .show();
             }
@@ -606,11 +596,6 @@ impl State {
                 tracing::info!("Theme changed to: {}", choice.name());
                 return self.save_config();
             }
-            Message::RuleFormGroupChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.group = s;
-                }
-            }
             Message::RuleFormTagInputChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.tag_input = s;
@@ -629,9 +614,6 @@ impl State {
                 if let Some(f) = &mut self.rule_form {
                     f.tags.retain(|t| t != &tag);
                 }
-            }
-            Message::FilterByGroup(group) => {
-                self.filter_group = group;
             }
             Message::FilterByTag(tag) => {
                 self.filter_tag = tag;
@@ -657,6 +639,33 @@ impl State {
                     }
                 }
             }
+            Message::RuleDragStart(id) => {
+                self.dragged_rule_id = Some(id);
+            }
+            Message::RuleDropped(target_id) => {
+                if let Some(dragged_id) = self.dragged_rule_id {
+                    if dragged_id != target_id {
+                        if let Some(old_index) =
+                            self.ruleset.rules.iter().position(|r| r.id == dragged_id)
+                        {
+                            if let Some(new_index) =
+                                self.ruleset.rules.iter().position(|r| r.id == target_id)
+                            {
+                                let command = crate::command::ReorderRuleCommand {
+                                    rule_id: dragged_id,
+                                    old_index,
+                                    new_index,
+                                };
+                                self.command_history
+                                    .execute(Box::new(command), &mut self.ruleset);
+                                let _ = self.save_config();
+                                self.update_cached_text();
+                            }
+                        }
+                    }
+                }
+                self.dragged_rule_id = None;
+            }
         }
         Task::none()
     }
@@ -666,7 +675,7 @@ impl State {
             self.rule_form = Some(RuleForm {
                 id: Some(rule.id),
                 label: rule.label.clone(),
-                protocol: rule.protocol,  // Copy, not clone
+                protocol: rule.protocol, // Copy, not clone
                 port_start: rule
                     .ports
                     .as_ref()
@@ -682,7 +691,6 @@ impl State {
                 interface: rule.interface.clone().unwrap_or_default(),
                 selected_preset: None,
                 tags: rule.tags.clone(),
-                group: rule.group.clone().unwrap_or_default(),
                 tag_input: String::new(),
             });
             self.form_errors = None;
@@ -718,12 +726,7 @@ impl State {
                 ipv6_only: false,
                 enabled: true,
                 created_at: Utc::now(),
-                tags: form.tags,  // No clone needed - we own form
-                group: if form.group.is_empty() {
-                    None
-                } else {
-                    Some(form.group)
-                },
+                tags: form.tags, // No clone needed - we own form
             };
 
             // Use command pattern for undo/redo support
@@ -749,7 +752,7 @@ impl State {
         Task::none()
     }
 
-    fn handle_preset_selected(&mut self, preset: crate::core::firewall::ServicePreset) {
+    fn handle_preset_selected(&mut self, preset: &crate::core::firewall::ServicePreset) {
         if let Some(form) = &mut self.rule_form {
             form.selected_preset = Some(preset.clone());
             form.protocol = preset.protocol;
@@ -766,71 +769,6 @@ impl State {
             let command = crate::command::ToggleRuleCommand {
                 rule_id: id,
                 was_enabled: rule.enabled,
-            };
-            self.command_history
-                .execute(Box::new(command), &mut self.ruleset);
-            let _ = self.save_config();
-            self.update_cached_text();
-        }
-    }
-
-    fn handle_move_up(&mut self, id: uuid::Uuid) {
-        if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == id)
-            && pos > 0
-        {
-            let command = crate::command::ReorderRuleCommand {
-                rule_id: id,
-                old_index: pos,
-                new_index: pos - 1,
-            };
-            self.command_history
-                .execute(Box::new(command), &mut self.ruleset);
-            let _ = self.save_config();
-            self.update_cached_text();
-        }
-    }
-
-    fn handle_move_down(&mut self, id: uuid::Uuid) {
-        if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == id)
-            && pos < self.ruleset.rules.len() - 1
-        {
-            let command = crate::command::ReorderRuleCommand {
-                rule_id: id,
-                old_index: pos,
-                new_index: pos + 1,
-            };
-            self.command_history
-                .execute(Box::new(command), &mut self.ruleset);
-            let _ = self.save_config();
-            self.update_cached_text();
-        }
-    }
-
-    fn handle_move_to_top(&mut self, id: uuid::Uuid) {
-        if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == id)
-            && pos > 0
-        {
-            let command = crate::command::ReorderRuleCommand {
-                rule_id: id,
-                old_index: pos,
-                new_index: 0,
-            };
-            self.command_history
-                .execute(Box::new(command), &mut self.ruleset);
-            let _ = self.save_config();
-            self.update_cached_text();
-        }
-    }
-
-    fn handle_move_to_bottom(&mut self, id: uuid::Uuid) {
-        if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == id)
-            && pos < self.ruleset.rules.len() - 1
-        {
-            let new_index = self.ruleset.rules.len() - 1;
-            let command = crate::command::ReorderRuleCommand {
-                rule_id: id,
-                old_index: pos,
-                new_index,
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
@@ -940,7 +878,7 @@ impl State {
 
                 // Log the operation
                 let success = result.is_ok();
-                let error = result.as_ref().err().map(|e| e.to_string());
+                let error = result.as_ref().err().map(std::string::ToString::to_string);
                 crate::audit::log_apply(rule_count, enabled_count, success, error.clone()).await;
 
                 result.map_err(|e| e.to_string())
@@ -955,7 +893,7 @@ impl State {
 
         // Save snapshot to disk for persistence
         if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
-            eprintln!("Failed to save snapshot to disk: {}", e);
+            eprintln!("Failed to save snapshot to disk: {e}");
             // Continue anyway - we still have the in-memory snapshot
         }
 
@@ -990,7 +928,10 @@ impl State {
 
                     // Log the revert operation
                     let success = final_result.is_ok();
-                    let error = final_result.as_ref().err().map(|e| e.to_string());
+                    let error = final_result
+                        .as_ref()
+                        .err()
+                        .map(std::string::ToString::to_string);
                     crate::audit::log_revert(success, error.clone()).await;
 
                     final_result.map_err(|e| e.to_string())
@@ -1038,8 +979,8 @@ impl State {
                 use tempfile::NamedTempFile;
 
                 // Create secure temp file with restricted permissions
-                let mut temp = NamedTempFile::new()
-                    .map_err(|e| format!("Failed to create temp file: {}", e))?;
+                let mut temp =
+                    NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
 
                 // Set restrictive permissions (Unix only)
                 #[cfg(unix)]
@@ -1048,14 +989,14 @@ impl State {
                     let perms = std::fs::Permissions::from_mode(0o600);
                     temp.as_file()
                         .set_permissions(perms)
-                        .map_err(|e| format!("Failed to set permissions: {}", e))?;
+                        .map_err(|e| format!("Failed to set permissions: {e}"))?;
                 }
 
                 // Write configuration to temp file
                 temp.write_all(text.as_bytes())
-                    .map_err(|e| format!("Failed to write temp file: {}", e))?;
+                    .map_err(|e| format!("Failed to write temp file: {e}"))?;
                 temp.flush()
-                    .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+                    .map_err(|e| format!("Failed to flush temp file: {e}"))?;
 
                 // Get path and keep temp file alive
                 let temp_path_str = temp
@@ -1075,7 +1016,7 @@ impl State {
                     ])
                     .status()
                     .await
-                    .map_err(|e| format!("Failed to execute pkexec: {}", e))?;
+                    .map_err(|e| format!("Failed to execute pkexec: {e}"))?;
 
                 if status.success() {
                     Ok(())
@@ -1128,7 +1069,7 @@ impl State {
         // Use cached JSON to avoid regenerating
         let json = self.cached_json_text.clone();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("drfw_rules_{}.json", timestamp);
+        let filename = format!("drfw_rules_{timestamp}.json");
 
         Task::perform(
             async move {
@@ -1138,20 +1079,21 @@ impl State {
                     .join("Downloads")
                     .join(&filename);
 
-                let path = if downloads_path.parent().map(|p| p.exists()).unwrap_or(false) {
+                let path = if downloads_path.parent().is_some_and(std::path::Path::exists) {
                     downloads_path
                 } else {
-                    crate::utils::get_data_dir()
-                        .map(|mut p| {
+                    crate::utils::get_data_dir().map_or_else(
+                        || std::path::PathBuf::from(&filename),
+                        |mut p| {
                             p.push(&filename);
                             p
-                        })
-                        .unwrap_or_else(|| std::path::PathBuf::from(&filename))
+                        },
+                    )
                 };
 
                 std::fs::write(&path, json)
-                    .map(|_| path.to_string_lossy().to_string())
-                    .map_err(|e| format!("Failed to export JSON: {}", e))
+                    .map(|()| path.to_string_lossy().to_string())
+                    .map_err(|e| format!("Failed to export JSON: {e}"))
             },
             Message::ExportResult,
         )
@@ -1160,7 +1102,7 @@ impl State {
     fn handle_export_nft(&self) -> Task<Message> {
         let nft_text = self.cached_nft_text.clone();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("drfw_rules_{}.nft", timestamp);
+        let filename = format!("drfw_rules_{timestamp}.nft");
 
         Task::perform(
             async move {
@@ -1169,20 +1111,21 @@ impl State {
                     .join("Downloads")
                     .join(&filename);
 
-                let path = if downloads_path.parent().map(|p| p.exists()).unwrap_or(false) {
+                let path = if downloads_path.parent().is_some_and(std::path::Path::exists) {
                     downloads_path
                 } else {
-                    crate::utils::get_data_dir()
-                        .map(|mut p| {
+                    crate::utils::get_data_dir().map_or_else(
+                        || std::path::PathBuf::from(&filename),
+                        |mut p| {
                             p.push(&filename);
                             p
-                        })
-                        .unwrap_or_else(|| std::path::PathBuf::from(&filename))
+                        },
+                    )
                 };
 
                 std::fs::write(&path, nft_text)
-                    .map(|_| path.to_string_lossy().to_string())
-                    .map_err(|e| format!("Failed to export nftables text: {}", e))
+                    .map(|()| path.to_string_lossy().to_string())
+                    .map_err(|e| format!("Failed to export nftables text: {e}"))
             },
             Message::ExportResult,
         )

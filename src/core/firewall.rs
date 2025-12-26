@@ -12,26 +12,25 @@
 //! - Network interface filtering
 //! - IPv6-only mode
 //! - Enable/disable state
-//! - Tags and grouping for organization
+//! - Tags for organization
 //!
 //! # Example
 //!
 //! ```
-//! use drfw::core::firewall::{Rule, Protocol};
+//! use drfw::core::firewall::{Rule, Protocol, PortRange};
 //! use uuid::Uuid;
 //!
 //! let rule = Rule {
 //!     id: Uuid::new_v4(),
 //!     label: "Allow SSH".to_string(),
 //!     protocol: Protocol::Tcp,
-//!     ports: Some("22".to_string()),
+//!     ports: Some(PortRange::single(22)),
 //!     source: None,
 //!     interface: None,
 //!     ipv6_only: false,
 //!     enabled: true,
 //!     created_at: chrono::Utc::now(),
 //!     tags: vec![],
-//!     group: None,
 //! };
 //! ```
 
@@ -112,9 +111,6 @@ pub struct Rule {
     /// Tags for organizing and filtering rules
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Optional group name for visual organization
-    #[serde(default)]
-    pub group: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -511,6 +507,12 @@ pub struct FirewallRuleset {
     pub advanced_security: AdvancedSecuritySettings,
 }
 
+impl Default for FirewallRuleset {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FirewallRuleset {
     pub fn new() -> Self {
         Self {
@@ -645,7 +647,7 @@ impl FirewallRuleset {
                 "drop icmp redirects",
                 vec![
                     json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }),
-                    json!({ "match": { "left": { "icmp": { "key": "type" } }, "op": "==", "right": "redirect" } }),
+                    json!({ "match": { "left": { "payload": { "protocol": "icmp", "field": "type" } }, "op": "==", "right": "redirect" } }),
                     json!({ "drop": null }),
                 ],
             ),
@@ -653,7 +655,7 @@ impl FirewallRuleset {
                 "drop icmpv6 redirects",
                 vec![
                     json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }),
-                    json!({ "match": { "left": { "icmpv6": { "key": "type" } }, "op": "==", "right": "nd-redirect" } }),
+                    json!({ "match": { "left": { "payload": { "protocol": "icmpv6", "field": "type" } }, "op": "==", "right": "nd-redirect" } }),
                     json!({ "drop": null }),
                 ],
             ),
@@ -677,6 +679,7 @@ impl FirewallRuleset {
         Self::add_icmp_rules(nft_rules, advanced);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn add_icmp_rules(nft_rules: &mut Vec<serde_json::Value>, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
 
@@ -686,7 +689,7 @@ impl FirewallRuleset {
             // IPv4 ICMP - essential types only
             let mut ipv4_expr = vec![
                 json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }),
-                json!({ "match": { "left": { "icmp": { "key": "type" } }, "op": "in", "right": [
+                json!({ "match": { "left": { "payload": { "protocol": "icmp", "field": "type" } }, "op": "in", "right": [
                     "echo-reply",           // Type 0: ping responses
                     "destination-unreachable", // Type 3: path MTU discovery
                     "echo-request",         // Type 8: allow being pinged
@@ -719,7 +722,7 @@ impl FirewallRuleset {
             // IPv6 ICMP - essential types only (more types required for IPv6 to function)
             let mut ipv6_expr = vec![
                 json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }),
-                json!({ "match": { "left": { "icmpv6": { "key": "type" } }, "op": "in", "right": [
+                json!({ "match": { "left": { "payload": { "protocol": "icmpv6", "field": "type" } }, "op": "in", "right": [
                     "destination-unreachable", // Type 1
                     "packet-too-big",         // Type 2: path MTU (CRITICAL for IPv6)
                     "time-exceeded",          // Type 3
@@ -985,8 +988,7 @@ impl FirewallRuleset {
 
         let _ = writeln!(
             out,
-            "        type filter hook output priority -10; policy {};",
-            output_policy
+            "        type filter hook output priority -10; policy {output_policy};"
         );
 
         let _ = writeln!(out, "    }}\n");

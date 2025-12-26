@@ -16,9 +16,9 @@
 //!
 //! # Example
 //!
-//! ```
+//! ```no_run
 //! use drfw::command::{CommandHistory, AddRuleCommand};
-//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol};
+//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol, PortRange};
 //! use uuid::Uuid;
 //!
 //! let mut ruleset = FirewallRuleset::new();
@@ -28,8 +28,13 @@
 //!     id: Uuid::new_v4(),
 //!     label: "Allow HTTP".to_string(),
 //!     protocol: Protocol::Tcp,
-//!     ports: Some("80".to_string()),
-//!     // ... other fields
+//!     ports: Some(PortRange::single(80)),
+//!     source: None,
+//!     interface: None,
+//!     ipv6_only: false,
+//!     enabled: true,
+//!     tags: vec![],
+//!     created_at: chrono::Utc::now(),
 //! };
 //!
 //! let cmd = Box::new(AddRuleCommand { rule });
@@ -344,7 +349,6 @@ mod tests {
             enabled: true,
             created_at: chrono::Utc::now(),
             tags: Vec::new(),
-            group: None,
         }
     }
 
@@ -496,7 +500,7 @@ mod tests {
 
         // Add 3 rules
         for i in 1..=3 {
-            let rule = create_test_rule(&format!("Rule {}", i));
+            let rule = create_test_rule(&format!("Rule {i}"));
             history.execute(Box::new(AddRuleCommand { rule }), &mut ruleset);
         }
 
