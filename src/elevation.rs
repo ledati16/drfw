@@ -47,7 +47,13 @@
 /// Arguments are passed directly to `nft` without shell interpretation.
 /// Callers must ensure arguments are properly validated before calling this function.
 pub fn create_elevated_nft_command(args: &[&str]) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("pkexec");
-    cmd.arg("nft").args(args);
-    cmd
+    if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
+        let mut cmd = tokio::process::Command::new("nft");
+        cmd.args(args);
+        cmd
+    } else {
+        let mut cmd = tokio::process::Command::new("pkexec");
+        cmd.arg("nft").args(args);
+        cmd
+    }
 }

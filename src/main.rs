@@ -43,6 +43,7 @@ mod command;
 mod config;
 mod core;
 mod elevation;
+mod fonts;
 mod theme;
 mod utils;
 mod validators;

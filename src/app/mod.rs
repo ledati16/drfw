@@ -7,8 +7,7 @@ use chrono::Utc;
 use iced::{Element, Task};
 use std::time::Duration;
 
-pub const FONT_REGULAR: iced::Font = iced::Font::DEFAULT;
-pub const FONT_MONO: iced::Font = iced::Font::MONOSPACE;
+// Fonts are now dynamically selected via settings
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct State {
@@ -38,6 +37,10 @@ pub struct State {
     pub filter_tag: Option<String>,
     pub dragged_rule_id: Option<uuid::Uuid>,
     pub hovered_drop_target_id: Option<uuid::Uuid>,
+    pub regular_font_choice: crate::fonts::RegularFontChoice,
+    pub mono_font_choice: crate::fonts::MonoFontChoice,
+    pub font_regular: iced::Font,
+    pub font_mono: iced::Font,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +243,9 @@ pub enum Message {
     Redo,
     // Theme
     ThemeChanged(crate::theme::ThemeChoice),
+    // Fonts
+    RegularFontChanged(crate::fonts::RegularFontChoice),
+    MonoFontChanged(crate::fonts::MonoFontChoice),
     // Rule Tagging
     RuleFormTagInputChanged(String),
     RuleFormAddTag,
@@ -267,10 +273,12 @@ impl State {
     }
 
     pub fn new() -> (Self, Task<Message>) {
-        // Load complete config including theme choice
+        // Load complete config including theme choice and fonts
         let config = crate::config::load_config();
         let ruleset = config.ruleset;
         let current_theme = config.theme_choice;
+        let regular_font_choice = config.regular_font;
+        let mono_font_choice = config.mono_font;
 
         let interfaces = crate::utils::list_interfaces();
         let cached_nft_text = ruleset.to_nft_text();
@@ -279,6 +287,10 @@ impl State {
 
         // Apply the theme
         let theme = current_theme.to_theme();
+
+        // Apply the fonts
+        let font_regular = regular_font_choice.to_font();
+        let font_mono = mono_font_choice.to_font();
 
         // Load custom themes from config directory
         let custom_themes = crate::theme::custom::load_custom_themes();
@@ -310,6 +322,10 @@ impl State {
                 filter_tag: None,
                 dragged_rule_id: None,
                 hovered_drop_target_id: None,
+                regular_font_choice,
+                mono_font_choice,
+                font_regular,
+                font_mono,
             },
             Task::batch(vec![
                 iced::font::load(
@@ -330,6 +346,8 @@ impl State {
         let config = crate::config::AppConfig {
             ruleset: self.ruleset.clone(),
             theme_choice: self.current_theme,
+            regular_font: self.regular_font_choice,
+            mono_font: self.mono_font_choice,
         };
         if let Err(e) = crate::config::save_config(&config) {
             eprintln!("Failed to save configuration: {e}");
@@ -579,6 +597,18 @@ impl State {
                 self.current_theme = choice;
                 self.theme = choice.to_theme();
                 tracing::info!("Theme changed to: {}", choice.name());
+                return self.save_config();
+            }
+            Message::RegularFontChanged(choice) => {
+                self.regular_font_choice = choice;
+                self.font_regular = choice.to_font();
+                tracing::info!("Regular font changed to: {}", choice.name());
+                return self.save_config();
+            }
+            Message::MonoFontChanged(choice) => {
+                self.mono_font_choice = choice;
+                self.font_mono = choice.to_font();
+                tracing::info!("Monospace font changed to: {}", choice.name());
                 return self.save_config();
             }
             Message::RuleFormTagInputChanged(s) => {

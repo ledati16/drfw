@@ -641,6 +641,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_valid_ruleset() {
+        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -681,6 +682,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_invalid_port_range() {
+        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;

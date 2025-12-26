@@ -46,6 +46,7 @@ fn setup_mock_nft() {
     let new_path = format!("{}:{}", mock_dir.display(), current_path);
     unsafe {
         env::set_var("PATH", new_path);
+        env::set_var("DRFW_TEST_NO_ELEVATION", "1");
     }
 }
 

@@ -4,7 +4,7 @@ use crate::app::ui_components::{
     section_header_container, sidebar_container,
 };
 use crate::app::{
-    AppStatus, FONT_MONO, FONT_REGULAR, Message, PendingWarning, RuleForm,
+    AppStatus, Message, PendingWarning, RuleForm,
     State, WorkspaceTab,
 };
 use crate::core::firewall::{PRESETS, Protocol};
@@ -30,18 +30,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let preview_content: Element<'_, Message> = match state.active_tab {
         WorkspaceTab::Nftables => {
             if let Some(ref diff) = diff_text {
-                container(view_diff_text(diff, theme))
+                container(view_diff_text(diff, theme, state.font_mono))
                     .width(Length::Fill)
                     .into()
             } else {
-                container(view_highlighted_nft(&state.cached_nft_text, theme))
+                container(view_highlighted_nft(&state.cached_nft_text, theme, state.font_mono))
                     .width(Length::Fill)
                     .into()
             }
         }
         WorkspaceTab::Json => {
             // Use cached JSON to avoid regenerating on every frame
-            container(view_highlighted_json(&state.cached_json_text, theme))
+            container(view_highlighted_json(&state.cached_json_text, theme, state.font_mono))
                 .width(Length::Fill)
                 .into()
         }
@@ -56,7 +56,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
     let overlay = if let Some(warning) = &state.pending_warning {
         Some(
-            container(view_warning_modal(warning, theme))
+            container(view_warning_modal(warning, theme, state.font_regular, state.font_mono))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -73,6 +73,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 state.form_errors.as_ref(),
                 &state.interfaces,
                 theme,
+                state.font_regular,
+                state.font_mono,
             ))
             .style(|_| container::Style {
                 background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
@@ -86,7 +88,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
         match &state.status {
             AppStatus::AwaitingApply => Some(
-                container(view_awaiting_apply(theme))
+                container(view_awaiting_apply(theme, state.font_regular))
                     .style(|_| container::Style {
                         background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                         ..Default::default()
@@ -97,7 +99,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     .center_y(Length::Fill),
             ),
             AppStatus::PendingConfirmation { .. } => Some(
-                container(view_pending_confirmation(state.countdown_remaining, theme))
+                container(view_pending_confirmation(state.countdown_remaining, theme, state.font_regular))
                     .style(|_| container::Style {
                         background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.95).into()),
                         ..Default::default()
@@ -126,7 +128,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_diagnostics = if state.show_diagnostics {
         stack![
             with_overlay,
-            container(view_diagnostics_modal(theme))
+            container(view_diagnostics_modal(theme, state.font_regular, state.font_mono))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -145,7 +147,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_export = if state.show_export_modal {
         stack![
             with_diagnostics,
-            container(view_export_modal(theme))
+            container(view_export_modal(theme, state.font_regular))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -164,7 +166,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state.show_shortcuts_help {
         stack![
             with_export,
-            container(view_shortcuts_help(theme))
+            container(view_shortcuts_help(theme, state.font_regular, state.font_mono))
                 .style(|_| container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
                     ..Default::default()
@@ -187,11 +189,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         row![
             container(text("🛡️").size(28).color(theme.accent)).padding(4),
             column![
-                text("DRFW").size(24).font(FONT_REGULAR).color(theme.accent),
+                text("DRFW").size(24).font(state.font_regular).color(theme.accent),
                 text("DUMB RUST FIREWALL")
                     .size(9)
                     .color(theme.fg_muted)
-                    .font(FONT_MONO),
+                    .font(state.font_mono),
             ]
             .spacing(0)
         ]
@@ -250,7 +252,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         ))
         .size(10)
         .color(theme.fg_muted)
-        .font(FONT_MONO),
+        .font(state.font_mono),
     ]
     .width(Length::Fill)
     .align_y(Alignment::Center);
@@ -261,7 +263,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 text("No matching rules.")
                     .size(13)
                     .color(theme.fg_muted)
-                    .font(FONT_REGULAR),
+                    .font(state.font_regular),
                 if state.ruleset.rules.is_empty() {
                     text("Click '+' to add your first rule.")
                         .size(11)
@@ -402,7 +404,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                     _ => "PROTO",
                                 })
                                 .size(9)
-                                .font(FONT_MONO)
+                                .font(state.font_mono)
                                 .color(if rule.enabled {
                                     theme.syntax_type
                                 } else {
@@ -423,24 +425,24 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                             // Port number below protocol - split range if too long
                             container({
                                 let port_display = rule.ports.as_ref().map_or_else(
-                                    || column![text("All").size(8).color(theme.fg_muted).font(FONT_MONO)],
+                                    || column![text("All").size(8).color(theme.fg_muted).font(state.font_mono)],
                                     |p| if p.start == p.end {
                                         // Single port
-                                        column![text(p.start.to_string()).size(8).color(theme.fg_muted).font(FONT_MONO)]
+                                        column![text(p.start.to_string()).size(8).color(theme.fg_muted).font(state.font_mono)]
                                     } else {
                                         // Port range - check if it needs wrapping
                                         let range_str = format!("{}-{}", p.start, p.end);
                                         if range_str.len() > 8 {
                                             // Split across two lines for long ranges
                                             column![
-                                                text(p.start.to_string()).size(8).color(theme.fg_muted).font(FONT_MONO),
-                                                text(p.end.to_string()).size(8).color(theme.fg_muted).font(FONT_MONO),
+                                                text(p.start.to_string()).size(8).color(theme.fg_muted).font(state.font_mono),
+                                                text(p.end.to_string()).size(8).color(theme.fg_muted).font(state.font_mono),
                                             ]
                                             .spacing(0)
                                             .align_x(Alignment::Center)
                                         } else {
                                             // Fits on one line
-                                            column![text(range_str).size(8).color(theme.fg_muted).font(FONT_MONO)]
+                                            column![text(range_str).size(8).color(theme.fg_muted).font(state.font_mono)]
                                         }
                                     }
                                 );
@@ -500,7 +502,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                     &rule.label
                                 })
                                 .size(12)
-                                .font(FONT_REGULAR)
+                                .font(state.font_regular)
                                 .wrapping(Wrapping::None)
                                 .color(if rule.enabled {
                                     theme.fg_primary
@@ -626,7 +628,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             text("NETWORK ACCESS")
                 .size(10)
                 .color(theme.fg_muted)
-                .font(FONT_REGULAR),
+                .font(state.font_regular),
             search_bar,
             metrics,
             container(
@@ -673,7 +675,7 @@ fn view_workspace<'a>(
                 WorkspaceTab::Settings => "Advanced Security",
             })
             .size(18)
-            .font(FONT_REGULAR)
+            .font(state.font_regular)
             .color(theme.fg_primary),
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Current nftables ruleset generated from your rules.",
@@ -730,12 +732,12 @@ fn view_workspace<'a>(
     });
 
     let save_to_system = if state.status == AppStatus::Confirmed {
-        button(text("Permanently Save to System").font(FONT_REGULAR))
+        button(text("Permanently Save to System").font(state.font_regular))
             .style(move |_, status| primary_button(theme, status))
             .padding([12, 24])
             .on_press(Message::SaveToSystemClicked)
     } else {
-        button(text("Save to /etc/nftables.conf").font(FONT_REGULAR))
+        button(text("Save to /etc/nftables.conf").font(state.font_regular))
             .padding([12, 24])
             .style(move |_, status| secondary_button(theme, status))
     };
@@ -758,7 +760,7 @@ fn view_workspace<'a>(
         } else {
             "Apply Changes"
         };
-        let mut btn = button(text(button_text).font(FONT_REGULAR)).padding([12, 32]);
+        let mut btn = button(text(button_text).font(state.font_regular)).padding([12, 32]);
 
         if is_dirty && !is_busy {
             btn = btn.style(move |_, status| dirty_button(theme, status));
@@ -774,7 +776,7 @@ fn view_workspace<'a>(
 
     // Undo/Redo buttons
     let undo_button = {
-        let mut btn = button(text("↶ Undo").font(FONT_REGULAR))
+        let mut btn = button(text("↶ Undo").font(state.font_regular))
             .padding([12, 20])
             .style(move |_, status| secondary_button(theme, status));
         if state.command_history.can_undo() {
@@ -784,7 +786,7 @@ fn view_workspace<'a>(
     };
 
     let redo_button = {
-        let mut btn = button(text("↷ Redo").font(FONT_REGULAR))
+        let mut btn = button(text("↷ Redo").font(state.font_regular))
             .padding([12, 20])
             .style(move |_, status| secondary_button(theme, status));
         if state.command_history.can_redo() {
@@ -807,7 +809,7 @@ fn view_workspace<'a>(
         save_to_system,
         rule::horizontal(1),
         if let Some(ref err) = state.last_error {
-            view_error_display(err, theme)
+            view_error_display(err, theme, state.font_regular, state.font_mono)
         } else {
             row![].into()
         },
@@ -850,6 +852,7 @@ fn view_tab_button<'a>(
 fn view_highlighted_json(
     content: &str,
     theme: &crate::theme::AppTheme,
+    mono_font: iced::Font,
 ) -> iced::widget::Column<'static, Message> {
     let mut lines = column![].spacing(2);
 
@@ -860,7 +863,7 @@ fn view_highlighted_json(
         row_content = row_content.push(
             container(
                 text(format!("{:3} ", i + 1))
-                    .font(FONT_MONO)
+                    .font(mono_font)
                     .size(11)
                     .color(Color::from_rgb(0.4, 0.4, 0.4)),
             )
@@ -878,10 +881,10 @@ fn view_highlighted_json(
                 const SPACES: &str = "                                ";
                 let spaces = &SPACES[..indent];
                 row_content = row_content
-                    .push(text("  ").font(FONT_MONO).size(13))
-                    .push(text(spaces).font(FONT_MONO).size(13));
+                    .push(text("  ").font(mono_font).size(13))
+                    .push(text(spaces).font(mono_font).size(13));
             } else {
-                row_content = row_content.push(text("  ").font(FONT_MONO).size(13));
+                row_content = row_content.push(text("  ").font(mono_font).size(13));
             }
         }
 
@@ -895,7 +898,7 @@ fn view_highlighted_json(
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
                         row_content = row_content
-                            .push(text(token).font(FONT_MONO).size(13).color(theme.fg_primary));
+                            .push(text(token).font(mono_font).size(13).color(theme.fg_primary));
                     }
 
                     // Read the full string
@@ -926,18 +929,18 @@ fn view_highlighted_json(
                         theme.syntax_string
                     };
                     row_content = row_content
-                        .push(text(string_content).font(FONT_MONO).size(13).color(color));
+                        .push(text(string_content).font(mono_font).size(13).color(color));
                 }
                 ':' | ',' => {
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
                         row_content = row_content
-                            .push(text(token).font(FONT_MONO).size(13).color(theme.fg_primary));
+                            .push(text(token).font(mono_font).size(13).color(theme.fg_primary));
                     }
                     let ch_str = if ch == ':' { ":" } else { "," };
                     row_content = row_content.push(
                         text(ch_str)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .size(13)
                             .color(theme.fg_primary),
                     );
@@ -946,7 +949,7 @@ fn view_highlighted_json(
                     if !current_token.is_empty() {
                         let token = std::mem::take(&mut current_token);
                         row_content = row_content
-                            .push(text(token).font(FONT_MONO).size(13).color(theme.fg_primary));
+                            .push(text(token).font(mono_font).size(13).color(theme.fg_primary));
                     }
                     let ch_str = match ch {
                         '{' => "{",
@@ -956,7 +959,7 @@ fn view_highlighted_json(
                         _ => unreachable!(),
                     };
                     row_content = row_content
-                        .push(text(ch_str).font(FONT_MONO).size(13).color(theme.info));
+                        .push(text(ch_str).font(mono_font).size(13).color(theme.info));
                 }
                 _ => {
                     current_token.push(ch);
@@ -973,7 +976,7 @@ fn view_highlighted_json(
                 _ => theme.fg_primary,
             };
             row_content = row_content
-                .push(text(current_token).font(FONT_MONO).size(13).color(color));
+                .push(text(current_token).font(mono_font).size(13).color(color));
         }
 
         lines = lines.push(row_content);
@@ -984,6 +987,7 @@ fn view_highlighted_json(
 fn view_highlighted_nft(
     content: &str,
     theme: &crate::theme::AppTheme,
+    mono_font: iced::Font,
 ) -> iced::widget::Column<'static, Message> {
     let mut lines = column![].spacing(1);
 
@@ -994,7 +998,7 @@ fn view_highlighted_nft(
         row_content = row_content.push(
             container(
                 text(format!("{:4}", i + 1))
-                    .font(FONT_MONO)
+                    .font(mono_font)
                     .size(11)
                     .color(Color::from_rgb(0.25, 0.25, 0.25)),
             )
@@ -1019,7 +1023,7 @@ fn view_highlighted_nft(
             if indent > 0 {
                 const SPACES: &str = "                                ";
                 let spaces = &SPACES[..indent];
-                row_content = row_content.push(text(spaces).font(FONT_MONO).size(14));
+                row_content = row_content.push(text(spaces).font(mono_font).size(14));
             }
         }
 
@@ -1029,7 +1033,7 @@ fn view_highlighted_nft(
         for (idx, word) in words.into_iter().enumerate() {
             // Add space between words (except first word)
             if idx > 0 {
-                row_content = row_content.push(text(" ").font(FONT_MONO).size(14));
+                row_content = row_content.push(text(" ").font(mono_font).size(14));
             }
 
             // Determine color based on token type
@@ -1058,7 +1062,7 @@ fn view_highlighted_nft(
 
             row_content = row_content.push(
                 text(word)
-                    .font(FONT_MONO)
+                    .font(mono_font)
                     .size(14)
                     .color(color)
             );
@@ -1073,6 +1077,7 @@ fn view_highlighted_nft(
 fn view_diff_text(
     diff_content: &str,
     theme: &crate::theme::AppTheme,
+    mono_font: iced::Font,
 ) -> iced::widget::Column<'static, Message> {
     let mut lines = column![].spacing(1);
 
@@ -1083,7 +1088,7 @@ fn view_diff_text(
         row_content = row_content.push(
             container(
                 text(format!("{:4}", i + 1))
-                    .font(FONT_MONO)
+                    .font(mono_font)
                     .size(11)
                     .color(Color::from_rgb(0.25, 0.25, 0.25)),
             )
@@ -1125,7 +1130,7 @@ fn view_diff_text(
             };
             row_content = row_content.push(
                 text(format!("{diff_prefix} "))
-                    .font(FONT_MONO)
+                    .font(mono_font)
                     .size(14)
                     .color(diff_color),
             );
@@ -1134,7 +1139,7 @@ fn view_diff_text(
             if indent > 0 {
                 const SPACES: &str = "                                ";
                 let spaces = &SPACES[..indent];
-                row_content = row_content.push(text(spaces).font(FONT_MONO).size(14));
+                row_content = row_content.push(text(spaces).font(mono_font).size(14));
             }
         }
 
@@ -1144,7 +1149,7 @@ fn view_diff_text(
         for (idx, word) in words.into_iter().enumerate() {
             // Add space between words (except first word)
             if idx > 0 {
-                row_content = row_content.push(text(" ").font(FONT_MONO).size(14));
+                row_content = row_content.push(text(" ").font(mono_font).size(14));
             }
 
             // Determine base color based on token type
@@ -1186,7 +1191,7 @@ fn view_diff_text(
 
             row_content = row_content.push(
                 text(word)
-                    .font(FONT_MONO)
+                    .font(mono_font)
                     .size(14)
                     .color(color)
             );
@@ -1204,6 +1209,8 @@ fn view_rule_form<'a>(
     errors: Option<&'a crate::app::FormErrors>,
     interfaces: &'a [String],
     theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+    mono_font: iced::Font,
 ) -> Element<'a, Message> {
     let title_text = if form.id.is_some() {
         "Edit Rule"
@@ -1224,7 +1231,7 @@ fn view_rule_form<'a>(
         column![
             text(title_text)
                 .size(22)
-                .font(FONT_REGULAR)
+                .font(regular_font)
                 .color(theme.info),
             text("Define allowed traffic patterns.")
                 .size(12)
@@ -1281,7 +1288,7 @@ fn view_rule_form<'a>(
                 .width(Length::Fill),
                 column![
                     text("PORT RANGE").size(10).color(theme.fg_muted),
-                    view_port_inputs(form, port_error, theme),
+                    view_port_inputs(form, port_error, theme, mono_font),
                     if let Some(err) = port_error {
                         text(err).size(11).color(theme.danger)
                     } else {
@@ -1408,6 +1415,7 @@ fn view_port_inputs<'a>(
     form: &RuleForm,
     _has_error: Option<&String>,
     theme: &'a crate::theme::AppTheme,
+    mono_font: iced::Font,
 ) -> Element<'a, Message> {
     if matches!(form.protocol, Protocol::Tcp | Protocol::Udp) {
         row![
@@ -1429,7 +1437,7 @@ fn view_port_inputs<'a>(
             text("Not applicable")
                 .size(12)
                 .color(theme.fg_muted)
-                .font(FONT_MONO),
+                .font(mono_font),
         )
         .padding(10)
         .width(Length::Fill)
@@ -1439,8 +1447,8 @@ fn view_port_inputs<'a>(
     }
 }
 
-fn view_awaiting_apply(app_theme: &crate::theme::AppTheme) -> Element<'_, Message> {
-    container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(FONT_REGULAR).color(app_theme.fg_primary),
+fn view_awaiting_apply(app_theme: &crate::theme::AppTheme, regular_font: iced::Font) -> Element<'_, Message> {
+    container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(regular_font).color(app_theme.fg_primary),
                       text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
                       row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(move |_, status| secondary_button(app_theme, status)),
                            button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
@@ -1452,13 +1460,14 @@ fn view_awaiting_apply(app_theme: &crate::theme::AppTheme) -> Element<'_, Messag
 fn view_pending_confirmation(
     remaining: u32,
     app_theme: &crate::theme::AppTheme,
+    regular_font: iced::Font,
 ) -> Element<'_, Message> {
     container(
         column![
             text("⏳").size(36),
             text("Confirm Safety")
                 .size(24)
-                .font(FONT_REGULAR)
+                .font(regular_font)
                 .color(app_theme.fg_primary),
             text(format!(
                 "Firewall updated. Automatic rollback in {remaining} seconds if not confirmed."
@@ -1521,6 +1530,46 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     crate::theme::ThemeChoice::all_builtin(),
                     Some(state.current_theme),
                     Message::ThemeChanged,
+                )
+                .width(200)
+                .text_size(14),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+
+            // Regular Font Selector
+            row![
+                column![
+                    text("UI Font").size(16).color(theme.fg_primary),
+                    text("Font used for buttons, labels, and text")
+                        .size(13)
+                        .color(theme.fg_muted),
+                ]
+                .width(Length::Fill),
+                pick_list(
+                    crate::fonts::RegularFontChoice::all(),
+                    Some(state.regular_font_choice),
+                    Message::RegularFontChanged,
+                )
+                .width(200)
+                .text_size(14),
+            ]
+            .spacing(16)
+            .align_y(Alignment::Center),
+
+            // Monospace Font Selector
+            row![
+                column![
+                    text("Code Font").size(16).color(theme.fg_primary),
+                    text("Monospace font for configuration preview")
+                        .size(13)
+                        .color(theme.fg_muted),
+                ]
+                .width(Length::Fill),
+                pick_list(
+                    crate::fonts::MonoFontChoice::all(),
+                    Some(state.mono_font_choice),
+                    Message::MonoFontChanged,
                 )
                 .width(200)
                 .text_size(14),
@@ -1713,6 +1762,8 @@ fn view_settings(state: &State) -> Element<'_, Message> {
 fn view_warning_modal<'a>(
     warning: &'a PendingWarning,
     theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+    mono_font: iced::Font,
 ) -> Element<'a, Message> {
     let (title, message, confirm_msg) = match warning {
         PendingWarning::EnableRpf => (
@@ -1729,17 +1780,17 @@ fn view_warning_modal<'a>(
 
     container(
         column![
-            text(title).size(20).color(theme.danger),
+            text(title).size(20).font(regular_font).color(theme.danger),
             text(message)
                 .size(14)
                 .color(theme.fg_primary)
-                .font(FONT_MONO),
+                .font(mono_font),
             row![
-                button(text("Cancel").size(14))
+                button(text("Cancel").size(14).font(regular_font))
                     .on_press(Message::CancelWarning)
                     .padding(12)
                     .style(move |_, status| card_button(theme, status)),
-                button(text("Yes, I understand").size(14))
+                button(text("Yes, I understand").size(14).font(regular_font))
                     .on_press(confirm_msg)
                     .padding(12)
                     .style(move |_, status| danger_button(theme, status)),
@@ -1770,6 +1821,8 @@ fn view_warning_modal<'a>(
 fn view_error_display<'a>(
     err: &'a crate::core::error::ErrorInfo,
     theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+    mono_font: iced::Font,
 ) -> Element<'a, Message> {
     let mut elements: Vec<Element<'_, Message>> = vec![
         row![
@@ -1777,7 +1830,7 @@ fn view_error_display<'a>(
             text(&err.message)
                 .size(13)
                 .color(theme.danger)
-                .font(FONT_REGULAR),
+                .font(regular_font),
             button("Copy Details")
                 .on_press(Message::CopyErrorClicked)
                 .padding([4, 10])
@@ -1796,7 +1849,7 @@ fn view_error_display<'a>(
                 text(suggestion)
                     .size(12)
                     .color(theme.fg_primary)
-                    .font(FONT_MONO),
+                    .font(mono_font),
             ]
             .spacing(6)
             .into(),
@@ -1807,7 +1860,7 @@ fn view_error_display<'a>(
 }
 
 #[allow(clippy::too_many_lines)]
-fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
+fn view_diagnostics_modal(theme: &crate::theme::AppTheme, regular_font: iced::Font, mono_font: iced::Font) -> Element<'_, Message> {
     // Read recent audit log entries
     let audit_entries = std::fs::read_to_string(
         crate::utils::get_data_dir()
@@ -1841,7 +1894,7 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
             row![
                 text("📊 Diagnostics & Logs")
                     .size(24)
-                    .font(FONT_REGULAR)
+                    .font(regular_font)
                     .color(theme.warning),
                 rule::horizontal(0),
             ]
@@ -1867,7 +1920,7 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
                             .map(|entry| {
                                 text(entry)
                                     .size(11)
-                                    .font(FONT_MONO)
+                                    .font(mono_font)
                                     .color(theme.fg_primary)
                                     .into()
                             })
@@ -1899,14 +1952,14 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
                             .color(theme.fg_muted),
                         text(recovery_cmd)
                             .size(12)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning),
                         text("Restore from snapshot:")
                             .size(12)
                             .color(theme.fg_muted),
                         text(snapshot_restore_cmd)
                             .size(12)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning),
                     ]
                     .spacing(6)
@@ -1944,12 +1997,12 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message
     .into()
 }
 
-fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
+fn view_export_modal(theme: &crate::theme::AppTheme, regular_font: iced::Font) -> Element<'_, Message> {
     container(
         column![
             text("📤 Export Rules")
                 .size(24)
-                .font(FONT_REGULAR)
+                .font(regular_font)
                 .color(theme.warning),
             text("Choose the export format:")
                 .size(14)
@@ -1961,7 +2014,7 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                         column![
                             text("Export as JSON")
                                 .size(16)
-                                .font(FONT_REGULAR)
+                                .font(regular_font)
                                 .color(theme.fg_primary),
                             text("Structured data format for automation and backup")
                                 .size(12)
@@ -1982,7 +2035,7 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                         column![
                             text("Export as nftables text")
                                 .size(16)
-                                .font(FONT_REGULAR)
+                                .font(regular_font)
                                 .color(theme.fg_primary),
                             text("Human-readable .nft format for manual editing")
                                 .size(12)
@@ -2017,17 +2070,17 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
+fn view_shortcuts_help(theme: &crate::theme::AppTheme, regular_font: iced::Font, mono_font: iced::Font) -> Element<'_, Message> {
     container(
         column![
             text("⌨️ Keyboard Shortcuts")
                 .size(24)
-                .font(FONT_REGULAR)
+                .font(regular_font)
                 .color(theme.warning),
             column![
                 text("General").size(16).color(theme.fg_primary),
                 row![
-                    container(text("F1").size(13).font(FONT_MONO).color(theme.warning))
+                    container(text("F1").size(13).font(mono_font).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
                         .style(move |_| container::Style {
@@ -2042,7 +2095,7 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                 ]
                 .spacing(16),
                 row![
-                    container(text("Esc").size(13).font(FONT_MONO).color(theme.warning))
+                    container(text("Esc").size(13).font(mono_font).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
                         .style(move |_| container::Style {
@@ -2064,7 +2117,7 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                     container(
                         text("Ctrl + N")
                             .size(13)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning)
                     )
                     .width(150)
@@ -2084,7 +2137,7 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                     container(
                         text("Ctrl + S")
                             .size(13)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning)
                     )
                     .width(150)
@@ -2104,7 +2157,7 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                     container(
                         text("Ctrl + Z")
                             .size(13)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning)
                     )
                     .width(150)
@@ -2124,7 +2177,7 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                     container(
                         text("Ctrl + Shift + Z")
                             .size(13)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning)
                     )
                     .width(150)
@@ -2150,7 +2203,7 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
                     container(
                         text("Ctrl + E")
                             .size(13)
-                            .font(FONT_MONO)
+                            .font(mono_font)
                             .color(theme.warning)
                     )
                     .width(150)

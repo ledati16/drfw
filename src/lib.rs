@@ -32,6 +32,7 @@ pub mod command;
 pub mod config;
 pub mod core;
 pub mod elevation;
+pub mod fonts;
 pub mod theme;
 pub mod utils;
 pub mod validators;

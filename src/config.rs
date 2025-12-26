@@ -11,6 +11,10 @@ pub struct AppConfig {
     pub ruleset: FirewallRuleset,
     #[serde(default)]
     pub theme_choice: crate::theme::ThemeChoice,
+    #[serde(default)]
+    pub regular_font: crate::fonts::RegularFontChoice,
+    #[serde(default)]
+    pub mono_font: crate::fonts::MonoFontChoice,
 }
 
 
@@ -76,6 +80,8 @@ pub fn load_config() -> AppConfig {
             return AppConfig {
                 ruleset,
                 theme_choice: crate::theme::ThemeChoice::default(),
+                regular_font: crate::fonts::RegularFontChoice::default(),
+                mono_font: crate::fonts::MonoFontChoice::default(),
             };
         }
     }
@@ -89,6 +95,8 @@ pub fn save_ruleset(ruleset: &FirewallRuleset) -> std::io::Result<()> {
     let config = AppConfig {
         ruleset: ruleset.clone(),
         theme_choice: crate::theme::ThemeChoice::default(),
+        regular_font: crate::fonts::RegularFontChoice::default(),
+        mono_font: crate::fonts::MonoFontChoice::default(),
     };
     save_config(&config)
 }
