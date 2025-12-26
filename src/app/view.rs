@@ -379,17 +379,16 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 ..Default::default()
                             }),
 
-                        // Toggle - make non-interactive when drag is active
+                        // Checkbox - make non-interactive when drag is active
                         {
-                            let toggle = toggler(rule.enabled)
-                                .size(12)
-                                .width(Length::Shrink)
+                            let check = checkbox(rule.enabled)
+                                .size(16)
                                 .spacing(0);
 
                             if any_drag_active && !is_being_dragged {
-                                toggle  // No on_toggle handler when drag active
+                                check  // No on_toggle handler when drag active
                             } else {
-                                toggle.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
+                                check.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
                             }
                         },
 
@@ -460,12 +459,17 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
                             for tag in rule.tags.iter() {
                                 let tag_theme = theme.clone();
+                                let is_enabled = rule.enabled;
                                 tag_items.push(
                                     container(
                                         container(
                                             text(tag)
                                                 .size(8)
-                                                .color(theme.fg_on_accent)
+                                                .color(if is_enabled {
+                                                    theme.fg_on_accent
+                                                } else {
+                                                    Color { a: 0.5, ..theme.fg_muted }
+                                                })
                                                 .wrapping(Wrapping::None)
                                         )
                                         .max_width(80)  // Max width for tag text, but shrinks to fit
@@ -473,7 +477,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                     )
                                     .padding([1, 4])
                                     .style(move |_| container::Style {
-                                        background: Some(tag_theme.accent.into()),
+                                        background: Some(if is_enabled {
+                                            tag_theme.accent.into()
+                                        } else {
+                                            Color { a: 0.3, ..tag_theme.accent }.into()
+                                        }),
                                         border: Border {
                                             radius: 3.0.into(),
                                             ..Default::default()
