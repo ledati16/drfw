@@ -1,108 +1,110 @@
 use iced::Font;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
-/// Font choices for the UI
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum RegularFontChoice {
-    #[default]
+/// Represents a font choice, either a system preset or a specific system font family
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FontChoice {
     SystemDefault,
-    Inter,
-    RobotoRegular,
-    SegoeUI,
-    SanFrancisco,
-    Ubuntu,
+    SystemMonospace,
+    Specific {
+        name: String,
+        #[serde(skip)]
+        handle: Option<Font>,
+    },
 }
 
-impl RegularFontChoice {
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::SystemDefault,
-            Self::Inter,
-            Self::RobotoRegular,
-            Self::SegoeUI,
-            Self::SanFrancisco,
-            Self::Ubuntu,
-        ]
+impl Default for FontChoice {
+    fn default() -> Self {
+        Self::SystemDefault
     }
+}
 
-    pub const fn name(self) -> &'static str {
+impl FontChoice {
+    pub fn name(&self) -> String {
         match self {
-            Self::SystemDefault => "System Default",
-            Self::Inter => "Inter",
-            Self::RobotoRegular => "Roboto",
-            Self::SegoeUI => "Segoe UI",
-            Self::SanFrancisco => "San Francisco",
-            Self::Ubuntu => "Ubuntu",
+            Self::SystemDefault => "System Default".to_string(),
+            Self::SystemMonospace => "System Monospace".to_string(),
+            Self::Specific { name, .. } => name.clone(),
         }
     }
 
-    pub const fn to_font(self) -> Font {
+    pub fn to_font(&self) -> Font {
         match self {
             Self::SystemDefault => Font::DEFAULT,
-            Self::Inter => Font::with_name("Inter"),
-            Self::RobotoRegular => Font::with_name("Roboto"),
-            Self::SegoeUI => Font::with_name("Segoe UI"),
-            Self::SanFrancisco => Font::with_name("San Francisco"),
-            Self::Ubuntu => Font::with_name("Ubuntu"),
-        }
-    }
-}
-
-impl std::fmt::Display for RegularFontChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
-
-/// Monospace font choices for code display
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum MonoFontChoice {
-    #[default]
-    SystemMonospace,
-    FiraCode,
-    JetBrainsMono,
-    SourceCodePro,
-    CascadiaCode,
-    UbuntuMono,
-}
-
-impl MonoFontChoice {
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::SystemMonospace,
-            Self::FiraCode,
-            Self::JetBrainsMono,
-            Self::SourceCodePro,
-            Self::CascadiaCode,
-            Self::UbuntuMono,
-        ]
-    }
-
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::SystemMonospace => "System Monospace",
-            Self::FiraCode => "Fira Code",
-            Self::JetBrainsMono => "JetBrains Mono",
-            Self::SourceCodePro => "Source Code Pro",
-            Self::CascadiaCode => "Cascadia Code",
-            Self::UbuntuMono => "Ubuntu Mono",
-        }
-    }
-
-    pub const fn to_font(self) -> Font {
-        match self {
             Self::SystemMonospace => Font::MONOSPACE,
-            Self::FiraCode => Font::with_name("Fira Code"),
-            Self::JetBrainsMono => Font::with_name("JetBrains Mono"),
-            Self::SourceCodePro => Font::with_name("Source Code Pro"),
-            Self::CascadiaCode => Font::with_name("Cascadia Code"),
-            Self::UbuntuMono => Font::with_name("Ubuntu Mono"),
+            Self::Specific { handle, .. } => handle.unwrap_or(Font::DEFAULT),
+        }
+    }
+
+    /// Resolves a font choice by populating its handle from the system cache if missing.
+    /// Used when loading from configuration.
+    pub fn resolve(&mut self, is_mono: bool) {
+        if let Self::Specific { name, handle } = self {
+            if handle.is_none() {
+                let mut found_handle = None;
+                // Find matching font in system cache
+                for option in all_options() {
+                    if let Self::Specific { name: system_name, handle: system_handle } = option {
+                        if system_name == name {
+                            found_handle = *system_handle;
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(h) = found_handle {
+                    *handle = Some(h);
+                } else {
+                    // Font was deleted from system, fall back to appropriate default
+                    tracing::warn!("Font '{}' not found on system, falling back to default.", name);
+                    *self = if is_mono {
+                        Self::SystemMonospace
+                    } else {
+                        Self::SystemDefault
+                    };
+                }
+            }
         }
     }
 }
 
-impl std::fmt::Display for MonoFontChoice {
+impl std::fmt::Display for FontChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
 }
+
+/// Global cache of system font families
+static SYSTEM_FONTS: OnceLock<Vec<FontChoice>> = OnceLock::new();
+
+/// Returns all available font choices for the UI, cached
+pub fn all_options() -> &'static [FontChoice] {
+    SYSTEM_FONTS.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        
+        let mut families: Vec<String> = db.faces()
+            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .collect();
+        
+        families.sort();
+        families.dedup();
+
+        let mut options = vec![FontChoice::SystemDefault, FontChoice::SystemMonospace];
+        
+        for name in families {
+            // We leak the name once per system font family to satisfy Iced's &'static requirement
+            let leaked_name: &'static str = Box::leak(name.clone().into_boxed_str());
+            options.push(FontChoice::Specific {
+                name,
+                handle: Some(Font::with_name(leaked_name)),
+            });
+        }
+        options
+    })
+}
+
+// Re-export old types as aliases for compatibility
+pub type RegularFontChoice = FontChoice;
+pub type MonoFontChoice = FontChoice;

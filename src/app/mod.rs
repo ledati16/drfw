@@ -29,6 +29,7 @@ pub struct State {
     pub show_diagnostics: bool,
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
+    pub font_picker: Option<FontPickerState>,
     pub command_history: crate::command::CommandHistory,
     pub current_theme: crate::theme::ThemeChoice,
     pub theme: crate::theme::AppTheme,
@@ -41,6 +42,19 @@ pub struct State {
     pub mono_font_choice: crate::fonts::MonoFontChoice,
     pub font_regular: iced::Font,
     pub font_mono: iced::Font,
+    pub available_fonts: &'static [crate::fonts::FontChoice],
+}
+
+#[derive(Debug, Clone)]
+pub struct FontPickerState {
+    pub target: FontPickerTarget,
+    pub search: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontPickerTarget {
+    Regular,
+    Mono,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,6 +260,9 @@ pub enum Message {
     // Fonts
     RegularFontChanged(crate::fonts::RegularFontChoice),
     MonoFontChanged(crate::fonts::MonoFontChoice),
+    OpenFontPicker(FontPickerTarget),
+    FontPickerSearchChanged(String),
+    CloseFontPicker,
     // Rule Tagging
     RuleFormTagInputChanged(String),
     RuleFormAddTag,
@@ -277,8 +294,12 @@ impl State {
         let config = crate::config::load_config();
         let ruleset = config.ruleset;
         let current_theme = config.theme_choice;
-        let regular_font_choice = config.regular_font;
-        let mono_font_choice = config.mono_font;
+        let mut regular_font_choice = config.regular_font;
+        let mut mono_font_choice = config.mono_font;
+
+        // Resolve fonts (hydrate handles from system cache, handle deleted fonts)
+        regular_font_choice.resolve(false);
+        mono_font_choice.resolve(true);
 
         let interfaces = crate::utils::list_interfaces();
         let cached_nft_text = ruleset.to_nft_text();
@@ -294,6 +315,9 @@ impl State {
 
         // Load custom themes from config directory
         let custom_themes = crate::theme::custom::load_custom_themes();
+
+        // Get available fonts (cached static slice)
+        let available_fonts = crate::fonts::all_options();
 
         (
             Self {
@@ -315,6 +339,7 @@ impl State {
                 show_diagnostics: false,
                 show_export_modal: false,
                 show_shortcuts_help: false,
+                font_picker: None,
                 command_history: crate::command::CommandHistory::default(),
                 current_theme,
                 theme,
@@ -326,6 +351,7 @@ impl State {
                 mono_font_choice,
                 font_regular,
                 font_mono,
+                available_fonts,
             },
             Task::batch(vec![
                 iced::font::load(
@@ -346,8 +372,8 @@ impl State {
         let config = crate::config::AppConfig {
             ruleset: self.ruleset.clone(),
             theme_choice: self.current_theme,
-            regular_font: self.regular_font_choice,
-            mono_font: self.mono_font_choice,
+            regular_font: self.regular_font_choice.clone(),
+            mono_font: self.mono_font_choice.clone(),
         };
         if let Err(e) = crate::config::save_config(&config) {
             eprintln!("Failed to save configuration: {e}");
@@ -600,16 +626,31 @@ impl State {
                 return self.save_config();
             }
             Message::RegularFontChanged(choice) => {
-                self.regular_font_choice = choice;
+                self.regular_font_choice = choice.clone();
                 self.font_regular = choice.to_font();
                 tracing::info!("Regular font changed to: {}", choice.name());
                 return self.save_config();
             }
             Message::MonoFontChanged(choice) => {
-                self.mono_font_choice = choice;
+                self.mono_font_choice = choice.clone();
                 self.font_mono = choice.to_font();
                 tracing::info!("Monospace font changed to: {}", choice.name());
+                self.font_picker = None; // Close picker after selection
                 return self.save_config();
+            }
+            Message::OpenFontPicker(target) => {
+                self.font_picker = Some(FontPickerState {
+                    target,
+                    search: String::new(),
+                });
+            }
+            Message::FontPickerSearchChanged(search) => {
+                if let Some(picker) = &mut self.font_picker {
+                    picker.search = search;
+                }
+            }
+            Message::CloseFontPicker => {
+                self.font_picker = None;
             }
             Message::RuleFormTagInputChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
@@ -1140,6 +1181,9 @@ impl State {
                     }
                     if self.show_export_modal {
                         return Task::done(Message::ExportClicked);
+                    }
+                    if self.font_picker.is_some() {
+                        return Task::done(Message::CloseFontPicker);
                     }
                 }
                 iced::keyboard::Key::Named(iced::keyboard::key::Named::F1) => {
