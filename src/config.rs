@@ -91,6 +91,7 @@ pub fn load_config() -> AppConfig {
 
 /// Legacy function for backward compatibility - saves only the ruleset
 #[deprecated(note = "Use save_config() instead")]
+#[allow(dead_code)]
 pub fn save_ruleset(ruleset: &FirewallRuleset) -> std::io::Result<()> {
     let config = AppConfig {
         ruleset: ruleset.clone(),
@@ -101,6 +102,7 @@ pub fn save_ruleset(ruleset: &FirewallRuleset) -> std::io::Result<()> {
 
 /// Legacy function for backward compatibility - loads only the ruleset
 #[deprecated(note = "Use load_config() instead")]
+#[allow(dead_code)]
 pub fn load_ruleset() -> FirewallRuleset {
     load_config().ruleset
 }

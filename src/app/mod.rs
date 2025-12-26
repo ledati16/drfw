@@ -34,6 +34,7 @@ pub struct State {
     pub command_history: crate::command::CommandHistory,
     pub current_theme: crate::theme::ThemeChoice,
     pub theme: crate::theme::AppTheme,
+    #[allow(dead_code)] // TODO: Add custom themes to theme picker UI
     pub custom_themes: Vec<crate::theme::AppTheme>,
 }
 

@@ -123,8 +123,9 @@ fn hex_to_color(hex: u32) -> Color {
 }
 
 /// All available built-in themes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeChoice {
+    #[default]
     Nord,
     Gruvbox,
     Dracula,
@@ -135,12 +136,6 @@ pub enum ThemeChoice {
     OneDark,
     SolarizedDark,
     Custom(usize), // Index into custom themes list
-}
-
-impl Default for ThemeChoice {
-    fn default() -> Self {
-        Self::Nord
-    }
 }
 
 impl ThemeChoice {
@@ -173,7 +168,7 @@ impl ThemeChoice {
         }
     }
 
-    pub fn to_theme(&self) -> AppTheme {
+    pub fn to_theme(self) -> AppTheme {
         match self {
             Self::Nord => presets::nord(),
             Self::Gruvbox => presets::gruvbox(),

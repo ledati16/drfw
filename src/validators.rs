@@ -6,7 +6,10 @@
 /// Sanitizes a label for safe use in nftables comments.
 ///
 /// Removes control characters, quotes, and shell metacharacters.
-/// Limits length to 64 characters as per specification.
+/// Limits length to 64 bytes (ASCII characters only) as per specification.
+///
+/// SECURITY: Uses `is_ascii_alphanumeric()` to prevent Unicode-based bypasses
+/// and ensure labels stay within system limits (64 bytes max).
 ///
 /// # Examples
 ///
@@ -23,8 +26,8 @@ pub fn sanitize_label(input: &str) -> String {
     input
         .chars()
         .filter(|c| {
-            // Allow alphanumeric, space, and safe punctuation only
-            c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ':')
+            // SECURITY: Use ASCII-only to prevent Unicode bypasses and multi-byte issues
+            c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ':')
         })
         .take(64)
         .collect()

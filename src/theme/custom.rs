@@ -157,6 +157,7 @@ pub fn load_custom_themes() -> Vec<AppTheme> {
 }
 
 /// Create an example custom theme file in the themes directory
+#[allow(dead_code)] // TODO: Call from UI "Create Example Theme" button
 pub fn create_example_theme() -> Result<PathBuf, String> {
     let mut config_dir =
         crate::utils::get_data_dir().ok_or_else(|| "Failed to get config directory".to_string())?;
