@@ -135,8 +135,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
         ]
         .into()
     } else {
@@ -154,8 +154,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
         ]
         .into()
     } else {
@@ -173,8 +173,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
         ]
         .into()
     } else {
@@ -192,8 +192,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
         ]
         .into()
     } else {
@@ -816,7 +816,7 @@ fn view_workspace<'a>(
 
     let footer = row![
         button("Export")
-            .on_press(Message::ExportClicked)
+            .on_press(Message::ToggleExportModal(true))
             .padding([12, 20])
             .style(move |_, status| secondary_button(theme, status)),
         button("Diagnostics")
@@ -2100,10 +2100,10 @@ fn view_diagnostics_modal(theme: &crate::theme::AppTheme, regular_font: iced::Fo
             .align_y(Alignment::Center),
         ]
         .spacing(20)
-        .padding(32)
-        .max_width(700),
+        .padding(32),
     )
-    .style(move |_| section_header_container(theme))
+    .max_width(700)
+    .style(move |_| card_container(theme))
     .into()
 }
 
@@ -2166,16 +2166,16 @@ fn view_export_modal(theme: &crate::theme::AppTheme, regular_font: iced::Font) -
                 .size(11)
                 .color(theme.fg_muted),
             button(text("Cancel").size(14))
-                .on_press(Message::ExportClicked) // Toggle to close
+                .on_press(Message::ToggleExportModal(false)) // Toggle to close
                 .padding([10, 20])
                 .style(move |_, status| secondary_button(theme, status)),
         ]
         .spacing(20)
         .padding(32)
-        .max_width(500)
         .align_x(Alignment::Center),
     )
-    .style(move |_| section_header_container(theme))
+    .max_width(500)
+    .style(move |_| card_container(theme))
     .into()
 }
 
@@ -2471,9 +2471,9 @@ fn view_shortcuts_help(theme: &crate::theme::AppTheme, regular_font: iced::Font,
                 .style(move |_, status| card_button(theme, status)),
         ]
         .spacing(24)
-        .padding(32)
-        .max_width(600),
+        .padding(32),
     )
-    .style(move |_| section_header_container(theme))
+    .max_width(600)
+    .style(move |_| card_container(theme))
     .into()
 }

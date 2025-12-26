@@ -225,7 +225,7 @@ pub enum Message {
     RevertResult(Result<(), String>),
     CountdownTick,
     TabChanged(WorkspaceTab),
-    ExportClicked,
+    ToggleExportModal(bool),
     CopyErrorClicked,
     SaveToSystemClicked,
     SaveToSystemResult(Result<(), String>),
@@ -508,8 +508,8 @@ impl State {
             }
             Message::CountdownTick => return self.handle_countdown_tick(),
             Message::TabChanged(tab) => self.active_tab = tab,
-            Message::ExportClicked => {
-                self.show_export_modal = true;
+            Message::ToggleExportModal(show) => {
+                self.show_export_modal = show;
             }
             Message::ExportAsJson => return self.handle_export_json(),
             Message::ExportAsNft => return self.handle_export_nft(),
@@ -1180,7 +1180,7 @@ impl State {
                         return Task::done(Message::ToggleDiagnostics(false));
                     }
                     if self.show_export_modal {
-                        return Task::done(Message::ExportClicked);
+                        return Task::done(Message::ToggleExportModal(false));
                     }
                     if self.font_picker.is_some() {
                         return Task::done(Message::CloseFontPicker);
@@ -1204,7 +1204,7 @@ impl State {
                 iced::keyboard::Key::Character("e")
                     if modifiers.command() || modifiers.control() =>
                 {
-                    return Task::done(Message::ExportClicked);
+                    return Task::done(Message::ToggleExportModal(true));
                 }
                 iced::keyboard::Key::Character("z")
                     if (modifiers.command() || modifiers.control()) && !modifiers.shift() =>
