@@ -1469,17 +1469,31 @@ mod property_tests {
 **Goal:** Add advanced features and improve user experience
 **Timeline:** v2.0+
 
-### 4.1 Optional Advanced Security Settings ⚙️ NEW
+**Overall Progress:**
+- ✅ 4.1 Advanced Security Settings - COMPLETE (7/7 features)
+- 🟡 4.2 Enhanced Error Messages - PARTIAL (translation layer exists)
+- ✅ 4.3 Undo/Redo - COMPLETE (8 tests passing)
+- 🟡 4.4 Export Formats - PARTIAL (JSON + .nft complete)
+- ✅ 4.5 Rule Templates/Presets - COMPLETE (64+ presets)
+- 🟡 4.6 Advanced UI - PARTIAL (theming, diff, search, shortcuts complete)
+- ⏳ 4.7 Testing/Simulation - PLANNED
+- ⏳ 4.8 Advanced Firewall Features - PLANNED
+
+---
+
+### 4.1 Optional Advanced Security Settings ✅ COMPLETE
 
 **Goal:** Provide optional security hardening for advanced users (all OFF by default)
 **Rationale:** These features are too restrictive for default desktop use but valuable for security-conscious users and server deployments.
 
-#### 4.1.1 Strict ICMP Mode
+**Status:** All 7 security settings implemented and tested in v1.0
 
-- [ ] Add UI toggle: "Strict ICMP filtering (recommended for servers)"
-- [ ] When enabled, restrict ICMP to only essential types
-- [ ] Show warning: "May break some network tools and multiplayer games"
-- [ ] **Default: OFF** (current behavior: allow all ICMP except redirects)
+#### 4.1.1 Strict ICMP Mode ✅
+
+- [x] Add UI toggle: "Strict ICMP filtering (recommended for servers)"
+- [x] When enabled, restrict ICMP to only essential types
+- [x] Show warning: "May break some network tools and multiplayer games"
+- [x] **Default: OFF** (current behavior: allow all ICMP except redirects)
 
 **Implementation:**
 ```rust
@@ -1822,49 +1836,63 @@ for users who need them.
 
 ---
 
-### 4.3 Undo/Redo Functionality
+### 4.3 Undo/Redo Functionality ✅ COMPLETE
 
-- [ ] Implement command pattern for all state changes
-- [ ] Add undo/redo stack (max 20 operations)
-- [ ] Add keyboard shortcuts (Ctrl+Z, Ctrl+Y)
-- [ ] Show undo/redo buttons in UI
-- [ ] Persist undo stack across sessions
+- [x] Implement command pattern for all state changes
+- [x] Add undo/redo stack (max 20 operations)
+- [x] Add keyboard shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+- [x] Show undo/redo buttons in UI
+- [ ] Persist undo stack across sessions (deferred - low priority)
+
+**Status:** Implemented in v1.0 with 8 comprehensive tests
 
 ---
 
-### 4.3 Multiple Export Formats
+### 4.4 Multiple Export Formats 🟡 PARTIAL
 
-- [ ] Export to nftables JSON
-- [ ] Export to nftables text (.nft)
+- [x] Export to nftables JSON ✅
+- [x] Export to nftables text (.nft) ✅
 - [ ] Export to iptables-translate compatible format
 - [ ] Export to firewalld rich rules
 - [ ] Add import functionality
 
+**Status:** Basic export complete, advanced formats deferred
+
 ---
 
-### 4.4 Rule Templates and Presets
+### 4.5 Rule Templates and Presets ✅ COMPLETE
 
-- [ ] Expand PRESETS list
-- [ ] Add rule templates (web server, database, gaming)
-- [ ] Allow custom preset creation
-- [ ] Import/export preset libraries
+- [x] Expand PRESETS list (64+ presets across 13 categories)
+- [x] Add rule templates (Remote Access, Web, DNS, Database, Gaming, Media, VPN, etc.)
+- [ ] Allow custom preset creation (future)
+- [ ] Import/export preset libraries (future)
 - [ ] Community preset sharing (future)
 
+**Status:** Comprehensive preset system implemented
+
 ---
 
-### 4.5 Advanced UI Features
+### 4.6 Advanced UI Features 🟡 PARTIAL
 
 - [ ] Inline rule validation (real-time feedback)
 - [ ] Syntax highlighting in JSON view
-- [ ] Diff view (current vs pending changes)
-- [ ] Search and filter rules
+- [x] Diff view (current vs pending changes) ✅
+- [x] Search and filter rules ✅
 - [ ] Rule grouping/tagging
-- [ ] Dark/light theme toggle
-- [ ] Keyboard shortcut help modal
+- [x] Theming system ✅
+  - [x] 9 preset themes (Nord, Gruvbox, Dracula, Monokai, Everforest, Tokyo Night, Catppuccin, One Dark, Solarized)
+  - [x] Custom theme loading from TOML files
+  - [x] Theme persistence across restarts
+  - [x] Theme selector in Settings tab
+- [x] Keyboard shortcut help modal (F1) ✅
+- [x] Diagnostics modal ✅
+- [x] Desktop notifications ✅
+
+**Status:** Core UX features complete, some advanced features pending
 
 ---
 
-### 4.6 Testing and Simulation
+### 4.7 Testing and Simulation
 
 - [ ] "Test Mode" - apply rules in separate namespace
 - [ ] Network connectivity checker
@@ -1874,10 +1902,10 @@ for users who need them.
 
 ---
 
-### 4.7 Advanced Firewall Features
+### 4.8 Advanced Firewall Features
 
 - [ ] IPv6 rule management
-- [ ] Rate limiting rules
+- [ ] Rate limiting rules (basic ICMP rate limiting implemented)
 - [ ] Connection tracking tuning
 - [ ] NAT/masquerade rules
 - [ ] Port forwarding
