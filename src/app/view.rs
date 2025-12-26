@@ -1618,272 +1618,219 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
     let advanced = &state.ruleset.advanced_security;
 
-    column![
-            // Header
-            text("Settings")
-                .size(24)
-                .color(theme.fg_primary),
-
-            // Theme Selector
-            row![
-                column![
-                    text("Theme").size(16).color(theme.fg_primary),
-                    text("Choose your preferred color scheme")
-                        .size(13)
-                        .color(theme.fg_muted),
-                ]
-                .width(Length::Fill),
-                pick_list(
-                    crate::theme::ThemeChoice::all_builtin(),
-                    Some(state.current_theme),
-                    Message::ThemeChanged,
-                )
-                .width(200)
-                .text_size(14),
-            ]
-            .spacing(16)
-            .align_y(Alignment::Center),
-
-            // Regular Font Selector
-            row![
-                column![
-                    text("UI Font").size(16).color(theme.fg_primary),
-                    text("Font used for buttons, labels, and text")
-                        .size(13)
-                        .color(theme.fg_muted),
-                ]
-                .width(Length::Fill),
-                button(
-                    row![
-                        container(
-                            text(state.regular_font_choice.name())
-                                .size(14)
-                                .wrapping(Wrapping::None)
-                        )
-                        .width(Length::Fill)
-                        .clip(true),
-                        text(" ▾").size(10).color(theme.fg_muted)
-                    ]
+    let appearance_card = container(
+        column![
+            container(
+                row![text("🎨").size(18), text("APPEARANCE").size(12).font(state.font_regular)]
+                    .spacing(8)
                     .align_y(Alignment::Center)
-                )
-                .on_press(Message::OpenFontPicker(FontPickerTarget::Regular))
-                .width(200)
-                .padding(10)
-                .style(move |_, status| secondary_button(theme, status)),
-            ]
-            .spacing(16)
-            .align_y(Alignment::Center),
+            )
+            .padding([8, 12])
+            .width(Length::Fill)
+            .style(move |_| section_header_container(theme)),
 
-            // Monospace Font Selector
-            row![
-                column![
-                    text("Code Font").size(16).color(theme.fg_primary),
-                    text("Monospace font for configuration preview")
-                        .size(13)
-                        .color(theme.fg_muted),
-                ]
-                .width(Length::Fill),
-                button(
-                    row![
-                        container(
-                            text(state.mono_font_choice.name())
-                                .size(14)
-                                .wrapping(Wrapping::None)
-                        )
-                        .width(Length::Fill)
-                        .clip(true),
-                        text(" ▾").size(10).color(theme.fg_muted)
-                    ]
-                    .align_y(Alignment::Center)
-                )
-                .on_press(Message::OpenFontPicker(FontPickerTarget::Mono))
-                .width(200)
-                .padding(10)
-                .style(move |_, status| secondary_button(theme, status)),
-            ]
-            .spacing(16)
-            .align_y(Alignment::Center),
-
-            rule::horizontal(1),
-
-            // Advanced Security Header
-            text("Advanced Security Settings")
-                .size(20)
-                .color(theme.fg_primary),
-            text("⚠️  These settings may break common applications. Defaults are suitable for most users.")
-                .size(14)
-                .color(theme.syntax_string),
-            rule::horizontal(1),
-            // Strict ICMP Mode
-            row![
-                toggler(advanced.strict_icmp)
-                    .on_toggle(Message::ToggleStrictIcmp)
-                    .width(40),
-                column![
-                    text("Strict ICMP filtering").size(16).color(theme.fg_primary),
-                    text("Only allow essential ICMP types")
-                        .size(13)
-                        .color(theme.fg_muted),
-                    text("ℹ️  May break network tools and games")
-                        .size(12)
-                        .color(theme.info),
-                ]
-                .spacing(4),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-            // ICMP Rate Limiting
-            row![
-                toggler(advanced.icmp_rate_limit > 0)
-                    .on_toggle(|enabled| {
-                        Message::IcmpRateLimitChanged(if enabled { 10 } else { 0 })
-                    })
-                    .width(40),
-                column![
-                    text("ICMP rate limiting").size(16).color(theme.fg_primary),
-                    row![
-                        text("Rate:").size(13).color(theme.fg_muted),
-                        slider(
-                            0..=50, advanced.icmp_rate_limit, Message::IcmpRateLimitChanged
-                        )
-                        .width(200),
-                        text(format!("{}/sec", advanced.icmp_rate_limit))
-                            .size(13)
-                            .color(theme.fg_primary),
-                        text("(0 = disabled)").size(12).color(theme.fg_muted),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                    text("ℹ️  May interfere with monitoring tools")
-                        .size(12)
-                        .color(theme.info),
-                ]
-                .spacing(4),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-            // Anti-spoofing (RPF)
-            row![
-                toggler(advanced.enable_rpf)
-                    .on_toggle(Message::ToggleRpfRequested)
-                    .width(40),
-                column![
-                    text("Anti-spoofing (RPF)").size(16).color(theme.fg_primary),
-                    text("Reverse path filtering via FIB lookup")
-                        .size(13)
-                        .color(theme.fg_muted),
-                    text("⚠️  WILL BREAK: Docker, VPNs, cloud instances")
-                        .size(12)
-                        .color(theme.danger),
-                ]
-                .spacing(4),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-            // Dropped Packet Logging
-            row![
-                toggler(advanced.log_dropped)
-                    .on_toggle(Message::ToggleDroppedLogging)
-                    .width(40),
-                column![
-                    text("Log dropped packets").size(16).color(theme.fg_primary),
-                    row![
-                        text("Rate:").size(13).color(theme.fg_muted),
-                        slider(
-                            1..=100, advanced.log_rate_per_minute, Message::LogRateChanged
-                        )
-                        .width(200),
-                        text(format!("{}/min", advanced.log_rate_per_minute))
-                            .size(13)
-                            .color(theme.fg_primary),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                    row![
-                        text("Prefix:").size(13).color(theme.fg_muted),
-                        text_input("DRFW-DROP: ", &advanced.log_prefix)
-                            .on_input(Message::LogPrefixChanged)
-                            .width(200),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                    text("ℹ️  Privacy: Logs network activity")
-                        .size(12)
-                        .color(theme.info),
-                ]
-                .spacing(4),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-            // Egress Profile
             column![
-                text("Egress Filtering Profile")
-                    .size(16)
-                    .color(theme.fg_primary),
-                row![
-                    button(
-                        text(if advanced.egress_profile
-                            == crate::core::firewall::EgressProfile::Desktop
-                        {
-                            "● Desktop"
-                        } else {
-                            "○ Desktop"
-                        })
-                        .size(14)
+                render_settings_row(
+                    "Theme",
+                    "Choose your preferred color scheme",
+                    pick_list(
+                        crate::theme::ThemeChoice::all_builtin(),
+                        Some(state.current_theme),
+                        Message::ThemeChanged,
                     )
-                    .on_press(Message::EgressProfileRequested(
-                        crate::core::firewall::EgressProfile::Desktop
-                    ))
-                    .style(move |_, status| if advanced.egress_profile
-                        == crate::core::firewall::EgressProfile::Desktop
-                    {
-                        active_card_button(&state.theme, status)
-                    } else {
-                        card_button(&state.theme, status)
-                    }),
+                    .width(Length::Fill)
+                    .text_size(14)
+                    .into(),
+                    theme,
+                    state.font_regular,
+                ),
+
+                render_settings_row(
+                    "UI Font",
+                    "Font used for buttons, labels, and text",
                     button(
-                        text(if advanced.egress_profile
-                            == crate::core::firewall::EgressProfile::Server
-                        {
-                            "● Server"
-                        } else {
-                            "○ Server"
-                        })
-                        .size(14)
+                        row![
+                            container(text(state.regular_font_choice.name()).size(13).wrapping(Wrapping::None))
+                                .width(Length::Fill).clip(true),
+                            text(" ▾").size(10).color(theme.fg_muted)
+                        ].align_y(Alignment::Center)
                     )
-                    .on_press(Message::EgressProfileRequested(
-                        crate::core::firewall::EgressProfile::Server
-                    ))
-                    .style(move |_, status| if advanced.egress_profile
-                        == crate::core::firewall::EgressProfile::Server
-                    {
-                        active_card_button(&state.theme, status)
-                    } else {
-                        card_button(&state.theme, status)
-                    }),
-                ]
-                .spacing(12),
-                text(if advanced.egress_profile
-                    == crate::core::firewall::EgressProfile::Desktop
-                {
-                    "Allow all outbound connections (default)"
-                } else {
-                    "⚠️  Deny all outbound by default (server mode)"
-                })
-                .size(13)
-                .color(if advanced.egress_profile
-                    == crate::core::firewall::EgressProfile::Desktop
-                {
-                    theme.fg_muted
-                } else {
-                    theme.danger
-                }),
-            ]
-            .spacing(8),
+                    .on_press(Message::OpenFontPicker(FontPickerTarget::Regular))
+                    .width(Length::Fill)
+                    .padding(8)
+                    .style(move |_, status| secondary_button(theme, status))
+                    .into(),
+                    theme,
+                    state.font_regular,
+                ),
+
+                render_settings_row(
+                    "Code Font",
+                    "Monospace font for configuration preview",
+                    button(
+                        row![
+                            container(text(state.mono_font_choice.name()).size(13).wrapping(Wrapping::None))
+                                .width(Length::Fill).clip(true),
+                            text(" ▾").size(10).color(theme.fg_muted)
+                        ].align_y(Alignment::Center)
+                    )
+                    .on_press(Message::OpenFontPicker(FontPickerTarget::Mono))
+                    .width(Length::Fill)
+                    .padding(8)
+                    .style(move |_, status| secondary_button(theme, status))
+                    .into(),
+                    theme,
+                    state.font_regular,
+                ),
+            ].spacing(16).padding(16)
         ]
-        .spacing(20)
-        .padding(20)
-        .into()
+    )
+    .style(move |_| card_container(theme));
+
+    let security_card = container(
+        column![
+            container(
+                row![text("🛡️").size(18), text("ADVANCED SECURITY").size(12).font(state.font_regular)]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+            )
+            .padding([8, 12])
+            .width(Length::Fill)
+            .style(move |_| section_header_container(theme)),
+
+            column![
+                text("⚠️ These settings may break common applications. Defaults are suitable for most users.")
+                    .size(13)
+                    .color(theme.syntax_string),
+
+                render_settings_row(
+                    "Strict ICMP filtering",
+                    "Only allow essential ICMP types (ping, MTU discovery)",
+                    toggler(advanced.strict_icmp)
+                        .on_toggle(Message::ToggleStrictIcmp)
+                        .width(Length::Shrink)
+                        .into(),
+                    theme,
+                    state.font_regular,
+                ),
+
+                render_settings_row(
+                    "ICMP rate limiting",
+                    "Limit incoming ICMP packets to prevent floods",
+                    row![
+                        slider(0..=50, advanced.icmp_rate_limit, Message::IcmpRateLimitChanged)
+                            .width(Length::Fill),
+                        text(format!("{}/s", advanced.icmp_rate_limit))
+                            .size(12).font(state.font_mono).width(40).align_x(Alignment::End),
+                    ].spacing(12).align_y(Alignment::Center).into(),
+                    theme,
+                    state.font_regular,
+                ),
+
+                render_settings_row(
+                    "Anti-spoofing (RPF)",
+                    "Drop packets with spoofed source addresses",
+                    toggler(advanced.enable_rpf)
+                        .on_toggle(Message::ToggleRpfRequested)
+                        .width(Length::Shrink)
+                        .into(),
+                    theme,
+                    state.font_regular,
+                ),
+
+                render_settings_row(
+                    "Log dropped packets",
+                    "Record filtered traffic to system logs",
+                    toggler(advanced.log_dropped)
+                        .on_toggle(Message::ToggleDroppedLogging)
+                        .width(Length::Shrink)
+                        .into(),
+                    theme,
+                    state.font_regular,
+                ),
+
+                if advanced.log_dropped {
+                    Element::from(column![
+                        render_settings_row(
+                            "   └ Log Rate",
+                            "Maximum log entries per minute",
+                            row![
+                                slider(1..=100, advanced.log_rate_per_minute, Message::LogRateChanged)
+                                    .width(Length::Fill),
+                                text(format!("{}/m", advanced.log_rate_per_minute))
+                                    .size(12).font(state.font_mono).width(40).align_x(Alignment::End),
+                            ].spacing(12).align_y(Alignment::Center).into(),
+                            theme,
+                            state.font_regular,
+                        ),
+                        render_settings_row(
+                            "   └ Log Prefix",
+                            "Tag used in system journal",
+                            text_input("DRFW-DROP: ", &advanced.log_prefix)
+                                .on_input(Message::LogPrefixChanged)
+                                .padding(8)
+                                .size(13)
+                                .into(),
+                            theme,
+                            state.font_regular,
+                        ),
+                    ].spacing(8))
+                } else {
+                    column![].into()
+                },
+
+                container(rule::horizontal(1)).padding([8, 0]),
+
+                column![
+                    text("Egress Filtering Profile").size(15).font(state.font_regular).color(theme.fg_primary),
+                    text("Desktop allows all outbound; Server mode denies by default").size(12).color(theme.fg_muted),
+                    row![
+                        button(text(if advanced.egress_profile == crate::core::firewall::EgressProfile::Desktop { "● Desktop" } else { "○ Desktop" }).size(13))
+                            .on_press(Message::EgressProfileRequested(crate::core::firewall::EgressProfile::Desktop))
+                            .width(Length::Fill)
+                            .style(move |_, status| if advanced.egress_profile == crate::core::firewall::EgressProfile::Desktop { active_card_button(theme, status) } else { card_button(theme, status) }),
+                        button(text(if advanced.egress_profile == crate::core::firewall::EgressProfile::Server { "● Server" } else { "○ Server" }).size(13))
+                            .on_press(Message::EgressProfileRequested(crate::core::firewall::EgressProfile::Server))
+                            .width(Length::Fill)
+                            .style(move |_, status| if advanced.egress_profile == crate::core::firewall::EgressProfile::Server { active_card_button(theme, status) } else { card_button(theme, status) }),
+                    ].spacing(12).width(Length::Fill)
+                ].spacing(8)
+            ].spacing(16).padding(16)
+        ]
+    )
+    .style(move |_| card_container(theme));
+
+    column![
+        text("Settings").size(24).font(state.font_regular).color(theme.fg_primary),
+        appearance_card,
+        security_card,
+    ]
+    .spacing(24)
+    .padding(8)
+    .into()
+}
+
+fn render_settings_row<'a>(
+    title: &'static str,
+    desc: &'static str,
+    control: Element<'a, Message>,
+    theme: &crate::theme::AppTheme,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    row![
+        column![
+            text(title).size(15).font(font).color(theme.fg_primary),
+            text(desc).size(12).color(theme.fg_muted),
+        ]
+        .width(Length::Fill)
+        .spacing(2),
+        container(control)
+            .width(Length::Fixed(250.0))
+            .align_x(Alignment::End)
+    ]
+    .spacing(20)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn view_warning_modal<'a>(
