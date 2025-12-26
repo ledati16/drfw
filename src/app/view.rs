@@ -1318,6 +1318,7 @@ fn view_rule_form<'a>(
     iface_options.extend(interfaces.iter().cloned());
 
     let form_box = column![
+        // Title Section
         column![
             text(title_text)
                 .size(22)
@@ -1328,6 +1329,8 @@ fn view_rule_form<'a>(
                 .color(theme.fg_muted)
         ]
         .spacing(4),
+
+        // Basic Info Section
         column![
             container(text("BASIC INFO").size(10).color(theme.fg_primary))
                 .padding([4, 8])
@@ -1336,9 +1339,9 @@ fn view_rule_form<'a>(
                 text("DESCRIPTION").size(10).color(theme.fg_muted),
                 text_input("e.g. Local Web Server", &form.label)
                     .on_input(Message::RuleFormLabelChanged)
-                    .padding(10)
+                    .padding(8)
             ]
-            .spacing(6),
+            .spacing(4),
             column![
                 text("SERVICE PRESET").size(10).color(theme.fg_muted),
                 pick_list(
@@ -1348,11 +1351,13 @@ fn view_rule_form<'a>(
                 )
                 .placeholder("Select a common service...")
                 .width(Length::Fill)
-                .padding(10)
+                .padding(8)
             ]
-            .spacing(6),
+            .spacing(4),
         ]
-        .spacing(12),
+        .spacing(8),
+
+        // Technical Details Section
         column![
             container(text("TECHNICAL DETAILS").size(10).color(theme.fg_primary))
                 .padding([4, 8])
@@ -1372,43 +1377,49 @@ fn view_rule_form<'a>(
                         Message::RuleFormProtocolChanged
                     )
                     .width(Length::Fill)
-                    .padding(10)
+                    .padding(8)
                 ]
-                .spacing(6)
+                .spacing(4)
                 .width(Length::Fill),
-                column![
-                    text("PORT RANGE").size(10).color(theme.fg_muted),
-                    view_port_inputs(form, port_error, theme, mono_font),
+                {
+                    let mut port_col = column![
+                        text("PORT RANGE").size(10).color(theme.fg_muted),
+                        view_port_inputs(form, port_error, theme, mono_font),
+                    ]
+                    .spacing(4)
+                    .width(Length::Fill);
+
                     if let Some(err) = port_error {
-                        text(err).size(11).color(theme.danger)
-                    } else {
-                        text("")
+                        port_col = port_col.push(text(err).size(11).color(theme.danger));
                     }
-                ]
-                .spacing(6)
-                .width(Length::Fill),
+                    port_col
+                },
             ]
             .spacing(16),
         ]
-        .spacing(12),
+        .spacing(8),
+
+        // Context Section
         column![
             container(text("CONTEXT").size(10).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
-            column![
-                text("SOURCE ADDRESS (OPTIONAL)")
-                    .size(10)
-                    .color(theme.fg_muted),
-                text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
-                    .on_input(Message::RuleFormSourceChanged)
-                    .padding(10),
+            {
+                let mut source_col = column![
+                    text("SOURCE ADDRESS (OPTIONAL)")
+                        .size(10)
+                        .color(theme.fg_muted),
+                    text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
+                        .on_input(Message::RuleFormSourceChanged)
+                        .padding(8),
+                ]
+                .spacing(4);
+
                 if let Some(err) = source_error {
-                    text(err).size(11).color(theme.danger)
-                } else {
-                    text("")
+                    source_col = source_col.push(text(err).size(11).color(theme.danger));
                 }
-            ]
-            .spacing(6),
+                source_col
+            },
             column![
                 text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted),
                 pick_list(
@@ -1425,33 +1436,37 @@ fn view_rule_form<'a>(
                     }
                 )
                 .width(Length::Fill)
-                .padding(10)
+                .padding(8)
             ]
-            .spacing(6),
+            .spacing(4),
         ]
-        .spacing(12),
+        .spacing(8),
+
+        // Organization Section
         column![
             container(text("ORGANIZATION").size(10).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
-            column![
-                text("TAGS").size(10).color(theme.fg_muted),
-                row![
-                    text_input("Add a tag...", &form.tag_input)
-                        .on_input(Message::RuleFormTagInputChanged)
-                        .on_submit(Message::RuleFormAddTag)
-                        .padding(10),
-                    button(text("+").size(16))
-                        .on_press(Message::RuleFormAddTag)
-                        .padding([8, 16])
-                        .style(move |_, status| primary_button(theme, status)),
+            {
+                let mut org_col = column![
+                    text("TAGS").size(10).color(theme.fg_muted),
+                    row![
+                        text_input("Add a tag...", &form.tag_input)
+                            .on_input(Message::RuleFormTagInputChanged)
+                            .on_submit(Message::RuleFormAddTag)
+                            .padding(8),
+                        button(text("+").size(16))
+                            .on_press(Message::RuleFormAddTag)
+                            .padding([8, 16])
+                            .style(move |_, status| primary_button(theme, status)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
                 ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                if form.tags.is_empty() {
-                    row(std::iter::empty()).spacing(8).wrap()
-                } else {
-                    row(form.tags.iter().map(|tag| {
+                .spacing(10);
+
+                if !form.tags.is_empty() {
+                    org_col = org_col.push(Element::from(row(form.tags.iter().map(|tag| -> Element<'_, Message> {
                         let tag_theme = theme.clone();
                         container(
                             row![
@@ -1473,27 +1488,29 @@ fn view_rule_form<'a>(
                         .into()
                     }))
                     .spacing(8)
-                    .wrap()
-                },
-            ]
-            .spacing(8),
+                    .wrap()));
+                }
+                org_col
+            },
         ]
-        .spacing(12),
+        .spacing(8),
+
+        // Footer Actions
         row![
             button(text("Cancel").size(14))
                 .on_press(Message::CancelRuleForm)
-                .padding([10, 20])
+                .padding([10, 24])
                 .style(move |_, status| secondary_button(theme, status)),
-            rule::horizontal(1),
+            container(row![]).width(Length::Fill),
             button(text(button_text).size(14))
                 .on_press(Message::SaveRuleForm)
-                .padding([10, 24])
+                .padding([10, 32])
                 .style(move |_, status| primary_button(theme, status)),
         ]
         .spacing(16)
         .align_y(Alignment::Center)
     ]
-    .spacing(20)
+    .spacing(12)
     .padding(32);
     container(form_box)
         .max_width(520)
@@ -1511,12 +1528,12 @@ fn view_port_inputs<'a>(
         row![
             text_input("80", &form.port_start)
                 .on_input(Message::RuleFormPortStartChanged)
-                .padding(10)
+                .padding(8)
                 .width(Length::Fill),
             text("-").size(16).color(theme.fg_muted),
             text_input("80", &form.port_end)
                 .on_input(Message::RuleFormPortEndChanged)
-                .padding(10)
+                .padding(8)
                 .width(Length::Fill),
         ]
         .spacing(6)
@@ -1529,9 +1546,9 @@ fn view_port_inputs<'a>(
                 .color(theme.fg_muted)
                 .font(mono_font),
         )
-        .padding(10)
+        .padding(8)
         .width(Length::Fill)
-        .height(40)
+        .height(36)
         .align_y(iced::alignment::Vertical::Center)
         .into()
     }
