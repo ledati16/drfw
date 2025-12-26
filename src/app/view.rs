@@ -672,18 +672,43 @@ fn view_workspace<'a>(
     preview_content: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let theme = &state.theme;
-    // Tabs at top (Option A layout)
-    let tab_bar = row![
-        view_tab_button(
-            "nftables.conf",
-            WorkspaceTab::Nftables,
-            state.active_tab,
-            theme
-        ),
-        view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab, theme),
-        view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
+
+    // Header: Tab Strip (Left) and Global Tools (Right)
+    let nav_row = row![
+        // Unified Tab Strip
+        container(
+            row![
+                view_tab_button("nftables.conf", WorkspaceTab::Nftables, state.active_tab, theme),
+                view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab, theme),
+                view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
+            ]
+            .spacing(2)
+        )
+        .padding(2)
+        .style(move |_| container::Style {
+            background: Some(theme.bg_elevated.into()),
+            border: Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+
+        container(row![]).width(Length::Fill),
+
+        // Global Utility Tools
+        row![
+            button(row![text("📤").size(14), text("Export").size(13)].spacing(8))
+                .on_press(Message::ToggleExportModal(true))
+                .padding([8, 16])
+                .style(move |_, status| secondary_button(theme, status)),
+            button(row![text("📊").size(14), text("Diagnostics").size(13)].spacing(8))
+                .on_press(Message::ToggleDiagnostics(true))
+                .padding([8, 16])
+                .style(move |_, status| secondary_button(theme, status)),
+        ].spacing(8)
     ]
-    .spacing(4);
+    .align_y(Alignment::Center);
 
     // Title and description row with optional diff checkbox
     let mut title_row = row![
@@ -691,21 +716,21 @@ fn view_workspace<'a>(
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Active Configuration",
                 WorkspaceTab::Json => "JSON Export",
-                WorkspaceTab::Settings => "Advanced Security",
+                WorkspaceTab::Settings => "Settings",
             })
-            .size(18)
+            .size(20)
             .font(state.font_regular)
             .color(theme.fg_primary),
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Current nftables ruleset generated from your rules.",
                 WorkspaceTab::Json => "Low-level JSON representation for debugging or automation.",
                 WorkspaceTab::Settings =>
-                    "Optional security features for advanced users and server deployments.",
+                    "Configure application appearance and advanced firewall security hardening.",
             })
-            .size(11)
+            .size(12)
             .color(theme.fg_muted),
         ]
-        .spacing(3)
+        .spacing(2)
         .width(Length::Fill),
     ];
 
@@ -721,8 +746,8 @@ fn view_workspace<'a>(
         );
     }
 
-    let preview_header = column![tab_bar, title_row]
-        .spacing(16);
+    let preview_header = column![nav_row, title_row]
+        .spacing(20);
 
     let editor = container(
         scrollable(
@@ -750,14 +775,48 @@ fn view_workspace<'a>(
         ..Default::default()
     });
 
+    // Zone: History (Left)
+    let history_actions = container(
+        row![
+            button(text("↶").size(18))
+                .on_press_maybe(state.command_history.can_undo().then_some(Message::Undo))
+                .padding([10, 16])
+                .style(move |_, status| secondary_button(theme, status)),
+            button(text("↷").size(18))
+                .on_press_maybe(state.command_history.can_redo().then_some(Message::Redo))
+                .padding([10, 16])
+                .style(move |_, status| secondary_button(theme, status)),
+        ].spacing(2)
+    )
+    .style(move |_| container::Style {
+        background: Some(theme.bg_elevated.into()),
+        border: Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    // Zone: Status (Center)
+    let status_area = container(
+        if let Some(ref err) = state.last_error {
+            view_error_display(err, theme, state.font_regular, state.font_mono)
+        } else {
+            row![].into()
+        }
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill);
+
+    // Zone: Commitment (Right)
     let save_to_system = if state.status == AppStatus::Confirmed {
-        button(text("Permanently Save to System").font(state.font_regular))
+        button(text("Permanently Save to System").size(13).font(state.font_regular))
             .style(move |_, status| primary_button(theme, status))
-            .padding([12, 24])
+            .padding([10, 20])
             .on_press(Message::SaveToSystemClicked)
     } else {
-        button(text("Save to /etc/nftables.conf").font(state.font_regular))
-            .padding([12, 24])
+        button(text("Save to System").size(13).font(state.font_regular))
+            .padding([10, 20])
             .style(move |_, status| secondary_button(theme, status))
     };
 
@@ -779,7 +838,7 @@ fn view_workspace<'a>(
         } else {
             "Apply Changes"
         };
-        let mut btn = button(text(button_text).font(state.font_regular)).padding([12, 32]);
+        let mut btn = button(text(button_text).size(14).font(state.font_regular)).padding([10, 24]);
 
         if is_dirty && !is_busy {
             btn = btn.style(move |_, status| dirty_button(theme, status));
@@ -793,47 +852,10 @@ fn view_workspace<'a>(
         btn
     };
 
-    // Undo/Redo buttons
-    let undo_button = {
-        let mut btn = button(text("↶ Undo").font(state.font_regular))
-            .padding([12, 20])
-            .style(move |_, status| secondary_button(theme, status));
-        if state.command_history.can_undo() {
-            btn = btn.on_press(Message::Undo);
-        }
-        btn
-    };
-
-    let redo_button = {
-        let mut btn = button(text("↷ Redo").font(state.font_regular))
-            .padding([12, 20])
-            .style(move |_, status| secondary_button(theme, status));
-        if state.command_history.can_redo() {
-            btn = btn.on_press(Message::Redo);
-        }
-        btn
-    };
-
     let footer = row![
-        button("Export")
-            .on_press(Message::ToggleExportModal(true))
-            .padding([12, 20])
-            .style(move |_, status| secondary_button(theme, status)),
-        button("Diagnostics")
-            .on_press(Message::ToggleDiagnostics(true))
-            .padding([12, 20])
-            .style(move |_, status| secondary_button(theme, status)),
-        undo_button,
-        redo_button,
-        save_to_system,
-        rule::horizontal(1),
-        if let Some(ref err) = state.last_error {
-            view_error_display(err, theme, state.font_regular, state.font_mono)
-        } else {
-            row![].into()
-        },
-        rule::horizontal(1),
-        apply_button,
+        history_actions,
+        status_area,
+        row![save_to_system, apply_button].spacing(12)
     ]
     .spacing(16)
     .align_y(Alignment::Center);
@@ -1798,18 +1820,16 @@ fn view_settings(state: &State) -> Element<'_, Message> {
             ].spacing(16).padding(16)
         ]
     )
-    .style(move |_| card_container(theme));
-
-    column![
-        text("Settings").size(24).font(state.font_regular).color(theme.fg_primary),
-        appearance_card,
-        security_card,
-    ]
-    .spacing(24)
-    .padding(8)
-    .into()
-}
-
+        .style(move |_| card_container(theme));
+     
+        column![
+            appearance_card,
+            security_card,
+        ]
+        .spacing(24)
+        .padding(8)
+        .into()
+    }
 fn render_settings_row<'a>(
     title: &'static str,
     desc: &'static str,
