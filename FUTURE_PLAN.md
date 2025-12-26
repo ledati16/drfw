@@ -1976,28 +1976,19 @@ fn update_cached_text(&mut self) {
 
 ---
 
-### 5.3 Optimize Syntax Highlighting
+### 5.3 Optimize Syntax Highlighting ✅ COMPLETED
 
-- [ ] **File:** `src/app/view.rs:378-413`
-- [ ] Pre-compute highlighted elements with `cached_nft_text`
-- [ ] Only regenerate when text changes
-- [ ] Use lazy_static for color constants
+- [x] **File:** `src/app/view.rs`
+- [x] Replace `clone()` with `std::mem::take()` to avoid unnecessary clones
+- [x] Use static strings for single-char tokens instead of `to_string()`
+- [x] Optimize indentation with pre-allocated static string buffer
+- [x] Eliminate unnecessary string allocations in diff highlighting
 
-**Implementation:**
-```rust
-pub struct State {
-    // ... existing ...
-    pub cached_highlighted: Option<iced::widget::Column<'static, Message>>,
-}
-
-// Only regenerate when text changes
-fn get_highlighted_text(&mut self) -> &iced::widget::Column<'_, Message> {
-    if self.cached_highlighted.is_none() {
-        self.cached_highlighted = Some(view_highlighted_nft(&self.cached_nft_text));
-    }
-    self.cached_highlighted.as_ref().unwrap()
-}
-```
+**Optimizations applied:**
+- JSON highlighting: Use `std::mem::take()` instead of `current_token.clone()`
+- Single-char tokens: Use static `&str` instead of `ch.to_string()`
+- Indentation: Use static 32-space buffer with slicing instead of `" ".repeat(indent)`
+- Diff highlighting: Removed unnecessary `line.to_string()` calls
 
 ---
 

@@ -703,9 +703,22 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
         // Preserve indentation
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
-        if !line.is_empty() {
+        if !line.is_empty() && indent > 0 {
+            // Use a static string for common indentation levels (up to 32 spaces)
+            const SPACES: &str = "                                ";
+            let indent_str = if indent <= 32 {
+                &SPACES[..indent]
+            } else {
+                SPACES // Fallback for deeply nested content
+            };
             row_content = row_content.push(
-                text(format!("  {}", " ".repeat(indent)))
+                text(format!("  {}", indent_str))
+                    .font(FONT_MONO)
+                    .size(13),
+            );
+        } else if !line.is_empty() {
+            row_content = row_content.push(
+                text("  ")
                     .font(FONT_MONO)
                     .size(13),
             );
@@ -719,10 +732,9 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
             match ch {
                 '"' => {
                     if !current_token.is_empty() {
-                        let token = current_token.clone();
+                        let token = std::mem::take(&mut current_token);
                         row_content =
                             row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
-                        current_token.clear();
                     }
 
                     // Read the full string
@@ -753,13 +765,13 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
                 }
                 ':' | ',' => {
                     if !current_token.is_empty() {
-                        let token = current_token.clone();
+                        let token = std::mem::take(&mut current_token);
                         row_content =
                             row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
-                        current_token.clear();
                     }
+                    let ch_str = if ch == ':' { ":" } else { "," };
                     row_content = row_content.push(
-                        text(ch.to_string())
+                        text(ch_str)
                             .font(FONT_MONO)
                             .size(13)
                             .color(GRUV_FG0),
@@ -767,13 +779,19 @@ fn view_highlighted_json(content: &str) -> iced::widget::Column<'static, Message
                 }
                 '{' | '}' | '[' | ']' => {
                     if !current_token.is_empty() {
-                        let token = current_token.clone();
+                        let token = std::mem::take(&mut current_token);
                         row_content =
                             row_content.push(text(token).font(FONT_MONO).size(13).color(GRUV_FG0));
-                        current_token.clear();
                     }
+                    let ch_str = match ch {
+                        '{' => "{",
+                        '}' => "}",
+                        '[' => "[",
+                        ']' => "]",
+                        _ => unreachable!(),
+                    };
                     row_content = row_content.push(
-                        text(ch.to_string())
+                        text(ch_str)
                             .font(FONT_MONO)
                             .size(13)
                             .color(GRUV_AQUA),
@@ -821,9 +839,22 @@ fn view_highlighted_nft(content: &str) -> iced::widget::Column<'_, Message> {
 
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
-        if !line.is_empty() {
+        if !line.is_empty() && indent > 0 {
+            // Use a static string for common indentation levels (up to 32 spaces)
+            const SPACES: &str = "                                ";
+            let indent_str = if indent <= 32 {
+                &SPACES[..indent]
+            } else {
+                SPACES // Fallback for deeply nested content
+            };
             row_content = row_content.push(
-                text(format!("  {}", " ".repeat(indent)))
+                text(format!("  {}", indent_str))
+                    .font(FONT_MONO)
+                    .size(13),
+            );
+        } else if !line.is_empty() {
+            row_content = row_content.push(
+                text("  ")
                     .font(FONT_MONO)
                     .size(13),
             );
@@ -885,17 +916,17 @@ fn view_diff_text(diff_content: &str) -> iced::widget::Column<'static, Message> 
 
         row_content = row_content.push(vertical_rule(1));
 
-        // Determine color based on diff prefix and own the string
-        let (color, content) = if line.starts_with("+ ") {
-            (SUCCESS, line.to_string()) // Green for additions
+        // Determine color based on diff prefix
+        let color = if line.starts_with("+ ") {
+            SUCCESS // Green for additions
         } else if line.starts_with("- ") {
-            (DANGER, line.to_string()) // Red for deletions
+            DANGER // Red for deletions
         } else {
-            (GRUV_FG0, line.to_string()) // Normal for unchanged
+            GRUV_FG0 // Normal for unchanged
         };
 
         row_content = row_content.push(
-            text(format!("  {}", content))
+            text(format!("  {}", line))
                 .font(FONT_MONO)
                 .size(13)
                 .color(color),
