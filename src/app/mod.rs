@@ -254,12 +254,15 @@ pub enum Message {
 
 impl State {
     pub fn new() -> (Self, Task<Message>) {
-        let ruleset = crate::config::load_ruleset();
+        // Load complete config including theme choice
+        let config = crate::config::load_config();
+        let ruleset = config.ruleset;
+        let current_theme = config.theme_choice;
+
         let interfaces = crate::utils::list_interfaces();
         let cached_nft_text = ruleset.to_nft_text();
 
-        // Load theme from config or use default
-        let current_theme = crate::theme::ThemeChoice::default();
+        // Apply the theme
         let theme = current_theme.to_theme();
 
         // Load custom themes from config directory
@@ -305,7 +308,11 @@ impl State {
     }
 
     fn save_config(&self) -> Task<Message> {
-        if let Err(e) = crate::config::save_ruleset(&self.ruleset) {
+        let config = crate::config::AppConfig {
+            ruleset: self.ruleset.clone(),
+            theme_choice: self.current_theme,
+        };
+        if let Err(e) = crate::config::save_config(&config) {
             eprintln!("Failed to save configuration: {}", e);
         }
         Task::none()
@@ -556,7 +563,7 @@ impl State {
                 self.current_theme = choice;
                 self.theme = choice.to_theme();
                 tracing::info!("Theme changed to: {}", choice.name());
-                // TODO: Persist theme choice to config
+                return self.save_config();
             }
             Message::OpenLogsFolder => {
                 if let Some(state_dir) = crate::utils::get_state_dir() {
@@ -651,7 +658,7 @@ impl State {
                 self.command_history
                     .execute(Box::new(command), &mut self.ruleset);
             }
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
             self.rule_form = None;
             self.form_errors = None;
@@ -679,7 +686,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
         }
     }
@@ -695,7 +702,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
         }
     }
@@ -711,7 +718,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
         }
     }
@@ -727,7 +734,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
         }
     }
@@ -744,7 +751,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
         }
     }
@@ -755,7 +762,7 @@ impl State {
             let command = crate::command::DeleteRuleCommand { rule, index: pos };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = crate::config::save_ruleset(&self.ruleset);
+            let _ = self.save_config();
             self.update_cached_text();
         }
         self.deleting_id = None;

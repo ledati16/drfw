@@ -2,28 +2,22 @@ use crate::theme::AppTheme;
 use iced::widget::{button, container};
 use iced::{Border, Color, Shadow, Vector};
 
-// Gruvbox Dark Palette
-pub const GRUV_BG0: Color = Color::from_rgb(0.157, 0.157, 0.157); // #282828
-pub const GRUV_BG1: Color = Color::from_rgb(0.235, 0.219, 0.212); // #3c3836
+// NOTE: These Gruvbox constants are kept for backward compatibility with view.rs
+// TODO: Complete migration of all inline colors in view.rs to use theme system
 pub const GRUV_BG2: Color = Color::from_rgb(0.314, 0.286, 0.271); // #504945
 pub const GRUV_FG0: Color = Color::from_rgb(0.984, 0.945, 0.780); // #fbf1c7
-pub const GRUV_FG4: Color = Color::from_rgb(0.659, 0.600, 0.518); // #a89984
 
-pub const GRUV_RED: Color = Color::from_rgb(0.800, 0.141, 0.114); // #cc241d
-pub const GRUV_GREEN: Color = Color::from_rgb(0.596, 0.592, 0.102); // #98971a
 pub const GRUV_YELLOW: Color = Color::from_rgb(0.839, 0.514, 0.086); // #d79921
 pub const GRUV_BLUE: Color = Color::from_rgb(0.271, 0.447, 0.475); // #458588
 pub const GRUV_PURPLE: Color = Color::from_rgb(0.690, 0.384, 0.525); // #b16286
 pub const GRUV_AQUA: Color = Color::from_rgb(0.424, 0.588, 0.522); // #689d6a
 pub const GRUV_ORANGE: Color = Color::from_rgb(0.839, 0.302, 0.051); // #d65d0e
 
-pub const BG_MAIN: Color = GRUV_BG0;
-pub const BG_SIDEBAR: Color = Color::from_rgb(0.114, 0.114, 0.114);
 pub const ACCENT: Color = GRUV_YELLOW;
-pub const SUCCESS: Color = GRUV_GREEN;
-pub const DANGER: Color = GRUV_RED;
+pub const SUCCESS: Color = Color::from_rgb(0.596, 0.592, 0.102); // GRUV_GREEN
+pub const DANGER: Color = Color::from_rgb(0.800, 0.141, 0.114); // GRUV_RED
 pub const TEXT_BRIGHT: Color = GRUV_FG0;
-pub const TEXT_DIM: Color = GRUV_FG4;
+pub const TEXT_DIM: Color = Color::from_rgb(0.659, 0.600, 0.518); // GRUV_FG4
 
 pub fn main_container(theme: &AppTheme) -> container::Style {
     container::Style {
