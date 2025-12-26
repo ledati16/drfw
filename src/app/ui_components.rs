@@ -76,16 +76,50 @@ pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style
             radius: 4.0.into(),
             ..Default::default()
         },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 4.0,
+        },
         ..Default::default()
     };
 
     match status {
         button::Status::Hovered => button::Style {
             background: Some(theme.accent_hover.into()),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 3.0),
+                blur_radius: 6.0,
+            },
             ..base
         },
         button::Status::Pressed => button::Style {
             background: Some(theme.accent.into()),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(
+                Color {
+                    a: 0.5,
+                    ..theme.accent
+                }
+                .into(),
+            ),
+            text_color: Color {
+                a: 0.5,
+                ..theme.fg_on_accent
+            },
+            shadow: Shadow {
+                color: Color::TRANSPARENT,
+                offset: Vector::new(0.0, 0.0),
+                blur_radius: 0.0,
+            },
             ..base
         },
         _ => base,
@@ -112,6 +146,11 @@ pub fn danger_button(theme: &AppTheme, status: button::Status) -> button::Style 
             radius: 4.0.into(),
             ..Default::default()
         },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 4.0,
+        },
         ..Default::default()
     };
 
@@ -126,31 +165,108 @@ pub fn danger_button(theme: &AppTheme, status: button::Status) -> button::Style 
                 }
                 .into(),
             ),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 3.0),
+                blur_radius: 6.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(theme.danger.into()),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(
+                Color {
+                    a: 0.5,
+                    ..theme.danger
+                }
+                .into(),
+            ),
+            text_color: Color {
+                a: 0.5,
+                ..theme.fg_on_accent
+            },
+            shadow: Shadow {
+                color: Color::TRANSPARENT,
+                offset: Vector::new(0.0, 0.0),
+                blur_radius: 0.0,
+            },
             ..base
         },
         _ => base,
     }
 }
 
-pub fn card_button(theme: &AppTheme, _status: button::Status) -> button::Style {
+pub fn card_button(theme: &AppTheme, status: button::Status) -> button::Style {
     let c = card_container(theme);
-    button::Style {
+    let base = button::Style {
         background: c.background,
         text_color: theme.fg_primary,
         border: c.border,
         shadow: c.shadow,
         snap: true,
+    };
+
+    match status {
+        button::Status::Hovered => button::Style {
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 3.0),
+                blur_radius: 6.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        _ => base,
     }
 }
 
-pub fn active_card_button(theme: &AppTheme, _status: button::Status) -> button::Style {
+pub fn active_card_button(theme: &AppTheme, status: button::Status) -> button::Style {
     let c = active_card_container(theme);
-    button::Style {
+    let base = button::Style {
         background: c.background,
         text_color: theme.fg_primary,
         border: c.border,
-        shadow: c.shadow,
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 4.0,
+        },
         snap: true,
+    };
+
+    match status {
+        button::Status::Hovered => button::Style {
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 3.0),
+                blur_radius: 6.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        _ => base,
     }
 }
 
@@ -162,13 +278,96 @@ pub fn active_tab_button(app_theme: &AppTheme, status: button::Status) -> button
             radius: 4.0.into(),
             ..Default::default()
         },
+        shadow: Shadow {
+            color: app_theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 4.0,
+        },
         ..Default::default()
     };
 
     match status {
         button::Status::Hovered => button::Style {
             background: Some(app_theme.bg_hover.into()),
+            shadow: Shadow {
+                color: app_theme.shadow_color,
+                offset: Vector::new(0.0, 3.0),
+                blur_radius: 6.0,
+            },
             ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(app_theme.bg_elevated.into()),
+            shadow: Shadow {
+                color: app_theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        _ => base,
+    }
+}
+
+pub fn secondary_button(theme: &AppTheme, status: button::Status) -> button::Style {
+    let base = button::Style {
+        background: Some(theme.bg_surface.into()),
+        text_color: theme.fg_primary,
+        border: Border {
+            color: theme.border,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 4.0,
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => button::Style {
+            background: Some(theme.bg_hover.into()),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 3.0),
+                blur_radius: 6.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(theme.bg_surface.into()),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            background: Some(
+                Color {
+                    a: 0.5,
+                    ..theme.bg_surface
+                }
+                .into(),
+            ),
+            text_color: theme.fg_muted,
+            border: Border {
+                color: Color {
+                    a: 0.3,
+                    ..theme.border
+                },
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            shadow: Shadow {
+                color: Color::TRANSPARENT,
+                offset: Vector::new(0.0, 0.0),
+                blur_radius: 0.0,
+            },
+            ..Default::default()
         },
         _ => base,
     }

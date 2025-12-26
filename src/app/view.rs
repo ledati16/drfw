@@ -1,6 +1,6 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
-    danger_button, dirty_button, main_container, primary_button,
+    danger_button, dirty_button, main_container, primary_button, secondary_button,
     section_header_container, sidebar_container,
 };
 use crate::app::{
@@ -13,7 +13,7 @@ use iced::widget::{
     toggler, tooltip,
 };
 use iced::widget::text::Wrapping;
-use iced::{Alignment, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Border, Color, Element, Length};
 
 #[allow(clippy::too_many_lines)]
 pub fn view(state: &State) -> Element<'_, Message> {
@@ -296,7 +296,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         button(text("No").size(11))
                             .on_press(Message::CancelDelete)
                             .padding(6)
-                            .style(button::secondary),
+                            .style(move |_, status| secondary_button(theme, status)),
                         button(text("Yes").size(11))
                             .on_press(Message::DeleteRule(rule.id))
                             .padding(6)
@@ -570,6 +570,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 width: 2.0,
                                 radius: 8.0.into(),
                             },
+                            shadow: iced::Shadow {
+                                color: theme.shadow_color,
+                                offset: iced::Vector::new(0.0, 4.0),
+                                blur_radius: 8.0,
+                            },
                             ..Default::default()
                         }
                     } else if is_hover_target {
@@ -579,6 +584,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 color: theme.success,
                                 width: 2.0,
                                 radius: 8.0.into(),
+                            },
+                            shadow: iced::Shadow {
+                                color: theme.shadow_color,
+                                offset: iced::Vector::new(0.0, 3.0),
+                                blur_radius: 6.0,
                             },
                             ..Default::default()
                         }
@@ -716,7 +726,7 @@ fn view_workspace<'a>(
     } else {
         button(text("Save to /etc/nftables.conf").font(FONT_REGULAR))
             .padding([12, 24])
-            .style(button::secondary)
+            .style(move |_, status| secondary_button(theme, status))
     };
 
     let is_dirty = state.is_dirty();
@@ -755,7 +765,7 @@ fn view_workspace<'a>(
     let undo_button = {
         let mut btn = button(text("↶ Undo").font(FONT_REGULAR))
             .padding([12, 20])
-            .style(button::secondary);
+            .style(move |_, status| secondary_button(theme, status));
         if state.command_history.can_undo() {
             btn = btn.on_press(Message::Undo);
         }
@@ -765,7 +775,7 @@ fn view_workspace<'a>(
     let redo_button = {
         let mut btn = button(text("↷ Redo").font(FONT_REGULAR))
             .padding([12, 20])
-            .style(button::secondary);
+            .style(move |_, status| secondary_button(theme, status));
         if state.command_history.can_redo() {
             btn = btn.on_press(Message::Redo);
         }
@@ -776,11 +786,11 @@ fn view_workspace<'a>(
         button("Export")
             .on_press(Message::ExportClicked)
             .padding([12, 20])
-            .style(button::secondary),
+            .style(move |_, status| secondary_button(theme, status)),
         button("Diagnostics")
             .on_press(Message::ToggleDiagnostics(true))
             .padding([12, 20])
-            .style(button::secondary),
+            .style(move |_, status| secondary_button(theme, status)),
         undo_button,
         redo_button,
         save_to_system,
@@ -818,7 +828,7 @@ fn view_tab_button<'a>(
             if is_active {
                 active_tab_button(theme, status)
             } else {
-                button::secondary(&Theme::Dark, status)
+                secondary_button(theme, status)
             }
         })
         .on_press(Message::TabChanged(tab))
@@ -1351,7 +1361,7 @@ fn view_rule_form<'a>(
             button(text("Cancel").size(14))
                 .on_press(Message::CancelRuleForm)
                 .padding([10, 20])
-                .style(button::secondary),
+                .style(move |_, status| secondary_button(theme, status)),
             rule::horizontal(1),
             button(text(button_text).size(14))
                 .on_press(Message::SaveRuleForm)
@@ -1407,7 +1417,7 @@ fn view_port_inputs<'a>(
 fn view_awaiting_apply(app_theme: &crate::theme::AppTheme) -> Element<'_, Message> {
     container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(FONT_REGULAR).color(app_theme.fg_primary),
                       text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
-                      row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(button::secondary),
+                      row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(move |_, status| secondary_button(app_theme, status)),
                            button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
     ].spacing(20).padding(32).align_x(Alignment::Center))
@@ -1970,7 +1980,7 @@ fn view_export_modal(theme: &crate::theme::AppTheme) -> Element<'_, Message> {
             button(text("Cancel").size(14))
                 .on_press(Message::ExportClicked) // Toggle to close
                 .padding([10, 20])
-                .style(button::secondary),
+                .style(move |_, status| secondary_button(theme, status)),
         ]
         .spacing(20)
         .padding(32)

@@ -629,26 +629,22 @@ impl State {
                 self.hovered_drop_target_id = None;
             }
             Message::RuleDropped(target_id) => {
-                if let Some(dragged_id) = self.dragged_rule_id {
-                    if dragged_id != target_id {
-                        if let Some(old_index) =
-                            self.ruleset.rules.iter().position(|r| r.id == dragged_id)
-                        {
-                            if let Some(new_index) =
-                                self.ruleset.rules.iter().position(|r| r.id == target_id)
-                            {
-                                let command = crate::command::ReorderRuleCommand {
-                                    rule_id: dragged_id,
-                                    old_index,
-                                    new_index,
-                                };
-                                self.command_history
-                                    .execute(Box::new(command), &mut self.ruleset);
-                                let _ = self.save_config();
-                                self.update_cached_text();
-                            }
-                        }
-                    }
+                if let Some(dragged_id) = self.dragged_rule_id
+                    && dragged_id != target_id
+                    && let Some(old_index) =
+                        self.ruleset.rules.iter().position(|r| r.id == dragged_id)
+                    && let Some(new_index) =
+                        self.ruleset.rules.iter().position(|r| r.id == target_id)
+                {
+                    let command = crate::command::ReorderRuleCommand {
+                        rule_id: dragged_id,
+                        old_index,
+                        new_index,
+                    };
+                    self.command_history
+                        .execute(Box::new(command), &mut self.ruleset);
+                    let _ = self.save_config();
+                    self.update_cached_text();
                 }
                 self.dragged_rule_id = None;
                 self.hovered_drop_target_id = None;
