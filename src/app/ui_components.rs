@@ -107,20 +107,36 @@ pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style
 
     match status {
         button::Status::Hovered => button::Style {
-            background: Some(theme.accent_hover.into()),
+            background: Some(
+                Color {
+                    r: (theme.accent.r * 1.08).min(1.0),
+                    g: (theme.accent.g * 1.08).min(1.0),
+                    b: (theme.accent.b * 1.08).min(1.0),
+                    ..theme.accent
+                }
+                .into(),
+            ),
             shadow: Shadow {
                 color: theme.shadow_color,
-                offset: Vector::new(0.0, 3.0),
-                blur_radius: 5.0,
+                offset: Vector::new(0.0, 2.5),
+                blur_radius: 4.0,
             },
             ..base
         },
         button::Status::Pressed => button::Style {
-            background: Some(theme.accent.into()),
+            background: Some(
+                Color {
+                    r: (theme.accent.r * 0.95).min(1.0),
+                    g: (theme.accent.g * 0.95).min(1.0),
+                    b: (theme.accent.b * 0.95).min(1.0),
+                    ..theme.accent
+                }
+                .into(),
+            ),
             shadow: Shadow {
                 color: theme.shadow_color,
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 2.0,
+                offset: Vector::new(0.0, 0.5),
+                blur_radius: 1.5,
             },
             ..base
         },
@@ -179,26 +195,34 @@ pub fn danger_button(theme: &AppTheme, status: button::Status) -> button::Style 
         button::Status::Hovered => button::Style {
             background: Some(
                 Color {
-                    r: (theme.danger.r * 1.1).min(1.0),
-                    g: (theme.danger.g * 1.1).min(1.0),
-                    b: (theme.danger.b * 1.1).min(1.0),
+                    r: (theme.danger.r * 1.08).min(1.0),
+                    g: (theme.danger.g * 1.08).min(1.0),
+                    b: (theme.danger.b * 1.08).min(1.0),
                     ..theme.danger
                 }
                 .into(),
             ),
             shadow: Shadow {
                 color: theme.shadow_color,
-                offset: Vector::new(0.0, 3.0),
-                blur_radius: 5.0,
+                offset: Vector::new(0.0, 2.5),
+                blur_radius: 4.0,
             },
             ..base
         },
         button::Status::Pressed => button::Style {
-            background: Some(theme.danger.into()),
+            background: Some(
+                Color {
+                    r: (theme.danger.r * 0.95).min(1.0),
+                    g: (theme.danger.g * 0.95).min(1.0),
+                    b: (theme.danger.b * 0.95).min(1.0),
+                    ..theme.danger
+                }
+                .into(),
+            ),
             shadow: Shadow {
                 color: theme.shadow_color,
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 2.0,
+                offset: Vector::new(0.0, 0.5),
+                blur_radius: 1.5,
             },
             ..base
         },
@@ -349,20 +373,36 @@ pub fn secondary_button(theme: &AppTheme, status: button::Status) -> button::Sty
 
     match status {
         button::Status::Hovered => button::Style {
-            background: Some(theme.bg_hover.into()),
+            background: Some(
+                Color {
+                    r: (theme.bg_surface.r * 1.08).min(1.0),
+                    g: (theme.bg_surface.g * 1.08).min(1.0),
+                    b: (theme.bg_surface.b * 1.08).min(1.0),
+                    ..theme.bg_surface
+                }
+                .into(),
+            ),
             shadow: Shadow {
                 color: theme.shadow_color,
-                offset: Vector::new(0.0, 3.0),
-                blur_radius: 5.0,
+                offset: Vector::new(0.0, 2.5),
+                blur_radius: 4.0,
             },
             ..base
         },
         button::Status::Pressed => button::Style {
-            background: Some(theme.bg_surface.into()),
+            background: Some(
+                Color {
+                    r: (theme.bg_surface.r * 0.95).min(1.0),
+                    g: (theme.bg_surface.g * 0.95).min(1.0),
+                    b: (theme.bg_surface.b * 0.95).min(1.0),
+                    ..theme.bg_surface
+                }
+                .into(),
+            ),
             shadow: Shadow {
                 color: theme.shadow_color,
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 2.0,
+                offset: Vector::new(0.0, 0.5),
+                blur_radius: 1.5,
             },
             ..base
         },
