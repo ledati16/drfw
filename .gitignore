@@ -10,3 +10,4 @@ cargo-test-fuzz-target
 !CLAUDE.md
 !README.md
 !contrib/README.md
+!contrib/style.md
