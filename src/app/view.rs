@@ -2,8 +2,8 @@ use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
     danger_button, dirty_button, main_container, modal_backdrop, primary_button,
     secondary_button, section_header_container, sidebar_container, themed_checkbox,
-    themed_horizontal_rule, themed_pick_list, themed_pick_list_menu, themed_slider,
-    themed_text_input, themed_toggler,
+    themed_horizontal_rule, themed_pick_list, themed_pick_list_menu, themed_scrollable,
+    themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, WorkspaceTab,
@@ -648,7 +648,9 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             search_area,
             column![
                 list_header,
-                scrollable(container(rule_list).padding([0, 2])).height(Length::Fill),
+                scrollable(container(rule_list).padding([0, 2]))
+                    .height(Length::Fill)
+                    .style(move |_, status| themed_scrollable(theme, status)),
             ]
             .spacing(12)
             .height(Length::Fill),
@@ -756,7 +758,8 @@ fn view_workspace<'a>(
                 .width(Length::Fill)
                 .height(Length::Shrink),
         )
-        .width(Length::Fill),
+        .width(Length::Fill)
+        .style(move |_, status| themed_scrollable(theme, status)),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -1672,8 +1675,8 @@ fn view_diagnostics_modal(
                 text("Recent Audit Log Entries:")
                     .size(14)
                     .color(theme.fg_primary),
-                container(scrollable(
-                    column(if recent_entries.is_empty() {
+                container(
+                    scrollable(column(if recent_entries.is_empty() {
                         vec![
                             text("No audit entries found")
                                 .size(12)
@@ -1692,8 +1695,9 @@ fn view_diagnostics_modal(
                             })
                             .collect()
                     })
-                    .spacing(4)
-                ))
+                    .spacing(4))
+                    .style(move |_, status| themed_scrollable(theme, status))
+                )
                 .height(200)
                 .style(move |_| container::Style {
                     background: Some(theme.bg_elevated.into()),
@@ -1948,9 +1952,12 @@ fn view_font_picker<'a>(
                 .padding(10)
                 .size(13)
                 .style(move |_, status| themed_text_input(theme, status)),
-            container(scrollable(container(font_list).padding(2)))
-                .height(Length::Fixed(400.0))
-                .width(Length::Fill)
+            container(
+                scrollable(container(font_list).padding(2))
+                    .style(move |_, status| themed_scrollable(theme, status))
+            )
+            .height(Length::Fixed(400.0))
+            .width(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(theme.bg_elevated.into()),
                     border: Border {

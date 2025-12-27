@@ -1,5 +1,7 @@
 use crate::theme::AppTheme;
-use iced::widget::{button, checkbox, container, pick_list, rule, slider, text_input, toggler};
+use iced::widget::{
+    button, checkbox, container, pick_list, rule, scrollable, slider, text_input, toggler,
+};
 use iced::{Border, Color, Shadow, Vector};
 
 pub fn main_container(theme: &AppTheme) -> container::Style {
@@ -691,5 +693,102 @@ pub fn themed_vertical_rule(theme: &AppTheme) -> rule::Style {
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
+    }
+}
+
+/// Themed scrollable with visible scrollbars
+pub fn themed_scrollable(theme: &AppTheme, status: scrollable::Status) -> scrollable::Style {
+    let rail = scrollable::Rail {
+        background: Some(theme.bg_elevated.into()),
+        border: Border {
+            color: theme.border,
+            width: 0.0,
+            radius: 4.0.into(),
+        },
+        scroller: scrollable::Scroller {
+            background: theme.fg_muted.into(),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 4.0.into(),
+            },
+        },
+    };
+
+    let auto_scroll = scrollable::AutoScroll {
+        background: theme.bg_surface.into(),
+        border: Border {
+            color: theme.border,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: theme.shadow_color,
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 4.0,
+        },
+        icon: theme.fg_primary,
+    };
+
+    match status {
+        scrollable::Status::Active { .. } => scrollable::Style {
+            container: container::Style::default(),
+            vertical_rail: rail,
+            horizontal_rail: rail,
+            gap: None,
+            auto_scroll,
+        },
+        scrollable::Status::Hovered {
+            is_horizontal_scrollbar_hovered,
+            is_vertical_scrollbar_hovered,
+            ..
+        } => {
+            // Change color when either scrollbar is hovered
+            let is_any_hovered = is_horizontal_scrollbar_hovered || is_vertical_scrollbar_hovered;
+            let hovered_rail = scrollable::Rail {
+                scroller: scrollable::Scroller {
+                    background: if is_any_hovered {
+                        theme.fg_secondary.into()
+                    } else {
+                        theme.fg_muted.into()
+                    },
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 4.0.into(),
+                    },
+                },
+                ..rail
+            };
+
+            scrollable::Style {
+                container: container::Style::default(),
+                vertical_rail: hovered_rail,
+                horizontal_rail: hovered_rail,
+                gap: None,
+                auto_scroll,
+            }
+        }
+        scrollable::Status::Dragged { .. } => {
+            let dragged_rail = scrollable::Rail {
+                scroller: scrollable::Scroller {
+                    background: theme.accent.into(),
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: 4.0.into(),
+                    },
+                },
+                ..rail
+            };
+
+            scrollable::Style {
+                container: container::Style::default(),
+                vertical_rail: dragged_rail,
+                horizontal_rail: dragged_rail,
+                gap: None,
+                auto_scroll,
+            }
+        }
     }
 }
