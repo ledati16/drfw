@@ -1,35 +1,68 @@
 use super::AppTheme;
 
-/// Default - Hybrid of Everdeer and Gruvbox (The "Rust" theme)
-/// Warm neutral browns with rust-orange accents, optimized for readability
-pub fn default_hybrid() -> AppTheme {
+/// Oxide - Hybrid of Everdeer and Gruvbox (The "Rust/Oxide" theme)
+/// Warm neutral browns with earthy copper accents, highly legible and grounded
+pub fn oxide() -> AppTheme {
     AppTheme::from_hex(
-        "Default",
+        "Oxide",
         0x0023_1D1B, // bg_base - Neutral warm brown
         0x001D_1816, // bg_sidebar - Deep oxide brown
         0x002E_2623, // bg_surface - Lighter card surface
         0x003A_312E, // bg_elevated - Input/button background
         0x0046_3B38, // bg_hover - Subtle highlight
         0x0052_4541, // bg_active - Active state brown
-        0x00E6_DBD3, // fg_primary - Warm cream text
+        0x00E6_DBD3, // fg_primary - Warm parchment text
         0x00B8_ACA2, // fg_secondary - Muted clay text
         0x007A_6E67, // fg_muted - Darkened earth gray
-        0x001D_1816, // fg_on_accent - Dark text on orange
-        0x00D6_5D0E, // accent - Rust orange
-        0x00FE_8019, // accent_hover - Bright oxide orange
+        0x001D_1816, // fg_on_accent - Dark text on copper
+        0x00A7_5533, // accent - Burnt copper orange
+        0x00BD_6D4D, // accent_hover - Warm clay highlight
         0x008F_A172, // success - Muted sage green
         0x00D8_A657, // warning - Warm gold
-        0x00CC_241D, // danger - Oxide red
+        0x00C2_5D4E, // danger - Terracotta red
         0x007D_AEA3, // info - Muted teal
         0x003E_3532, // border - Subtle brown border
-        0x00D6_5D0E, // border_strong - Rust accent border
+        0x00A7_5533, // border_strong - Copper accent border
         0x002E_2623, // divider - Surface match
-        0x00E6_7E80, // syntax_keyword - Warm terracotta
+        0x00D4_7761, // syntax_keyword - Oxide terracotta
         0x00D6_99B6, // syntax_type - Muted orchid
-        0x00D8_A657, // syntax_string - Amber/Gold
+        0x00DB_B98F, // syntax_string - Sandstone gold
         0x00B8_ACA2, // syntax_number - Secondary text
         0x007A_6E67, // syntax_comment - Muted brown
-        0x00D6_5D0E, // syntax_operator - Rust orange
+        0x00A7_5533, // syntax_operator - Burnt copper
+    )
+}
+
+/// Aethel - Atmospheric noble theme (Gemini's Masterpiece)
+/// Deep violet-tinted charcoal backgrounds with celestial indigo and mauve accents
+pub fn aethel() -> AppTheme {
+    AppTheme::from_hex(
+        "Aethel",
+        0x0016_161E, // bg_base - Midnight indigo-charcoal
+        0x000F_0F14, // bg_sidebar - Deepest ink
+        0x001A_1B26, // bg_surface - Polished slate
+        0x0024_283B, // bg_elevated - Muted graphite
+        0x002F_3549, // bg_hover - Subtle highlight
+        0x0041_4868, // bg_active - Active indigo
+        0x00DC_DFE4, // fg_primary - Silvered white
+        0x00A9_B1D6, // fg_secondary - Cool gray
+        0x0056_5F89, // fg_muted - Deep ash
+        0x0016_161E, // fg_on_accent - Dark text on celestial
+        0x0089_B4FA, // accent - Celestial indigo
+        0x00A3_C7FF, // accent_hover - Lighter frost
+        0x009E_CE6A, // success - Seafoam green
+        0x00E0_AF68, // warning - Ember gold
+        0x00F7_768E, // danger - Rose red
+        0x007D_CFFF, // info - Sky cyan
+        0x0024_283B, // border - Gutter gray
+        0x0089_B4FA, // border_strong - Indigo accent
+        0x001A_1B26, // divider - Surface match
+        0x00BB_9AF7, // syntax_keyword - Mauve purple
+        0x007D_CFFF, // syntax_type - Sky blue
+        0x009E_CE6A, // syntax_string - Seafoam green
+        0x00FF_9E64, // syntax_number - Terracotta orange
+        0x0056_5F89, // syntax_comment - Muted ash
+        0x0089_B4FA, // syntax_operator - Indigo
     )
 }
 
@@ -337,7 +370,8 @@ mod tests {
     #[test]
     fn test_all_themes_have_names() {
         let themes = [
-            default_hybrid(),
+            oxide(),
+            aethel(),
             nord(),
             gruvbox(),
             dracula(),
@@ -357,7 +391,8 @@ mod tests {
     #[test]
     fn test_theme_colors_are_valid() {
         // Just verify themes can be created without panicking
-        let _ = default_hybrid();
+        let _ = oxide();
+        let _ = aethel();
         let _ = nord();
         let _ = gruvbox();
         let _ = dracula();

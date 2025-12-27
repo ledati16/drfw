@@ -127,7 +127,8 @@ fn hex_to_color(hex: u32) -> Color {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeChoice {
     #[default]
-    Default,
+    Oxide,
+    Aethel,
     Nord,
     Gruvbox,
     Dracula,
@@ -143,7 +144,8 @@ pub enum ThemeChoice {
 impl ThemeChoice {
     pub fn all_builtin() -> &'static [Self] {
         &[
-            Self::Default,
+            Self::Oxide,
+            Self::Aethel,
             Self::Nord,
             Self::Gruvbox,
             Self::Dracula,
@@ -158,7 +160,8 @@ impl ThemeChoice {
 
     pub fn name(&self) -> String {
         match self {
-            Self::Default => "Default".to_string(),
+            Self::Oxide => "Oxide".to_string(),
+            Self::Aethel => "Aethel".to_string(),
             Self::Nord => "Nord".to_string(),
             Self::Gruvbox => "Gruvbox".to_string(),
             Self::Dracula => "Dracula".to_string(),
@@ -177,7 +180,8 @@ impl ThemeChoice {
     #[allow(clippy::match_same_arms)]
     pub fn to_theme(self) -> AppTheme {
         match self {
-            Self::Default => presets::default_hybrid(),
+            Self::Oxide => presets::oxide(),
+            Self::Aethel => presets::aethel(),
             Self::Nord => presets::nord(),
             Self::Gruvbox => presets::gruvbox(),
             Self::Dracula => presets::dracula(),
@@ -187,7 +191,7 @@ impl ThemeChoice {
             Self::CatppuccinMocha => presets::catppuccin_mocha(),
             Self::OneDark => presets::one_dark(),
             Self::SolarizedDark => presets::solarized_dark(),
-            Self::Custom(_) => presets::default_hybrid(), // Will be replaced with custom theme
+            Self::Custom(_) => presets::oxide(), // Will be replaced with custom theme
         }
     }
 }
