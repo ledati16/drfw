@@ -223,25 +223,21 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     ])
     .padding(iced::Padding::new(0.0).bottom(10.0));
 
-    // 2. Filter Logic & Tag Collection
-    let mut all_tags = std::collections::BTreeSet::new();
-    for rule in &state.ruleset.rules {
-        for tag in &rule.tags {
-            all_tags.insert(tag.clone());
-        }
-    }
+    // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags)
+    let all_tags = &state.cached_all_tags;
 
     let filtered_rules: Vec<_> = state
         .ruleset
         .rules
         .iter()
         .filter(|r| {
-            let search_term = state.rule_search.to_lowercase();
+            // Phase 4: Use cached lowercase search term
+            let search_term = state.rule_search_lowercase.as_str();
             let matches_search = state.rule_search.is_empty()
-                || r.label.to_lowercase().contains(&search_term)
-                || r.protocol.to_string().to_lowercase().contains(&search_term)
-                || r.interface.as_ref().is_some_and(|i| i.to_lowercase().contains(&search_term))
-                || r.tags.iter().any(|tag| tag.to_lowercase().contains(&search_term));
+                || r.label.to_lowercase().contains(search_term)
+                || r.protocol.to_string().to_lowercase().contains(search_term)
+                || r.interface.as_ref().is_some_and(|i| i.to_lowercase().contains(search_term))
+                || r.tags.iter().any(|tag| tag.to_lowercase().contains(search_term));
 
             let matches_tag = if let Some(ref filter_tag) = state.filter_tag {
                 r.tags.contains(filter_tag)
@@ -266,11 +262,10 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         ];
 
         for tag in all_tags {
-            let is_selected = state.filter_tag.as_ref() == Some(&tag);
-            let tag_clone = tag.clone();
+            let is_selected = state.filter_tag.as_ref() == Some(tag);
             tag_elements.push(
                 button(text(tag).size(10))
-                    .on_press(Message::FilterByTag(Some(tag_clone)))
+                    .on_press(Message::FilterByTag(Some(tag.clone())))
                     .padding([4, 8])
                     .style(move |_, status| if is_selected { active_tab_button(theme, status) } else { secondary_button(theme, status) })
                     .into()
@@ -322,9 +317,10 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         .center_x(Length::Fill)
         .into()
     } else {
-        filtered_rules
-            .into_iter()
-            .fold(column![].spacing(8), |col, rule| {
+        // Phase 5: Pre-allocate Vec for better performance
+        let mut rule_cards = Vec::with_capacity(filtered_rules.len());
+
+        for rule in filtered_rules {
                 // ... (Rule card logic remains the same)
                 let is_editing = state.rule_form.as_ref().and_then(|f| f.id) == Some(rule.id);
                 let is_deleting = state.deleting_id == Some(rule.id);
@@ -536,9 +532,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     card.into()
                 };
 
-                col.push(card_element)
-            })
-            .into()
+                rule_cards.push(card_element);
+        }
+
+        // Build column from pre-allocated Vec
+        column(rule_cards).spacing(8).into()
     };
 
     // 6. Sidebar Footer (Pinned Action)

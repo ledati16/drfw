@@ -23,6 +23,8 @@ pub struct State {
     pub cached_nft_text: String,
     pub cached_json_text: String,
     pub rule_search: String,
+    pub rule_search_lowercase: String,
+    pub cached_all_tags: Vec<String>,
     pub deleting_id: Option<uuid::Uuid>,
     pub pending_warning: Option<PendingWarning>,
     pub show_diff: bool,
@@ -333,6 +335,8 @@ impl State {
                 cached_nft_text,
                 cached_json_text,
                 rule_search: String::new(),
+                rule_search_lowercase: String::new(),
+                cached_all_tags: Vec::new(),
                 deleting_id: None,
                 pending_warning: None,
                 show_diff: true,
@@ -366,6 +370,16 @@ impl State {
         self.cached_nft_text = self.ruleset.to_nft_text();
         self.cached_json_text =
             serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
+
+        // Update tag cache (Phase 3: Cache Tag Collection)
+        use std::collections::BTreeSet;
+        let all_tags: BTreeSet<String> = self
+            .ruleset
+            .rules
+            .iter()
+            .flat_map(|r| r.tags.iter().cloned())
+            .collect();
+        self.cached_all_tags = all_tags.into_iter().collect();
     }
 
     fn save_config(&self) -> Task<Message> {
@@ -471,7 +485,10 @@ impl State {
                 self.validate_form_realtime();
             }
             Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(&preset),
-            Message::RuleSearchChanged(s) => self.rule_search = s,
+            Message::RuleSearchChanged(s) => {
+                self.rule_search_lowercase = s.to_lowercase();
+                self.rule_search = s;
+            }
             Message::ToggleRuleEnabled(id) => self.handle_toggle_rule(id),
             Message::DeleteRuleRequested(id) => self.deleting_id = Some(id),
             Message::CancelDelete => self.deleting_id = None,

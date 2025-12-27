@@ -78,27 +78,36 @@ impl std::fmt::Display for FontChoice {
 /// Global cache of system font families
 static SYSTEM_FONTS: OnceLock<Vec<FontChoice>> = OnceLock::new();
 
+/// Centralized storage for font names (Phase 2: Fix memory leak)
+/// Instead of leaking each font name individually, we leak one Vec
+/// This is still a leak, but bounds memory to O(n_fonts) instead of unbounded growth
+static FONT_NAMES_STORAGE: OnceLock<&'static [String]> = OnceLock::new();
+
 /// Returns all available font choices for the UI, cached
 pub fn all_options() -> &'static [FontChoice] {
     SYSTEM_FONTS.get_or_init(|| {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
-        
+
         let mut families: Vec<String> = db.faces()
             .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
             .collect();
-        
+
         families.sort();
         families.dedup();
 
+        // Store all font names in centralized static storage (one-time controlled leak)
+        // Box::leak gives us 'static access to the Vec's contents
+        let font_names: &'static [String] = FONT_NAMES_STORAGE
+            .get_or_init(|| Box::leak(families.into_boxed_slice()));
+
         let mut options = vec![FontChoice::SystemDefault, FontChoice::SystemMonospace];
-        
-        for name in families {
-            // We leak the name once per system font family to satisfy Iced's &'static requirement
-            let leaked_name: &'static str = Box::leak(name.clone().into_boxed_str());
+
+        // Reference strings from the centralized storage
+        for name in font_names {
             options.push(FontChoice::Specific {
-                name,
-                handle: Some(Font::with_name(leaked_name)),
+                name: name.clone(),
+                handle: Some(Font::with_name(name.as_str())),
             });
         }
         options

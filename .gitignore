@@ -1,3 +1,12 @@
 /target/
 **/*.rs.bk
 cargo-test-fuzz-target
+
+# Documentation and markdown files
+*.md
+/docs/
+
+# Exceptions: Keep tracking these specific files
+!CLAUDE.md
+!README.md
+!contrib/README.md
