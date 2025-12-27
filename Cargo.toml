@@ -3,6 +3,28 @@ name = "drfw"
 version = "0.1.0"
 edition = "2024"
 
+[lints.clippy]
+# UI view functions and parsers are naturally large - breaking them up reduces readability
+too_many_lines = "allow"
+
+# State management structs with many boolean flags are idiomatic for GUI applications
+struct_excessive_bools = "allow"
+
+# Linux filesystems are case-sensitive, we intentionally check lowercase .json
+case_sensitive_file_extension_comparisons = "allow"
+
+# Theme matching: same arms are intentional for clarity
+match_same_arms = "allow"
+
+# Theme creation requires many color parameters - this is unavoidable
+too_many_arguments = "allow"
+
+# Test-specific lints (used in test modules for color comparisons and test data generation)
+float_cmp = "allow"
+uninlined_format_args = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+
 [dependencies]
 # GUI Framework
 iced = { version = "0.14", features = ["tokio"] }

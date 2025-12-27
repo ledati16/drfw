@@ -5,8 +5,7 @@ use std::fs;
 use std::io::Write;
 
 /// Complete application configuration including ruleset and UI settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     pub ruleset: FirewallRuleset,
     #[serde(default)]
@@ -16,7 +15,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub mono_font: crate::fonts::MonoFontChoice,
 }
-
 
 /// Saves the complete app config to disk using an atomic write pattern.
 /// 1. Writes to a temporary file.

@@ -679,7 +679,6 @@ impl FirewallRuleset {
         Self::add_icmp_rules(nft_rules, advanced);
     }
 
-    #[allow(clippy::too_many_lines)]
     fn add_icmp_rules(nft_rules: &mut Vec<serde_json::Value>, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
 

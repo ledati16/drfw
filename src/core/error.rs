@@ -222,7 +222,6 @@ impl ErrorTranslation {
 struct NftablesErrorPattern;
 
 impl NftablesErrorPattern {
-    #[allow(clippy::too_many_lines)]
     fn match_error(msg: &str) -> ErrorTranslation {
         let lower = msg.to_lowercase();
 
