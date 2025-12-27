@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use iced::widget::{button, checkbox, container, pick_list, slider, text_input, toggler};
+use iced::widget::{button, checkbox, container, pick_list, rule, slider, text_input, toggler};
 use iced::{Border, Color, Shadow, Vector};
 
 pub fn main_container(theme: &AppTheme) -> container::Style {
@@ -670,5 +670,26 @@ pub fn modal_backdrop(theme: &AppTheme) -> container::Style {
             .into(),
         ),
         ..Default::default()
+    }
+}
+
+/// Themed horizontal rule (separator line)
+pub fn themed_horizontal_rule(theme: &AppTheme) -> rule::Style {
+    rule::Style {
+        color: theme.divider,
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    }
+}
+
+/// Themed vertical rule (separator line)
+#[allow(dead_code)] // Available for future use
+pub fn themed_vertical_rule(theme: &AppTheme) -> rule::Style {
+    rule::Style {
+        color: theme.divider,
+        radius: 0.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
     }
 }

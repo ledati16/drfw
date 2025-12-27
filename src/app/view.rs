@@ -2,7 +2,8 @@ use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
     danger_button, dirty_button, main_container, modal_backdrop, primary_button,
     secondary_button, section_header_container, sidebar_container, themed_checkbox,
-    themed_pick_list, themed_pick_list_menu, themed_slider, themed_text_input, themed_toggler,
+    themed_horizontal_rule, themed_pick_list, themed_pick_list_menu, themed_slider,
+    themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, WorkspaceTab,
@@ -103,10 +104,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         match &state.status {
             AppStatus::AwaitingApply => Some(
                 container(view_awaiting_apply(theme, state.font_regular))
-                    .style(|_| container::Style {
-                        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-                        ..Default::default()
-                    })
+                    .style(move |_| modal_backdrop(theme))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .center_x(Length::Fill)
@@ -164,10 +162,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_diagnostics,
             container(view_export_modal(theme, state.font_regular))
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-                    ..Default::default()
-                })
+                .style(move |_| modal_backdrop(theme))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -183,10 +178,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_export,
             container(view_font_picker(state, picker_state))
-                .style(|_| container::Style {
-                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-                    ..Default::default()
-                })
+                .style(move |_| modal_backdrop(theme))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Alignment::Center)
@@ -1241,7 +1233,7 @@ fn view_awaiting_apply(
                            button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
     ].spacing(20).padding(32).align_x(Alignment::Center))
-    .style(move |_| { let mut style = card_container(app_theme); style.shadow = iced::Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.8), offset: iced::Vector::new(0.0, 10.0), blur_radius: 20.0 }; style }).into()
+    .style(move |_| { let mut style = card_container(app_theme); style.shadow = iced::Shadow { color: app_theme.shadow_strong, offset: iced::Vector::new(0.0, 10.0), blur_radius: 20.0 }; style }).into()
 }
 
 fn view_pending_confirmation(
@@ -1282,7 +1274,7 @@ fn view_pending_confirmation(
     .style(move |_| {
         let mut style = card_container(app_theme);
         style.shadow = iced::Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.8),
+            color: app_theme.shadow_strong,
             offset: iced::Vector::new(0.0, 10.0),
             blur_radius: 20.0,
         };
@@ -1478,7 +1470,10 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                     column![].into()
                 },
 
-                container(rule::horizontal(1)).padding([8, 0]),
+                container(
+                    rule::horizontal(1).style(move |_| themed_horizontal_rule(theme))
+                )
+                .padding([8, 0]),
 
                 column![
                     text("Egress Filtering Profile").size(15).font(state.font_regular).color(theme.fg_primary),
@@ -1572,7 +1567,7 @@ fn view_warning_modal<'a>(
     .style(move |_| {
         let mut style = card_container(theme);
         style.shadow = iced::Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.8),
+            color: theme.shadow_strong,
             offset: iced::Vector::new(0.0, 10.0),
             blur_radius: 20.0,
         };
@@ -1667,7 +1662,7 @@ fn view_diagnostics_modal(
                     .size(24)
                     .font(regular_font)
                     .color(theme.warning),
-                rule::horizontal(0),
+                rule::horizontal(0).style(move |_| themed_horizontal_rule(theme)),
             ]
             .spacing(12)
             .align_y(Alignment::Center)
@@ -1941,7 +1936,7 @@ fn view_font_picker<'a>(
                 .size(18)
                 .font(state.font_regular)
                 .color(theme.fg_primary),
-                rule::horizontal(0),
+                rule::horizontal(0).style(move |_| themed_horizontal_rule(theme)),
                 button(text("×").size(20).color(theme.fg_muted))
                     .on_press(Message::CloseFontPicker)
                     .style(button::text),
@@ -1970,7 +1965,7 @@ fn view_font_picker<'a>(
                     .size(10)
                     .color(theme.fg_muted)
                     .font(state.font_mono),
-                rule::horizontal(0),
+                rule::horizontal(0).style(move |_| themed_horizontal_rule(theme)),
                 button(text("Close").size(13))
                     .on_press(Message::CloseFontPicker)
                     .padding([8, 20])
@@ -1986,7 +1981,7 @@ fn view_font_picker<'a>(
     .style(move |_| {
         let mut style = card_container(theme);
         style.shadow = iced::Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+            color: theme.shadow_strong,
             offset: iced::Vector::new(0.0, 10.0),
             blur_radius: 30.0,
         };

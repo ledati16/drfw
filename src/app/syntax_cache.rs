@@ -517,8 +517,8 @@ impl TokenColor {
             TokenColor::Number => theme.syntax_number,
             TokenColor::Comment => theme.syntax_comment,
             TokenColor::Bracket => theme.info, // Brackets use info color (matches old code)
-            TokenColor::LineNumber => Color::from_rgb(0.4, 0.4, 0.4),
-            TokenColor::LineNumberNft => Color::from_rgb(0.25, 0.25, 0.25), // Darker gray for NFT
+            TokenColor::LineNumber => theme.fg_muted,
+            TokenColor::LineNumberNft => theme.fg_muted, // Use theme's muted color for line numbers
         }
     }
 }
