@@ -1,6 +1,39 @@
 use super::AppTheme;
 
-/// Nord - Professional arctic-inspired theme (DEFAULT)
+/// Default - Hybrid of Everdeer and Gruvbox (The "Rust" theme)
+/// Warm neutral browns with rust-orange accents, optimized for readability
+pub fn default_hybrid() -> AppTheme {
+    AppTheme::from_hex(
+        "Default",
+        0x0023_1D1B, // bg_base - Neutral warm brown
+        0x001D_1816, // bg_sidebar - Deep oxide brown
+        0x002E_2623, // bg_surface - Lighter card surface
+        0x003A_312E, // bg_elevated - Input/button background
+        0x0046_3B38, // bg_hover - Subtle highlight
+        0x0052_4541, // bg_active - Active state brown
+        0x00E6_DBD3, // fg_primary - Warm cream text
+        0x00B8_ACA2, // fg_secondary - Muted clay text
+        0x007A_6E67, // fg_muted - Darkened earth gray
+        0x001D_1816, // fg_on_accent - Dark text on orange
+        0x00D6_5D0E, // accent - Rust orange
+        0x00FE_8019, // accent_hover - Bright oxide orange
+        0x008F_A172, // success - Muted sage green
+        0x00D8_A657, // warning - Warm gold
+        0x00CC_241D, // danger - Oxide red
+        0x007D_AEA3, // info - Muted teal
+        0x003E_3532, // border - Subtle brown border
+        0x00D6_5D0E, // border_strong - Rust accent border
+        0x002E_2623, // divider - Surface match
+        0x00E6_7E80, // syntax_keyword - Warm terracotta
+        0x00D6_99B6, // syntax_type - Muted orchid
+        0x00D8_A657, // syntax_string - Amber/Gold
+        0x00B8_ACA2, // syntax_number - Secondary text
+        0x007A_6E67, // syntax_comment - Muted brown
+        0x00D6_5D0E, // syntax_operator - Rust orange
+    )
+}
+
+/// Nord - Professional arctic-inspired theme
 /// Clean, modern, excellent for professional tools
 pub fn nord() -> AppTheme {
     AppTheme::from_hex(
@@ -304,6 +337,7 @@ mod tests {
     #[test]
     fn test_all_themes_have_names() {
         let themes = [
+            default_hybrid(),
             nord(),
             gruvbox(),
             dracula(),
@@ -323,6 +357,7 @@ mod tests {
     #[test]
     fn test_theme_colors_are_valid() {
         // Just verify themes can be created without panicking
+        let _ = default_hybrid();
         let _ = nord();
         let _ = gruvbox();
         let _ = dracula();
