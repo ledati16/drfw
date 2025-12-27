@@ -1,4 +1,3 @@
-pub mod custom;
 pub mod presets;
 
 use iced::Color;
@@ -51,7 +50,6 @@ pub struct AppTheme {
 
 impl AppTheme {
     /// Creates a theme from RGB hex values for easier definition
-    #[allow(clippy::too_many_arguments)]
     pub fn from_hex(
         name: &str,
         bg_base: u32,
@@ -114,7 +112,6 @@ impl AppTheme {
 }
 
 /// Converts hex color (0xRRGGBB) to iced Color
-#[allow(clippy::cast_precision_loss)]
 fn hex_to_color(hex: u32) -> Color {
     Color::from_rgb(
         ((hex >> 16) & 0xFF) as f32 / 255.0,
@@ -131,30 +128,42 @@ pub enum ThemeChoice {
     Aethel,
     Nord,
     Gruvbox,
+    GruvboxLight,
     Dracula,
     Monokai,
     Everforest,
     TokyoNight,
     CatppuccinMocha,
+    CatppuccinLatte,
     OneDark,
     SolarizedDark,
-    Custom(usize), // Index into custom themes list
+    AyuDark,
+    RosePine,
+    MaterialTheme,
+    GitHubLight,
 }
 
 impl ThemeChoice {
-    pub fn all_builtin() -> &'static [Self] {
+    /// Returns all available themes
+    pub fn all() -> &'static [Self] {
         &[
             Self::Oxide,
             Self::Aethel,
             Self::Nord,
             Self::Gruvbox,
+            Self::GruvboxLight,
             Self::Dracula,
             Self::Monokai,
             Self::Everforest,
             Self::TokyoNight,
             Self::CatppuccinMocha,
+            Self::CatppuccinLatte,
             Self::OneDark,
             Self::SolarizedDark,
+            Self::AyuDark,
+            Self::RosePine,
+            Self::MaterialTheme,
+            Self::GitHubLight,
         ]
     }
 
@@ -163,35 +172,43 @@ impl ThemeChoice {
             Self::Oxide => "Oxide".to_string(),
             Self::Aethel => "Aethel".to_string(),
             Self::Nord => "Nord".to_string(),
-            Self::Gruvbox => "Gruvbox".to_string(),
+            Self::Gruvbox => "Gruvbox Dark".to_string(),
+            Self::GruvboxLight => "Gruvbox Light".to_string(),
             Self::Dracula => "Dracula".to_string(),
             Self::Monokai => "Monokai".to_string(),
             Self::Everforest => "Everforest".to_string(),
             Self::TokyoNight => "Tokyo Night".to_string(),
             Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
+            Self::CatppuccinLatte => "Catppuccin Latte".to_string(),
             Self::OneDark => "One Dark".to_string(),
             Self::SolarizedDark => "Solarized Dark".to_string(),
-            Self::Custom(idx) => format!("Custom {idx}"),
+            Self::AyuDark => "Ayu Dark".to_string(),
+            Self::RosePine => "Rosé Pine".to_string(),
+            Self::MaterialTheme => "Material Theme".to_string(),
+            Self::GitHubLight => "GitHub Light".to_string(),
         }
     }
 
-    // Each match arm intentionally calls a different theme function
-    // The Custom variant temporarily falls back to Nord until custom theme loading is implemented
-    #[allow(clippy::match_same_arms)]
+    /// Converts theme choice to actual theme
     pub fn to_theme(self) -> AppTheme {
         match self {
             Self::Oxide => presets::oxide(),
             Self::Aethel => presets::aethel(),
             Self::Nord => presets::nord(),
             Self::Gruvbox => presets::gruvbox(),
+            Self::GruvboxLight => presets::gruvbox_light(),
             Self::Dracula => presets::dracula(),
             Self::Monokai => presets::monokai(),
             Self::Everforest => presets::everforest(),
             Self::TokyoNight => presets::tokyo_night(),
             Self::CatppuccinMocha => presets::catppuccin_mocha(),
+            Self::CatppuccinLatte => presets::catppuccin_latte(),
             Self::OneDark => presets::one_dark(),
             Self::SolarizedDark => presets::solarized_dark(),
-            Self::Custom(_) => presets::oxide(), // Will be replaced with custom theme
+            Self::AyuDark => presets::ayu_dark(),
+            Self::RosePine => presets::rose_pine(),
+            Self::MaterialTheme => presets::material_theme(),
+            Self::GitHubLight => presets::github_light(),
         }
     }
 }
