@@ -54,10 +54,22 @@ pub fn card_container(theme: &AppTheme) -> container::Style {
 }
 
 /// Elevated card container for main content areas (nftables/json/settings)
-/// Larger shadow for more visual hierarchy
+/// Larger shadow for more visual hierarchy with subtle background gradient
 pub fn elevated_card_container(theme: &AppTheme) -> container::Style {
+    // Subtle theme-aware gradient for main workspace depth
+    let multiplier = if theme.is_light() { 0.90 } else { 1.15 };
+
+    let gradient = Gradient::Linear(iced::gradient::Linear::new(0.0)
+        .add_stop(0.0, theme.bg_surface)
+        .add_stop(1.0, Color {
+            r: (theme.bg_surface.r * multiplier).min(1.0),
+            g: (theme.bg_surface.g * multiplier).min(1.0),
+            b: (theme.bg_surface.b * multiplier).min(1.0),
+            ..theme.bg_surface
+        }));
+
     container::Style {
-        background: Some(theme.bg_surface.into()),
+        background: Some(gradient.into()),
         border: Border {
             color: theme.border,
             width: 1.0,
