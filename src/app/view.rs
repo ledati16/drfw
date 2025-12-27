@@ -10,7 +10,7 @@ use crate::app::{
 use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, stack, text, text_input,
-    toggler, tooltip,
+    toggler,
 };
 use iced::widget::text::Wrapping;
 use iced::{Alignment, Border, Color, Element, Length};
@@ -221,30 +221,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     ])
     .padding(iced::Padding::new(0.0).bottom(10.0));
 
-    let search_bar = column![
-        text_input("Search rules...", &state.rule_search)
-            .on_input(Message::RuleSearchChanged)
-            .padding(10)
-            .size(13),
-    ]
-    .spacing(4);
-
-    let add_button = button(
-        row![text("+").size(18), text("Add Access Rule").size(14)]
-            .spacing(10)
-            .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .padding(12)
-    .style(move |_, status| primary_button(theme, status))
-    .on_press(Message::AddRuleClicked);
-
     let filtered_rules: Vec<_> = state
         .ruleset
         .rules
         .iter()
         .filter(|r| {
-            // Text search filter
             let search_term = state.rule_search.to_lowercase();
             let matches_search = state.rule_search.is_empty()
                 || r.label.to_lowercase().contains(&search_term)
@@ -252,7 +233,6 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 || r.interface.as_ref().is_some_and(|i| i.to_lowercase().contains(&search_term))
                 || r.tags.iter().any(|tag| tag.to_lowercase().contains(&search_term));
 
-            // Tag filter
             let matches_tag = if let Some(ref filter_tag) = state.filter_tag {
                 r.tags.contains(filter_tag)
             } else {
@@ -263,18 +243,30 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         })
         .collect();
 
-    let metrics = row![
-        text(format!(
-            "Showing {} of {}",
-            filtered_rules.len(),
-            state.ruleset.rules.len()
-        ))
-        .size(10)
-        .color(theme.fg_muted)
-        .font(state.font_mono),
+    let search_and_metrics = column![
+        text_input("Search rules...", &state.rule_search)
+            .on_input(Message::RuleSearchChanged)
+            .padding(10)
+            .size(13),
+        row![
+            text(format!("{} rules found", filtered_rules.len()))
+                .size(10)
+                .color(theme.fg_muted)
+                .font(state.font_mono),
+        ]
+        .padding([0, 4]),
     ]
+    .spacing(6);
+
+    let add_button = button(
+        row![text("+").size(18), text("Add Access Rule").size(14)]
+            .spacing(10)
+            .align_y(Alignment::Center),
+    )
     .width(Length::Fill)
-    .align_y(Alignment::Center);
+    .padding(12)
+    .style(move |_, status| primary_button(theme, status))
+    .on_press(Message::AddRuleClicked);
 
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
         container(
@@ -342,291 +334,167 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         theme.fg_muted
                     };
 
-                    // Compact card design, REVERTED truncation/icons
-                    row![
-                        // Drag Handle (Button) with tooltip
-                        tooltip(
-                            button(
-                                container(text("::").size(12).color(handle_color))
-                                    .width(Length::Fixed(20.0))
-                                    .center_x(Length::Fixed(20.0))
+                    // Combined Protocol/Port pill
+                    let proto_text = match rule.protocol {
+                        Protocol::Tcp => "TCP",
+                        Protocol::Udp => "UDP",
+                        Protocol::Any => "ANY",
+                        Protocol::Icmp => "ICMP",
+                        Protocol::Icmpv6 => "ICMPv6",
+                    };
+
+                    let port_text = rule.ports.as_ref().map_or_else(
+                        || "All".to_string(),
+                        |p| if p.start == p.end { p.start.to_string() } else { format!("{}-{}", p.start, p.end) }
+                    );
+
+                    let badge = container(
+                        text(format!("{proto_text}: {port_text}"))
+                            .size(9)
+                            .font(state.font_mono)
+                            .color(if rule.enabled { theme.syntax_type } else { theme.fg_muted })
+                    )
+                    .padding([2, 6])
+                    .style(move |_| container::Style {
+                        background: Some(theme.bg_base.into()),
+                        border: Border {
+                            radius: 4.0.into(),
+                            color: theme.border,
+                            width: 1.0,
+                        },
+                        ..Default::default()
+                    });
+
+                    // Main Content: Label + Tags
+                    let mut tag_items: Vec<Element<'_, Message>> = vec![];
+                    for tag in rule.tags.iter() {
+                        let tag_theme = theme.clone();
+                        let is_enabled = rule.enabled;
+                        tag_items.push(
+                            container(
+                                text(tag)
+                                    .size(8)
+                                    .color(if is_enabled { theme.fg_on_accent } else { Color { a: 0.5, ..theme.fg_muted } })
+                                    .wrapping(Wrapping::None)
                             )
+                            .padding([1, 4])
+                            .style(move |_: &_| container::Style {
+                                background: Some(if is_enabled { tag_theme.accent.into() } else { Color { a: 0.3, ..tag_theme.accent }.into() }),
+                                border: Border { radius: 3.0.into(), ..Default::default() },
+                                ..Default::default()
+                            })
+                            .clip(true)
+                            .into()
+                        );
+                    }
+
+                    let main_info = column![
+                        // Top row: Label (with clipping and fixed height)
+                        container(
+                            text(if rule.label.is_empty() { "Unnamed Rule" } else { &rule.label })
+                                .size(13)
+                                .font(state.font_regular)
+                                .color(if rule.enabled { theme.fg_primary } else { theme.fg_muted })
+                                .wrapping(Wrapping::None)
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fixed(18.0))
+                        .padding(iced::Padding::new(0.0).right(4.0))
+                        .clip(true),
+
+                        // Bottom row: Tags (clipped, fixed height) + Badge (priority)
+                        row![
+                            container(
+                                row(tag_items).spacing(4).align_y(Alignment::Center)
+                            )
+                            .width(Length::Fill)
+                            .height(Length::Fixed(18.0))
+                            .align_y(Alignment::Center)
+                            .clip(true),
+
+                            badge,
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                    ].spacing(2).width(Length::Fill);
+
+                    row![
+                        // Drag Handle
+                        button(container(text("::").size(12).color(handle_color)).center_x(Length::Fixed(20.0)))
                             .on_press(handle_action)
                             .padding([0, 2])
                             .style(button::text),
-                            container(
-                                text(if any_drag_active && !is_being_dragged {
-                                    "Click to move here"
-                                } else {
-                                    "Click to move rule"
-                                })
-                                .size(11)
-                            )
-                            .padding(6)
-                            .style(move |_| container::Style {
-                                background: Some(Color::from_rgb(0.15, 0.15, 0.15).into()),
-                                border: Border {
-                                    color: theme.border,
-                                    width: 1.0,
-                                    radius: 4.0.into(),
-                                },
-                                shadow: iced::Shadow {
-                                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-                                    offset: iced::Vector::new(0.0, 2.0),
-                                    blur_radius: 4.0,
-                                },
-                                ..Default::default()
-                            }),
-                            tooltip::Position::Right
-                        ),
 
                         // Status Strip
                         container(column![])
                             .width(Length::Fixed(3.0))
                             .height(Length::Fixed(24.0))
-                            .style(move |_| container::Style {
-                                background: Some(
-                                    (if rule.enabled {
-                                        theme.info
-                                    } else {
-                                        theme.fg_muted
-                                    })
-                                    .into()
-                                ),
-                                border: Border {
-                                    radius: 2.0.into(),
-                                    ..Default::default()
-                                },
+                            .style(move |_: &_| container::Style {
+                                background: Some((if rule.enabled { theme.info } else { theme.fg_muted }).into()),
+                                border: Border { radius: 2.0.into(), ..Default::default() },
                                 ..Default::default()
                             }),
 
-                        // Checkbox - make non-interactive when drag is active
-                        {
-                            let check = checkbox(rule.enabled)
-                                .size(16)
-                                .spacing(0);
+                        // Checkbox
+                        checkbox(rule.enabled)
+                            .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
+                            .size(16)
+                            .spacing(0),
 
-                            if any_drag_active && !is_being_dragged {
-                                check  // No on_toggle handler when drag active
-                            } else {
-                                check.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
-                            }
-                        },
+                        // Info Click Area
+                        button(main_info)
+                            .on_press(Message::EditRuleClicked(rule.id))
+                            .padding(0)
+                            .style(button::text)
+                            .width(Length::Fill),
 
-                        // Protocol Badge + Port (vertical stack)
-                        column![
-                            container(
-                                text(match rule.protocol {
-                                    Protocol::Tcp => "TCP",
-                                    Protocol::Udp => "UDP",
-                                    Protocol::Any => "ANY",
-                                    _ => "PROTO",
-                                })
-                                .size(9)
-                                .font(state.font_mono)
-                                .color(if rule.enabled {
-                                    theme.syntax_type
-                                } else {
-                                    theme.fg_muted
-                                })
-                            )
-                            .padding([2, 4])
-                            .style(move |_| container::Style {
-                                background: Some(theme.bg_base.into()),
-                                border: Border {
-                                    radius: 4.0.into(),
-                                    color: theme.border,
-                                    width: 1.0,
-                                },
-                                ..Default::default()
-                            }),
-
-                            // Port number below protocol - split range if too long
-                            container({
-                                let port_display = rule.ports.as_ref().map_or_else(
-                                    || column![text("All").size(8).color(theme.fg_muted).font(state.font_mono)],
-                                    |p| if p.start == p.end {
-                                        // Single port
-                                        column![text(p.start.to_string()).size(8).color(theme.fg_muted).font(state.font_mono)]
-                                    } else {
-                                        // Port range - check if it needs wrapping
-                                        let range_str = format!("{}-{}", p.start, p.end);
-                                        if range_str.len() > 8 {
-                                            // Split across two lines for long ranges
-                                            column![
-                                                text(p.start.to_string()).size(8).color(theme.fg_muted).font(state.font_mono),
-                                                text(p.end.to_string()).size(8).color(theme.fg_muted).font(state.font_mono),
-                                            ]
-                                            .spacing(0)
-                                            .align_x(Alignment::Center)
-                                        } else {
-                                            // Fits on one line
-                                            column![text(range_str).size(8).color(theme.fg_muted).font(state.font_mono)]
-                                        }
-                                    }
-                                );
-                                port_display.align_x(Alignment::Center)
-                            })
-                            .width(Length::Fixed(50.0))  // Fixed width prevents alignment shift
-                            .center_x(Length::Fixed(50.0)),
-                        ]
-                        .spacing(2)
-                        .align_x(Alignment::Center),  // Center the column contents
-
-                        // Info Column - make non-interactive when drag is active
-                        {
-                            // Build tag badges - no limit, just let them flow and clip naturally
-                            let mut tag_items = vec![];
-
-                            for tag in rule.tags.iter() {
-                                let tag_theme = theme.clone();
-                                let is_enabled = rule.enabled;
-                                tag_items.push(
-                                    container(
-                                        container(
-                                            text(tag)
-                                                .size(8)
-                                                .color(if is_enabled {
-                                                    theme.fg_on_accent
-                                                } else {
-                                                    Color { a: 0.5, ..theme.fg_muted }
-                                                })
-                                                .wrapping(Wrapping::None)
-                                        )
-                                        .max_width(80)  // Max width for tag text, but shrinks to fit
-                                        .clip(true)  // Clip text at badge edge if over max
-                                    )
-                                    .padding([1, 4])
-                                    .style(move |_| container::Style {
-                                        background: Some(if is_enabled {
-                                            tag_theme.accent.into()
-                                        } else {
-                                            Color { a: 0.3, ..tag_theme.accent }.into()
-                                        }),
-                                        border: Border {
-                                            radius: 3.0.into(),
-                                            ..Default::default()
-                                        },
-                                        ..Default::default()
-                                    })
-                                    .into()
-                                );
-                            }
-
-                            // Build content column - only add tag row if tags exist
-                            let label_widget = container(
-                                text(if rule.label.is_empty() {
-                                    "Unnamed Rule"
-                                } else {
-                                    &rule.label
-                                })
-                                .size(12)
-                                .font(state.font_regular)
-                                .wrapping(Wrapping::None)
-                                .color(if rule.enabled {
-                                    theme.fg_primary
-                                } else {
-                                    theme.fg_muted
-                                })
-                            )
-                            .width(Length::Fill)
-                            .clip(true);
-
-                            let content = if tag_items.is_empty() {
-                                // No tags: add spacer to maintain consistent card height
-                                column![
-                                    label_widget,
-                                    container(row![])
-                                        .height(Length::Fixed(12.0)),  // Match tag row height (8px text + 2px padding + 2px spacing)
-                                ]
-                                .spacing(4)
-                                .width(Length::Fill)
-                            } else {
-                                // Has tags: show label + tags with spacing
-                                column![
-                                    label_widget,
-                                    row(tag_items)
-                                        .spacing(4)
-                                        .align_y(Alignment::Center),
-                                ]
-                                .spacing(4)
-                                .width(Length::Fill)
-                            };
-
-                            let btn = button(content)
-                                .padding(0)
-                                .style(button::text);
-
-                            if any_drag_active && !is_being_dragged {
-                                btn  // No on_press when drag active
-                            } else {
-                                btn.on_press(Message::EditRuleClicked(rule.id))
-                            }
-                        },
-
-                        // Actions - make non-interactive when drag is active
-                        {
-                            let btn = button(text("×").size(14).color(theme.fg_muted))
-                                .padding(4)
-                                .style(button::text);
-
-                            if any_drag_active && !is_being_dragged {
-                                btn  // No on_press when drag active
-                            } else {
-                                btn.on_press(Message::DeleteRuleRequested(rule.id))
-                            }
-                        },
+                        // Delete
+                        button(text("×").size(14).color(theme.fg_muted))
+                            .on_press(Message::DeleteRuleRequested(rule.id))
+                            .padding(4)
+                            .style(button::text),
                     ]
                     .spacing(8)
-                    .padding(iced::Padding {
-                        top: 6.0,
-                        right: 8.0,
-                        bottom: 6.0,
-                        left: 4.0,
-                    })
+                    .padding([6, 8])
+                    .align_y(Alignment::Center)
                     .into()
                 };
 
-                // Wrap card in mouse_area when dragging to detect hover
                 let card = container(card_content)
-                    .style(move |_| if is_editing {
-                        active_card_container(theme)
-                    } else if is_being_dragged {
-                        container::Style {
-                            background: Some(theme.bg_active.into()),
-                            border: Border {
-                                color: theme.accent,
-                                width: 2.0,
-                                radius: 8.0.into(),
-                            },
-                            shadow: iced::Shadow {
-                                color: theme.shadow_color,
-                                offset: iced::Vector::new(0.0, 4.0),
-                                blur_radius: 8.0,
-                            },
-                            ..Default::default()
+                    .style(move |_| {
+                        let mut style = if is_editing {
+                            active_card_container(theme)
+                        } else if is_being_dragged {
+                            container::Style {
+                                background: Some(theme.bg_active.into()),
+                                border: Border { color: theme.accent, width: 2.0, radius: 8.0.into() },
+                                shadow: iced::Shadow { color: theme.shadow_color, offset: iced::Vector::new(0.0, 4.0), blur_radius: 8.0 },
+                                ..Default::default()
+                            }
+                        } else if is_hover_target {
+                            container::Style {
+                                background: Some(theme.bg_surface.into()),
+                                border: Border { color: theme.success, width: 2.0, radius: 8.0.into() },
+                                shadow: iced::Shadow { color: theme.shadow_color, offset: iced::Vector::new(0.0, 3.0), blur_radius: 6.0 },
+                                ..Default::default()
+                            }
+                        } else {
+                            card_container(theme)
+                        };
+
+                        // Dim the card if the rule is disabled
+                        if !rule.enabled && !is_editing && !is_being_dragged && !is_hover_target {
+                            style.background = style.background.map(|b| {
+                                match b {
+                                    iced::Background::Color(c) => iced::Background::Color(Color { a: 0.6, ..c }),
+                                    _ => b,
+                                }
+                            });
                         }
-                    } else if is_hover_target {
-                        container::Style {
-                            background: Some(theme.bg_surface.into()),
-                            border: Border {
-                                color: theme.success,
-                                width: 2.0,
-                                radius: 8.0.into(),
-                            },
-                            shadow: iced::Shadow {
-                                color: theme.shadow_color,
-                                offset: iced::Vector::new(0.0, 3.0),
-                                blur_radius: 6.0,
-                            },
-                            ..Default::default()
-                        }
-                    } else {
-                        card_container(theme)
+                        style
                     });
 
                 let card_element: Element<'_, Message> = if any_drag_active && !is_being_dragged {
-                    // Make entire card clickable and hoverable when drag is active
                     mouse_area(card)
                         .on_enter(Message::RuleHoverStart(rule.id))
                         .on_exit(Message::RuleHoverEnd)
@@ -644,12 +512,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     container(
         column![
             branding,
-            text("NETWORK ACCESS")
-                .size(10)
-                .color(theme.fg_muted)
-                .font(state.font_regular),
-            search_bar,
-            metrics,
+            search_and_metrics,
             container(
                 scrollable(container(rule_list).height(Length::Shrink))
                     .height(Length::Fill)
@@ -657,7 +520,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             .max_height(800),
             add_button,
         ]
-        .spacing(20)
+        .spacing(16)
         .padding(24),
     )
     .width(Length::Fixed(320.0))
