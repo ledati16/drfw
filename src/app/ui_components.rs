@@ -676,7 +676,7 @@ pub fn modal_backdrop(theme: &AppTheme) -> container::Style {
 /// Themed horizontal rule (separator line)
 pub fn themed_horizontal_rule(theme: &AppTheme) -> rule::Style {
     rule::Style {
-        color: theme.divider,
+        color: theme.border,
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
@@ -687,7 +687,7 @@ pub fn themed_horizontal_rule(theme: &AppTheme) -> rule::Style {
 #[allow(dead_code)] // Available for future use
 pub fn themed_vertical_rule(theme: &AppTheme) -> rule::Style {
     rule::Style {
-        color: theme.divider,
+        color: theme.border,
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,
