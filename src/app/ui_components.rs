@@ -2,7 +2,7 @@ use crate::theme::AppTheme;
 use iced::widget::{
     button, checkbox, container, pick_list, rule, scrollable, slider, text_input, toggler,
 };
-use iced::{Border, Color, Shadow, Vector};
+use iced::{Border, Color, Gradient, Shadow, Vector};
 
 pub fn main_container(theme: &AppTheme) -> container::Style {
     container::Style {
@@ -13,8 +13,20 @@ pub fn main_container(theme: &AppTheme) -> container::Style {
 }
 
 pub fn sidebar_container(theme: &AppTheme) -> container::Style {
+    // Theme-aware gradient: light themes darken, dark themes lighten more dramatically
+    let multiplier = if theme.is_light() { 0.80 } else { 1.40 };
+
+    let gradient = Gradient::Linear(iced::gradient::Linear::new(0.0)
+        .add_stop(0.0, theme.bg_sidebar)
+        .add_stop(1.0, Color {
+            r: (theme.bg_sidebar.r * multiplier).min(1.0),
+            g: (theme.bg_sidebar.g * multiplier).min(1.0),
+            b: (theme.bg_sidebar.b * multiplier).min(1.0),
+            ..theme.bg_sidebar
+        }));
+
     container::Style {
-        background: Some(theme.bg_sidebar.into()),
+        background: Some(gradient.into()),
         border: Border {
             color: theme.border,
             width: 1.0,
