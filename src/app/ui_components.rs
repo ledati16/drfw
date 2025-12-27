@@ -366,7 +366,7 @@ pub fn active_tab_button(app_theme: &AppTheme, status: button::Status) -> button
         background: Some(app_theme.bg_elevated.into()),
         text_color: app_theme.fg_primary,
         border: Border {
-            radius: 4.0.into(),
+            radius: 0.0.into(),
             ..Default::default()
         },
         shadow: Shadow {
@@ -391,6 +391,54 @@ pub fn active_tab_button(app_theme: &AppTheme, status: button::Status) -> button
             background: Some(app_theme.bg_elevated.into()),
             shadow: Shadow {
                 color: app_theme.shadow_color,
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..base
+        },
+        _ => base,
+    }
+}
+
+pub fn inactive_tab_button(theme: &AppTheme, status: button::Status) -> button::Style {
+    let base = button::Style {
+        background: Some(theme.bg_surface.into()),
+        text_color: theme.fg_primary,
+        border: Border {
+            color: theme.border,
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 3.0,
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => button::Style {
+            background: Some(
+                Color {
+                    r: (theme.bg_surface.r * 1.08).min(1.0),
+                    g: (theme.bg_surface.g * 1.08).min(1.0),
+                    b: (theme.bg_surface.b * 1.08).min(1.0),
+                    ..theme.bg_surface
+                }
+                .into(),
+            ),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 2.5),
+                blur_radius: 4.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(theme.bg_surface.into()),
+            shadow: Shadow {
+                color: theme.shadow_color,
                 offset: Vector::new(0.0, 1.0),
                 blur_radius: 2.0,
             },

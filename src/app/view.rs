@@ -1,9 +1,9 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
-    danger_button, dirty_button, elevated_card_container, main_container, modal_backdrop,
-    primary_button, secondary_button, section_header_container, sidebar_container,
-    themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
-    themed_scrollable, themed_slider, themed_text_input, themed_toggler,
+    danger_button, dirty_button, elevated_card_container, inactive_tab_button, main_container,
+    modal_backdrop, primary_button, secondary_button, section_header_container,
+    sidebar_container, themed_checkbox, themed_horizontal_rule, themed_pick_list,
+    themed_pick_list_menu, themed_scrollable, themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, WorkspaceTab,
@@ -691,7 +691,7 @@ fn view_workspace<'a>(
         .style(move |_| container::Style {
             background: Some(theme.bg_elevated.into()),
             border: Border {
-                radius: 6.0.into(),
+                radius: 0.0.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -875,7 +875,7 @@ fn view_tab_button<'a>(
             if is_active {
                 active_tab_button(theme, status)
             } else {
-                secondary_button(theme, status)
+                inactive_tab_button(theme, status)
             }
         })
         .on_press(Message::TabChanged(tab))
