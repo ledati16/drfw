@@ -673,6 +673,9 @@ impl State {
             }
             Message::FilterByTag(tag) => {
                 self.filter_tag = tag;
+                if self.filter_tag.is_none() {
+                    self.rule_search.clear();
+                }
             }
             Message::OpenLogsFolder => {
                 if let Some(state_dir) = crate::utils::get_state_dir() {
@@ -1184,6 +1187,9 @@ impl State {
                     }
                     if self.font_picker.is_some() {
                         return Task::done(Message::CloseFontPicker);
+                    }
+                    if !self.rule_search.is_empty() {
+                        self.rule_search.clear();
                     }
                 }
                 iced::keyboard::Key::Named(iced::keyboard::key::Named::F1) => {

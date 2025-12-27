@@ -204,6 +204,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
 #[allow(clippy::too_many_lines)]
 fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
+    
+    // 1. Branding Header
     let branding = container(column![
         row![
             container(text("🛡️").size(28).color(theme.accent)).padding(4),
@@ -220,6 +222,14 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         .align_y(Alignment::Center)
     ])
     .padding(iced::Padding::new(0.0).bottom(10.0));
+
+    // 2. Filter Logic & Tag Collection
+    let mut all_tags = std::collections::BTreeSet::new();
+    for rule in &state.ruleset.rules {
+        for tag in &rule.tags {
+            all_tags.insert(tag.clone());
+        }
+    }
 
     let filtered_rules: Vec<_> = state
         .ruleset
@@ -243,31 +253,60 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         })
         .collect();
 
-    let search_and_metrics = column![
+    // 3. Search and Filters Section
+    let tag_cloud: Element<'_, Message> = if all_tags.is_empty() {
+        column![].into()
+    } else {
+        let mut tag_elements: Vec<Element<'_, Message>> = vec![
+            button(text("All").size(10))
+                .on_press(Message::FilterByTag(None))
+                .padding([4, 8])
+                .style(move |_, status| if state.filter_tag.is_none() { active_tab_button(theme, status) } else { secondary_button(theme, status) })
+                .into()
+        ];
+
+        for tag in all_tags {
+            let is_selected = state.filter_tag.as_ref() == Some(&tag);
+            let tag_clone = tag.clone();
+            tag_elements.push(
+                button(text(tag).size(10))
+                    .on_press(Message::FilterByTag(Some(tag_clone)))
+                    .padding([4, 8])
+                    .style(move |_, status| if is_selected { active_tab_button(theme, status) } else { secondary_button(theme, status) })
+                    .into()
+            );
+        }
+
+        let tags_row = row(tag_elements).spacing(6).wrap();
+
+        column![
+            text("FILTERS").size(9).font(state.font_mono).color(theme.fg_muted),
+            container(tags_row).width(Length::Fill).max_height(120)
+        ].spacing(8).into()
+    };
+
+    let search_area = column![
         text_input("Search rules...", &state.rule_search)
             .on_input(Message::RuleSearchChanged)
             .padding(10)
             .size(13),
-        row![
-            text(format!("{} rules found", filtered_rules.len()))
-                .size(10)
-                .color(theme.fg_muted)
-                .font(state.font_mono),
-        ]
-        .padding([0, 4]),
+        tag_cloud,
     ]
-    .spacing(6);
+    .spacing(16);
 
-    let add_button = button(
-        row![text("+").size(18), text("Add Access Rule").size(14)]
-            .spacing(10)
-            .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .padding(12)
-    .style(move |_, status| primary_button(theme, status))
-    .on_press(Message::AddRuleClicked);
+    // 4. Rule List Header
+    let list_header = row![
+        text("RULES").size(9).font(state.font_mono).color(theme.fg_muted),
+        container(row![]).width(Length::Fill),
+        text(format!("{}/{}", filtered_rules.len(), state.ruleset.rules.len()))
+            .size(9)
+            .font(state.font_mono)
+            .color(theme.fg_muted),
+    ]
+    .align_y(Alignment::Center)
+    .padding([0, 4]);
 
+    // 5. Rule List (Scrollable)
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
         container(
             column![
@@ -275,25 +314,18 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .size(13)
                     .color(theme.fg_muted)
                     .font(state.font_regular),
-                if state.ruleset.rules.is_empty() {
-                    text("Click '+' to add your first rule.")
-                        .size(11)
-                        .color(theme.fg_muted)
-                } else {
-                    text("")
-                }
             ]
-            .spacing(10)
+            .padding(40)
             .align_x(Alignment::Center),
         )
         .width(Length::Fill)
-        .padding(40)
         .center_x(Length::Fill)
         .into()
     } else {
         filtered_rules
             .into_iter()
             .fold(column![].spacing(8), |col, rule| {
+                // ... (Rule card logic remains the same)
                 let is_editing = state.rule_form.as_ref().and_then(|f| f.id) == Some(rule.id);
                 let is_deleting = state.deleting_id == Some(rule.id);
                 let is_being_dragged = state.dragged_rule_id == Some(rule.id);
@@ -509,16 +541,36 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             .into()
     };
 
+    // 6. Sidebar Footer (Pinned Action)
+    // 6. Sidebar Footer (Pinned Action)
+    let footer = column![
+        container(row![]).height(Length::Fixed(1.0)).width(Length::Fill).style(move |_| container::Style {
+            background: Some(theme.border.into()),
+            ..Default::default()
+        }),
+        container(
+            button(
+                row![text("+").size(18), text("Add Access Rule").size(14)]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding(14)
+            .style(move |_, status| primary_button(theme, status))
+            .on_press(Message::AddRuleClicked)
+        )
+        .padding(iced::Padding::new(0.0).top(16.0))
+    ];
+
     container(
         column![
             branding,
-            search_and_metrics,
-            container(
-                scrollable(container(rule_list).height(Length::Shrink))
-                    .height(Length::Fill)
-            )
-            .max_height(800),
-            add_button,
+            search_area,
+            column![
+                list_header,
+                scrollable(container(rule_list).padding([0, 2])).height(Length::Fill),
+            ].spacing(12).height(Length::Fill),
+            footer,
         ]
         .spacing(16)
         .padding(24),

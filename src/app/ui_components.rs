@@ -15,7 +15,7 @@ pub fn sidebar_container(theme: &AppTheme) -> container::Style {
         background: Some(theme.bg_sidebar.into()),
         border: Border {
             color: theme.border,
-            width: 0.0,
+            width: 1.0,
             radius: 0.0.into(),
         },
         ..Default::default()
