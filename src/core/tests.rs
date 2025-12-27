@@ -1,6 +1,4 @@
 #[cfg(test)]
-#[allow(clippy::uninlined_format_args)]
-#[allow(clippy::cast_possible_truncation)]
 mod tests_impl {
     use crate::core::firewall::{FirewallRuleset, PortRange, Protocol, Rule};
     use chrono::Utc;
@@ -648,7 +646,8 @@ mod integration_tests {
         }
 
         let ruleset = create_test_ruleset();
-        let result = verify::verify_ruleset(&ruleset).await;
+        let json = ruleset.to_nftables_json();
+        let result = verify::verify_ruleset(json).await;
 
         assert!(
             result.is_ok(),
@@ -707,7 +706,8 @@ mod integration_tests {
             created_at: Utc::now(),
         });
 
-        let result = verify::verify_ruleset(&ruleset).await;
+        let json = ruleset.to_nftables_json();
+        let result = verify::verify_ruleset(json).await;
         // This should actually succeed since it's a valid (though broad) range
         assert!(result.is_ok());
     }
@@ -782,7 +782,8 @@ mod integration_tests {
         }
 
         let ruleset = FirewallRuleset::new();
-        let result = verify::verify_ruleset(&ruleset).await;
+        let json = ruleset.to_nftables_json();
+        let result = verify::verify_ruleset(json).await;
 
         assert!(
             result.is_ok(),
@@ -858,7 +859,8 @@ mod integration_tests {
             created_at: Utc::now(),
         });
 
-        let result = verify::verify_ruleset(&ruleset).await;
+        let json = ruleset.to_nftables_json();
+        let result = verify::verify_ruleset(json).await;
 
         assert!(
             result.is_ok(),

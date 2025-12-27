@@ -3,7 +3,6 @@
 /// This module provides validation of rulesets before they are applied,
 /// helping prevent broken firewall configurations.
 use crate::core::error::{Error, Result};
-use crate::core::firewall::FirewallRuleset;
 use tracing::{info, warn};
 
 /// Result of a ruleset verification operation
@@ -36,6 +35,7 @@ impl VerifyResult {
 }
 
 /// Verifies a ruleset without applying it using `nft --json --check`
+/// Phase 1 Optimization: Takes JSON directly to avoid cloning ruleset
 ///
 /// # Errors
 ///
@@ -43,18 +43,18 @@ impl VerifyResult {
 /// - nft command cannot be executed
 /// - JSON serialization fails
 /// - Communication with nft process fails
-pub async fn verify_ruleset(ruleset: &FirewallRuleset) -> Result<VerifyResult> {
-    let json_payload = ruleset.to_nftables_json();
+pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyResult> {
     let json_string = serde_json::to_string(&json_payload)?;
 
     info!("Verifying ruleset via nft --json --check (elevated)");
 
-    let mut child = crate::elevation::create_elevated_nft_command(&["--json", "--check", "-f", "-"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Internal(format!("Failed to spawn nft: {e}")))?;
+    let mut child =
+        crate::elevation::create_elevated_nft_command(&["--json", "--check", "-f", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Internal(format!("Failed to spawn nft: {e}")))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;

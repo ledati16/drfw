@@ -1,14 +1,12 @@
 use crate::core::error::{Error, Result};
-use crate::core::firewall::FirewallRuleset;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 
 /// Applies a ruleset and returns the PRE-APPLY snapshot in a single elevated operation.
 /// This reduces the number of password prompts to one.
-pub async fn apply_with_snapshot(ruleset: &FirewallRuleset) -> Result<Value> {
-    let mut json_payload = ruleset.to_nftables_json();
-
+/// Phase 1 Optimization: Takes JSON directly to avoid cloning entire ruleset
+pub async fn apply_with_snapshot(mut json_payload: Value) -> Result<Value> {
     // Inject a list table command AFTER the table creation (position 1, after "add table")
     // This captures the PRE-APPLY snapshot for rollback
     if let Some(nft_rules) = json_payload["nftables"].as_array_mut() {
@@ -97,7 +95,8 @@ pub fn validate_snapshot(snapshot: &Value) -> Result<()> {
 /// Computes SHA-256 checksum of a JSON value.
 ///
 /// The checksum is computed on the canonical JSON string representation.
-#[allow(dead_code)]
+/// Used by integration tests to verify snapshot integrity.
+#[allow(dead_code)] // Used in integration tests, not in binary
 pub fn compute_checksum(snapshot: &Value) -> String {
     let json_str = serde_json::to_string(snapshot).unwrap_or_default();
     let mut hasher = Sha256::new();
@@ -202,7 +201,6 @@ pub fn list_snapshots() -> Result<Vec<std::path::PathBuf>> {
 
     // Case-sensitive extension check is intentional - on Linux/Unix systems, filenames are case-sensitive
     // and we specifically want lowercase `.json` files, not `.JSON` or other variants
-    #[allow(clippy::case_sensitive_file_extension_comparisons)]
     let mut snapshots: Vec<std::path::PathBuf> = std::fs::read_dir(&state_dir)?
         .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
@@ -275,7 +273,6 @@ fn cleanup_old_snapshots() -> Result<()> {
 /// let emergency_ruleset = get_emergency_default_ruleset();
 /// // Apply when all else fails
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn get_emergency_default_ruleset() -> Value {
     use serde_json::json;
 
@@ -673,9 +670,10 @@ mod tests {
         // Look for loopback rule
         let has_loopback = nftables.iter().any(|item| {
             if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
-                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str()) {
-                    return comment.contains("loopback");
-                }
+                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
+            {
+                return comment.contains("loopback");
+            }
             false
         });
 
@@ -693,9 +691,10 @@ mod tests {
         // Look for established/related rule
         let has_established = nftables.iter().any(|item| {
             if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
-                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str()) {
-                    return comment.contains("established");
-                }
+                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
+            {
+                return comment.contains("established");
+            }
             false
         });
 
@@ -713,9 +712,10 @@ mod tests {
         // Look for ICMP rules
         let has_icmp = nftables.iter().any(|item| {
             if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
-                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str()) {
-                    return comment.contains("ICMP");
-                }
+                && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
+            {
+                return comment.contains("ICMP");
+            }
             false
         });
 

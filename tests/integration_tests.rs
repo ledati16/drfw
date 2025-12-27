@@ -81,7 +81,8 @@ async fn test_verify_with_mock() {
     setup_mock_nft();
 
     let ruleset = create_test_ruleset();
-    let result = verify::verify_ruleset(&ruleset).await;
+    let json = ruleset.to_nftables_json();
+    let result = verify::verify_ruleset(json).await;
 
     // If nft is not available, skip the test
     if result.is_err() {
@@ -117,7 +118,8 @@ async fn test_verify_fails_with_permission_error() {
     }
 
     let ruleset = create_test_ruleset();
-    let result = verify::verify_ruleset(&ruleset).await;
+    let json = ruleset.to_nftables_json();
+    let result = verify::verify_ruleset(json).await;
 
     // Should succeed in running but report permission error
     assert!(result.is_ok());
@@ -142,7 +144,8 @@ async fn test_empty_ruleset_verification() {
     setup_mock_nft();
 
     let ruleset = FirewallRuleset::new();
-    let result = verify::verify_ruleset(&ruleset).await;
+    let json = ruleset.to_nftables_json();
+    let result = verify::verify_ruleset(json).await;
 
     // Skip if nft is not available
     if result.is_err() {
@@ -192,7 +195,8 @@ async fn test_multiple_rules_verification() {
         });
     }
 
-    let result = verify::verify_ruleset(&ruleset).await;
+    let json = ruleset.to_nftables_json();
+    let result = verify::verify_ruleset(json).await;
     assert!(result.is_ok(), "Multi-rule verification should succeed");
 }
 
