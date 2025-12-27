@@ -71,6 +71,7 @@ fn main() -> iced::Result {
             size: Size::new(1000.0, 700.0),
             ..Default::default()
         })
+        .title("Dumb Rust Firewall")
         .theme(|_state: &app::State| iced::Theme::Dark)
         .run()
 }
