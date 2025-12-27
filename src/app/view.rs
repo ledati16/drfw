@@ -1,9 +1,9 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
-    danger_button, dirty_button, main_container, modal_backdrop, primary_button,
-    secondary_button, section_header_container, sidebar_container, themed_checkbox,
-    themed_horizontal_rule, themed_pick_list, themed_pick_list_menu, themed_scrollable,
-    themed_slider, themed_text_input, themed_toggler,
+    danger_button, dirty_button, elevated_card_container, main_container, modal_backdrop,
+    primary_button, secondary_button, section_header_container, sidebar_container,
+    themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
+    themed_scrollable, themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, WorkspaceTab,
@@ -763,20 +763,7 @@ fn view_workspace<'a>(
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .style(move |_| container::Style {
-        background: Some(theme.bg_base.into()),
-        border: Border {
-            radius: 12.0.into(),
-            color: theme.border,
-            width: 1.0,
-        },
-        shadow: iced::Shadow {
-            color: theme.shadow_color,
-            offset: iced::Vector::new(0.0, 4.0),
-            blur_radius: 10.0,
-        },
-        ..Default::default()
-    });
+    .style(move |_| elevated_card_container(theme));
 
     // Zone: History (Left)
     let history_actions = container(

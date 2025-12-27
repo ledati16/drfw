@@ -35,7 +35,26 @@ pub fn card_container(theme: &AppTheme) -> container::Style {
         shadow: Shadow {
             color: theme.shadow_color,
             offset: Vector::new(0.0, 2.0),
-            blur_radius: 4.0,
+            blur_radius: 3.0,
+        },
+        ..Default::default()
+    }
+}
+
+/// Elevated card container for main content areas (nftables/json/settings)
+/// Larger shadow for more visual hierarchy
+pub fn elevated_card_container(theme: &AppTheme) -> container::Style {
+    container::Style {
+        background: Some(theme.bg_surface.into()),
+        border: Border {
+            color: theme.border,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 6.0,
         },
         ..Default::default()
     }
@@ -81,7 +100,7 @@ pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style
         shadow: Shadow {
             color: theme.shadow_color,
             offset: Vector::new(0.0, 2.0),
-            blur_radius: 4.0,
+            blur_radius: 3.0,
         },
         ..Default::default()
     };
@@ -92,7 +111,7 @@ pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style
             shadow: Shadow {
                 color: theme.shadow_color,
                 offset: Vector::new(0.0, 3.0),
-                blur_radius: 6.0,
+                blur_radius: 5.0,
             },
             ..base
         },
@@ -151,7 +170,7 @@ pub fn danger_button(theme: &AppTheme, status: button::Status) -> button::Style 
         shadow: Shadow {
             color: theme.shadow_color,
             offset: Vector::new(0.0, 2.0),
-            blur_radius: 4.0,
+            blur_radius: 3.0,
         },
         ..Default::default()
     };
@@ -170,7 +189,7 @@ pub fn danger_button(theme: &AppTheme, status: button::Status) -> button::Style 
             shadow: Shadow {
                 color: theme.shadow_color,
                 offset: Vector::new(0.0, 3.0),
-                blur_radius: 6.0,
+                blur_radius: 5.0,
             },
             ..base
         },
@@ -323,7 +342,7 @@ pub fn secondary_button(theme: &AppTheme, status: button::Status) -> button::Sty
         shadow: Shadow {
             color: theme.shadow_color,
             offset: Vector::new(0.0, 2.0),
-            blur_radius: 4.0,
+            blur_radius: 3.0,
         },
         ..Default::default()
     };
@@ -334,7 +353,7 @@ pub fn secondary_button(theme: &AppTheme, status: button::Status) -> button::Sty
             shadow: Shadow {
                 color: theme.shadow_color,
                 offset: Vector::new(0.0, 3.0),
-                blur_radius: 6.0,
+                blur_radius: 5.0,
             },
             ..base
         },

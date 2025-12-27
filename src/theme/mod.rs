@@ -78,9 +78,29 @@ impl AppTheme {
         syntax_comment: u32,
         syntax_operator: u32,
     ) -> Self {
+        let bg_base_color = hex_to_color(bg_base);
+
+        // Calculate if theme is light based on background luminance
+        let is_light = color_luminance(&bg_base_color) > 0.5;
+
+        // Set shadow colors appropriate for theme type
+        let (shadow_color, shadow_strong) = if is_light {
+            // Light themes: crisp and visible without muddiness (35%)
+            (
+                Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+                Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+            )
+        } else {
+            // Dark themes: stronger for pixel-perfect depth (60%)
+            (
+                Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+                Color::from_rgba(0.0, 0.0, 0.0, 0.85),
+            )
+        };
+
         Self {
             name: name.to_string(),
-            bg_base: hex_to_color(bg_base),
+            bg_base: bg_base_color,
             bg_sidebar: hex_to_color(bg_sidebar),
             bg_surface: hex_to_color(bg_surface),
             bg_elevated: hex_to_color(bg_elevated),
@@ -105,9 +125,14 @@ impl AppTheme {
             syntax_number: hex_to_color(syntax_number),
             syntax_comment: hex_to_color(syntax_comment),
             syntax_operator: hex_to_color(syntax_operator),
-            shadow_color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-            shadow_strong: Color::from_rgba(0.0, 0.0, 0.0, 0.8),
+            shadow_color,
+            shadow_strong,
         }
+    }
+
+    /// Returns `true` if this is a light theme
+    pub fn is_light(&self) -> bool {
+        color_luminance(&self.bg_base) > 0.5
     }
 }
 
@@ -118,6 +143,30 @@ fn hex_to_color(hex: u32) -> Color {
         ((hex >> 8) & 0xFF) as f32 / 255.0,
         (hex & 0xFF) as f32 / 255.0,
     )
+}
+
+/// Calculates relative luminance using WCAG formula
+/// Returns value between 0.0 (black) and 1.0 (white)
+fn color_luminance(color: &Color) -> f32 {
+    // Apply gamma correction
+    let r = if color.r <= 0.03928 {
+        color.r / 12.92
+    } else {
+        ((color.r + 0.055) / 1.055).powf(2.4)
+    };
+    let g = if color.g <= 0.03928 {
+        color.g / 12.92
+    } else {
+        ((color.g + 0.055) / 1.055).powf(2.4)
+    };
+    let b = if color.b <= 0.03928 {
+        color.b / 12.92
+    } else {
+        ((color.b + 0.055) / 1.055).powf(2.4)
+    };
+
+    // WCAG luminance formula
+    0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 /// All available built-in themes
