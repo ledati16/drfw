@@ -363,10 +363,10 @@ pub fn active_card_button(theme: &AppTheme, status: button::Status) -> button::S
 
 pub fn active_tab_button(app_theme: &AppTheme, status: button::Status) -> button::Style {
     let base = button::Style {
-        background: Some(app_theme.bg_elevated.into()),
-        text_color: app_theme.fg_primary,
+        background: Some(app_theme.accent.into()),
+        text_color: app_theme.fg_on_accent,
         border: Border {
-            radius: 0.0.into(),
+            radius: 4.0.into(),
             ..Default::default()
         },
         shadow: Shadow {
@@ -379,7 +379,7 @@ pub fn active_tab_button(app_theme: &AppTheme, status: button::Status) -> button
 
     match status {
         button::Status::Hovered => button::Style {
-            background: Some(app_theme.bg_hover.into()),
+            background: Some(app_theme.accent_hover.into()),
             shadow: Shadow {
                 color: app_theme.shadow_color,
                 offset: Vector::new(0.0, 3.0),
@@ -388,7 +388,7 @@ pub fn active_tab_button(app_theme: &AppTheme, status: button::Status) -> button
             ..base
         },
         button::Status::Pressed => button::Style {
-            background: Some(app_theme.bg_elevated.into()),
+            background: Some(app_theme.accent.into()),
             shadow: Shadow {
                 color: app_theme.shadow_color,
                 offset: Vector::new(0.0, 1.0),
@@ -407,7 +407,7 @@ pub fn inactive_tab_button(theme: &AppTheme, status: button::Status) -> button::
         border: Border {
             color: theme.border,
             width: 1.0,
-            radius: 0.0.into(),
+            radius: 4.0.into(),
         },
         shadow: Shadow {
             color: theme.shadow_color,

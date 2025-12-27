@@ -673,43 +673,27 @@ fn view_workspace<'a>(
 
     // Header: Tab Strip (Left) and Global Tools (Right)
     let nav_row = row![
-        // Unified Tab Strip
-        container(
-            row![
-                view_tab_button(
-                    "nftables.conf",
-                    WorkspaceTab::Nftables,
-                    state.active_tab,
-                    theme
-                ),
-                view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab, theme),
-                view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
-            ]
-            .spacing(2)
-        )
-        .padding(2)
-        .style(move |_| container::Style {
-            background: Some(theme.bg_elevated.into()),
-            border: Border {
-                radius: 0.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }),
+        // Tab buttons - simple rounded buttons like Export/Diagnostics
+        view_tab_button(
+            "nftables.conf",
+            WorkspaceTab::Nftables,
+            state.active_tab,
+            theme
+        ),
+        view_tab_button("JSON Payload", WorkspaceTab::Json, state.active_tab, theme),
+        view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
         container(row![]).width(Length::Fill),
         // Global Utility Tools
-        row![
-            button(row![text("📤").size(14), text("Export").size(13)].spacing(8))
-                .on_press(Message::ToggleExportModal(true))
-                .padding([8, 16])
-                .style(move |_, status| secondary_button(theme, status)),
-            button(row![text("📊").size(14), text("Diagnostics").size(13)].spacing(8))
-                .on_press(Message::ToggleDiagnostics(true))
-                .padding([8, 16])
-                .style(move |_, status| secondary_button(theme, status)),
-        ]
-        .spacing(8)
+        button(row![text("📤").size(14), text("Export").size(13)].spacing(8))
+            .on_press(Message::ToggleExportModal(true))
+            .padding([8, 16])
+            .style(move |_, status| secondary_button(theme, status)),
+        button(row![text("📊").size(14), text("Diagnostics").size(13)].spacing(8))
+            .on_press(Message::ToggleDiagnostics(true))
+            .padding([8, 16])
+            .style(move |_, status| secondary_button(theme, status)),
     ]
+    .spacing(8)
     .align_y(Alignment::Center);
 
     // Title and description row with optional diff checkbox
