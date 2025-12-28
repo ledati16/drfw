@@ -11,8 +11,8 @@ use crate::app::{
 use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, stack, text,
-    text_input, toggler,
+    button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, space,
+    stack, text, text_input, toggler,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 
@@ -1817,8 +1817,8 @@ fn view_font_picker<'a>(
             if is_mono_picker && !f.is_monospace() {
                 return false;
             }
-            // Search filter (use cached lowercase, only lowercase font name once per font)
-            search_term.is_empty() || f.name().to_lowercase().contains(search_term)
+            // Search filter (use cached lowercase name - zero allocations!)
+            search_term.is_empty() || f.name_lowercase().contains(search_term)
         })
         .collect();
 
@@ -1841,11 +1841,15 @@ fn view_font_picker<'a>(
             row![
                 column![
                     text(name).size(13).color(theme.fg_primary),
-                    // Performance: Simple preview text, no complex rendering
-                    text("AaBbCc 123")
-                        .size(11)
-                        .font(preview_font)
-                        .color(theme.fg_secondary),
+                    // Contextual preview text: code sample for mono fonts, readable text for UI fonts
+                    text(if is_mono_picker {
+                        "fn main() { 0x123 }"
+                    } else {
+                        "The quick brown fox"
+                    })
+                    .size(11)
+                    .font(preview_font)
+                    .color(theme.fg_secondary),
                 ]
                 .spacing(2)
                 .width(Length::Fill),
@@ -1889,21 +1893,13 @@ fn view_font_picker<'a>(
 
     container(
         column![
-            row![
-                text(match picker.target {
-                    FontPickerTarget::Regular => "Select UI Font",
-                    FontPickerTarget::Mono => "Select Code Font",
-                })
-                .size(18)
-                .font(state.font_regular)
-                .color(theme.fg_primary),
-                rule::horizontal(0).style(move |_| themed_horizontal_rule(theme)),
-                button(text("×").size(20).color(theme.fg_muted))
-                    .on_press(Message::CloseFontPicker)
-                    .style(button::text),
-            ]
-            .align_y(Alignment::Center)
-            .spacing(12),
+            text(match picker.target {
+                FontPickerTarget::Regular => "Select UI Font",
+                FontPickerTarget::Mono => "Select Code Font",
+            })
+            .size(18)
+            .font(state.font_regular)
+            .color(theme.fg_primary),
             text_input("Search fonts...", &picker.search)
                 .on_input(Message::FontPickerSearchChanged)
                 .padding(10)
@@ -1916,7 +1912,6 @@ fn view_font_picker<'a>(
             .height(Length::Fixed(400.0))
             .width(Length::Fill)
             .style(move |_| container::Style {
-                background: Some(theme.bg_elevated.into()),
                 border: Border {
                     radius: 8.0.into(),
                     color: theme.border,
@@ -1929,14 +1924,13 @@ fn view_font_picker<'a>(
                     .size(10)
                     .color(theme.fg_muted)
                     .font(state.font_mono),
-                rule::horizontal(0).style(move |_| themed_horizontal_rule(theme)),
+                space::Space::new().width(Length::Fill),
                 button(text("Close").size(13))
                     .on_press(Message::CloseFontPicker)
                     .padding([8, 20])
                     .style(move |_, status| secondary_button(theme, status)),
             ]
             .align_y(Alignment::Center)
-            .spacing(16)
         ]
         .spacing(16)
         .padding(24)

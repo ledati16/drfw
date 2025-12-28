@@ -12,6 +12,8 @@ pub enum FontChoice {
         name: String,
         #[serde(skip)]
         handle: Option<Font>,
+        #[serde(skip)]
+        name_lowercase: String,
     },
 }
 
@@ -21,6 +23,15 @@ impl FontChoice {
             Self::SystemDefault => "System Default".to_string(),
             Self::SystemMonospace => "System Monospace".to_string(),
             Self::Specific { name, .. } => name.clone(),
+        }
+    }
+
+    /// Returns the lowercase version of the font name (cached for performance)
+    pub fn name_lowercase(&self) -> &str {
+        match self {
+            Self::SystemDefault => "system default",
+            Self::SystemMonospace => "system monospace",
+            Self::Specific { name_lowercase, .. } => name_lowercase.as_str(),
         }
     }
 
@@ -37,29 +48,29 @@ impl FontChoice {
         match self {
             Self::SystemDefault => false,
             Self::SystemMonospace => true,
-            Self::Specific { name, .. } => {
+            Self::Specific { name_lowercase, .. } => {
                 // Heuristic: Check if name contains common monospace indicators
-                let name_lower = name.to_lowercase();
-                name_lower.contains("mono")
-                    || name_lower.contains("code")
-                    || name_lower.contains("console")
-                    || name_lower.contains("courier")
-                    || name_lower.contains("terminal")
-                    || name_lower.contains("fixed")
-                    || name_lower.contains("source code")
-                    || name_lower.contains("jetbrains")
-                    || name_lower.contains("fira code")
-                    || name_lower.contains("inconsolata")
-                    || name_lower.contains("hack")
-                    || name_lower.contains("menlo")
-                    || name_lower.contains("consolas")
-                    || name_lower.contains("roboto mono")
-                    || name_lower.contains("ubuntu mono")
-                    || name_lower.contains("dejavu sans mono")
-                    || name_lower.contains("liberation mono")
-                    || name_lower.contains("noto mono")
-                    || name_lower.contains("cascadia")
-                    || name_lower.contains("iosevka")
+                // Use cached lowercase version for performance
+                name_lowercase.contains("mono")
+                    || name_lowercase.contains("code")
+                    || name_lowercase.contains("console")
+                    || name_lowercase.contains("courier")
+                    || name_lowercase.contains("terminal")
+                    || name_lowercase.contains("fixed")
+                    || name_lowercase.contains("source code")
+                    || name_lowercase.contains("jetbrains")
+                    || name_lowercase.contains("fira code")
+                    || name_lowercase.contains("inconsolata")
+                    || name_lowercase.contains("hack")
+                    || name_lowercase.contains("menlo")
+                    || name_lowercase.contains("consolas")
+                    || name_lowercase.contains("roboto mono")
+                    || name_lowercase.contains("ubuntu mono")
+                    || name_lowercase.contains("dejavu sans mono")
+                    || name_lowercase.contains("liberation mono")
+                    || name_lowercase.contains("noto mono")
+                    || name_lowercase.contains("cascadia")
+                    || name_lowercase.contains("iosevka")
             }
         }
     }
@@ -67,36 +78,48 @@ impl FontChoice {
     /// Resolves a font choice by populating its handle from the system cache if missing.
     /// Used when loading from configuration.
     pub fn resolve(&mut self, is_mono: bool) {
-        if let Self::Specific { name, handle } = self
-            && handle.is_none()
+        if let Self::Specific {
+            name,
+            handle,
+            name_lowercase,
+        } = self
         {
-            let mut found_handle = None;
-            // Find matching font in system cache
-            for option in all_options() {
-                if let Self::Specific {
-                    name: system_name,
-                    handle: system_handle,
-                } = option
-                    && system_name == name
-                {
-                    found_handle = *system_handle;
-                    break;
-                }
+            // Populate name_lowercase if empty (deserialized from old config)
+            if name_lowercase.is_empty() {
+                *name_lowercase = name.to_lowercase();
             }
 
-            if let Some(h) = found_handle {
-                *handle = Some(h);
-            } else {
-                // Font was deleted from system, fall back to appropriate default
-                tracing::warn!(
-                    "Font '{}' not found on system, falling back to default.",
-                    name
-                );
-                *self = if is_mono {
-                    Self::SystemMonospace
+            // Populate handle if missing
+            if handle.is_none() {
+                let mut found_handle = None;
+                // Find matching font in system cache
+                for option in all_options() {
+                    if let Self::Specific {
+                        name: system_name,
+                        handle: system_handle,
+                        ..
+                    } = option
+                        && system_name == name
+                    {
+                        found_handle = *system_handle;
+                        break;
+                    }
+                }
+
+                if let Some(h) = found_handle {
+                    *handle = Some(h);
                 } else {
-                    Self::SystemDefault
-                };
+                    // Font was deleted from system, fall back to appropriate default
+                    tracing::warn!(
+                        "Font '{}' not found on system, falling back to default.",
+                        name
+                    );
+                    *self = if is_mono {
+                        Self::SystemMonospace
+                    } else {
+                        Self::SystemDefault
+                    };
+                }
             }
         }
     }
@@ -142,6 +165,7 @@ pub fn all_options() -> &'static [FontChoice] {
             options.push(FontChoice::Specific {
                 name: name.clone(),
                 handle: Some(Font::with_name(name.as_str())),
+                name_lowercase: name.to_lowercase(),
             });
         }
         options
