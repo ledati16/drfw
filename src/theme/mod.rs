@@ -172,92 +172,154 @@ fn color_luminance(color: &Color) -> f32 {
 /// All available built-in themes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeChoice {
+    // ═══════════════════════════════════════════════════
+    // CUSTOM THEMES (Project Defaults)
+    // ═══════════════════════════════════════════════════
     #[default]
     Oxide,
     Aethel,
-    Nord,
-    Gruvbox,
-    GruvboxLight,
-    Dracula,
-    Monokai,
-    Everforest,
+
+    // ═══════════════════════════════════════════════════
+    // POPULAR DARK THEMES (by downloads/rating)
+    // ═══════════════════════════════════════════════════
+    Dracula,        // 7.5M - Iconic purple/pink
+    OneDark,        // 7.2M - VSCode favorite
+    Monokai,        // 2M+ - Classic warm
+    WinterIsComing, // 2.1M
+    NightOwl,       // 1.9M
+    SynthWave84,    // 1.3M - Retro cyberpunk
+    ShadesPurple,   // 1.4M
+
+    // ═══════════════════════════════════════════════════
+    // MODERN DARK THEMES
+    // ═══════════════════════════════════════════════════
     TokyoNight,
     CatppuccinMocha,
-    CatppuccinLatte,
-    OneDark,
-    SolarizedDark,
-    AyuDark,
     RosePine,
-    MaterialTheme,
-    GitHubLight,
+
+    // ═══════════════════════════════════════════════════
+    // NATURE/ATMOSPHERIC DARK THEMES
+    // ═══════════════════════════════════════════════════
+    Nord,
+    Gruvbox,
+    Everforest,
+    AyuDark,
+
+    // ═══════════════════════════════════════════════════
+    // LIGHT THEMES
+    // ═══════════════════════════════════════════════════
+    GruvboxLight,
+    CatppuccinLatte,
+    RosePineDawn,
+    EverforestLight,
+    OxideLight,
+    OneLight,
+    SolarizedLight,
+    AyuLight,
 }
 
 impl ThemeChoice {
     /// Returns all available themes
     pub fn all() -> &'static [Self] {
         &[
+            // Custom themes
             Self::Oxide,
             Self::Aethel,
-            Self::Nord,
-            Self::Gruvbox,
-            Self::GruvboxLight,
+            // Popular dark themes
             Self::Dracula,
+            Self::OneDark,
             Self::Monokai,
-            Self::Everforest,
+            Self::WinterIsComing,
+            Self::NightOwl,
+            Self::SynthWave84,
+            Self::ShadesPurple,
+            // Modern dark themes
             Self::TokyoNight,
             Self::CatppuccinMocha,
-            Self::CatppuccinLatte,
-            Self::OneDark,
-            Self::SolarizedDark,
-            Self::AyuDark,
             Self::RosePine,
-            Self::MaterialTheme,
-            Self::GitHubLight,
+            // Nature/atmospheric dark themes
+            Self::Nord,
+            Self::Gruvbox,
+            Self::Everforest,
+            Self::AyuDark,
+            // Light themes
+            Self::GruvboxLight,
+            Self::CatppuccinLatte,
+            Self::RosePineDawn,
+            Self::EverforestLight,
+            Self::OxideLight,
+            Self::OneLight,
+            Self::SolarizedLight,
+            Self::AyuLight,
         ]
     }
 
     pub fn name(&self) -> String {
         match self {
+            // Custom themes
             Self::Oxide => "Oxide".to_string(),
             Self::Aethel => "Aethel".to_string(),
-            Self::Nord => "Nord".to_string(),
-            Self::Gruvbox => "Gruvbox Dark".to_string(),
-            Self::GruvboxLight => "Gruvbox Light".to_string(),
+            // Popular dark themes
             Self::Dracula => "Dracula".to_string(),
+            Self::OneDark => "One Dark".to_string(),
             Self::Monokai => "Monokai".to_string(),
-            Self::Everforest => "Everforest".to_string(),
+            Self::WinterIsComing => "Winter is Coming".to_string(),
+            Self::NightOwl => "Night Owl".to_string(),
+            Self::SynthWave84 => "SynthWave '84".to_string(),
+            Self::ShadesPurple => "Shades of Purple".to_string(),
+            // Modern dark themes
             Self::TokyoNight => "Tokyo Night".to_string(),
             Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
-            Self::CatppuccinLatte => "Catppuccin Latte".to_string(),
-            Self::OneDark => "One Dark".to_string(),
-            Self::SolarizedDark => "Solarized Dark".to_string(),
-            Self::AyuDark => "Ayu Dark".to_string(),
             Self::RosePine => "Rosé Pine".to_string(),
-            Self::MaterialTheme => "Material Theme".to_string(),
-            Self::GitHubLight => "GitHub Light".to_string(),
+            // Nature/atmospheric dark themes
+            Self::Nord => "Nord".to_string(),
+            Self::Gruvbox => "Gruvbox Dark".to_string(),
+            Self::Everforest => "Everforest Dark".to_string(),
+            Self::AyuDark => "Ayu Dark".to_string(),
+            // Light themes
+            Self::GruvboxLight => "Gruvbox Light".to_string(),
+            Self::CatppuccinLatte => "Catppuccin Latte".to_string(),
+            Self::RosePineDawn => "Rosé Pine Dawn".to_string(),
+            Self::EverforestLight => "Everforest Light".to_string(),
+            Self::OxideLight => "Oxide Light".to_string(),
+            Self::OneLight => "One Light".to_string(),
+            Self::SolarizedLight => "Solarized Light".to_string(),
+            Self::AyuLight => "Ayu Light".to_string(),
         }
     }
 
     /// Converts theme choice to actual theme
     pub fn to_theme(self) -> AppTheme {
         match self {
+            // Custom themes
             Self::Oxide => presets::oxide(),
             Self::Aethel => presets::aethel(),
-            Self::Nord => presets::nord(),
-            Self::Gruvbox => presets::gruvbox(),
-            Self::GruvboxLight => presets::gruvbox_light(),
+            // Popular dark themes
             Self::Dracula => presets::dracula(),
+            Self::OneDark => presets::one_dark(),
             Self::Monokai => presets::monokai(),
-            Self::Everforest => presets::everforest(),
+            Self::WinterIsComing => presets::winter_is_coming(),
+            Self::NightOwl => presets::night_owl(),
+            Self::SynthWave84 => presets::synthwave_84(),
+            Self::ShadesPurple => presets::shades_purple(),
+            // Modern dark themes
             Self::TokyoNight => presets::tokyo_night(),
             Self::CatppuccinMocha => presets::catppuccin_mocha(),
-            Self::CatppuccinLatte => presets::catppuccin_latte(),
-            Self::OneDark => presets::one_dark(),
-            Self::SolarizedDark => presets::solarized_dark(),
-            Self::AyuDark => presets::ayu_dark(),
             Self::RosePine => presets::rose_pine(),
-            Self::MaterialTheme => presets::material_theme(),
-            Self::GitHubLight => presets::github_light(),
+            // Nature/atmospheric dark themes
+            Self::Nord => presets::nord(),
+            Self::Gruvbox => presets::gruvbox(),
+            Self::Everforest => presets::everforest(),
+            Self::AyuDark => presets::ayu_dark(),
+            // Light themes
+            Self::GruvboxLight => presets::gruvbox_light(),
+            Self::CatppuccinLatte => presets::catppuccin_latte(),
+            Self::RosePineDawn => presets::rose_pine_dawn(),
+            Self::EverforestLight => presets::everforest_light(),
+            Self::OxideLight => presets::oxide_light(),
+            Self::OneLight => presets::one_light(),
+            Self::SolarizedLight => presets::solarized_light(),
+            Self::AyuLight => presets::ayu_light(),
         }
     }
 }

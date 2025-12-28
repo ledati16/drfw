@@ -33,6 +33,39 @@ pub fn oxide() -> AppTheme {
     )
 }
 
+/// Oxide Light - Light counterpart to Oxide (Default light theme)
+/// Warm parchment backgrounds with the same burnt copper accent, like writing on quality aged paper
+pub fn oxide_light() -> AppTheme {
+    AppTheme::from_hex(
+        "Oxide Light",
+        0x00F0_E8DF, // bg_base - Aged parchment background
+        0x00E5_DBCF, // bg_sidebar - Warm stone sidebar
+        0x00F5_EFE7, // bg_surface - Lighter card surfaces
+        0x00FA_F6F0, // bg_elevated - Almost white inputs
+        0x00E0_D6CC, // bg_hover - Darker warm hover
+        0x00D5_C9BC, // bg_active - Active warm tan
+        0x003A_2E25, // fg_primary - Deep warm brown (almost black)
+        0x006A_5D51, // fg_secondary - Medium warm brown
+        0x009B_8D7F, // fg_muted - Light brown for disabled
+        0x00FF_FCF8, // fg_on_accent - Light cream on copper
+        0x00A7_5533, // accent - Burnt copper (same as dark)
+        0x0092_4A2E, // accent_hover - Darker copper for contrast
+        0x006B_8456, // success - Darker sage green
+        0x00B8_8A35, // warning - Golden amber
+        0x00A7_3D2E, // danger - Darker terracotta
+        0x004D_8A7E, // info - Darker teal
+        0x00D5_C9BC, // border - Warm tan border
+        0x00A7_5533, // border_strong - Copper border
+        0x00E0_D6CC, // divider - Subtle warm divider
+        0x00A7_3D2E, // syntax_keyword - Terracotta red
+        0x008B_5A8E, // syntax_type - Muted purple
+        0x00B8_8A35, // syntax_string - Golden amber
+        0x006A_5D51, // syntax_number - Medium brown
+        0x009B_8D7F, // syntax_comment - Muted brown
+        0x00A7_5533, // syntax_operator - Copper accent
+    )
+}
+
 /// Aethel - Atmospheric noble theme (Gemini's Masterpiece)
 /// Deep violet-tinted charcoal backgrounds with celestial indigo and mauve accents
 pub fn aethel() -> AppTheme {
@@ -330,39 +363,6 @@ pub fn one_dark() -> AppTheme {
     )
 }
 
-/// Solarized Dark - Scientifically designed theme
-/// Classic, carefully crafted for readability
-pub fn solarized_dark() -> AppTheme {
-    AppTheme::from_hex(
-        "Solarized Dark",
-        0x0000_2B36, // bg_base - Base03
-        0x0000_212B, // bg_sidebar - Darker
-        0x0007_3642, // bg_surface - Base02
-        0x0009_4451, // bg_elevated - Lighter
-        0x000E_5261, // bg_hover - Even lighter
-        0x0058_6E75, // bg_active - Base01
-        0x00FD_F6E3, // fg_primary - Base3
-        0x00EE_E8D5, // fg_secondary - Base2
-        0x0065_7B83, // fg_muted - Base00
-        0x0000_2B36, // fg_on_accent - Dark on light
-        0x0026_8BD2, // accent - Blue
-        0x0036_9BD2, // accent_hover - Lighter blue
-        0x0085_9900, // success - Green
-        0x00B5_8900, // warning - Yellow
-        0x00DC_322F, // danger - Red
-        0x002A_A198, // info - Cyan
-        0x0007_3642, // border - Base02
-        0x0026_8BD2, // border_strong - Blue
-        0x0007_3642, // divider - Base02
-        0x00D3_3682, // syntax_keyword - Magenta
-        0x0026_8BD2, // syntax_type - Blue
-        0x002A_A198, // syntax_string - Cyan
-        0x00CB_4B16, // syntax_number - Orange
-        0x0058_6E75, // syntax_comment - Base01
-        0x0085_9900, // syntax_operator - Green
-    )
-}
-
 /// Ayu Dark - Warm, nature-inspired theme beloved by Rust community
 /// Muted warm colors with excellent readability
 pub fn ayu_dark() -> AppTheme {
@@ -426,39 +426,6 @@ pub fn rose_pine() -> AppTheme {
         0x00EA_9A97, // syntax_number - Coral
         0x006E_6A86, // syntax_comment - Muted gray
         0x003E_8FB0, // syntax_operator - Teal
-    )
-}
-
-/// Material Theme - Palenight variant, one of the most popular themes
-/// Deep purple backgrounds with vibrant cyan and pink accents
-pub fn material_theme() -> AppTheme {
-    AppTheme::from_hex(
-        "Material Theme",
-        0x0029_2D3E, // bg_base - Deep purple gray
-        0x0021_252E, // bg_sidebar - Darker sidebar
-        0x0032_364A, // bg_surface - Card surface
-        0x003B_3F51, // bg_elevated - Elevated elements
-        0x0044_475A, // bg_hover - Hover state
-        0x0050_5666, // bg_active - Active selection
-        0x00EE_FFFF, // fg_primary - Bright white
-        0x00B0_BEC5, // fg_secondary - Cool gray
-        0x0067_6E95, // fg_muted - Purple gray
-        0x0029_2D3E, // fg_on_accent - Dark on accent
-        0x0082_AAFF, // accent - Bright cyan
-        0x00A3_C7FF, // accent_hover - Lighter cyan
-        0x00C3_E88D, // success - Fresh green
-        0x00FF_CB6B, // warning - Warm yellow
-        0x00F0_7178, // danger - Coral red
-        0x0089_DDFF, // info - Sky blue
-        0x003B_3F51, // border - Subtle border
-        0x0082_AAFF, // border_strong - Cyan border
-        0x0032_364A, // divider - Match surface
-        0x00C7_92EA, // syntax_keyword - Purple
-        0x0089_DDFF, // syntax_type - Sky blue
-        0x00C3_E88D, // syntax_string - Green
-        0x00F7_8C6C, // syntax_number - Orange
-        0x0067_6E95, // syntax_comment - Muted
-        0x0089_DDFF, // syntax_operator - Cyan
     )
 }
 
@@ -528,36 +495,308 @@ pub fn gruvbox_light() -> AppTheme {
     )
 }
 
-/// GitHub Light - Clean, professional light theme
-/// Pure white backgrounds with GitHub's signature blue and green
-pub fn github_light() -> AppTheme {
+// ═══════════════════════════════════════════════════
+// POPULAR DARK THEMES
+// ═══════════════════════════════════════════════════
+
+/// Winter is Coming - Cool blue dark theme with icy highlights
+/// Deep blue backgrounds with bright blue and cyan accents
+pub fn winter_is_coming() -> AppTheme {
     AppTheme::from_hex(
-        "GitHub Light",
-        0x00FF_FFFF, // bg_base - Pure white
-        0x00F6_F8FA, // bg_sidebar - Light gray
-        0x00F6_F8FA, // bg_surface - Card surface
-        0x00E1_E4E8, // bg_elevated - Elevated elements
-        0x00D0_D7DE, // bg_hover - Hover state
-        0x00AC_B6BF, // bg_active - Active selection
-        0x0024_292F, // fg_primary - Dark text
-        0x0057_606A, // fg_secondary - Gray text
-        0x0066_6E76, // fg_muted - Light gray
-        0x00FF_FFFF, // fg_on_accent - White on accent
-        0x0009_69DA, // accent - GitHub blue
-        0x001F_6FEB, // accent_hover - Brighter blue
-        0x001A_7F37, // success - GitHub green
-        0x009A_6700, // warning - Orange
-        0x00CF_222E, // danger - GitHub red
-        0x0009_69DA, // info - Blue
-        0x00D0_D7DE, // border - Light border
-        0x0009_69DA, // border_strong - Blue border
-        0x00D8_DEE4, // divider - Match elevated
-        0x00CF_222E, // syntax_keyword - Red
-        0x0009_69DA, // syntax_type - Blue
-        0x000A_3069, // syntax_string - Dark green
-        0x0005_50AE, // syntax_number - Purple
-        0x0057_606A, // syntax_comment - Gray
-        0x00CF_222E, // syntax_operator - Red
+        "Winter is Coming",
+        0x0000_1122, // bg_base - Deep winter blue
+        0x0000_0D19, // bg_sidebar - Darker blue
+        0x0011_2233, // bg_surface - Lighter card blue
+        0x0019_3348, // bg_elevated - Input background
+        0x0021_445D, // bg_hover - Hover state
+        0x002A_556F, // bg_active - Active state
+        0x00D1_E3F4, // fg_primary - Cool white text
+        0x009E_C8E4, // fg_secondary - Light blue text
+        0x0070_95B1, // fg_muted - Muted blue
+        0x0000_1122, // fg_on_accent - Dark text on accent
+        0x0080_C7FF, // accent - Bright winter blue
+        0x0069_AAE0, // accent_hover - Darker blue
+        0x007F_D962, // success - Bright green
+        0x00FF_C66D, // warning - Warm yellow
+        0x00FF_6B6B, // danger - Soft red
+        0x0082_AAFF, // info - Light blue
+        0x0019_3348, // border - Match elevated
+        0x0080_C7FF, // border_strong - Accent border
+        0x0011_2233, // divider - Match surface
+        0x00C3_E88D, // syntax_keyword - Lime green
+        0x0082_AAFF, // syntax_type - Light blue
+        0x00EE_EBDD, // syntax_string - Cream
+        0x00F7_8C6C, // syntax_number - Orange
+        0x00A0_A0A0, // syntax_comment - Gray
+        0x0080_C7FF, // syntax_operator - Accent blue
+    )
+}
+
+/// Night Owl - Professional dark blue theme optimized for night coding
+/// Dark navy with vibrant syntax colors for excellent readability
+pub fn night_owl() -> AppTheme {
+    AppTheme::from_hex(
+        "Night Owl",
+        0x0001_1627, // bg_base - Dark navy
+        0x0001_0D18, // bg_sidebar - Darker navy
+        0x0011_2A42, // bg_surface - Card background
+        0x0019_3549, // bg_elevated - Input background
+        0x0021_4456, // bg_hover - Hover state
+        0x002A_5568, // bg_active - Active state
+        0x00D6_DEEB, // fg_primary - Light gray-blue
+        0x0089_A4BB, // fg_secondary - Medium gray-blue
+        0x005F_7E97, // fg_muted - Muted blue
+        0x0001_1627, // fg_on_accent - Dark on accent
+        0x007E_57C2, // accent - Purple
+        0x006A_4CAA, // accent_hover - Darker purple
+        0x00C5_E478, // success - Green-yellow
+        0x00F7_8C6C, // warning - Orange
+        0x00FF_5874, // danger - Pink-red
+        0x0082_AAFF, // info - Light blue
+        0x0011_2A42, // border - Match surface
+        0x007E_57C2, // border_strong - Purple border
+        0x0011_2A42, // divider - Match surface
+        0x00C7_92EA, // syntax_keyword - Magenta
+        0x0082_AAFF, // syntax_type - Light blue
+        0x00EC_C48D, // syntax_string - Golden
+        0x00F7_8C6C, // syntax_number - Orange
+        0x0063_7777, // syntax_comment - Muted teal
+        0x007F_DBCA, // syntax_operator - Teal
+    )
+}
+
+/// SynthWave '84 - Retro neon cyberpunk theme
+/// Dark background with vibrant neon pink, cyan, and purple
+pub fn synthwave_84() -> AppTheme {
+    AppTheme::from_hex(
+        "SynthWave '84",
+        0x0026_2335, // bg_base - Dark purple-black
+        0x0020_1B2D, // bg_sidebar - Darker purple
+        0x0034_294A, // bg_surface - Purple card
+        0x0041_3356, // bg_elevated - Lighter purple
+        0x004E_4061, // bg_hover - Hover purple
+        0x005B_4D6C, // bg_active - Active purple
+        0x00F9_F9F9, // fg_primary - Almost white
+        0x00C4_C0D0, // fg_secondary - Light purple-gray
+        0x008A_85A0, // fg_muted - Muted purple
+        0x0026_2335, // fg_on_accent - Dark on accent
+        0x00FF_007C, // accent - Neon pink
+        0x00E0_0066, // accent_hover - Darker pink
+        0x0072_F1B8, // success - Neon cyan
+        0x00FF_E261, // warning - Neon yellow
+        0x00FE_4450, // danger - Neon red
+        0x0036_F9F6, // info - Bright cyan
+        0x0034_294A, // border - Match surface
+        0x00FF_007C, // border_strong - Neon pink
+        0x0034_294A, // divider - Match surface
+        0x00FF_7EDB, // syntax_keyword - Pink
+        0x0036_F9F6, // syntax_type - Cyan
+        0x00FF_E261, // syntax_string - Yellow
+        0x00F9_7E72, // syntax_number - Orange-pink
+        0x006D_6D6D, // syntax_comment - Gray
+        0x00FF_7EDB, // syntax_operator - Pink
+    )
+}
+
+/// Shades of Purple - Purple-dominant professional theme
+/// Rich purple backgrounds with vibrant purple and pink accents
+pub fn shades_purple() -> AppTheme {
+    AppTheme::from_hex(
+        "Shades of Purple",
+        0x002D_2B55, // bg_base - Deep purple
+        0x0025_2347, // bg_sidebar - Darker purple
+        0x003D_3A6A, // bg_surface - Medium purple card
+        0x004A_4775, // bg_elevated - Lighter purple
+        0x0057_5480, // bg_hover - Hover purple
+        0x0064_618B, // bg_active - Active purple
+        0x00E3_DFFF, // fg_primary - Light purple-white
+        0x00A5_9ACC, // fg_secondary - Medium purple
+        0x0079_72A8, // fg_muted - Muted purple
+        0x002D_2B55, // fg_on_accent - Dark on accent
+        0x00AD_26FF, // accent - Vibrant purple
+        0x0095_20E0, // accent_hover - Darker purple
+        0x0080_CBC4, // success - Teal
+        0x00FF_C600, // warning - Golden yellow
+        0x00EC_3A37, // danger - Red
+        0x0070_99DD, // info - Blue
+        0x003D_3A6A, // border - Match surface
+        0x00AD_26FF, // border_strong - Purple border
+        0x003D_3A6A, // divider - Match surface
+        0x00FF_628C, // syntax_keyword - Pink
+        0x009E_FFE6, // syntax_type - Mint
+        0x00A0_FFC4, // syntax_string - Light green
+        0x00FF_9D00, // syntax_number - Orange
+        0x006C_6783, // syntax_comment - Muted purple
+        0x00FF_628C, // syntax_operator - Pink
+    )
+}
+
+// ═══════════════════════════════════════════════════
+// LIGHT THEMES
+// ═══════════════════════════════════════════════════
+
+/// One Light - Clean minimal light theme (pairs with One Dark)
+/// Soft white backgrounds with subtle blue and green accents
+pub fn one_light() -> AppTheme {
+    AppTheme::from_hex(
+        "One Light",
+        0x00FA_FAFA, // bg_base - Soft white
+        0x00F0_F0F0, // bg_sidebar - Light gray
+        0x00FF_FFFF, // bg_surface - Pure white cards
+        0x00EC_ECEC, // bg_elevated - Slightly darker
+        0x00DB_DBDB, // bg_hover - Hover gray
+        0x00CA_CACA, // bg_active - Active gray
+        0x0038_3A42, // fg_primary - Dark gray
+        0x006A_6C75, // fg_secondary - Medium gray
+        0x009C_9EA6, // fg_muted - Light gray
+        0x00FA_FAFA, // fg_on_accent - Light on accent
+        0x0040_78F2, // accent - Blue
+        0x0030_68E0, // accent_hover - Darker blue
+        0x0050_A14F, // success - Green
+        0x00C1_8401, // warning - Orange
+        0x00E4_5649, // danger - Red
+        0x0040_78F2, // info - Blue
+        0x00DB_DBDB, // border - Light border
+        0x0040_78F2, // border_strong - Blue border
+        0x00EC_ECEC, // divider - Match elevated
+        0x00A6_26A4, // syntax_keyword - Purple
+        0x0040_78F2, // syntax_type - Blue
+        0x0050_A14F, // syntax_string - Green
+        0x00C1_8401, // syntax_number - Orange
+        0x00A0_A1A7, // syntax_comment - Gray
+        0x0038_3A42, // syntax_operator - Dark gray
+    )
+}
+
+/// Solarized Light - Classic scientifically-designed light theme
+/// Warm cream backgrounds designed for eye comfort and readability
+pub fn solarized_light() -> AppTheme {
+    AppTheme::from_hex(
+        "Solarized Light",
+        0x00FD_F6E3, // bg_base - Base3 (warm cream)
+        0x00EE_E8D5, // bg_sidebar - Base2
+        0x00FD_F6E3, // bg_surface - Base3
+        0x00EE_E8D5, // bg_elevated - Base2
+        0x0093_A1A1, // bg_hover - Base1
+        0x0083_9496, // bg_active - Base0
+        0x0065_7B83, // fg_primary - Base00
+        0x0058_6E75, // fg_secondary - Base01
+        0x0093_A1A1, // fg_muted - Base1
+        0x00FD_F6E3, // fg_on_accent - Light on accent
+        0x0026_8BD2, // accent - Blue
+        0x0021_76BA, // accent_hover - Darker blue
+        0x0085_9900, // success - Green
+        0x00B5_8900, // warning - Yellow
+        0x00DC_322F, // danger - Red
+        0x002A_A198, // info - Cyan
+        0x0093_A1A1, // border - Base1
+        0x0026_8BD2, // border_strong - Blue
+        0x00EE_E8D5, // divider - Base2
+        0x00D3_3682, // syntax_keyword - Magenta
+        0x0026_8BD2, // syntax_type - Blue
+        0x002A_A198, // syntax_string - Cyan
+        0x00CB_4B16, // syntax_number - Orange
+        0x0093_A1A1, // syntax_comment - Base1
+        0x0085_9900, // syntax_operator - Green
+    )
+}
+
+/// Ayu Light - Modern bright light theme with orange accents
+/// Clean white backgrounds with vibrant orange and blue highlights
+pub fn ayu_light() -> AppTheme {
+    AppTheme::from_hex(
+        "Ayu Light",
+        0x00FA_FAFA, // bg_base - Clean white
+        0x00F3_F4F5, // bg_sidebar - Light gray
+        0x00FF_FFFF, // bg_surface - Pure white
+        0x00ED_EEEF, // bg_elevated - Subtle gray
+        0x00E7_E8E9, // bg_hover - Darker gray
+        0x00E1_E2E3, // bg_active - Active gray
+        0x005C_6166, // fg_primary - Dark gray
+        0x0082_8C94, // fg_secondary - Medium gray
+        0x00A1_AAB3, // fg_muted - Light gray
+        0x00FA_FAFA, // fg_on_accent - Light on accent
+        0x00FF_8F40, // accent - Bright orange
+        0x00E6_7A2E, // accent_hover - Darker orange
+        0x0086_B300, // success - Green
+        0x00F2_AE49, // warning - Yellow
+        0x00F5_1818, // danger - Red
+        0x0035_9BF8, // info - Blue
+        0x00E7_E8E9, // border - Light border
+        0x00FF_8F40, // border_strong - Orange
+        0x00ED_EEEF, // divider - Match elevated
+        0x00FA_8D3E, // syntax_keyword - Orange
+        0x0035_9BF8, // syntax_type - Blue
+        0x0086_B300, // syntax_string - Green
+        0x00A3_7ACC, // syntax_number - Purple
+        0x00A1_AAB3, // syntax_comment - Gray
+        0x00ED_9366, // syntax_operator - Light orange
+    )
+}
+
+/// Rosé Pine Dawn - Romantic light theme with rose and gold accents
+/// Warm cream backgrounds with rose, gold, and pine colors
+pub fn rose_pine_dawn() -> AppTheme {
+    AppTheme::from_hex(
+        "Rosé Pine Dawn",
+        0x00FA_F4ED, // bg_base - Warm cream
+        0x00F2_E9E1, // bg_sidebar - Slightly darker cream
+        0x00FF_F9F3, // bg_surface - Lighter cream
+        0x00EC_DFCE, // bg_elevated - Warm tan
+        0x00E0_D3C2, // bg_hover - Darker tan
+        0x00D4_C7B6, // bg_active - Active tan
+        0x005F_5695, // fg_primary - Deep purple-gray
+        0x0079_7593, // fg_secondary - Medium purple-gray
+        0x009B_9099, // fg_muted - Light purple-gray
+        0x00FA_F4ED, // fg_on_accent - Light on accent
+        0x00D7_827E, // accent - Rose
+        0x00C5_7570, // accent_hover - Darker rose
+        0x0056_949F, // success - Pine teal
+        0x00EA_9D34, // warning - Gold
+        0x00B4_637A, // danger - Muted red
+        0x0090_7AA9, // info - Purple
+        0x00EC_DFCE, // border - Warm border
+        0x00D7_827E, // border_strong - Rose border
+        0x00EC_DFCE, // divider - Match elevated
+        0x00B4_637A, // syntax_keyword - Muted red
+        0x0056_949F, // syntax_type - Pine
+        0x00EA_9D34, // syntax_string - Gold
+        0x00D7_827E, // syntax_number - Rose
+        0x009B_9099, // syntax_comment - Muted gray
+        0x00D7_827E, // syntax_operator - Rose
+    )
+}
+
+/// Everforest Light - Soft green nature-inspired light theme
+/// Warm cream backgrounds with forest green accents
+pub fn everforest_light() -> AppTheme {
+    AppTheme::from_hex(
+        "Everforest Light",
+        0x00FF_F9E8, // bg_base - Warm cream
+        0x00F8_F0DC, // bg_sidebar - Light tan
+        0x00FF_FFEF, // bg_surface - Lighter cream
+        0x00F0_E5D1, // bg_elevated - Warm beige
+        0x00E4_D9C5, // bg_hover - Darker beige
+        0x00D8_CDB9, // bg_active - Active beige
+        0x005C_6A72, // fg_primary - Dark gray-green
+        0x007D_8B92, // fg_secondary - Medium gray
+        0x009F_A9AD, // fg_muted - Light gray
+        0x00FF_F9E8, // fg_on_accent - Light on accent
+        0x008D_A101, // accent - Forest green
+        0x007A_8C00, // accent_hover - Darker green
+        0x0093_B259, // success - Lime green
+        0x00E6_9875, // warning - Orange
+        0x00E6_7E80, // danger - Soft red
+        0x007F_BFB2, // info - Teal
+        0x00F0_E5D1, // border - Beige border
+        0x008D_A101, // border_strong - Green border
+        0x00F0_E5D1, // divider - Match elevated
+        0x00F8_5552, // syntax_keyword - Red
+        0x0039_97A2, // syntax_type - Teal
+        0x00DB_B274, // syntax_string - Yellow
+        0x00E6_9875, // syntax_number - Orange
+        0x00A6_B1B7, // syntax_comment - Gray
+        0x008D_A101, // syntax_operator - Green
     )
 }
 
@@ -568,23 +807,35 @@ mod tests {
     #[test]
     fn test_all_themes_have_names() {
         let themes = [
+            // Custom themes
             oxide(),
             aethel(),
-            nord(),
-            gruvbox(),
-            gruvbox_light(),
+            // Popular dark themes
             dracula(),
+            one_dark(),
             monokai(),
-            everforest(),
+            winter_is_coming(),
+            night_owl(),
+            synthwave_84(),
+            shades_purple(),
+            // Modern dark themes
             tokyo_night(),
             catppuccin_mocha(),
-            catppuccin_latte(),
-            one_dark(),
-            solarized_dark(),
-            ayu_dark(),
             rose_pine(),
-            material_theme(),
-            github_light(),
+            // Nature/atmospheric dark themes
+            nord(),
+            gruvbox(),
+            everforest(),
+            ayu_dark(),
+            // Light themes
+            gruvbox_light(),
+            catppuccin_latte(),
+            rose_pine_dawn(),
+            everforest_light(),
+            oxide_light(),
+            one_light(),
+            solarized_light(),
+            ayu_light(),
         ];
 
         for theme in &themes {
@@ -595,22 +846,34 @@ mod tests {
     #[test]
     fn test_theme_colors_are_valid() {
         // Just verify themes can be created without panicking
+        // Custom themes
         let _ = oxide();
         let _ = aethel();
-        let _ = nord();
-        let _ = gruvbox();
-        let _ = gruvbox_light();
+        // Popular dark themes
         let _ = dracula();
+        let _ = one_dark();
         let _ = monokai();
-        let _ = everforest();
+        let _ = winter_is_coming();
+        let _ = night_owl();
+        let _ = synthwave_84();
+        let _ = shades_purple();
+        // Modern dark themes
         let _ = tokyo_night();
         let _ = catppuccin_mocha();
-        let _ = catppuccin_latte();
-        let _ = one_dark();
-        let _ = solarized_dark();
-        let _ = ayu_dark();
         let _ = rose_pine();
-        let _ = material_theme();
-        let _ = github_light();
+        // Nature/atmospheric dark themes
+        let _ = nord();
+        let _ = gruvbox();
+        let _ = everforest();
+        let _ = ayu_dark();
+        // Light themes
+        let _ = gruvbox_light();
+        let _ = catppuccin_latte();
+        let _ = rose_pine_dawn();
+        let _ = everforest_light();
+        let _ = oxide_light();
+        let _ = one_light();
+        let _ = solarized_light();
+        let _ = ayu_light();
     }
 }
