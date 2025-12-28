@@ -997,6 +997,7 @@ fn view_rule_form<'a>(
                 .placeholder("Select a common service...")
                 .width(Length::Fill)
                 .padding(8)
+                .menu_height(300.0) // Limit menu height to prevent off-screen overflow
                 .style(move |_, status| themed_pick_list(theme, status))
                 .menu_style(move |_| themed_pick_list_menu(theme))
             ]

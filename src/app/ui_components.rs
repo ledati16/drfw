@@ -619,10 +619,10 @@ pub fn themed_pick_list(theme: &AppTheme, status: pick_list::Status) -> pick_lis
             text_color: theme.fg_primary,
         },
         pick_list::Status::Opened { .. } => pick_list::Style {
-            background: theme.bg_elevated.into(),
+            background: theme.bg_base.into(), // Dimmed to deepest layer for depressed look
             border: Border {
-                color: theme.accent,
-                width: 2.0,
+                color: Color::TRANSPARENT,
+                width: 0.0, // No border when opened - menu shadow provides definition
                 radius: 4.0.into(),
             },
             handle_color: theme.accent,
@@ -634,17 +634,36 @@ pub fn themed_pick_list(theme: &AppTheme, status: pick_list::Status) -> pick_lis
 
 /// Pick list menu styling (the dropdown menu itself)
 pub fn themed_pick_list_menu(theme: &AppTheme) -> iced::overlay::menu::Style {
+    // Calculate brighter menu background to distinguish from input controls
+    let menu_bg = if theme.is_light() {
+        // Light themes: brighten toward white
+        Color {
+            r: (theme.bg_elevated.r * 0.97 + 0.03).min(1.0),
+            g: (theme.bg_elevated.g * 0.97 + 0.03).min(1.0),
+            b: (theme.bg_elevated.b * 0.97 + 0.03).min(1.0),
+            ..theme.bg_elevated
+        }
+    } else {
+        // Dark themes: hybrid brighten (multiply + boost)
+        Color {
+            r: (theme.bg_elevated.r * 1.15 + 0.04).min(1.0),
+            g: (theme.bg_elevated.g * 1.15 + 0.04).min(1.0),
+            b: (theme.bg_elevated.b * 1.15 + 0.04).min(1.0),
+            ..theme.bg_elevated
+        }
+    };
+
     iced::overlay::menu::Style {
-        background: theme.bg_surface.into(),
+        background: menu_bg.into(),
         border: Border {
-            color: theme.border_strong,
-            width: 1.0,
+            color: Color::TRANSPARENT,
+            width: 0.0,
             radius: 4.0.into(),
         },
         shadow: Shadow {
             color: theme.shadow_color,
-            offset: Vector::new(0.0, 4.0),
-            blur_radius: 8.0,
+            offset: Vector::new(0.0, 2.0), // Crisp shadow matching modal style
+            blur_radius: 3.0,
         },
         text_color: theme.fg_primary,
         selected_background: theme.bg_hover.into(),

@@ -274,6 +274,114 @@ The `+ 0.03` additive boost ensures visibility even on very dark backgrounds.
 
 ---
 
+## Dropdown Menu Styling (Pick Lists)
+
+### Implementation
+**Location:** `src/app/ui_components.rs:597-653` (pick_list styling), `src/app/view.rs` (widget usage)
+
+Dropdown menus feature a borderless design with crisp shadows and a "depressed" visual effect when opened.
+
+### Pick List Control States
+
+**Active state** (closed, not hovered):
+```rust
+background: theme.bg_elevated,
+border: 1px theme.border,
+```
+
+**Hovered state**:
+```rust
+background: theme.bg_hover,
+border: 1px theme.border_strong,
+```
+
+**Opened state** (dropdown menu visible):
+```rust
+background: theme.bg_base, // Dimmed to deepest layer for "pressed in" effect
+border: transparent, // No border - menu shadow provides definition
+```
+
+**Design rationale:** When the dropdown opens, the control dims to the deepest background layer (`bg_base`) and loses its border. This creates a visual "depression" effect - the control appears to recede, making the floating menu stand out more clearly.
+
+### Dropdown Menu Styling
+
+The dropdown menu itself uses borderless, crisp shadow design with a calculated brighter background:
+
+```rust
+// Calculate brighter background to distinguish from input controls
+let menu_bg = if theme.is_light() {
+    // Light: brighten toward white (97% original + 3% white)
+    Color {
+        r: (theme.bg_elevated.r * 0.97 + 0.03).min(1.0),
+        g: (theme.bg_elevated.g * 0.97 + 0.03).min(1.0),
+        b: (theme.bg_elevated.b * 0.97 + 0.03).min(1.0),
+        ..theme.bg_elevated
+    }
+} else {
+    // Dark: hybrid brighten (15% brighter + 4% boost)
+    Color {
+        r: (theme.bg_elevated.r * 1.15 + 0.04).min(1.0),
+        g: (theme.bg_elevated.g * 1.15 + 0.04).min(1.0),
+        b: (theme.bg_elevated.b * 1.15 + 0.04).min(1.0),
+        ..theme.bg_elevated
+    }
+};
+
+background: menu_bg,
+border: transparent (no border),
+shadow: Shadow {
+    offset: (0.0, 2.0), // Directional shadow matching modals
+    blur: 3.0,          // Crisp, clean definition
+}
+```
+
+**Why brighter than `bg_elevated`?** Menu items need visual distinction from the input control they're hovering over. Since controls use `bg_elevated` and dim to `bg_base` when opened, making the menu brighter creates clear separation.
+
+**Theme-aware calculation:**
+- Light themes: Blend toward white (maintains brightness)
+- Dark themes: Hybrid multiply + boost (ensures visibility on very dark backgrounds)
+- Follows the same pattern as gradient calculations elsewhere in the app
+
+**Why no border?** The crisp shadow provides all the definition needed. Adding a border creates visual clutter and can overlap awkwardly when the menu opens upward.
+
+**Why directional shadow?** Consistency with modals - both are overlays floating above content, so they follow the same elevation/lighting pattern.
+
+### Menu Height Limiting
+
+**Selective application:** Only dropdowns with many items need height limits. Apply `.menu_height(300.0)` selectively based on content:
+
+```rust
+// Service Preset: 50+ items - NEEDS height limit
+pick_list(PRESETS, selected, on_select)
+    .menu_height(300.0) // Scrollable after ~10-12 items
+    .style(move |_, status| themed_pick_list(theme, status))
+    .menu_style(move |_| themed_pick_list_menu(theme))
+
+// Protocol: 5 items - NO height limit (auto-sizes perfectly)
+pick_list(protocols, selected, on_select)
+    .style(move |_, status| themed_pick_list(theme, status))
+    .menu_style(move |_| themed_pick_list_menu(theme))
+
+// Interface: <10 items typically - NO height limit (auto-sizes)
+pick_list(interfaces, selected, on_select)
+    .style(move |_, status| themed_pick_list(theme, status))
+    .menu_style(move |_| themed_pick_list_menu(theme))
+```
+
+**Why selective?** Iced's `menu_height()` sets a **fixed height**, not a maximum. Using `Fixed(300.0)` on short lists creates awkward empty space. There is no `Length::Shrink` with a max cap in Iced 0.14.
+
+**300px rationale:** Allows approximately 10-12 items visible before scrolling. Prevents long lists (service presets) from extending off-screen.
+
+### Selected Item Styling
+
+Menu items use consistent hover pattern:
+```rust
+selected_background: theme.bg_hover,
+selected_text_color: theme.fg_primary,
+```
+
+---
+
 ## Button Styling
 
 ### Centralized Button Styles
@@ -983,6 +1091,33 @@ Consistent filter UX across the application.
 ## Changelog
 
 ### 2025-12-28
+
+**Post-Midnight Session - Dropdown Menu Polish:**
+- **Borderless Dropdown Design:** Removed borders from dropdown menus for cleaner appearance
+  - Menu border: removed (transparent)
+  - Menu shadow: crisp directional `(0.0, 2.0)` with `blur: 3.0` matching modal style
+  - Tested uniform shadow `(0.0, 0.0)` - rejected in favor of directional consistency
+- **Depressed Control State:** Control dims when dropdown opens
+  - Opened state background: `bg_base` (deepest layer) for "pressed in" effect
+  - Opened state border: transparent (menu shadow provides definition)
+  - Creates visual hierarchy - control recedes, menu stands out
+- **Menu Background Contrast:** Calculated brighter background for clear distinction
+  - Started with `bg_elevated` (same as input controls) - items blended with controls
+  - Added theme-aware brightening calculation to create visual separation
+  - Light themes: 97% original + 3% white blend
+  - Dark themes: 1.15x multiply + 0.04 additive boost
+  - Result: Menu items clearly distinct from depressed control below
+- **Menu Height Limiting:** Selective application based on dropdown content
+  - Service Preset (50+ items): `.menu_height(300.0)` to prevent off-screen overflow
+  - Protocol (5 items): No height limit - auto-sizes perfectly
+  - Interface (~10 items): No height limit - auto-sizes to content
+  - **Fix:** Removed fixed height from short dropdowns to eliminate empty space
+  - **Rationale:** Iced's `menu_height()` is fixed, not max - no auto-size-with-cap option exists
+- **Dropdown Menu Styling Section:** Comprehensive documentation added to STYLE.md
+  - Control state styling rationale (depressed effect)
+  - Menu styling patterns (borderless, shadow-only, elevated background)
+  - Menu height limiting best practices
+  - Design decision log (why directional shadow, why no border, why bg_elevated)
 
 **Very Late Evening Session - Section Header Pattern:**
 - **Section Header System:** Implemented subtle backdrop pattern for labels and headers
