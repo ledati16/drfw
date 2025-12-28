@@ -148,7 +148,7 @@ pub fn gruvbox() -> AppTheme {
         0x00A8_9984, // fg_muted - fg4
         0x0028_2828, // fg_on_accent - Dark on light
         0x00D7_9921, // accent - Yellow
-        0x00FA_ABD2, // accent_hover - Bright yellow
+        0x00FA_BD2F, // accent_hover - Bright yellow
         0x0098_971A, // success - Green
         0x00D7_9921, // warning - Yellow
         0x00CC_241D, // danger - Red
