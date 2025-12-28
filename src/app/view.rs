@@ -76,7 +76,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 warning,
                 theme,
                 state.font_regular,
-                state.font_mono,
             ))
             .style(move |_| modal_backdrop(theme))
             .width(Length::Fill)
@@ -1490,7 +1489,6 @@ fn view_warning_modal<'a>(
     warning: &'a PendingWarning,
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
-    mono_font: iced::Font,
 ) -> Element<'a, Message> {
     let (title, message, confirm_msg) = match warning {
         PendingWarning::EnableRpf => (
@@ -1511,7 +1509,7 @@ fn view_warning_modal<'a>(
             text(message)
                 .size(14)
                 .color(theme.fg_primary)
-                .font(mono_font),
+                .font(regular_font),
             row![
                 button(text("Cancel").size(14).font(regular_font))
                     .on_press(Message::CancelWarning)
