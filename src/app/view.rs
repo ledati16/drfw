@@ -12,9 +12,12 @@ use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::text::Wrapping;
 use iced::widget::{
     button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, space,
-    stack, text, text_input, toggler,
+    stack, text, text_input, toggler, Id,
 };
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length, Padding};
+
+// Text input IDs for focus management
+const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
 
 pub fn view(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
@@ -1909,12 +1912,30 @@ fn view_font_picker<'a>(
                 .on_input(Message::FontPickerSearchChanged)
                 .padding(10)
                 .size(13)
+                .id(Id::new(FONT_SEARCH_INPUT_ID))
                 .style(move |_, status| themed_text_input(theme, status)),
             container(
                 scrollable(
                     column![
-                        container(font_list).padding([2, 12]),
-                        if filtered_count > display_limit {
+                        container(font_list).padding(Padding {
+                            top: 2.0,
+                            right: 12.0,
+                            bottom: 2.0,
+                            left: 2.0,
+                        }),
+                        if filtered_count == 0 {
+                            container(
+                                text("No fonts found — try a different search")
+                                    .size(11)
+                                    .color(theme.fg_muted),
+                            )
+                            .padding(Padding {
+                                top: 8.0,
+                                right: 12.0,
+                                bottom: 4.0,
+                                left: 12.0,
+                            })
+                        } else if filtered_count > display_limit {
                             container(
                                 text(format!(
                                     "Showing {} of {} fonts — search to find more",
@@ -1923,7 +1944,12 @@ fn view_font_picker<'a>(
                                 .size(11)
                                 .color(theme.fg_muted),
                             )
-                            .padding([8, 12])
+                            .padding(Padding {
+                                top: 8.0,
+                                right: 12.0,
+                                bottom: 4.0,
+                                left: 12.0,
+                            })
                         } else {
                             container(text(""))
                         },

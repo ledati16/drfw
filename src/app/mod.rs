@@ -689,6 +689,8 @@ impl State {
                     search: String::new(),
                     search_lowercase: String::new(),
                 });
+                // Auto-focus search input when picker opens
+                return iced::widget::operation::focus_next();
             }
             Message::FontPickerSearchChanged(search) => {
                 if let Some(picker) = &mut self.font_picker {
