@@ -750,27 +750,17 @@ fn view_workspace<'a>(
     .style(move |_| elevated_card_container(theme));
 
     // Zone: History (Left)
-    let history_actions = container(
-        row![
-            button(text("↶").size(18))
-                .on_press_maybe(state.command_history.can_undo().then_some(Message::Undo))
-                .padding([10, 16])
-                .style(move |_, status| secondary_button(theme, status)),
-            button(text("↷").size(18))
-                .on_press_maybe(state.command_history.can_redo().then_some(Message::Redo))
-                .padding([10, 16])
-                .style(move |_, status| secondary_button(theme, status)),
-        ]
-        .spacing(2),
-    )
-    .style(move |_| container::Style {
-        background: Some(theme.bg_elevated.into()),
-        border: Border {
-            radius: 6.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+    let history_actions = row![
+        button(text("↶").size(18))
+            .on_press_maybe(state.command_history.can_undo().then_some(Message::Undo))
+            .padding([10, 16])
+            .style(move |_, status| secondary_button(theme, status)),
+        button(text("↷").size(18))
+            .on_press_maybe(state.command_history.can_redo().then_some(Message::Redo))
+            .padding([10, 16])
+            .style(move |_, status| secondary_button(theme, status)),
+    ]
+    .spacing(12);
 
     // Zone: Status (Center)
     let status_area = container(if let Some(ref err) = state.last_error {
