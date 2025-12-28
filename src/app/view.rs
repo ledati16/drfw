@@ -237,10 +237,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .size(24)
                     .font(state.font_regular)
                     .color(theme.accent),
-                text("DUMB RUST FIREWALL")
+                container(text("DUMB RUST FIREWALL")
                     .size(9)
                     .color(theme.fg_muted)
-                    .font(state.font_mono),
+                    .font(state.font_mono))
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
             ]
             .spacing(0)
         ]
@@ -297,10 +299,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         let tags_row = row(tag_elements).spacing(6).wrap();
 
         column![
-            text("FILTERS")
+            container(text("FILTERS")
                 .size(9)
                 .font(state.font_mono)
-                .color(theme.fg_muted),
+                .color(theme.fg_muted))
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
             container(tags_row).width(Length::Fill).max_height(120)
         ]
         .spacing(8)
@@ -319,10 +323,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
     // 4. Rule List Header
     let list_header = row![
-        text("RULES")
+        container(text("RULES")
             .size(9)
             .font(state.font_mono)
-            .color(theme.fg_muted),
+            .color(theme.fg_muted))
+            .padding([2, 6])
+            .style(move |_| section_header_container(theme)),
         container(row![]).width(Length::Fill),
         text(format!(
             "{}/{}",
@@ -333,8 +339,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         .font(state.font_mono)
         .color(theme.fg_muted),
     ]
-    .align_y(Alignment::Center)
-    .padding([0, 4]);
+    .align_y(Alignment::Center);
 
     // 5. Rule List (Scrollable)
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
@@ -663,11 +668,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             search_area,
             column![
                 list_header,
-                scrollable(container(rule_list).padding([0, 2]))
+                scrollable(rule_list)
                     .height(Length::Fill)
                     .style(move |_, status| themed_scrollable(theme, status)),
             ]
-            .spacing(12)
+            .spacing(8)
             .height(Length::Fill),
             footer,
         ]
@@ -1005,7 +1010,9 @@ fn view_rule_form<'a>(
                 .style(move |_| section_header_container(theme)),
             row![
                 column![
-                    text("PROTOCOL").size(10).color(theme.fg_muted),
+                    container(text("PROTOCOL").size(10).color(theme.fg_muted))
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
                     pick_list(
                         vec![
                             Protocol::Any,
@@ -1026,7 +1033,9 @@ fn view_rule_form<'a>(
                 .width(Length::Fill),
                 {
                     let mut port_col = column![
-                        text("PORT RANGE").size(10).color(theme.fg_muted),
+                        container(text("PORT RANGE").size(10).color(theme.fg_muted))
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
                         view_port_inputs(form, port_error, theme, mono_font),
                     ]
                     .spacing(4)
@@ -1048,9 +1057,11 @@ fn view_rule_form<'a>(
                 .style(move |_| section_header_container(theme)),
             {
                 let mut source_col = column![
-                    text("SOURCE ADDRESS (OPTIONAL)")
+                    container(text("SOURCE ADDRESS (OPTIONAL)")
                         .size(10)
-                        .color(theme.fg_muted),
+                        .color(theme.fg_muted))
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
                     text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
                         .on_input(Message::RuleFormSourceChanged)
                         .padding(8)
@@ -1064,7 +1075,9 @@ fn view_rule_form<'a>(
                 source_col
             },
             column![
-                text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted),
+                container(text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted))
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
                 pick_list(
                     iface_options,
                     Some(if form.interface.is_empty() {
@@ -1093,7 +1106,9 @@ fn view_rule_form<'a>(
                 .style(move |_| section_header_container(theme)),
             {
                 let mut org_col = column![
-                    text("TAGS").size(10).color(theme.fg_muted),
+                    container(text("TAGS").size(10).color(theme.fg_muted))
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
                     row![
                         text_input("Add a tag...", &form.tag_input)
                             .on_input(Message::RuleFormTagInputChanged)
@@ -1206,7 +1221,9 @@ fn view_awaiting_apply(
     app_theme: &crate::theme::AppTheme,
     regular_font: iced::Font,
 ) -> Element<'_, Message> {
-    container(column![text("🛡️").size(36), text("Commit Changes?").size(24).font(regular_font).color(app_theme.fg_primary),
+    container(column![text("🛡️").size(36), container(text("Commit Changes?").size(24).font(regular_font).color(app_theme.fg_primary))
+                          .padding([4, 8])
+                          .style(move |_| section_header_container(app_theme)),
                       text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
                       row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(move |_, status| secondary_button(app_theme, status)),
                            button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
@@ -1224,10 +1241,12 @@ fn view_pending_confirmation(
     container(
         column![
             text("⏳").size(36),
-            text("Confirm Safety")
+            container(text("Confirm Safety")
                 .size(24)
                 .font(regular_font)
-                .color(app_theme.fg_primary),
+                .color(app_theme.fg_primary))
+                .padding([4, 8])
+                .style(move |_| section_header_container(app_theme)),
             text(format!(
                 "Firewall updated. Automatic rollback in {remaining} seconds if not confirmed."
             ))
@@ -1911,13 +1930,15 @@ fn view_font_picker<'a>(
 
     container(
         column![
-            text(match picker.target {
+            container(text(match picker.target {
                 FontPickerTarget::Regular => "Select UI Font",
                 FontPickerTarget::Mono => "Select Code Font",
             })
             .size(18)
             .font(state.font_regular)
-            .color(theme.fg_primary),
+            .color(theme.fg_primary))
+                .padding([4, 8])
+                .style(move |_| section_header_container(theme)),
             text_input("Search fonts...", &picker.search)
                 .on_input(Message::FontPickerSearchChanged)
                 .padding(10)
@@ -1979,14 +2000,16 @@ fn view_font_picker<'a>(
                 ..Default::default()
             }),
             row![
-                text(if filtered_count < state.available_fonts.len() {
+                container(text(if filtered_count < state.available_fonts.len() {
                     format!("{} fonts match", filtered_count)
                 } else {
                     format!("{} fonts available", filtered_count)
                 })
                 .size(10)
                 .color(theme.fg_muted)
-                .font(state.font_mono),
+                .font(state.font_mono))
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
                 space::Space::new().width(Length::Fill),
                 button(text("Close").size(14))
                     .on_press(Message::CloseFontPicker)
@@ -2173,10 +2196,20 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
     // Preview panel showing currently selected theme (two-column layout)
     let preview_panel = container(
         column![
-            text(format!("PREVIEW: {}", state.current_theme.name()))
-                .size(11)
-                .font(state.font_mono)
-                .color(theme.fg_muted),
+            row![
+                container(text("PREVIEW:")
+                    .size(11)
+                    .font(state.font_mono)
+                    .color(theme.fg_muted))
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
+                text(state.current_theme.name())
+                    .size(11)
+                    .font(state.font_mono)
+                    .color(theme.fg_muted),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
             // Two-column layout: UI elements left, code right
             row![
                 // Left column: Buttons, text hierarchy, status colors (45% width)
@@ -2206,10 +2239,12 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     .spacing(6),
                     // Text hierarchy
                     column![
-                        text("Text Hierarchy")
+                        container(text("Text Hierarchy")
                             .size(10)
                             .font(state.font_mono)
-                            .color(theme.fg_muted),
+                            .color(theme.fg_muted))
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
                         row![
                             text("Primary").size(11).color(theme.fg_primary),
                             text("•").size(11).color(theme.fg_muted),
@@ -2222,10 +2257,12 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     .spacing(4),
                     // Status colors
                     column![
-                        text("Status Colors")
+                        container(text("Status Colors")
                             .size(10)
                             .font(state.font_mono)
-                            .color(theme.fg_muted),
+                            .color(theme.fg_muted))
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
                         row![
                             make_color_dot(theme.success, STATUS_COLOR_SIZE),
                             make_color_dot(theme.warning, STATUS_COLOR_SIZE),
@@ -2314,10 +2351,12 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
 
     container(
         column![
-            text("Select Theme")
+            container(text("Select Theme")
                 .size(18)
                 .font(state.font_regular)
-                .color(theme.fg_primary),
+                .color(theme.fg_primary))
+                .padding([4, 8])
+                .style(move |_| section_header_container(theme)),
             text_input("Search themes...", &picker.search)
                 .on_input(Message::ThemePickerSearchChanged)
                 .padding(10)
@@ -2352,14 +2391,16 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             }),
             preview_panel,
             row![
-                text(if filtered_count < crate::theme::ThemeChoice::all().len() {
+                container(text(if filtered_count < crate::theme::ThemeChoice::all().len() {
                     format!("{} themes match", filtered_count)
                 } else {
                     format!("{} themes available", filtered_count)
                 })
                 .size(10)
                 .color(theme.fg_muted)
-                .font(state.font_mono),
+                .font(state.font_mono))
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
                 space::Space::new().width(Length::Fill),
                 button(text("Cancel").size(14))
                     .on_press(Message::CancelThemePicker)
@@ -2388,10 +2429,12 @@ fn view_shortcuts_help(
 ) -> Element<'_, Message> {
     container(
         column![
-            text("⌨️ Keyboard Shortcuts")
+            container(text("⌨️ Keyboard Shortcuts")
                 .size(24)
                 .font(regular_font)
-                .color(theme.warning),
+                .color(theme.warning))
+                .padding([4, 8])
+                .style(move |_| section_header_container(theme)),
             column![
                 text("General").size(16).color(theme.fg_primary),
                 row![

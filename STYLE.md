@@ -43,6 +43,143 @@ pub struct AppTheme {
 
 ---
 
+## Section Header Pattern
+
+### Purpose
+
+Section headers provide subtle visual separation and hierarchy for labels, field names, and organizational text throughout the UI. They use a minimal backdrop to make text stand out slightly from the background without being heavy-handed.
+
+### Implementation
+
+**Location:** `src/app/ui_components.rs:125-140`
+
+```rust
+pub fn section_header_container(theme: &AppTheme) -> container::Style {
+    container::Style {
+        background: Some(
+            Color {
+                a: 0.05, // Subtle opacity - visible but not overwhelming
+                ..theme.fg_primary
+            }
+            .into(),
+        ),
+        border: Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+```
+
+**Key characteristics:**
+- **5% opacity** of `fg_primary` color (increased from initial 0.02 for better visibility)
+- **4px border radius** for subtle rounding
+- **Works across all themes** - uses semantic `fg_primary` so adapts automatically
+- **Minimal performance cost** - just a container with background color
+
+### Usage Pattern
+
+Wrap text in a container with this style and small padding:
+
+```rust
+container(text("FILTERS")
+    .size(9)
+    .font(state.font_mono)
+    .color(theme.fg_muted))
+    .padding([2, 6])  // Small padding: [vertical, horizontal]
+    .style(move |_| section_header_container(theme))
+```
+
+**Padding guidelines:**
+- **[2, 6]** for small labels (size 9-11): "FILTERS", "PREVIEW:", field labels
+- **[4, 8]** for larger headers (size 12+): "Select Theme", "BASIC INFO"
+
+### Where to Use Section Headers
+
+✅ **Good uses** - Adds clarity and visual hierarchy:
+
+1. **Sidebar section labels:**
+   - "DUMB RUST FIREWALL" subtitle
+   - "FILTERS"
+   - "RULES"
+
+2. **Modal/dialog titles:**
+   - "Select Theme"
+   - "Select UI Font" / "Select Code Font"
+   - "⌨️ Keyboard Shortcuts"
+   - "Commit Changes?"
+   - "Confirm Safety"
+
+3. **Form section headers:**
+   - "BASIC INFO", "TECHNICAL DETAILS", "CONTEXT", "ORGANIZATION"
+   - "APPEARANCE", "ADVANCED SECURITY"
+
+4. **Field labels within forms:**
+   - "PROTOCOL", "PORT RANGE", "SOURCE ADDRESS", "INTERFACE", "TAGS"
+
+5. **Preview/status indicators:**
+   - "PREVIEW:" (in theme picker - note: just the label, not dynamic content)
+   - "Text Hierarchy", "Status Colors" (in theme preview panel)
+
+6. **Footer metadata:**
+   - "{X} themes available" (theme picker)
+   - "{X} fonts available" (font picker)
+
+❌ **Avoid using for:**
+
+1. **Large page titles** - These are already prominent via size/color
+   - ~~"Active Configuration"~~ - too large, doesn't need extra treatment
+   - ~~"JSON Export"~~ - same
+   - Main workspace titles work better with size/color alone
+
+2. **Dynamic content** - Keep the backdrop on the static label only
+   - ✅ "PREVIEW:" ← static label gets backdrop
+   - ❌ ~~"PREVIEW: Ayu Dark"~~ ← don't wrap dynamic theme name
+   - Theme name should be plain text next to the label
+
+3. **Body text or descriptions** - Only for headers/labels
+   - "Current nftables ruleset generated from your rules." ← too long, descriptive text
+
+4. **Action buttons** - Use button styles instead
+   - Buttons already have their own styling system
+
+### Design Rationale
+
+**Why this pattern works:**
+
+1. **Subtle hierarchy** - Doesn't compete with content, just organizes it
+2. **Consistent treatment** - Same visual weight across all section headers
+3. **Theme-aware** - Uses semantic color so works in light/dark themes
+4. **Minimal** - Small opacity (5%) prevents visual clutter
+5. **Performant** - Simple container style, negligible overhead
+6. **Maintainable** - Centralized function, easy to adjust globally
+
+**Evolution:**
+- Initial opacity: **0.02** (too subtle, barely visible)
+- Current opacity: **0.05** (2.5x more visible, sweet spot)
+- If ever too prominent, reduce to 0.03-0.04
+- If too subtle again, increase to 0.06-0.07
+
+### Spacing Consistency
+
+Section headers revealed spacing inconsistencies in the sidebar that were fixed:
+
+**Problem:**
+- FILTERS → tags: 8px spacing
+- RULES → cards: 12px spacing (inconsistent!)
+- Rule cards had extra [0, 2] padding wrapper
+- RULES header had [0, 4] padding on row
+
+**Solution:**
+- Standardized to **8px spacing** for both
+- Removed extra padding wrappers
+- Now perfectly aligned with consistent visual rhythm
+
+**Lesson:** Section headers make spacing issues more visible - use them as a diagnostic tool when polishing UI.
+
+---
+
 ## Shadow System
 
 ### Implementation
@@ -846,6 +983,34 @@ Consistent filter UX across the application.
 ## Changelog
 
 ### 2025-12-28
+
+**Very Late Evening Session - Section Header Pattern:**
+- **Section Header System:** Implemented subtle backdrop pattern for labels and headers
+  - Centralized `section_header_container()` function in `ui_components.rs`
+  - 5% opacity of `fg_primary` color (increased from 0.02 for better visibility)
+  - 4px border radius with small padding ([2, 6] or [4, 8])
+  - Applied to 19 locations across the app for consistent hierarchy
+- **Locations Added:**
+  - Sidebar: "DUMB RUST FIREWALL", "FILTERS", "RULES"
+  - Theme picker: "Select Theme", "PREVIEW:", "Text Hierarchy", "Status Colors", "{X} themes available"
+  - Font picker: "Select UI Font/Code Font", "{X} fonts available"
+  - Modals: "Keyboard Shortcuts", "Commit Changes?", "Confirm Safety"
+  - Rule form: All field labels (PROTOCOL, PORT RANGE, SOURCE ADDRESS, INTERFACE, TAGS)
+  - Settings: Already had it (APPEARANCE, ADVANCED SECURITY)
+- **Pattern Guidelines Established:**
+  - ✅ Use for: static labels, section headers, field labels, footer metadata
+  - ❌ Avoid for: large page titles, dynamic content, body text, action buttons
+  - Only wrap static label portion, not dynamic content (e.g., "PREVIEW:" not "PREVIEW: Ayu Dark")
+- **Spacing Consistency Fixed:**
+  - Sidebar FILTERS → tags: kept at 8px spacing
+  - Sidebar RULES → cards: reduced from 12px → 8px (now consistent)
+  - Removed extra [0, 2] padding wrapper from rule cards
+  - Removed [0, 4] padding from RULES header row
+  - Result: Perfect alignment throughout sidebar
+- **Section Header Pattern Section:** Comprehensive documentation added to STYLE.md
+  - Usage patterns, padding guidelines, where to use/avoid
+  - Design rationale and evolution notes
+  - Performance analysis (negligible overhead)
 
 **Late Evening Session - Theme Picker Implementation:**
 - **Theme Picker Modal:** Replaced dropdown with visual theme picker (22 themes displayed as cards)

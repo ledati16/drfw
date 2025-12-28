@@ -126,7 +126,7 @@ pub fn section_header_container(theme: &AppTheme) -> container::Style {
     container::Style {
         background: Some(
             Color {
-                a: 0.02,
+                a: 0.05, // Increased from 0.02 for better visibility
                 ..theme.fg_primary
             }
             .into(),
