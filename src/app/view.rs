@@ -1195,7 +1195,8 @@ fn view_awaiting_apply(
                            button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
     ].spacing(20).padding(32).align_x(Alignment::Center))
-    .style(move |_| { let mut style = card_container(app_theme); style.shadow = iced::Shadow { color: app_theme.shadow_strong, offset: iced::Vector::new(0.0, 10.0), blur_radius: 20.0 }; style }).into()
+    .style(move |_| card_container(app_theme))
+    .into()
 }
 
 fn view_pending_confirmation(
@@ -1233,15 +1234,7 @@ fn view_pending_confirmation(
         .padding(32)
         .align_x(Alignment::Center),
     )
-    .style(move |_| {
-        let mut style = card_container(app_theme);
-        style.shadow = iced::Shadow {
-            color: app_theme.shadow_strong,
-            offset: iced::Vector::new(0.0, 10.0),
-            blur_radius: 20.0,
-        };
-        style
-    })
+    .style(move |_| card_container(app_theme))
     .into()
 }
 
@@ -1527,11 +1520,6 @@ fn view_warning_modal<'a>(
     )
     .style(move |_| {
         let mut style = card_container(theme);
-        style.shadow = iced::Shadow {
-            color: theme.shadow_strong,
-            offset: iced::Vector::new(0.0, 10.0),
-            blur_radius: 20.0,
-        };
         style.border = Border {
             color: theme.danger,
             width: 2.0,
@@ -1989,15 +1977,7 @@ fn view_font_picker<'a>(
         .padding(24)
         .width(Length::Fixed(500.0)),
     )
-    .style(move |_| {
-        let mut style = card_container(theme);
-        style.shadow = iced::Shadow {
-            color: theme.shadow_strong,
-            offset: iced::Vector::new(0.0, 10.0),
-            blur_radius: 30.0,
-        };
-        style
-    })
+    .style(move |_| card_container(theme))
     .into()
 }
 
