@@ -182,13 +182,11 @@ pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // POPULAR DARK THEMES (by downloads/rating)
     // ═══════════════════════════════════════════════════
-    Dracula,        // 7.5M - Iconic purple/pink
-    OneDark,        // 7.2M - VSCode favorite
-    Monokai,        // 2M+ - Classic warm
-    WinterIsComing, // 2.1M
-    NightOwl,       // 1.9M
-    SynthWave84,    // 1.3M - Retro cyberpunk
-    ShadesPurple,   // 1.4M
+    Dracula,    // 7.5M - Iconic purple/pink
+    OneDark,    // 7.2M - VSCode favorite
+    Monokai,    // 2M+ - Classic warm
+    NightOwl,   // 1.9M
+    SynthWave84, // 1.3M - Retro cyberpunk
 
     // ═══════════════════════════════════════════════════
     // MODERN DARK THEMES
@@ -229,10 +227,8 @@ impl ThemeChoice {
             Self::Dracula,
             Self::OneDark,
             Self::Monokai,
-            Self::WinterIsComing,
             Self::NightOwl,
             Self::SynthWave84,
-            Self::ShadesPurple,
             // Modern dark themes
             Self::TokyoNight,
             Self::CatppuccinMocha,
@@ -263,10 +259,8 @@ impl ThemeChoice {
             Self::Dracula => "Dracula".to_string(),
             Self::OneDark => "One Dark".to_string(),
             Self::Monokai => "Monokai".to_string(),
-            Self::WinterIsComing => "Winter is Coming".to_string(),
             Self::NightOwl => "Night Owl".to_string(),
             Self::SynthWave84 => "SynthWave '84".to_string(),
-            Self::ShadesPurple => "Shades of Purple".to_string(),
             // Modern dark themes
             Self::TokyoNight => "Tokyo Night".to_string(),
             Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
@@ -298,10 +292,8 @@ impl ThemeChoice {
             Self::Dracula => presets::dracula(),
             Self::OneDark => presets::one_dark(),
             Self::Monokai => presets::monokai(),
-            Self::WinterIsComing => presets::winter_is_coming(),
             Self::NightOwl => presets::night_owl(),
             Self::SynthWave84 => presets::synthwave_84(),
-            Self::ShadesPurple => presets::shades_purple(),
             // Modern dark themes
             Self::TokyoNight => presets::tokyo_night(),
             Self::CatppuccinMocha => presets::catppuccin_mocha(),

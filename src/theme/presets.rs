@@ -499,39 +499,6 @@ pub fn gruvbox_light() -> AppTheme {
 // POPULAR DARK THEMES
 // ═══════════════════════════════════════════════════
 
-/// Winter is Coming - Cool blue dark theme with icy highlights
-/// Deep blue backgrounds with bright blue and cyan accents
-pub fn winter_is_coming() -> AppTheme {
-    AppTheme::from_hex(
-        "Winter is Coming",
-        0x0000_1122, // bg_base - Deep winter blue
-        0x0000_0D19, // bg_sidebar - Darker blue
-        0x0011_2233, // bg_surface - Lighter card blue
-        0x0019_3348, // bg_elevated - Input background
-        0x0021_445D, // bg_hover - Hover state
-        0x002A_556F, // bg_active - Active state
-        0x00D1_E3F4, // fg_primary - Cool white text
-        0x009E_C8E4, // fg_secondary - Light blue text
-        0x0070_95B1, // fg_muted - Muted blue
-        0x0000_1122, // fg_on_accent - Dark text on accent
-        0x0080_C7FF, // accent - Bright winter blue
-        0x0069_AAE0, // accent_hover - Darker blue
-        0x007F_D962, // success - Bright green
-        0x00FF_C66D, // warning - Warm yellow
-        0x00FF_6B6B, // danger - Soft red
-        0x0082_AAFF, // info - Light blue
-        0x0019_3348, // border - Match elevated
-        0x0080_C7FF, // border_strong - Accent border
-        0x0011_2233, // divider - Match surface
-        0x00C3_E88D, // syntax_keyword - Lime green
-        0x0082_AAFF, // syntax_type - Light blue
-        0x00EE_EBDD, // syntax_string - Cream
-        0x00F7_8C6C, // syntax_number - Orange
-        0x00A0_A0A0, // syntax_comment - Gray
-        0x0080_C7FF, // syntax_operator - Accent blue
-    )
-}
-
 /// Night Owl - Professional dark blue theme optimized for night coding
 /// Dark navy with vibrant syntax colors for excellent readability
 pub fn night_owl() -> AppTheme {
@@ -595,39 +562,6 @@ pub fn synthwave_84() -> AppTheme {
         0x00F9_7E72, // syntax_number - Orange-pink
         0x006D_6D6D, // syntax_comment - Gray
         0x00FF_7EDB, // syntax_operator - Pink
-    )
-}
-
-/// Shades of Purple - Purple-dominant professional theme
-/// Rich purple backgrounds with vibrant purple and pink accents
-pub fn shades_purple() -> AppTheme {
-    AppTheme::from_hex(
-        "Shades of Purple",
-        0x002D_2B55, // bg_base - Deep purple
-        0x0025_2347, // bg_sidebar - Darker purple
-        0x003D_3A6A, // bg_surface - Medium purple card
-        0x004A_4775, // bg_elevated - Lighter purple
-        0x0057_5480, // bg_hover - Hover purple
-        0x0064_618B, // bg_active - Active purple
-        0x00E3_DFFF, // fg_primary - Light purple-white
-        0x00A5_9ACC, // fg_secondary - Medium purple
-        0x0079_72A8, // fg_muted - Muted purple
-        0x002D_2B55, // fg_on_accent - Dark on accent
-        0x00AD_26FF, // accent - Vibrant purple
-        0x0095_20E0, // accent_hover - Darker purple
-        0x0080_CBC4, // success - Teal
-        0x00FF_C600, // warning - Golden yellow
-        0x00EC_3A37, // danger - Red
-        0x0070_99DD, // info - Blue
-        0x003D_3A6A, // border - Match surface
-        0x00AD_26FF, // border_strong - Purple border
-        0x003D_3A6A, // divider - Match surface
-        0x00FF_628C, // syntax_keyword - Pink
-        0x009E_FFE6, // syntax_type - Mint
-        0x00A0_FFC4, // syntax_string - Light green
-        0x00FF_9D00, // syntax_number - Orange
-        0x006C_6783, // syntax_comment - Muted purple
-        0x00FF_628C, // syntax_operator - Pink
     )
 }
 
@@ -814,10 +748,8 @@ mod tests {
             dracula(),
             one_dark(),
             monokai(),
-            winter_is_coming(),
             night_owl(),
             synthwave_84(),
-            shades_purple(),
             // Modern dark themes
             tokyo_night(),
             catppuccin_mocha(),
@@ -853,10 +785,8 @@ mod tests {
         let _ = dracula();
         let _ = one_dark();
         let _ = monokai();
-        let _ = winter_is_coming();
         let _ = night_owl();
         let _ = synthwave_84();
-        let _ = shades_purple();
         // Modern dark themes
         let _ = tokyo_night();
         let _ = catppuccin_mocha();
