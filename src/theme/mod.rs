@@ -213,7 +213,6 @@ pub enum ThemeChoice {
     OxideLight,
     OneLight,
     SolarizedLight,
-    AyuLight,
 }
 
 impl ThemeChoice {
@@ -246,7 +245,6 @@ impl ThemeChoice {
             Self::OxideLight,
             Self::OneLight,
             Self::SolarizedLight,
-            Self::AyuLight,
         ]
     }
 
@@ -278,7 +276,6 @@ impl ThemeChoice {
             Self::OxideLight => "Oxide Light".to_string(),
             Self::OneLight => "One Light".to_string(),
             Self::SolarizedLight => "Solarized Light".to_string(),
-            Self::AyuLight => "Ayu Light".to_string(),
         }
     }
 
@@ -311,7 +308,6 @@ impl ThemeChoice {
             Self::OxideLight => presets::oxide_light(),
             Self::OneLight => presets::one_light(),
             Self::SolarizedLight => presets::solarized_light(),
-            Self::AyuLight => presets::ayu_light(),
         }
     }
 }

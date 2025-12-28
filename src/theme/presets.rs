@@ -635,39 +635,6 @@ pub fn solarized_light() -> AppTheme {
     )
 }
 
-/// Ayu Light - Modern bright light theme with orange accents
-/// Clean white backgrounds with vibrant orange and blue highlights
-pub fn ayu_light() -> AppTheme {
-    AppTheme::from_hex(
-        "Ayu Light",
-        0x00FA_FAFA, // bg_base - Clean white
-        0x00F3_F4F5, // bg_sidebar - Light gray
-        0x00FF_FFFF, // bg_surface - Pure white
-        0x00ED_EEEF, // bg_elevated - Subtle gray
-        0x00E7_E8E9, // bg_hover - Darker gray
-        0x00E1_E2E3, // bg_active - Active gray
-        0x005C_6166, // fg_primary - Dark gray
-        0x0082_8C94, // fg_secondary - Medium gray
-        0x00A1_AAB3, // fg_muted - Light gray
-        0x00FA_FAFA, // fg_on_accent - Light on accent
-        0x00FF_8F40, // accent - Bright orange
-        0x00E6_7A2E, // accent_hover - Darker orange
-        0x0086_B300, // success - Green
-        0x00F2_AE49, // warning - Yellow
-        0x00F5_1818, // danger - Red
-        0x0035_9BF8, // info - Blue
-        0x00E7_E8E9, // border - Light border
-        0x00FF_8F40, // border_strong - Orange
-        0x00ED_EEEF, // divider - Match elevated
-        0x00FA_8D3E, // syntax_keyword - Orange
-        0x0035_9BF8, // syntax_type - Blue
-        0x0086_B300, // syntax_string - Green
-        0x00A3_7ACC, // syntax_number - Purple
-        0x00A1_AAB3, // syntax_comment - Gray
-        0x00ED_9366, // syntax_operator - Light orange
-    )
-}
-
 /// Rosé Pine Dawn - Romantic light theme with rose and gold accents
 /// Warm cream backgrounds with rose, gold, and pine colors
 pub fn rose_pine_dawn() -> AppTheme {
@@ -767,7 +734,6 @@ mod tests {
             oxide_light(),
             one_light(),
             solarized_light(),
-            ayu_light(),
         ];
 
         for theme in &themes {
@@ -804,6 +770,5 @@ mod tests {
         let _ = oxide_light();
         let _ = one_light();
         let _ = solarized_light();
-        let _ = ayu_light();
     }
 }
