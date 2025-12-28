@@ -236,7 +236,6 @@ pub enum Message {
     SaveToSystemClicked,
     SaveToSystemResult(Result<(), String>),
     EventOccurred(iced::Event),
-    FontsLoaded,
     ToggleDiff(bool),
     // Advanced Security Settings
     ToggleStrictIcmp(bool),
@@ -372,12 +371,7 @@ impl State {
                 font_mono,
                 available_fonts,
             },
-            Task::batch(vec![
-                iced::font::load(
-                    include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(),
-                )
-                .map(|_| Message::FontsLoaded),
-            ]),
+            Task::none(),
         )
     }
 
@@ -589,7 +583,6 @@ impl State {
             }
             Message::SaveToSystemResult(Err(e)) => self.last_error = Some(ErrorInfo::new(e)),
             Message::EventOccurred(event) => return self.handle_event(event),
-            Message::FontsLoaded => {}
             Message::ToggleDiff(enabled) => self.show_diff = enabled,
             // Advanced Security Settings
             Message::ToggleStrictIcmp(enabled) => {
