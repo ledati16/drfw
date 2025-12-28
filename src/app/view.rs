@@ -6,18 +6,19 @@ use crate::app::ui_components::{
     themed_scrollable, themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
-    AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, WorkspaceTab,
+    AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, ThemeFilter,
+    ThemePickerState, WorkspaceTab,
 };
 use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, space,
-    stack, text, text_input, toggler, Id,
+    Id, button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, space,
+    stack, text, text_input, toggler,
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding};
 
 // Text input IDs for focus management
-const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
+pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
 
 pub fn view(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
@@ -187,10 +188,26 @@ pub fn view(state: &State) -> Element<'_, Message> {
         with_export
     };
 
+    // Theme picker modal overlay
+    let with_theme_picker = if let Some(ref picker_state) = state.theme_picker {
+        stack![
+            with_font_picker,
+            container(view_theme_picker(state, picker_state))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+        ]
+        .into()
+    } else {
+        with_font_picker
+    };
+
     // Keyboard shortcuts help overlay
     if state.show_shortcuts_help {
         stack![
-            with_font_picker,
+            with_theme_picker,
             container(view_shortcuts_help(
                 theme,
                 state.font_regular,
@@ -204,7 +221,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_font_picker
+        with_theme_picker
     }
 }
 
@@ -352,11 +369,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         .size(12)
                         .color(theme.danger)
                         .width(Length::Fill),
-                    button(text("No").size(11))
+                    button(text("No").size(14))
                         .on_press(Message::CancelDelete)
                         .padding(6)
                         .style(move |_, status| secondary_button(theme, status)),
-                    button(text("Yes").size(11))
+                    button(text("Yes").size(14))
                         .on_press(Message::DeleteRule(rule.id))
                         .padding(6)
                         .style(move |_, status| danger_button(theme, status)),
@@ -541,7 +558,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     // Delete
                     button(text("×").size(14).color(theme.fg_muted))
                         .on_press(Message::DeleteRuleRequested(rule.id))
-                        .padding(4)
+                        .padding(6)
                         .style(button::text),
                 ]
                 .spacing(8)
@@ -1128,12 +1145,12 @@ fn view_rule_form<'a>(
         row![
             button(text("Cancel").size(14))
                 .on_press(Message::CancelRuleForm)
-                .padding([10, 24])
+                .padding([10, 20])
                 .style(move |_, status| secondary_button(theme, status)),
             container(row![]).width(Length::Fill),
             button(text(button_text).size(14))
                 .on_press(Message::SaveRuleForm)
-                .padding([10, 32])
+                .padding([10, 24])
                 .style(move |_, status| primary_button(theme, status)),
         ]
         .spacing(16)
@@ -1260,15 +1277,23 @@ fn view_settings(state: &State) -> Element<'_, Message> {
             render_settings_row(
                 "Theme",
                 "Choose your preferred color scheme",
-                pick_list(
-                    crate::theme::ThemeChoice::all(),
-                    Some(state.current_theme),
-                    Message::ThemeChanged,
+                button(
+                    row![
+                        container(
+                            text(state.current_theme.name())
+                                .size(13)
+                                .wrapping(Wrapping::None)
+                        )
+                        .width(Length::Fill)
+                        .clip(true),
+                        text(" ▾").size(10).color(theme.fg_muted)
+                    ]
+                    .align_y(Alignment::Center)
                 )
+                .on_press(Message::OpenThemePicker)
                 .width(Length::Fill)
-                .text_size(14)
-                .style(move |_, status| themed_pick_list(theme, status))
-                .menu_style(move |_| themed_pick_list_menu(theme))
+                .padding(8)
+                .style(move |_, status| secondary_button(theme, status))
                 .into(),
                 theme,
                 state.font_regular,
@@ -1430,20 +1455,17 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                 )
                 .padding([8, 0]),
 
-                column![
-                    text("Egress Filtering Profile").size(15).font(state.font_regular).color(theme.fg_primary),
-                    text("Desktop allows all outbound; Server mode denies by default").size(12).color(theme.fg_muted),
-                    row![
-                        button(text(if advanced.egress_profile == crate::core::firewall::EgressProfile::Desktop { "● Desktop" } else { "○ Desktop" }).size(13))
-                            .on_press(Message::EgressProfileRequested(crate::core::firewall::EgressProfile::Desktop))
-                            .width(Length::Fill)
-                            .style(move |_, status| if advanced.egress_profile == crate::core::firewall::EgressProfile::Desktop { active_card_button(theme, status) } else { card_button(theme, status) }),
-                        button(text(if advanced.egress_profile == crate::core::firewall::EgressProfile::Server { "● Server" } else { "○ Server" }).size(13))
-                            .on_press(Message::EgressProfileRequested(crate::core::firewall::EgressProfile::Server))
-                            .width(Length::Fill)
-                            .style(move |_, status| if advanced.egress_profile == crate::core::firewall::EgressProfile::Server { active_card_button(theme, status) } else { card_button(theme, status) }),
-                    ].spacing(12).width(Length::Fill)
-                ].spacing(8)
+                render_settings_row(
+                    "Server Mode",
+                    "Block all outbound connections by default (recommended for servers)",
+                    toggler(advanced.egress_profile == crate::core::firewall::EgressProfile::Server)
+                        .on_toggle(Message::ServerModeToggled)
+                        .width(Length::Shrink)
+                        .style(move |_, status| themed_toggler(theme, status))
+                        .into(),
+                    theme,
+                    state.font_regular,
+                )
             ].spacing(16).padding(16)
         ]
     )
@@ -1505,11 +1527,11 @@ fn view_warning_modal<'a>(
             row![
                 button(text("Cancel").size(14).font(regular_font))
                     .on_press(Message::CancelWarning)
-                    .padding(12)
-                    .style(move |_, status| card_button(theme, status)),
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(theme, status)),
                 button(text("Yes, I understand").size(14).font(regular_font))
                     .on_press(confirm_msg)
-                    .padding(12)
+                    .padding([10, 24])
                     .style(move |_, status| danger_button(theme, status)),
             ]
             .spacing(12),
@@ -1523,7 +1545,7 @@ fn view_warning_modal<'a>(
         style.border = Border {
             color: theme.danger,
             width: 2.0,
-            ..Default::default()
+            radius: 8.0.into(),
         };
         style
     })
@@ -1702,7 +1724,7 @@ fn view_diagnostics_modal(
                 button(text("Close").size(14))
                     .on_press(Message::ToggleDiagnostics(false))
                     .padding([10, 20])
-                    .style(move |_, status| card_button(theme, status)),
+                    .style(move |_, status| secondary_button(theme, status)),
             ]
             .spacing(12)
             .align_y(Alignment::Center),
@@ -1966,9 +1988,9 @@ fn view_font_picker<'a>(
                 .color(theme.fg_muted)
                 .font(state.font_mono),
                 space::Space::new().width(Length::Fill),
-                button(text("Close").size(13))
+                button(text("Close").size(14))
                     .on_press(Message::CloseFontPicker)
-                    .padding([8, 20])
+                    .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
             ]
             .align_y(Alignment::Center)
@@ -1976,6 +1998,384 @@ fn view_font_picker<'a>(
         .spacing(16)
         .padding(24)
         .width(Length::Fixed(500.0)),
+    )
+    .style(move |_| card_container(theme))
+    .into()
+}
+
+fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Element<'a, Message> {
+    // Theme picker layout constants
+    const CARD_WIDTH: f32 = 150.0;
+    const CARD_SPACING: f32 = 16.0;
+    const GRID_PADDING: f32 = 8.0; // Clean symmetric padding
+    const MODAL_WIDTH: f32 = 556.0; // Fine-tuned for visual balance
+    const GRADIENT_BAR_HEIGHT: f32 = 24.0;
+    const COLOR_DOT_SIZE: f32 = 12.0;
+    const STATUS_COLOR_SIZE: f32 = 14.0;
+
+    let theme = &state.theme;
+    let search_term = &picker.search_lowercase;
+
+    // Filter themes by search term and light/dark filter
+    // Cache to_theme() results to avoid duplicate calls (performance optimization)
+    let filtered_themes: Vec<_> = crate::theme::ThemeChoice::all()
+        .iter()
+        .filter_map(|choice| {
+            let theme_instance = choice.to_theme();
+
+            // Filter by light/dark
+            let matches_filter = match picker.filter {
+                ThemeFilter::All => true,
+                ThemeFilter::Light => theme_instance.is_light(),
+                ThemeFilter::Dark => !theme_instance.is_light(),
+            };
+
+            // Filter by search (cached lowercase, ASCII-only for performance)
+            let matches_search = search_term.is_empty()
+                || choice.name().to_ascii_lowercase().contains(search_term);
+
+            if matches_filter && matches_search {
+                Some((*choice, theme_instance))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Track counts for display
+    let filtered_count = filtered_themes.len();
+
+    // Helper function for creating colored dot containers
+    let make_color_dot = |color: Color, size: f32| {
+        container(space::Space::new().width(size).height(size)).style(move |_| container::Style {
+            background: Some(color.into()),
+            border: Border {
+                radius: (size / 2.0).into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    };
+
+    // Pre-allocate theme card vector (show all themes, no limit)
+    let mut theme_cards = Vec::with_capacity(filtered_count);
+
+    for (choice, theme_preview) in filtered_themes.iter() {
+        let is_selected = state.current_theme == *choice;
+
+        // Extract colors for use in closures (Color is Copy)
+        let bg_base = theme_preview.bg_base;
+        let bg_surface = theme_preview.bg_surface;
+        let accent = theme_preview.accent;
+        let success = theme_preview.success;
+        let warning = theme_preview.warning;
+        let danger = theme_preview.danger;
+
+        theme_cards.push(
+            button(
+                column![
+                    // Header: name only (no checkmark)
+                    text(choice.name()).size(13).color(theme.fg_primary),
+                    // Split visual preview: 70% bg gradient + 30% accent color (square)
+                    row![
+                        // Left: background gradient
+                        container(space::Space::new())
+                            .width(Length::FillPortion(7))
+                            .height(Length::Fixed(GRADIENT_BAR_HEIGHT))
+                            .style(move |_| container::Style {
+                                background: Some(
+                                    iced::gradient::Linear::new(0.0)
+                                        .add_stop(0.0, bg_base)
+                                        .add_stop(1.0, bg_surface)
+                                        .into(),
+                                ),
+                                ..Default::default()
+                            }),
+                        // Right: accent color
+                        container(space::Space::new())
+                            .width(Length::FillPortion(3))
+                            .height(Length::Fixed(GRADIENT_BAR_HEIGHT))
+                            .style(move |_| container::Style {
+                                background: Some(accent.into()),
+                                ..Default::default()
+                            }),
+                    ],
+                    // Color swatches (semantic colors)
+                    row![
+                        make_color_dot(accent, COLOR_DOT_SIZE),
+                        make_color_dot(success, COLOR_DOT_SIZE),
+                        make_color_dot(warning, COLOR_DOT_SIZE),
+                        make_color_dot(danger, COLOR_DOT_SIZE),
+                    ]
+                    .spacing(4),
+                ]
+                .spacing(6)
+                .padding(8),
+            )
+            .width(Length::Fixed(CARD_WIDTH))
+            .on_press(Message::ThemePreview(*choice))
+            .style(move |_, status| {
+                let mut style = card_button(theme, status);
+                if is_selected {
+                    // Add accent border for selected theme
+                    style.border = Border {
+                        color: accent,
+                        width: 2.0,
+                        radius: 8.0.into(),
+                    };
+                }
+                style
+            })
+            .into(),
+        );
+    }
+
+    // Create grid layout (3 columns) - wrapped row with better spacing
+    let theme_grid = row(theme_cards)
+        .spacing(CARD_SPACING)
+        .wrap();
+
+    // Filter buttons (identical to tag filtering pattern)
+    let filter_buttons = row![
+        button(text("All").size(10))
+            .padding([4, 8])
+            .style(move |_, status| {
+                if matches!(picker.filter, ThemeFilter::All) {
+                    active_tab_button(theme, status)
+                } else {
+                    secondary_button(theme, status)
+                }
+            })
+            .on_press(Message::ThemePickerFilterChanged(ThemeFilter::All)),
+        button(text("Light").size(10))
+            .padding([4, 8])
+            .style(move |_, status| {
+                if matches!(picker.filter, ThemeFilter::Light) {
+                    active_tab_button(theme, status)
+                } else {
+                    secondary_button(theme, status)
+                }
+            })
+            .on_press(Message::ThemePickerFilterChanged(ThemeFilter::Light)),
+        button(text("Dark").size(10))
+            .padding([4, 8])
+            .style(move |_, status| {
+                if matches!(picker.filter, ThemeFilter::Dark) {
+                    active_tab_button(theme, status)
+                } else {
+                    secondary_button(theme, status)
+                }
+            })
+            .on_press(Message::ThemePickerFilterChanged(ThemeFilter::Dark)),
+    ]
+    .spacing(6);
+
+    // Preview panel showing currently selected theme (two-column layout)
+    let preview_panel = container(
+        column![
+            text(format!("PREVIEW: {}", state.current_theme.name()))
+                .size(11)
+                .font(state.font_mono)
+                .color(theme.fg_muted),
+            // Two-column layout: UI elements left, code right
+            row![
+                // Left column: Buttons, text hierarchy, status colors (45% width)
+                column![
+                    // Buttons in 2x2 grid (larger size)
+                    row![
+                        button(text("Apply").size(12))
+                            .padding([7, 16])
+                            .on_press(Message::ThemePreviewButtonClick)
+                            .style(move |_, status| primary_button(theme, status)),
+                        button(text("Cancel").size(12))
+                            .padding([7, 16])
+                            .on_press(Message::ThemePreviewButtonClick)
+                            .style(move |_, status| secondary_button(theme, status)),
+                    ]
+                    .spacing(6),
+                    row![
+                        button(text("Delete").size(12))
+                            .padding([7, 16])
+                            .on_press(Message::ThemePreviewButtonClick)
+                            .style(move |_, status| danger_button(theme, status)),
+                        button(text("Save").size(12))
+                            .padding([7, 16])
+                            .on_press(Message::ThemePreviewButtonClick)
+                            .style(move |_, status| dirty_button(theme, status)),
+                    ]
+                    .spacing(6),
+                    // Text hierarchy
+                    column![
+                        text("Text Hierarchy")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.fg_muted),
+                        row![
+                            text("Primary").size(11).color(theme.fg_primary),
+                            text("•").size(11).color(theme.fg_muted),
+                            text("Secondary").size(11).color(theme.fg_secondary),
+                            text("•").size(11).color(theme.fg_muted),
+                            text("Muted").size(11).color(theme.fg_muted),
+                        ]
+                        .spacing(6),
+                    ]
+                    .spacing(4),
+                    // Status colors
+                    column![
+                        text("Status Colors")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.fg_muted),
+                        row![
+                            make_color_dot(theme.success, STATUS_COLOR_SIZE),
+                            make_color_dot(theme.warning, STATUS_COLOR_SIZE),
+                            make_color_dot(theme.danger, STATUS_COLOR_SIZE),
+                            make_color_dot(theme.info, STATUS_COLOR_SIZE),
+                        ]
+                        .spacing(6),
+                    ]
+                    .spacing(4),
+                ]
+                .spacing(10)
+                .width(Length::FillPortion(9)),
+                // Right column: Taller code snippet (55% width)
+                container(
+                    column![
+                        text("fn process_data(items: Vec<String>) -> u32 {")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_keyword),
+                        text("    let mut count = 0;  // initialize")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_comment),
+                        text("    for item in items.iter() {")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_keyword),
+                        text("        if item.len() > 5 {")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_keyword),
+                        text("            count += 1;")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_number),
+                        text("            println!(\"Found: {}\", item);")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_string),
+                        text("        }")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_keyword),
+                        text("    }")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_keyword),
+                        text("    count  // return value")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_comment),
+                        text("}")
+                            .size(10)
+                            .font(state.font_mono)
+                            .color(theme.syntax_keyword),
+                    ]
+                    .spacing(1)
+                )
+                .padding(8)
+                .width(Length::FillPortion(11))
+                .style(move |_| container::Style {
+                    background: Some(theme.bg_elevated.into()),
+                    border: Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(8)
+        .padding(12),
+    )
+    .width(Length::Fill)
+    .style(move |_| container::Style {
+        background: Some(theme.bg_surface.into()),
+        border: Border {
+            radius: 8.0.into(),
+            color: theme.border,
+            width: 1.0,
+        },
+        ..Default::default()
+    });
+
+    container(
+        column![
+            text("Select Theme")
+                .size(18)
+                .font(state.font_regular)
+                .color(theme.fg_primary),
+            text_input("Search themes...", &picker.search)
+                .on_input(Message::ThemePickerSearchChanged)
+                .padding(10)
+                .size(13)
+                .style(move |_, status| themed_text_input(theme, status)),
+            filter_buttons,
+            container(
+                scrollable(
+                    column![if filtered_count == 0 {
+                        container(
+                            text("No themes found — try a different search")
+                                .size(11)
+                                .color(theme.fg_muted),
+                        )
+                        .padding(GRID_PADDING) // Symmetric - simple and maintainable
+                    } else {
+                        container(theme_grid).padding(GRID_PADDING) // Symmetric - simple and maintainable
+                    }]
+                )
+                .width(Length::Fill)
+                .style(move |_, status| themed_scrollable(theme, status))
+            )
+            .height(Length::Fixed(320.0))
+            .width(Length::Fill)
+            .style(move |_| container::Style {
+                border: Border {
+                    radius: 8.0.into(),
+                    color: theme.border,
+                    width: 1.0,
+                },
+                ..Default::default()
+            }),
+            preview_panel,
+            row![
+                text(if filtered_count < crate::theme::ThemeChoice::all().len() {
+                    format!("{} themes match", filtered_count)
+                } else {
+                    format!("{} themes available", filtered_count)
+                })
+                .size(10)
+                .color(theme.fg_muted)
+                .font(state.font_mono),
+                space::Space::new().width(Length::Fill),
+                button(text("Cancel").size(14))
+                    .on_press(Message::CancelThemePicker)
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(theme, status)),
+                button(text("Apply").size(14))
+                    .on_press(Message::ApplyTheme)
+                    .padding([10, 24])
+                    .style(move |_, status| primary_button(theme, status)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+        ]
+        .spacing(16)
+        .padding(24)
+        .width(Length::Fixed(MODAL_WIDTH)),
     )
     .style(move |_| card_container(theme))
     .into()
@@ -2143,7 +2543,7 @@ fn view_shortcuts_help(
             button(text("Close").size(14))
                 .on_press(Message::ToggleShortcutsHelp(false))
                 .padding([10, 20])
-                .style(move |_, status| card_button(theme, status)),
+                .style(move |_, status| secondary_button(theme, status)),
         ]
         .spacing(24)
         .padding(32),

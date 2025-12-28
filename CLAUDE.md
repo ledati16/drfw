@@ -287,6 +287,35 @@ impl ThemeChoice {
 
 **Do NOT** implement Catalog traits to achieve this. Use delegation instead.
 
+### UI Styling Reference (MANDATORY)
+
+**CRITICAL:** Before making ANY changes to UI styling, theming, shadows, buttons, modals, or visual design:
+
+1. **Read `STYLE.md` first** - This is the canonical UI style guide for DRFW
+2. **Follow established patterns** - Don't invent new styling approaches unless explicitly needed
+3. **Update `STYLE.md`** - Document any new styling patterns or decisions you implement
+4. **Check the changelog** - Review recent styling changes to understand design evolution
+
+**`STYLE.md` contains:**
+- Design philosophy and core principles
+- Semantic color system documentation
+- Shadow system implementation and usage patterns
+- Button styling centralization and categories
+- Tab strip design rationale
+- Modal window styling standards
+- Font picker patterns
+- What was rejected and why (critical for avoiding repeated mistakes)
+- Performance considerations for UI rendering
+
+**Never:**
+- Create inline button styles (use centralized functions from `ui_components.rs`)
+- Implement Catalog traits for application-level themes
+- Use gradients on interactive elements (breaks shadows in Iced 0.14)
+- Modify existing style functions without checking all usage sites
+- Add new UI patterns without documenting them in `STYLE.md`
+
+**When uncertain about styling:** Consult `STYLE.md` sections on the specific component type (buttons, modals, tabs, etc.) before proceeding.
+
 ---
 
 ## 10. GUI Performance Optimization
@@ -438,6 +467,47 @@ let mut out = String::with_capacity(300 + (self.rules.len() * 50));
 3. ✅ Pre-generate in `update()` when data changes - Correct approach
 
 **Best Practice:** Compute expensive view state in `update()`, store in State, reference in `view()`.
+
+### Modal Width Calculations & Wrapped Layouts (2025-12-28 Theme Picker)
+
+**What Happened:** During theme picker implementation, we spent significant time trying to achieve pixel-perfect padding symmetry between cards and scrollbar through exact width calculations.
+
+**Initial Approach (Wrong):**
+```rust
+// Calculating exact modal width from card requirements
+const MODAL_WIDTH: f32 = (CARD_WIDTH * 3.0) + (CARD_SPACING * 2.0) + (GRID_PADDING * 2.0) + 50.0;
+```
+- Brittle: Breaks with any layout change
+- Fragile: Requires recalculation when adding features
+- False precision: Iced's wrapped rows don't work this way
+
+**Correct Approach:**
+```rust
+// Choose comfortable width, fine-tune by ±10px for visual balance
+const CARD_WIDTH: f32 = 150.0;
+const CARD_SPACING: f32 = 16.0;
+const GRID_PADDING: f32 = 8.0;
+const MODAL_WIDTH: f32 = 556.0; // Fine-tuned for visual balance
+```
+
+**Key Insights:**
+1. **Wrapped rows only expand to content width**, not container width - extra space appears on right
+2. **This is normal Iced behavior** - don't fight it with complex calculations
+3. **Use symmetric padding everywhere** - asymmetric padding to "fix" scrollbar gaps is a code smell
+4. **Choose comfortable width with slack** (~20-30px extra) for scrollbar overlay
+5. **Fine-tune by ±10px if needed** - minor visual adjustments are acceptable
+6. **Won't break with font size changes** - fixed card widths are resilient
+
+**The Scrollbar Saga:**
+We went through multiple iterations trying to achieve perfect padding:
+- Adding extra right padding → huge left gap appeared
+- Reducing modal width → cards clipped by scrollbar
+- Asymmetric padding calculations → confusing and fragile
+- **Solution:** Increased modal width to 556px with symmetric 8px padding
+
+**Lesson:** When layout feels "hacky" or requires advanced math, step back. Choose simple constants, add some slack, and fine-tune visually. Don't pursue pixel perfection at the cost of maintainability.
+
+**Reference:** See `STYLE.md` "Theme Picker Patterns" section for detailed implementation.
 
 ### Performance Profiling Guidelines
 **Before Optimizing:**

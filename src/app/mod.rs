@@ -5,6 +5,8 @@ pub mod view;
 use crate::core::error::ErrorInfo;
 use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
+use iced::widget::Id;
+use iced::widget::operation::focus;
 use iced::{Element, Task};
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -37,6 +39,7 @@ pub struct State {
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
     pub font_picker: Option<FontPickerState>,
+    pub theme_picker: Option<ThemePickerState>,
     pub command_history: crate::command::CommandHistory,
     pub current_theme: crate::theme::ThemeChoice,
     pub theme: crate::theme::AppTheme,
@@ -61,6 +64,21 @@ pub struct FontPickerState {
 pub enum FontPickerTarget {
     Regular,
     Mono,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThemePickerState {
+    pub search: String,
+    pub search_lowercase: String, // Cache lowercase to avoid allocations every frame
+    pub filter: ThemeFilter,
+    pub original_theme: crate::theme::ThemeChoice, // For revert on Cancel
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeFilter {
+    All,
+    Light,
+    Dark,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,7 +264,7 @@ pub enum Message {
     ToggleDroppedLogging(bool),
     LogRateChanged(u32),
     LogPrefixChanged(String),
-    EgressProfileRequested(crate::core::firewall::EgressProfile),
+    ServerModeToggled(bool),
     ConfirmServerMode,
     // Diagnostics
     ToggleDiagnostics(bool),
@@ -261,7 +279,15 @@ pub enum Message {
     Undo,
     Redo,
     // Theme
+    #[allow(dead_code)] // Reserved for future direct theme switching (e.g., keyboard shortcuts, CLI args)
     ThemeChanged(crate::theme::ThemeChoice),
+    OpenThemePicker,
+    ThemePickerSearchChanged(String),
+    ThemePickerFilterChanged(ThemeFilter),
+    ThemePreview(crate::theme::ThemeChoice),
+    ApplyTheme,
+    CancelThemePicker,
+    ThemePreviewButtonClick, // No-op for preview buttons to show hover/click effects
     // Fonts
     RegularFontChanged(crate::fonts::RegularFontChoice),
     MonoFontChanged(crate::fonts::MonoFontChoice),
@@ -359,6 +385,7 @@ impl State {
                 show_export_modal: false,
                 show_shortcuts_help: false,
                 font_picker: None,
+                theme_picker: None,
                 command_history: crate::command::CommandHistory::default(),
                 current_theme,
                 theme,
@@ -630,13 +657,14 @@ impl State {
                 self.update_cached_text();
                 return self.save_config();
             }
-            Message::EgressProfileRequested(profile) => {
-                if profile == crate::core::firewall::EgressProfile::Server {
-                    // Show warning modal
+            Message::ServerModeToggled(enabled) => {
+                if enabled {
+                    // Show warning modal before enabling Server mode
                     self.pending_warning = Some(PendingWarning::EnableServerMode);
                 } else {
                     // Can switch to Desktop without warning
-                    self.ruleset.advanced_security.egress_profile = profile;
+                    self.ruleset.advanced_security.egress_profile =
+                        crate::core::firewall::EgressProfile::Desktop;
                     self.update_cached_text();
                     return self.save_config();
                 }
@@ -670,6 +698,52 @@ impl State {
                 tracing::info!("Theme changed to: {}", choice.name());
                 return self.save_config();
             }
+            Message::OpenThemePicker => {
+                self.theme_picker = Some(ThemePickerState {
+                    search: String::new(),
+                    search_lowercase: String::new(),
+                    filter: ThemeFilter::All,
+                    original_theme: self.current_theme,
+                });
+            }
+            Message::ThemePickerSearchChanged(search) => {
+                if let Some(picker) = &mut self.theme_picker {
+                    picker.search_lowercase = search.to_lowercase(); // Cache lowercase
+                    picker.search = search;
+                }
+            }
+            Message::ThemePickerFilterChanged(filter) => {
+                if let Some(picker) = &mut self.theme_picker {
+                    picker.filter = filter;
+                }
+            }
+            Message::ThemePreview(choice) => {
+                // Apply theme temporarily for preview (don't save)
+                self.current_theme = choice;
+                self.theme = choice.to_theme();
+                tracing::info!("Previewing theme: {}", choice.name());
+            }
+            Message::ApplyTheme => {
+                // Confirm theme selection and save
+                self.theme_picker = None;
+                tracing::info!("Applied theme: {}", self.current_theme.name());
+                return self.save_config();
+            }
+            Message::CancelThemePicker => {
+                // Revert to original theme and close picker
+                if let Some(picker) = &self.theme_picker {
+                    self.current_theme = picker.original_theme;
+                    self.theme = picker.original_theme.to_theme();
+                    tracing::info!(
+                        "Cancelled theme selection, reverted to: {}",
+                        self.current_theme.name()
+                    );
+                }
+                self.theme_picker = None;
+            }
+            Message::ThemePreviewButtonClick => {
+                // No-op: preview buttons are just for showing hover/click effects
+            }
             Message::RegularFontChanged(choice) => {
                 self.regular_font_choice = choice.clone();
                 self.font_regular = choice.to_font();
@@ -690,7 +764,7 @@ impl State {
                     search_lowercase: String::new(),
                 });
                 // Auto-focus search input when picker opens
-                return iced::widget::operation::focus_next();
+                return focus(Id::from(view::FONT_SEARCH_INPUT_ID));
             }
             Message::FontPickerSearchChanged(search) => {
                 if let Some(picker) = &mut self.font_picker {
@@ -1244,6 +1318,9 @@ impl State {
                     }
                     if self.font_picker.is_some() {
                         return Task::done(Message::CloseFontPicker);
+                    }
+                    if self.theme_picker.is_some() {
+                        return Task::done(Message::CancelThemePicker);
                     }
                     if !self.rule_search.is_empty() {
                         self.rule_search.clear();
