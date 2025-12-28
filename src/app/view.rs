@@ -1822,9 +1822,14 @@ fn view_font_picker<'a>(
         })
         .collect();
 
+    // Track counts for display
+    let filtered_count = filtered_fonts.len();
+    let display_limit = 30;
+    let displayed_count = filtered_count.min(display_limit);
+
     // Limit visible items to improve rendering performance if there are many matches
     // 30 is enough for a searchable list and keeps layout fast (reduced from 100)
-    let font_list = column(filtered_fonts.into_iter().take(30).map(|f| {
+    let font_list = column(filtered_fonts.into_iter().take(display_limit).map(|f| {
         // Performance: Don't clone until button press (use index instead)
         let name = f.name();
         let preview_font = f.to_font(); // Cheap: just returns handle from FontChoice
@@ -1906,8 +1911,26 @@ fn view_font_picker<'a>(
                 .size(13)
                 .style(move |_, status| themed_text_input(theme, status)),
             container(
-                scrollable(container(font_list).padding(2))
-                    .style(move |_, status| themed_scrollable(theme, status))
+                scrollable(
+                    column![
+                        container(font_list).padding([2, 12]),
+                        if filtered_count > display_limit {
+                            container(
+                                text(format!(
+                                    "Showing {} of {} fonts — search to find more",
+                                    displayed_count, filtered_count
+                                ))
+                                .size(11)
+                                .color(theme.fg_muted),
+                            )
+                            .padding([8, 12])
+                        } else {
+                            container(text(""))
+                        },
+                    ]
+                    .spacing(0)
+                )
+                .style(move |_, status| themed_scrollable(theme, status))
             )
             .height(Length::Fixed(400.0))
             .width(Length::Fill)
@@ -1920,10 +1943,14 @@ fn view_font_picker<'a>(
                 ..Default::default()
             }),
             row![
-                text(format!("{} fonts found", state.available_fonts.len()))
-                    .size(10)
-                    .color(theme.fg_muted)
-                    .font(state.font_mono),
+                text(if filtered_count < state.available_fonts.len() {
+                    format!("{} fonts match", filtered_count)
+                } else {
+                    format!("{} fonts available", filtered_count)
+                })
+                .size(10)
+                .color(theme.fg_muted)
+                .font(state.font_mono),
                 space::Space::new().width(Length::Fill),
                 button(text("Close").size(13))
                     .on_press(Message::CloseFontPicker)
