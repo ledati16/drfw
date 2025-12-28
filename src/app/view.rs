@@ -1,9 +1,9 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
     danger_button, dirty_button, elevated_card_container, inactive_tab_button, main_container,
-    modal_backdrop, primary_button, secondary_button, section_header_container,
-    sidebar_container, themed_checkbox, themed_horizontal_rule, themed_pick_list,
-    themed_pick_list_menu, themed_scrollable, themed_slider, themed_text_input, themed_toggler,
+    modal_backdrop, primary_button, secondary_button, section_header_container, sidebar_container,
+    themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
+    themed_scrollable, themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, WorkspaceTab,
@@ -72,16 +72,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
     let overlay = if let Some(warning) = &state.pending_warning {
         Some(
-            container(view_warning_modal(
-                warning,
-                theme,
-                state.font_regular,
-            ))
-            .style(move |_| modal_backdrop(theme))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
+            container(view_warning_modal(warning, theme, state.font_regular))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
         )
     } else if let Some(form) = &state.rule_form {
         Some(
@@ -1635,26 +1631,28 @@ fn view_diagnostics_modal(
                     .size(14)
                     .color(theme.fg_primary),
                 container(
-                    scrollable(column(if recent_entries.is_empty() {
-                        vec![
-                            text("No audit entries found")
-                                .size(12)
-                                .color(theme.fg_muted)
-                                .into(),
-                        ]
-                    } else {
-                        recent_entries
-                            .into_iter()
-                            .map(|entry| {
-                                text(entry)
-                                    .size(11)
-                                    .font(mono_font)
-                                    .color(theme.fg_primary)
-                                    .into()
-                            })
-                            .collect()
-                    })
-                    .spacing(4))
+                    scrollable(
+                        column(if recent_entries.is_empty() {
+                            vec![
+                                text("No audit entries found")
+                                    .size(12)
+                                    .color(theme.fg_muted)
+                                    .into(),
+                            ]
+                        } else {
+                            recent_entries
+                                .into_iter()
+                                .map(|entry| {
+                                    text(entry)
+                                        .size(11)
+                                        .font(mono_font)
+                                        .color(theme.fg_primary)
+                                        .into()
+                                })
+                                .collect()
+                        })
+                        .spacing(4)
+                    )
                     .style(move |_, status| themed_scrollable(theme, status))
                 )
                 .height(200)
@@ -1917,15 +1915,15 @@ fn view_font_picker<'a>(
             )
             .height(Length::Fixed(400.0))
             .width(Length::Fill)
-                .style(move |_| container::Style {
-                    background: Some(theme.bg_elevated.into()),
-                    border: Border {
-                        radius: 8.0.into(),
-                        color: theme.border,
-                        width: 1.0,
-                    },
-                    ..Default::default()
-                }),
+            .style(move |_| container::Style {
+                background: Some(theme.bg_elevated.into()),
+                border: Border {
+                    radius: 8.0.into(),
+                    color: theme.border,
+                    width: 1.0,
+                },
+                ..Default::default()
+            }),
             row![
                 text(format!("{} fonts found", state.available_fonts.len()))
                     .size(10)

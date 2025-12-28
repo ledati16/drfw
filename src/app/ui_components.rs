@@ -32,9 +32,11 @@ pub fn sidebar_container(theme: &AppTheme) -> container::Style {
         }
     };
 
-    let gradient = Gradient::Linear(iced::gradient::Linear::new(0.0)
-        .add_stop(0.0, theme.bg_sidebar)
-        .add_stop(1.0, gradient_end));
+    let gradient = Gradient::Linear(
+        iced::gradient::Linear::new(0.0)
+            .add_stop(0.0, theme.bg_sidebar)
+            .add_stop(1.0, gradient_end),
+    );
 
     container::Style {
         background: Some(gradient.into()),
@@ -86,9 +88,11 @@ pub fn elevated_card_container(theme: &AppTheme) -> container::Style {
         }
     };
 
-    let gradient = Gradient::Linear(iced::gradient::Linear::new(0.0)
-        .add_stop(0.0, theme.bg_surface)
-        .add_stop(1.0, gradient_end));
+    let gradient = Gradient::Linear(
+        iced::gradient::Linear::new(0.0)
+            .add_stop(0.0, theme.bg_surface)
+            .add_stop(1.0, gradient_end),
+    );
 
     container::Style {
         background: Some(gradient.into()),
@@ -568,9 +572,16 @@ pub fn themed_text_input(theme: &AppTheme, status: text_input::Status) -> text_i
             selection: theme.accent,
         },
         text_input::Status::Disabled => text_input::Style {
-            background: Color { a: 0.5, ..theme.bg_elevated }.into(),
+            background: Color {
+                a: 0.5,
+                ..theme.bg_elevated
+            }
+            .into(),
             border: Border {
-                color: Color { a: 0.3, ..theme.border },
+                color: Color {
+                    a: 0.3,
+                    ..theme.border
+                },
                 width: 1.0,
                 radius: 4.0.into(),
             },
