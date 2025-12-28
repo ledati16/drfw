@@ -34,32 +34,32 @@ pub fn oxide() -> AppTheme {
 }
 
 /// Oxide Light - Light counterpart to Oxide (Default light theme)
-/// Warm parchment backgrounds with the same burnt copper accent, like writing on quality aged paper
+/// Warm copper-tinted cream with subtle terracotta influence - professional yet distinctive
 pub fn oxide_light() -> AppTheme {
     AppTheme::from_hex(
         "Oxide Light",
-        0x00F0_E8DF, // bg_base - Aged parchment background
-        0x00E5_DBCF, // bg_sidebar - Warm stone sidebar
-        0x00F5_EFE7, // bg_surface - Lighter card surfaces
-        0x00FA_F6F0, // bg_elevated - Almost white inputs
-        0x00E0_D6CC, // bg_hover - Darker warm hover
-        0x00D5_C9BC, // bg_active - Active warm tan
+        0x00F2_E8D8, // bg_base - Warm cream with subtle copper tint
+        0x00E3_D7C5, // bg_sidebar - Warm clay sidebar
+        0x00F7_F0E5, // bg_surface - Light warm cream cards
+        0x00FC_F8F0, // bg_elevated - Almost white with warmth
+        0x00DC_CFBD, // bg_hover - Warm tan hover
+        0x00D4_C4B0, // bg_active - Adobe tan active
         0x003A_2E25, // fg_primary - Deep warm brown (almost black)
         0x006A_5D51, // fg_secondary - Medium warm brown
         0x009B_8D7F, // fg_muted - Light brown for disabled
         0x00FF_FCF8, // fg_on_accent - Light cream on copper
         0x00A7_5533, // accent - Burnt copper (same as dark)
         0x0092_4A2E, // accent_hover - Darker copper for contrast
-        0x006B_8456, // success - Darker sage green
-        0x00B8_8A35, // warning - Golden amber
-        0x00A7_3D2E, // danger - Darker terracotta
-        0x004D_8A7E, // info - Darker teal
-        0x00D5_C9BC, // border - Warm tan border
+        0x006B_8456, // success - Sage green
+        0x00BD_8838, // warning - Warm amber
+        0x00AD_4433, // danger - Warm terracotta
+        0x004D_8A7E, // info - Teal contrast
+        0x00D8_CCBA, // border - Warm border
         0x00A7_5533, // border_strong - Copper border
-        0x00E0_D6CC, // divider - Subtle warm divider
-        0x00A7_3D2E, // syntax_keyword - Terracotta red
-        0x008B_5A8E, // syntax_type - Muted purple
-        0x00B8_8A35, // syntax_string - Golden amber
+        0x00E3_D7C5, // divider - Warm divider
+        0x00AD_4433, // syntax_keyword - Terracotta
+        0x008B_5A8E, // syntax_type - Muted purple (contrast)
+        0x00BD_8838, // syntax_string - Warm amber
         0x006A_5D51, // syntax_number - Medium brown
         0x009B_8D7F, // syntax_comment - Muted brown
         0x00A7_5533, // syntax_operator - Copper accent
