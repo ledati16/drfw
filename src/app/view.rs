@@ -1,6 +1,6 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
-    danger_button, dirty_button, elevated_card_container, inactive_tab_button, main_container,
+    danger_button, dirty_button, inactive_tab_button, main_container,
     modal_backdrop, primary_button, secondary_button, section_header_container, sidebar_container,
     themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
     themed_scrollable, themed_slider, themed_text_input, themed_toggler,
@@ -15,7 +15,7 @@ use iced::widget::{
     Id, button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, space,
     stack, text, text_input, toggler,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding};
+use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow};
 
 // Text input IDs for focus management
 pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
@@ -767,7 +767,20 @@ fn view_workspace<'a>(
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .style(move |_| elevated_card_container(theme));
+    .style(move |_| container::Style {
+        background: Some(theme.bg_surface.into()),
+        border: Border {
+            color: theme.border,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 3.0,
+        },
+        ..Default::default()
+    });
 
     // Zone: History (Left)
     let history_actions = row![
@@ -2606,6 +2619,25 @@ fn view_from_cached_json_tokens<'a>(
 ) -> iced::widget::Column<'a, Message> {
     const SPACES: &str = "                                ";
 
+    // Pre-calculate subtle zebra stripe color (1.5% difference)
+    let even_stripe = if theme.is_light() {
+        // Light themes: slightly darker
+        Color {
+            r: (theme.bg_surface.r * 0.985).max(0.0),
+            g: (theme.bg_surface.g * 0.985).max(0.0),
+            b: (theme.bg_surface.b * 0.985).max(0.0),
+            ..theme.bg_surface
+        }
+    } else {
+        // Dark themes: slightly lighter
+        Color {
+            r: (theme.bg_surface.r * 1.015 + 0.005).min(1.0),
+            g: (theme.bg_surface.g * 1.015 + 0.005).min(1.0),
+            b: (theme.bg_surface.b * 1.015 + 0.005).min(1.0),
+            ..theme.bg_surface
+        }
+    };
+
     let mut lines = column![].spacing(2);
 
     for highlighted_line in tokens {
@@ -2643,7 +2675,16 @@ fn view_from_cached_json_tokens<'a>(
             );
         }
 
-        lines = lines.push(row_content);
+        // Apply subtle zebra striping: even rows get background, odd rows transparent
+        let is_even = highlighted_line.line_number % 2 == 0;
+        let bg = if is_even { Some(even_stripe) } else { None };
+
+        lines = lines.push(container(row_content).width(Length::Fill).style(move |_| {
+            container::Style {
+                background: bg.map(Into::into),
+                ..Default::default()
+            }
+        }));
     }
 
     lines
@@ -2656,6 +2697,25 @@ fn view_from_cached_nft_tokens<'a>(
     mono_font: iced::Font,
 ) -> iced::widget::Column<'a, Message> {
     const SPACES: &str = "                                ";
+
+    // Pre-calculate subtle zebra stripe color (1.5% difference)
+    let even_stripe = if theme.is_light() {
+        // Light themes: slightly darker
+        Color {
+            r: (theme.bg_surface.r * 0.985).max(0.0),
+            g: (theme.bg_surface.g * 0.985).max(0.0),
+            b: (theme.bg_surface.b * 0.985).max(0.0),
+            ..theme.bg_surface
+        }
+    } else {
+        // Dark themes: slightly lighter
+        Color {
+            r: (theme.bg_surface.r * 1.015 + 0.005).min(1.0),
+            g: (theme.bg_surface.g * 1.015 + 0.005).min(1.0),
+            b: (theme.bg_surface.b * 1.015 + 0.005).min(1.0),
+            ..theme.bg_surface
+        }
+    };
 
     let mut lines = column![].spacing(1); // NFT uses tighter spacing than JSON
 
@@ -2690,7 +2750,16 @@ fn view_from_cached_nft_tokens<'a>(
             );
         }
 
-        lines = lines.push(row_content);
+        // Apply subtle zebra striping: even rows get background, odd rows transparent
+        let is_even = highlighted_line.line_number % 2 == 0;
+        let bg = if is_even { Some(even_stripe) } else { None };
+
+        lines = lines.push(container(row_content).width(Length::Fill).style(move |_| {
+            container::Style {
+                background: bg.map(Into::into),
+                ..Default::default()
+            }
+        }));
     }
 
     lines
