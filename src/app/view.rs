@@ -416,21 +416,36 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     theme.fg_muted
                 };
 
-                // Combined Protocol/Port pill
+                // Protocol/Port badge with chain arrow in Server Mode
                 // Issue #16: Use display_name() method (no match expression)
                 let proto_text = rule.protocol.display_name();
                 // Issue #5: Use cached port display string - no allocation!
                 let port_text = &rule.port_display;
 
+                // Determine if we're in Server Mode
+                let server_mode = state.ruleset.advanced_security.egress_profile
+                    == crate::core::firewall::EgressProfile::Server;
+
+                // Chain arrow: only show in Server Mode
+                let chain_arrow = if server_mode {
+                    match rule.chain {
+                        crate::core::firewall::Chain::Input => "↓",
+                        crate::core::firewall::Chain::Output => "↑",
+                    }
+                } else {
+                    ""
+                };
+
                 let badge = container(
-                    text(format!("{proto_text}: {port_text}"))
+                    text(format!("{}{}: {}", chain_arrow, proto_text, port_text))
                         .size(9)
                         .font(state.font_mono)
                         .color(if rule.enabled {
                             theme.syntax_type
                         } else {
                             theme.fg_muted
-                        }),
+                        })
+                        .wrapping(Wrapping::None), // Never wrap - clip instead
                 )
                 .padding([2, 6])
                 .style(move |_| container::Style {
@@ -441,7 +456,9 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         width: 1.0,
                     },
                     ..Default::default()
-                });
+                })
+                .width(Length::Shrink) // Only take needed space
+                .clip(true); // Clip if extreme edge case
 
                 // Main Content: Label + Tags
                 // Issue #20: Pre-allocate tag items Vec with exact capacity
@@ -486,8 +503,40 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     );
                 }
 
-                let main_info = column![
-                    // Top row: Label (with clipping and fixed height)
+                // Row 2: Interface (if present) + Badge
+                let row2 = if let Some(ref iface) = rule.interface {
+                    row![
+                        // Interface with @ prefix - clips if too long
+                        container(
+                            text(format!("@{}", iface))
+                                .size(9)
+                                .font(state.font_mono)
+                                .color(if rule.enabled {
+                                    theme.fg_muted
+                                } else {
+                                    Color {
+                                        a: 0.5,
+                                        ..theme.fg_muted
+                                    }
+                                })
+                                .wrapping(Wrapping::None)
+                        )
+                        .width(Length::Fill)
+                        .clip(true),
+                        badge,
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                } else {
+                    // No interface - badge gets left alignment
+                    row![badge].align_y(Alignment::Center)
+                };
+
+                // Build main_info with dynamic rows
+                let mut main_info_rows: Vec<Element<'_, Message>> = Vec::with_capacity(3);
+
+                // Row 1: Label (always present)
+                main_info_rows.push(
                     container(
                         text(if rule.label.is_empty() {
                             "Unnamed Rule"
@@ -501,26 +550,35 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         } else {
                             theme.fg_muted
                         })
-                        .wrapping(Wrapping::None)
+                        .wrapping(Wrapping::None),
                     )
                     .width(Length::Fill)
                     .height(Length::Fixed(18.0))
                     .padding(iced::Padding::new(0.0).right(4.0))
-                    .clip(true),
-                    // Bottom row: Tags (clipped, fixed height) + Badge (priority)
-                    row![
+                    .clip(true)
+                    .into(),
+                );
+
+                // Row 2: Interface + Badge (always present)
+                main_info_rows.push(
+                    container(row2)
+                        .width(Length::Fill)
+                        .height(Length::Fixed(18.0))
+                        .into(),
+                );
+
+                // Row 3: Tags (only if tags exist)
+                if !rule.tags.is_empty() {
+                    main_info_rows.push(
                         container(row(tag_items).spacing(4).align_y(Alignment::Center))
                             .width(Length::Fill)
                             .height(Length::Fixed(18.0))
-                            .align_y(Alignment::Center)
-                            .clip(true),
-                        badge,
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                ]
-                .spacing(2)
-                .width(Length::Fill);
+                            .clip(true) // Clip if too many tags
+                            .into(),
+                    );
+                }
+
+                let main_info = column(main_info_rows).spacing(2).width(Length::Fill);
 
                 row![
                     // Drag Handle

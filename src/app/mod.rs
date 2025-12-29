@@ -472,6 +472,14 @@ impl State {
             .iter()
             .enumerate()
             .filter(|(_, r)| {
+                // Hide OUTPUT rules in Desktop Mode (they're harmless but confusing)
+                if self.ruleset.advanced_security.egress_profile
+                    == crate::core::firewall::EgressProfile::Desktop
+                    && r.chain == crate::core::firewall::Chain::Output
+                {
+                    return false;
+                }
+
                 // Issue #14: Early return optimization - check tag filter first (cheaper)
                 if let Some(ref filter_tag) = self.filter_tag
                     && !r.tags.contains(filter_tag)
