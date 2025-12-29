@@ -33,6 +33,13 @@ mod tests_impl {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -67,6 +74,13 @@ mod tests_impl {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -88,6 +102,13 @@ mod tests_impl {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -191,6 +212,13 @@ mod tests_impl {
             enabled: true,
             tags: vec!["secure".to_string()],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -207,6 +235,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -220,6 +255,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -289,6 +331,13 @@ mod tests_impl {
                 enabled: true,
                 tags: vec![],
                 created_at: Utc::now(),
+                // Cached fields
+                label_lowercase: String::new(),
+                interface_lowercase: None,
+                tags_lowercase: Vec::new(),
+                protocol_lowercase: "",
+                port_display: String::new(),
+                source_string: None,
             });
         }
 
@@ -344,6 +393,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -357,6 +413,13 @@ mod tests_impl {
             enabled: false, // DISABLED
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -370,6 +433,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -414,6 +484,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -427,6 +504,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -440,6 +524,13 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -516,6 +607,13 @@ mod property_tests {
                 enabled: true,
                 tags: Vec::new(),
                 created_at: Utc::now(),
+                // Cached fields
+                label_lowercase: String::new(),
+                interface_lowercase: None,
+                tags_lowercase: Vec::new(),
+                protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
             }
         }
     }
@@ -633,6 +731,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
         ruleset
     }
@@ -704,6 +809,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -742,6 +854,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let json2 = ruleset1.to_nftables_json();
@@ -831,6 +950,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -844,6 +970,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         ruleset.rules.push(Rule {
@@ -857,6 +990,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -903,6 +1043,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         // UDP rule
@@ -917,6 +1064,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         // Any protocol rule
@@ -931,6 +1085,13 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
 
         let json = ruleset.to_nftables_json();

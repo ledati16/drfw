@@ -5,6 +5,11 @@
 use iced::Color;
 use std::borrow::Cow;
 
+/// Average number of syntax tokens per line in JSON output (pre-allocation optimization)
+const AVG_JSON_TOKENS_PER_LINE: usize = 20;
+/// Average number of syntax tokens per line in nftables text output (pre-allocation optimization)
+const AVG_NFT_TOKENS_PER_LINE: usize = 15;
+
 /// A highlighted token with its color
 /// Uses Cow to avoid heap allocations for common static tokens like "{", "}", ":", etc.
 #[derive(Debug, Clone)]
@@ -70,7 +75,7 @@ pub fn tokenize_json(content: &str) -> Vec<HighlightedLine> {
 }
 
 fn parse_json_line(line: &str) -> Vec<Token> {
-    let mut tokens = Vec::with_capacity(20); // Pre-allocate (avg ~15 tokens/line, avoids reallocations)
+    let mut tokens = Vec::with_capacity(AVG_JSON_TOKENS_PER_LINE);
     let mut chars = line.chars().peekable();
     let mut current_token = String::new();
 
@@ -335,7 +340,7 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
         "policy",
     ];
 
-    let mut tokens = Vec::with_capacity(15); // Pre-allocate (avg ~12 tokens/line)
+    let mut tokens = Vec::with_capacity(AVG_NFT_TOKENS_PER_LINE);
     let mut current_token = String::new();
     let mut in_string = false;
     let chars = line.chars();
@@ -480,7 +485,9 @@ pub fn compute_and_tokenize_diff(
     use similar::ChangeTag;
 
     let diff = similar::TextDiff::from_lines(old_text, new_text);
-    let mut result = Vec::new();
+    // Issue #18: Pre-allocate Vec with estimated capacity (max of old/new line count)
+    let line_count = old_text.lines().count().max(new_text.lines().count());
+    let mut result = Vec::with_capacity(line_count);
     let mut line_number = 0;
 
     for change in diff.iter_all_changes() {

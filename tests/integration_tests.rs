@@ -64,6 +64,13 @@ fn create_test_ruleset() -> FirewallRuleset {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
     ruleset
 }
@@ -192,6 +199,13 @@ async fn test_multiple_rules_verification() {
             enabled: true,
             tags: vec![],
             created_at: chrono::Utc::now(),
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            source_string: None,
         });
     }
 
@@ -331,6 +345,13 @@ async fn test_checksum_changes_on_modification() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     let snapshot2 = ruleset1.to_nftables_json();
@@ -384,6 +405,13 @@ async fn test_all_protocol_types_generate_valid_json() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     // UDP
@@ -398,6 +426,13 @@ async fn test_all_protocol_types_generate_valid_json() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     // ICMP
@@ -412,6 +447,13 @@ async fn test_all_protocol_types_generate_valid_json() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     // Any
@@ -426,6 +468,13 @@ async fn test_all_protocol_types_generate_valid_json() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     let json = ruleset.to_nftables_json();
@@ -455,6 +504,13 @@ async fn test_complex_rule_configurations() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     // Rule with interface filter
@@ -469,6 +525,13 @@ async fn test_complex_rule_configurations() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     // Rule with port range
@@ -486,6 +549,13 @@ async fn test_complex_rule_configurations() {
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     // Rule with everything
@@ -500,6 +570,13 @@ async fn test_complex_rule_configurations() {
         enabled: true,
         tags: vec!["dns".to_string(), "public".to_string()],
         created_at: chrono::Utc::now(),
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
     });
 
     let json = ruleset.to_nftables_json();

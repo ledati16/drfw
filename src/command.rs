@@ -24,7 +24,7 @@
 //! let mut ruleset = FirewallRuleset::new();
 //! let mut history = CommandHistory::default();
 //!
-//! let rule = Rule {
+//! let mut rule = Rule {
 //!     id: Uuid::new_v4(),
 //!     label: "Allow HTTP".to_string(),
 //!     protocol: Protocol::Tcp,
@@ -35,7 +35,15 @@
 //!     enabled: true,
 //!     tags: vec![],
 //!     created_at: chrono::Utc::now(),
+//!     // Cached fields (populated by rebuild_caches())
+//!     label_lowercase: String::new(),
+//!     interface_lowercase: None,
+//!     tags_lowercase: Vec::new(),
+//!     protocol_lowercase: "",
+//!     port_display: String::new(),
+//!     source_string: None,
 //! };
+//! rule.rebuild_caches();
 //!
 //! let cmd = Box::new(AddRuleCommand { rule });
 //! history.execute(cmd, &mut ruleset);
@@ -338,18 +346,18 @@ mod tests {
     use crate::core::firewall::Protocol;
 
     fn create_test_rule(label: &str) -> Rule {
-        Rule {
-            id: Uuid::new_v4(),
-            label: label.to_string(),
-            protocol: Protocol::Tcp,
-            ports: None,
-            source: None,
-            interface: None,
-            ipv6_only: false,
-            enabled: true,
-            created_at: chrono::Utc::now(),
-            tags: Vec::new(),
-        }
+        Rule::with_caches(
+            Uuid::new_v4(),
+            label.to_string(),
+            Protocol::Tcp,
+            None,  // ports
+            None,  // source
+            None,  // interface
+            false, // ipv6_only
+            true,  // enabled
+            chrono::Utc::now(),
+            Vec::new(), // tags
+        )
     }
 
     #[test]

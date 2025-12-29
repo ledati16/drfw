@@ -16,6 +16,7 @@ use iced::widget::{
     scrollable, space, stack, text, text_input, toggler,
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow};
+use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
 
 // Text input IDs for focus management
 pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
@@ -92,7 +93,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             container(view_rule_form(
                 form,
                 state.form_errors.as_ref(),
-                &state.interfaces,
+                &state.interfaces_with_any, // Issue #4: Use cached list with "Any" prepended
                 theme,
                 state.font_regular,
                 state.font_mono,
@@ -288,8 +289,9 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         for tag in all_tags {
             let is_selected = state.filter_tag.as_ref() == Some(tag);
             tag_elements.push(
-                button(text(tag).size(10))
-                    .on_press(Message::FilterByTag(Some(tag.clone())))
+                button(text(tag.as_str()).size(10))
+                    // Issue #2: Arc::clone just copies pointer (cheap!), not string data
+                    .on_press(Message::FilterByTag(Some(Arc::clone(tag))))
                     .padding([4, 8])
                     .style(move |_, status| {
                         if is_selected {
@@ -413,24 +415,10 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 };
 
                 // Combined Protocol/Port pill
-                let proto_text = match rule.protocol {
-                    Protocol::Tcp => "TCP",
-                    Protocol::Udp => "UDP",
-                    Protocol::Any => "ANY",
-                    Protocol::Icmp => "ICMP",
-                    Protocol::Icmpv6 => "ICMPv6",
-                };
-
-                let port_text = rule.ports.as_ref().map_or_else(
-                    || "All".to_string(),
-                    |p| {
-                        if p.start == p.end {
-                            p.start.to_string()
-                        } else {
-                            format!("{}-{}", p.start, p.end)
-                        }
-                    },
-                );
+                // Issue #16: Use display_name() method (no match expression)
+                let proto_text = rule.protocol.display_name();
+                // Issue #5: Use cached port display string - no allocation!
+                let port_text = &rule.port_display;
 
                 let badge = container(
                     text(format!("{proto_text}: {port_text}"))
@@ -454,35 +442,37 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 });
 
                 // Main Content: Label + Tags
-                let mut tag_items: Vec<Element<'_, Message>> = vec![];
+                // Issue #20: Pre-allocate tag items Vec with exact capacity
+                let mut tag_items: Vec<Element<'_, Message>> = Vec::with_capacity(rule.tags.len());
+                // Issue #15: Pre-compute all tag colors (enabled/disabled variants)
+                let is_enabled = rule.enabled;
+                let tag_text_color = if is_enabled {
+                    theme.fg_on_accent
+                } else {
+                    Color {
+                        a: 0.5,
+                        ..theme.fg_muted
+                    }
+                };
+                let tag_bg_color = if is_enabled {
+                    theme.accent
+                } else {
+                    Color {
+                        a: 0.3,
+                        ..theme.accent
+                    }
+                };
                 for tag in &rule.tags {
-                    let tag_theme = theme.clone();
-                    let is_enabled = rule.enabled;
                     tag_items.push(
                         container(
                             text(tag)
                                 .size(8)
-                                .color(if is_enabled {
-                                    theme.fg_on_accent
-                                } else {
-                                    Color {
-                                        a: 0.5,
-                                        ..theme.fg_muted
-                                    }
-                                })
+                                .color(tag_text_color)
                                 .wrapping(Wrapping::None),
                         )
                         .padding([1, 4])
                         .style(move |_: &_| container::Style {
-                            background: Some(if is_enabled {
-                                tag_theme.accent.into()
-                            } else {
-                                Color {
-                                    a: 0.3,
-                                    ..tag_theme.accent
-                                }
-                                .into()
-                            }),
+                            background: Some(tag_bg_color.into()),
                             border: Border {
                                 radius: 3.0.into(),
                                 ..Default::default()
@@ -933,7 +923,8 @@ fn view_from_cached_diff_tokens<'a>(
     // Use pre-computed zebra stripe color from theme (computed once, not every frame)
     let even_stripe = theme.zebra_stripe;
 
-    let mut lines = keyed_column(Vec::new()).spacing(1);
+    // Issue #20: Pre-allocate with exact line count
+    let mut lines = keyed_column(Vec::with_capacity(diff_tokens.len())).spacing(1);
 
     for (diff_type, highlighted_line) in diff_tokens {
         let line_number = highlighted_line.line_number;
@@ -1018,8 +1009,8 @@ fn view_rule_form<'a>(
     };
     let port_error = errors.and_then(|e| e.port.as_ref());
     let source_error = errors.and_then(|e| e.source.as_ref());
-    let mut iface_options = vec!["Any".to_string()];
-    iface_options.extend(interfaces.iter().cloned());
+    // Issue #4: Use pre-cached interface list with "Any" - no allocation!
+    let iface_options = interfaces;
 
     let form_box = column![
         // Title Section
@@ -1050,7 +1041,7 @@ fn view_rule_form<'a>(
                 text("SERVICE PRESET").size(10).color(theme.fg_muted),
                 pick_list(
                     PRESETS,
-                    form.selected_preset.clone(),
+                    form.selected_preset, // No clone needed - Copy type
                     Message::RuleFormPresetSelected
                 )
                 .placeholder("Select a common service...")
@@ -1188,12 +1179,14 @@ fn view_rule_form<'a>(
                 .spacing(10);
 
                 if !form.tags.is_empty() {
+                    // Issue #6: Capture only needed colors instead of cloning entire theme
+                    let accent_color = theme.accent;
+                    let fg_on_accent = theme.fg_on_accent;
                     org_col = org_col.push(Element::from(
                         row(form.tags.iter().map(|tag| -> Element<'_, Message> {
-                            let tag_theme = theme.clone();
                             container(
                                 row![
-                                    text(tag).size(12).color(theme.fg_on_accent),
+                                    text(tag).size(12).color(fg_on_accent),
                                     button(text("×").size(14))
                                         .on_press(Message::RuleFormRemoveTag(tag.clone()))
                                         .padding([2, 6])
@@ -1205,7 +1198,7 @@ fn view_rule_form<'a>(
                             .padding([4, 10])
                             .style(move |t| {
                                 let mut style = container::rounded_box(t);
-                                style.background = Some(tag_theme.accent.into());
+                                style.background = Some(accent_color.into());
                                 style
                             })
                             .into()
@@ -2685,7 +2678,8 @@ fn view_from_cached_json_tokens<'a>(
     // Use pre-computed zebra stripe color from theme (computed once, not every frame)
     let even_stripe = theme.zebra_stripe;
 
-    let mut lines = keyed_column(Vec::new()).spacing(2);
+    // Issue #20: Pre-allocate with exact line count
+    let mut lines = keyed_column(Vec::with_capacity(tokens.len())).spacing(2);
 
     for highlighted_line in tokens {
         let line_number = highlighted_line.line_number;
@@ -2758,7 +2752,8 @@ fn view_from_cached_nft_tokens<'a>(
     // Use pre-computed zebra stripe color from theme (computed once, not every frame)
     let even_stripe = theme.zebra_stripe;
 
-    let mut lines = keyed_column(Vec::new()).spacing(1); // NFT uses tighter spacing than JSON
+    // Issue #20: Pre-allocate with exact line count
+    let mut lines = keyed_column(Vec::with_capacity(tokens.len())).spacing(1); // NFT uses tighter spacing than JSON
 
     for highlighted_line in tokens {
         let line_number = highlighted_line.line_number;

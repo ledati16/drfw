@@ -5,7 +5,26 @@ use tracing::{error, info, warn};
 
 /// Applies a ruleset and returns the PRE-APPLY snapshot in a single elevated operation.
 /// This reduces the number of password prompts to one.
-/// Phase 1 Optimization: Takes JSON directly to avoid cloning entire ruleset
+///
+/// # Arguments
+///
+/// * `json_payload` - The nftables JSON payload to apply (must contain `nftables` array)
+///
+/// # Errors
+///
+/// Returns error if:
+/// - `nft` command execution fails
+/// - Privilege escalation fails or is denied
+/// - JSON parsing of snapshot fails
+///
+/// # Panics
+///
+/// May panic if `json_payload` structure is malformed (not an object or missing `nftables` key).
+/// Callers should use `to_nftables_json()` to ensure correct structure.
+///
+/// # Phase 1 Optimization
+///
+/// Takes JSON directly to avoid cloning entire ruleset
 pub async fn apply_with_snapshot(mut json_payload: Value) -> Result<Value> {
     // Inject a list table command AFTER the table creation (position 1, after "add table")
     // This captures the PRE-APPLY snapshot for rollback
@@ -201,27 +220,31 @@ pub fn list_snapshots() -> Result<Vec<std::path::PathBuf>> {
 
     // Case-sensitive extension check is intentional - on Linux/Unix systems, filenames are case-sensitive
     // and we specifically want lowercase `.json` files, not `.JSON` or other variants
-    let mut snapshots: Vec<std::path::PathBuf> = std::fs::read_dir(&state_dir)?
+    let snapshots: Vec<std::path::PathBuf> = std::fs::read_dir(&state_dir)?
         .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| {
-                    n.starts_with("snapshot_")
-                        && std::path::Path::new(n)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-                })
+            path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("snapshot_")
+                    && std::path::Path::new(n)
+                        .extension()
+                        .is_some_and(|ext| ext == "json") // Case-sensitive as intended
+            })
         })
         .collect();
 
-    // Sort by modification time, newest first
-    snapshots.sort_by(|a, b| {
-        let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
-        let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
-        b_time.cmp(&a_time) // Reverse order for newest first
-    });
+    // Issue #13: Sort by modification time with O(n log n) instead of O(n² log n)
+    // Collect metadata once, then sort
+    let mut snapshots_with_time: Vec<_> = snapshots
+        .into_iter()
+        .filter_map(|path| {
+            let time = std::fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+            Some((path, time))
+        })
+        .collect();
+
+    snapshots_with_time.sort_unstable_by(|a, b| b.1.cmp(&a.1)); // Newest first
+    let snapshots: Vec<_> = snapshots_with_time.into_iter().map(|(p, _)| p).collect();
 
     Ok(snapshots)
 }

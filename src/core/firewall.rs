@@ -20,7 +20,7 @@
 //! use drfw::core::firewall::{Rule, Protocol, PortRange};
 //! use uuid::Uuid;
 //!
-//! let rule = Rule {
+//! let mut rule = Rule {
 //!     id: Uuid::new_v4(),
 //!     label: "Allow SSH".to_string(),
 //!     protocol: Protocol::Tcp,
@@ -31,7 +31,15 @@
 //!     enabled: true,
 //!     created_at: chrono::Utc::now(),
 //!     tags: vec![],
+//!     // Cached fields (populated by rebuild_caches())
+//!     label_lowercase: String::new(),
+//!     interface_lowercase: None,
+//!     tags_lowercase: Vec::new(),
+//!     protocol_lowercase: "",
+//!     port_display: String::new(),
+//!     source_string: None,
 //! };
+//! rule.rebuild_caches();
 //! ```
 
 use ipnetwork::IpNetwork;
@@ -55,6 +63,30 @@ pub enum Protocol {
     Icmp,
     /// Internet Control Message Protocol version 6
     Icmpv6,
+}
+
+impl Protocol {
+    /// Returns lowercase protocol name as static string for efficient search filtering (Issue #9)
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Protocol::Any => "any",
+            Protocol::Tcp => "tcp",
+            Protocol::Udp => "udp",
+            Protocol::Icmp => "icmp",
+            Protocol::Icmpv6 => "icmpv6",
+        }
+    }
+
+    /// Returns display name for UI rendering (Issue #16)
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Protocol::Tcp => "TCP",
+            Protocol::Udp => "UDP",
+            Protocol::Any => "ANY",
+            Protocol::Icmp => "ICMP",
+            Protocol::Icmpv6 => "ICMPv6",
+        }
+    }
 }
 
 impl fmt::Display for Protocol {
@@ -111,13 +143,134 @@ pub struct Rule {
     /// Tags for organizing and filtering rules
     #[serde(default)]
     pub tags: Vec<String>,
+
+    // Cached lowercase fields for search performance (Issue #1)
+    /// Cached lowercase version of `label` for fast search filtering
+    #[serde(skip)]
+    pub label_lowercase: String,
+    /// Cached lowercase version of `interface` for fast search filtering
+    #[serde(skip)]
+    pub interface_lowercase: Option<String>,
+    /// Cached lowercase versions of all tags for fast search filtering
+    #[serde(skip)]
+    pub tags_lowercase: Vec<String>,
+    /// Cached lowercase protocol name for fast search filtering (Issue #3)
+    #[serde(skip)]
+    pub protocol_lowercase: &'static str,
+    /// Cached port display string for efficient view rendering (Issue #5)
+    #[serde(skip)]
+    pub port_display: String,
+    /// Cached source IP network string for efficient JSON generation (Issue #10)
+    #[serde(skip)]
+    pub source_string: Option<String>,
+}
+
+impl Rule {
+    /// Rebuilds all cached lowercase fields for search performance
+    /// Must be called after deserialization or any field modification
+    pub fn rebuild_caches(&mut self) {
+        self.label_lowercase = self.label.to_lowercase();
+        self.interface_lowercase = self.interface.as_ref().map(|i| i.to_lowercase());
+        self.tags_lowercase = self.tags.iter().map(|t| t.to_lowercase()).collect();
+        self.protocol_lowercase = self.protocol.as_str();
+        // Issue #5: Cache port display string for efficient view rendering
+        self.port_display = self.ports.as_ref().map_or_else(
+            || "All".to_string(),
+            |p| {
+                if p.start == p.end {
+                    p.start.to_string()
+                } else {
+                    format!("{}-{}", p.start, p.end)
+                }
+            },
+        );
+        // Issue #10: Cache source IP string for efficient JSON generation
+        self.source_string = self.source.map(|s| s.to_string());
+    }
+
+    /// Updates label and its cached lowercase version
+    pub fn set_label(&mut self, label: String) {
+        self.label_lowercase = label.to_lowercase();
+        self.label = label;
+    }
+
+    /// Updates interface and its cached lowercase version
+    pub fn set_interface(&mut self, interface: Option<String>) {
+        self.interface_lowercase = interface.as_ref().map(|i| i.to_lowercase());
+        self.interface = interface;
+    }
+
+    /// Updates protocol and its cached lowercase version
+    pub fn set_protocol(&mut self, protocol: Protocol) {
+        self.protocol_lowercase = protocol.as_str();
+        self.protocol = protocol;
+    }
+
+    /// Adds a tag and updates the cached lowercase tags
+    pub fn add_tag(&mut self, tag: String) {
+        let tag_lowercase = tag.to_lowercase();
+        self.tags.push(tag);
+        self.tags_lowercase.push(tag_lowercase);
+    }
+
+    /// Removes a tag and updates the cached lowercase tags
+    pub fn remove_tag(&mut self, tag: &str) {
+        if let Some(pos) = self.tags.iter().position(|t| t == tag) {
+            self.tags.remove(pos);
+            self.tags_lowercase.remove(pos);
+        }
+    }
+
+    /// Sets all tags and updates the cached lowercase tags
+    pub fn set_tags(&mut self, tags: Vec<String>) {
+        self.tags_lowercase = tags.iter().map(|t| t.to_lowercase()).collect();
+        self.tags = tags;
+    }
+
+    /// Creates a Rule with specified fields and auto-initializes caches.
+    /// Useful for tests and manual rule creation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_caches(
+        id: Uuid,
+        label: String,
+        protocol: Protocol,
+        ports: Option<PortRange>,
+        source: Option<IpNetwork>,
+        interface: Option<String>,
+        ipv6_only: bool,
+        enabled: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+        tags: Vec<String>,
+    ) -> Self {
+        let mut rule = Self {
+            id,
+            label,
+            protocol,
+            ports,
+            source,
+            interface,
+            ipv6_only,
+            enabled,
+            created_at,
+            tags,
+            // Initialize with empty caches - will be rebuilt next
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(), // Issue #5: Will be populated by rebuild_caches()
+            source_string: None,         // Issue #10: Will be populated by rebuild_caches()
+        };
+        rule.rebuild_caches();
+        rule
+    }
 }
 
 fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServicePreset {
     pub name: &'static str,
     pub protocol: Protocol,
@@ -526,7 +679,10 @@ impl FirewallRuleset {
     pub fn to_nftables_json(&self) -> serde_json::Value {
         use serde_json::json;
 
-        let mut nft_rules = Vec::new();
+        // Issue #11: Pre-allocate Vec with estimated capacity
+        // Base rules: ~15, user rules: N, termination: ~5
+        let estimated_capacity = 20 + self.rules.len();
+        let mut nft_rules = Vec::with_capacity(estimated_capacity);
 
         // 1. Setup Table & Flush
         nft_rules.push(json!({ "add": { "table": { "family": "inet", "name": "drfw" } } }));
@@ -809,12 +965,14 @@ impl FirewallRuleset {
 
     fn add_user_rule(nft_rules: &mut Vec<serde_json::Value>, rule: &Rule) {
         use serde_json::json;
-        let mut expressions = Vec::new();
+        // Issue #11: Pre-allocate with typical max size (protocol + ports + src + interface + state + comment + action)
+        let mut expressions = Vec::with_capacity(8);
 
         match rule.protocol {
             Protocol::Any => {}
             Protocol::Tcp | Protocol::Udp => {
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": rule.protocol.to_string() } }));
+                // Issue #9: Use as_str() for static string (no allocation)
+                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": rule.protocol.as_str() } }));
             }
             Protocol::Icmp => {
                 expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }));
@@ -825,11 +983,19 @@ impl FirewallRuleset {
         }
 
         if let Some(src) = rule.source {
+            // Issue #10: Use cached source string (falls back to to_string() if cache not populated)
+            let src_string;
+            let src_str = if let Some(ref cached) = rule.source_string {
+                cached.as_str()
+            } else {
+                src_string = src.to_string();
+                &src_string
+            };
             expressions.push(json!({
                 "match": {
                     "left": { "payload": { "protocol": if src.is_ipv6() { "ip6" } else { "ip" }, "field": "saddr" } },
                     "op": "==",
-                    "right": src.to_string()
+                    "right": src_str
                 }
             }));
         }
@@ -850,7 +1016,8 @@ impl FirewallRuleset {
             };
             expressions.push(json!({
                 "match": {
-                    "left": { "payload": { "protocol": rule.protocol.to_string(), "field": "dport" } },
+                    // Issue #9: Use as_str() for static string (no allocation)
+                    "left": { "payload": { "protocol": rule.protocol.as_str(), "field": "dport" } },
                     "op": "==",
                     "right": port_val
                 }

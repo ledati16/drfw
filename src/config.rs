@@ -71,18 +71,26 @@ pub fn save_config(config: &AppConfig) -> std::io::Result<()> {
 pub fn load_config() -> AppConfig {
     if let Some(mut path) = get_data_dir() {
         path.push("config.json");
-        if let Ok(config) = fs::read_to_string(&path).and_then(|json| {
+        if let Ok(mut config) = fs::read_to_string(&path).and_then(|json| {
             serde_json::from_str::<AppConfig>(&json).map_err(std::io::Error::other)
         }) {
+            // Rebuild caches after deserialization (Issue #1, #3)
+            for rule in &mut config.ruleset.rules {
+                rule.rebuild_caches();
+            }
             return config;
         }
 
         // Fallback: Try loading old ruleset.json format for backward compatibility
         path.pop();
         path.push("ruleset.json");
-        if let Ok(ruleset) = fs::read_to_string(path).and_then(|json| {
+        if let Ok(mut ruleset) = fs::read_to_string(path).and_then(|json| {
             serde_json::from_str::<FirewallRuleset>(&json).map_err(std::io::Error::other)
         }) {
+            // Rebuild caches after deserialization (Issue #1, #3)
+            for rule in &mut ruleset.rules {
+                rule.rebuild_caches();
+            }
             return AppConfig {
                 ruleset,
                 theme_choice: crate::theme::ThemeChoice::default(),

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Complete theme definition with semantic color naming
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppTheme {
-    pub name: String,
+    pub name: &'static str, // Issue #8: Static string to avoid heap allocation
 
     // === Background Layers (progressive depth) ===
     pub bg_base: Color,     // App background (deepest)
@@ -55,7 +55,7 @@ pub struct AppTheme {
 impl AppTheme {
     /// Creates a theme from RGB hex values for easier definition
     pub fn from_hex(
-        name: &str,
+        name: &'static str, // Issue #8: Static string (no allocation)
         bg_base: u32,
         bg_sidebar: u32,
         bg_surface: u32,
@@ -123,7 +123,7 @@ impl AppTheme {
         };
 
         Self {
-            name: name.to_string(),
+            name, // Issue #8: Use static str directly (no allocation)
             bg_base: bg_base_color,
             bg_sidebar: hex_to_color(bg_sidebar),
             bg_surface: hex_to_color(bg_surface),
@@ -274,34 +274,35 @@ impl ThemeChoice {
         ]
     }
 
-    pub fn name(self) -> String {
+    pub fn name(self) -> &'static str {
+        // Issue #8: Return static strings (no allocation)
         match self {
             // Custom themes
-            Self::Oxide => "Oxide".to_string(),
-            Self::Aethel => "Aethel".to_string(),
+            Self::Oxide => "Oxide",
+            Self::Aethel => "Aethel",
             // Popular dark themes
-            Self::Dracula => "Dracula".to_string(),
-            Self::OneDark => "One Dark".to_string(),
-            Self::Monokai => "Monokai".to_string(),
-            Self::NightOwl => "Night Owl".to_string(),
-            Self::SynthWave84 => "SynthWave '84".to_string(),
+            Self::Dracula => "Dracula",
+            Self::OneDark => "One Dark",
+            Self::Monokai => "Monokai",
+            Self::NightOwl => "Night Owl",
+            Self::SynthWave84 => "SynthWave '84",
             // Modern dark themes
-            Self::TokyoNight => "Tokyo Night".to_string(),
-            Self::CatppuccinMocha => "Catppuccin Mocha".to_string(),
-            Self::RosePine => "Rosé Pine".to_string(),
+            Self::TokyoNight => "Tokyo Night",
+            Self::CatppuccinMocha => "Catppuccin Mocha",
+            Self::RosePine => "Rosé Pine",
             // Nature/atmospheric dark themes
-            Self::Nord => "Nord".to_string(),
-            Self::Gruvbox => "Gruvbox Dark".to_string(),
-            Self::Everforest => "Everforest Dark".to_string(),
-            Self::AyuDark => "Ayu Dark".to_string(),
+            Self::Nord => "Nord",
+            Self::Gruvbox => "Gruvbox Dark",
+            Self::Everforest => "Everforest Dark",
+            Self::AyuDark => "Ayu Dark",
             // Light themes
-            Self::GruvboxLight => "Gruvbox Light".to_string(),
-            Self::CatppuccinLatte => "Catppuccin Latte".to_string(),
-            Self::RosePineDawn => "Rosé Pine Dawn".to_string(),
-            Self::EverforestLight => "Everforest Light".to_string(),
-            Self::OxideLight => "Oxide Light".to_string(),
-            Self::OneLight => "One Light".to_string(),
-            Self::SolarizedLight => "Solarized Light".to_string(),
+            Self::GruvboxLight => "Gruvbox Light",
+            Self::CatppuccinLatte => "Catppuccin Latte",
+            Self::RosePineDawn => "Rosé Pine Dawn",
+            Self::EverforestLight => "Everforest Light",
+            Self::OxideLight => "Oxide Light",
+            Self::OneLight => "One Light",
+            Self::SolarizedLight => "Solarized Light",
         }
     }
 
@@ -340,6 +341,6 @@ impl ThemeChoice {
 
 impl std::fmt::Display for ThemeChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.name())
+        f.write_str(self.name())
     }
 }

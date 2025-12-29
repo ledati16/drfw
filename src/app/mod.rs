@@ -8,7 +8,7 @@ use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Element, Task};
-use std::collections::BTreeSet;
+use std::sync::Arc; // Issue #2: Atomic reference-counted strings for tags (thread-safe for Iced)
 use std::time::Duration;
 
 // Fonts are now dynamically selected via settings
@@ -22,7 +22,7 @@ pub struct State {
     pub rule_form: Option<RuleForm>,
     pub countdown_remaining: u32,
     pub form_errors: Option<FormErrors>,
-    pub interfaces: Vec<String>,
+    pub interfaces_with_any: Vec<String>, // Issue #4: Cached ["Any", "eth0", "wlan0", ...] for pick_list
     // Phase 1 Memory Optimization: Removed cached_nft_text and cached_json_text
     // Text is already stored in tokens, no need to duplicate it
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>, // Phase 1: Pre-parsed NFT tokens
@@ -30,7 +30,7 @@ pub struct State {
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>, // Phase 1: Pre-parsed diff tokens
     pub rule_search: String,
     pub rule_search_lowercase: String,
-    pub cached_all_tags: Vec<String>,
+    pub cached_all_tags: Vec<Arc<String>>, // Issue #2: Arc for cheap pointer cloning (thread-safe)
     pub cached_filtered_rule_indices: Vec<usize>, // Phase 1: Cache filtered rule indices (updated when search/filter changes)
     pub deleting_id: Option<uuid::Uuid>,
     pub pending_warning: Option<PendingWarning>,
@@ -44,7 +44,7 @@ pub struct State {
     pub command_history: crate::command::CommandHistory,
     pub current_theme: crate::theme::ThemeChoice,
     pub theme: crate::theme::AppTheme,
-    pub filter_tag: Option<String>,
+    pub filter_tag: Option<Arc<String>>, // Issue #2: Arc for cheap pointer cloning (thread-safe)
     pub dragged_rule_id: Option<uuid::Uuid>,
     pub hovered_drop_target_id: Option<uuid::Uuid>,
     pub regular_font_choice: crate::fonts::RegularFontChoice,
@@ -164,7 +164,7 @@ impl RuleForm {
         let ports = if matches!(self.protocol, Protocol::Tcp | Protocol::Udp) {
             let port_start = self.port_start.parse::<u16>();
             let port_end = if self.port_end.is_empty() {
-                port_start.clone()
+                port_start.clone() // Clone needed - Result is not Copy
             } else {
                 self.port_end.parse::<u16>()
             };
@@ -301,7 +301,7 @@ pub enum Message {
     RuleFormTagInputChanged(String),
     RuleFormAddTag,
     RuleFormRemoveTag(String),
-    FilterByTag(Option<String>),
+    FilterByTag(Option<Arc<String>>), // Issue #2: Arc for cheap pointer cloning (thread-safe)
     // Drag and Drop
     RuleDragStart(uuid::Uuid),
     RuleDropped(uuid::Uuid),
@@ -337,6 +337,10 @@ impl State {
         mono_font_choice.resolve(true);
 
         let interfaces = crate::utils::list_interfaces();
+        // Issue #4: Cache interface list with "Any" prepended for pick_list
+        let interfaces_with_any: Vec<String> = std::iter::once("Any".to_string())
+            .chain(interfaces.iter().cloned())
+            .collect();
 
         // Phase 1: Pre-tokenize syntax highlighting on startup (no text caching - saves memory!)
         let cached_nft_tokens = syntax_cache::tokenize_nft(&ruleset.to_nft_text());
@@ -345,12 +349,19 @@ impl State {
         );
 
         // Phase 3: Pre-compute tag cache on startup
-        let all_tags: BTreeSet<String> = ruleset
+        // Issue #2: Wrap tags in Arc for cheap pointer cloning in view
+        // Issue #7: Use HashSet (O(n)) instead of BTreeSet (O(n log n)) for deduplication
+        use std::collections::HashSet;
+        let mut all_tags: Vec<String> = ruleset
             .rules
             .iter()
-            .flat_map(|r| r.tags.iter().cloned())
+            .flat_map(|r| r.tags.iter())
+            .collect::<HashSet<&String>>()
+            .into_iter()
+            .cloned()
             .collect();
-        let cached_all_tags: Vec<String> = all_tags.into_iter().collect();
+        all_tags.sort_unstable();
+        let cached_all_tags: Vec<Arc<String>> = all_tags.into_iter().map(Arc::new).collect();
 
         // Phase 1: Initialize filtered rule indices (all rules visible on startup)
         let cached_filtered_rule_indices: Vec<usize> = (0..ruleset.rules.len()).collect();
@@ -375,7 +386,7 @@ impl State {
                 rule_form: None,
                 countdown_remaining: 15,
                 form_errors: None,
-                interfaces,
+                interfaces_with_any,
                 cached_nft_tokens,
                 cached_json_tokens,
                 cached_diff_tokens: None, // Phase 1: No diff on startup (no changes yet)
@@ -428,13 +439,20 @@ impl State {
         // nft_text and json_text are dropped here, freeing memory!
 
         // Update tag cache (Phase 3: Cache Tag Collection)
-        let all_tags: BTreeSet<String> = self
+        // Issue #2: Wrap tags in Arc for cheap pointer cloning in view
+        // Issue #7: Use HashSet (O(n)) instead of BTreeSet (O(n log n)) for deduplication
+        use std::collections::HashSet;
+        let mut all_tags: Vec<String> = self
             .ruleset
             .rules
             .iter()
-            .flat_map(|r| r.tags.iter().cloned())
+            .flat_map(|r| r.tags.iter())
+            .collect::<HashSet<&String>>()
+            .into_iter()
+            .cloned()
             .collect();
-        self.cached_all_tags = all_tags.into_iter().collect();
+        all_tags.sort_unstable();
+        self.cached_all_tags = all_tags.into_iter().map(Arc::new).collect();
 
         // Phase 1: Update filtered rule indices (rules changed, filters need updating)
         self.update_filter_cache();
@@ -448,25 +466,26 @@ impl State {
             .iter()
             .enumerate()
             .filter(|(_, r)| {
-                // Phase 4: Use cached lowercase search term
+                // Issue #14: Early return optimization - check tag filter first (cheaper)
+                if let Some(ref filter_tag) = self.filter_tag
+                    && !r.tags.contains(filter_tag)
+                {
+                    return false; // Skip expensive search if tag doesn't match
+                }
+
+                // Skip search if no search term
+                if self.rule_search.is_empty() {
+                    return true;
+                }
+
+                // Issue #1, #3: Use cached lowercase fields - no allocations!
                 let search_term = self.rule_search_lowercase.as_str();
-                let matches_search = self.rule_search.is_empty()
-                    || r.label.to_lowercase().contains(search_term)
-                    || r.protocol.to_string().to_lowercase().contains(search_term)
-                    || r.interface
+                r.label_lowercase.contains(search_term)
+                    || r.protocol_lowercase.contains(search_term)
+                    || r.interface_lowercase
                         .as_ref()
-                        .is_some_and(|i| i.to_lowercase().contains(search_term))
-                    || r.tags
-                        .iter()
-                        .any(|tag| tag.to_lowercase().contains(search_term));
-
-                let matches_tag = if let Some(ref filter_tag) = self.filter_tag {
-                    r.tags.contains(filter_tag)
-                } else {
-                    true
-                };
-
-                matches_search && matches_tag
+                        .is_some_and(|i| i.contains(search_term))
+                    || r.tags_lowercase.iter().any(|tag| tag.contains(search_term))
             })
             .map(|(idx, _)| idx)
             .collect();
@@ -566,14 +585,17 @@ impl State {
             }
             Message::ApplyResult(Ok(snapshot)) => self.handle_apply_result(snapshot),
             Message::ConfirmClicked => {
-                self.status = AppStatus::Confirmed;
-                // Confirmation notification
-                let _ = notify_rust::Notification::new()
-                    .summary("✅ DRFW — Changes Confirmed")
-                    .body("Firewall rules have been saved and will persist.")
-                    .urgency(notify_rust::Urgency::Normal)
-                    .timeout(5000)
-                    .show();
+                // Only confirm if still in PendingConfirmation state (prevent race with countdown)
+                if matches!(self.status, AppStatus::PendingConfirmation { .. }) {
+                    self.status = AppStatus::Confirmed;
+                    // Confirmation notification
+                    let _ = notify_rust::Notification::new()
+                        .summary("✅ DRFW — Changes Confirmed")
+                        .body("Firewall rules have been saved and will persist.")
+                        .urgency(notify_rust::Urgency::Normal)
+                        .timeout(5000)
+                        .show();
+                }
             }
             Message::RevertClicked => return self.handle_revert_clicked(),
             Message::RevertResult(Ok(())) => {
@@ -797,11 +819,15 @@ impl State {
             }
             Message::RuleFormAddTag => {
                 if let Some(f) = &mut self.rule_form {
-                    let tag = f.tag_input.trim().to_string();
-                    if !tag.is_empty() && !f.tags.contains(&tag) {
+                    // Sanitize tag input to prevent injection attacks
+                    let tag = crate::validators::sanitize_label(f.tag_input.trim());
+                    // Validate: non-empty, unique, and reasonable length
+                    if !tag.is_empty() && !f.tags.contains(&tag) && tag.len() <= 32 {
                         f.tags.push(tag);
                         f.tag_input.clear();
                     }
+                    // Note: sanitize_label strips invalid characters
+                    // Empty result means input contained only invalid chars
                 }
             }
             Message::RuleFormRemoveTag(tag) => {
@@ -820,22 +846,29 @@ impl State {
             }
             Message::OpenLogsFolder => {
                 if let Some(state_dir) = crate::utils::get_state_dir() {
-                    let path_str = state_dir.to_string_lossy().to_string();
-                    #[cfg(target_os = "linux")]
-                    {
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg(&path_str)
-                            .spawn();
-                    }
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = std::process::Command::new("open").arg(&path_str).spawn();
-                    }
-                    #[cfg(target_os = "windows")]
-                    {
-                        let _ = std::process::Command::new("explorer")
-                            .arg(&path_str)
-                            .spawn();
+                    // Validate path exists and is safe before opening
+                    if state_dir.exists() && state_dir.is_dir() {
+                        // Use canonicalize for safety - prevents path traversal issues
+                        if let Ok(canonical) = state_dir.canonicalize() {
+                            #[cfg(target_os = "linux")]
+                            {
+                                let _ = std::process::Command::new("xdg-open")
+                                    .arg(canonical.as_os_str())
+                                    .spawn();
+                            }
+                            #[cfg(target_os = "macos")]
+                            {
+                                let _ = std::process::Command::new("open")
+                                    .arg(canonical.as_os_str())
+                                    .spawn();
+                            }
+                            #[cfg(target_os = "windows")]
+                            {
+                                let _ = std::process::Command::new("explorer")
+                                    .arg(canonical.as_os_str())
+                                    .spawn();
+                            }
+                        }
                     }
                 }
             }
@@ -917,23 +950,32 @@ impl State {
 
             // Sanitize label to prevent injection attacks
             let sanitized_label = crate::validators::sanitize_label(&form.label);
+            let interface = if form.interface.is_empty() {
+                None
+            } else {
+                Some(form.interface)
+            };
 
-            let rule = Rule {
+            let mut rule = Rule {
                 id: form.id.unwrap_or_else(uuid::Uuid::new_v4),
                 label: sanitized_label,
                 protocol: form.protocol,
                 ports,
                 source,
-                interface: if form.interface.is_empty() {
-                    None
-                } else {
-                    Some(form.interface)
-                },
+                interface,
                 ipv6_only: false,
                 enabled: true,
                 created_at: Utc::now(),
                 tags: form.tags, // No clone needed - we own form
+                // Initialize cached fields (Issue #1, #3, #5, #10)
+                label_lowercase: String::new(),
+                interface_lowercase: None,
+                tags_lowercase: Vec::new(),
+                protocol_lowercase: "",
+                port_display: String::new(), // Issue #5: Will be populated by rebuild_caches()
+                source_string: None,         // Issue #10: Will be populated by rebuild_caches()
             };
+            rule.rebuild_caches();
 
             // Use command pattern for undo/redo support
             if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == rule.id) {
@@ -960,7 +1002,7 @@ impl State {
 
     fn handle_preset_selected(&mut self, preset: &crate::core::firewall::ServicePreset) {
         if let Some(form) = &mut self.rule_form {
-            form.selected_preset = Some(preset.clone());
+            form.selected_preset = Some(*preset); // No clone needed - Copy type
             form.protocol = preset.protocol;
             form.port_start = preset.port.to_string();
             form.port_end = preset.port.to_string();
@@ -1103,7 +1145,11 @@ impl State {
         // Save snapshot to disk for persistence
         if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
             eprintln!("Failed to save snapshot to disk: {e}");
-            // Continue anyway - we still have the in-memory snapshot
+            // Show warning to user - rollback may be unavailable after restart
+            self.last_error = Some(ErrorInfo::new(format!(
+                "Warning: Failed to save snapshot to disk. Rollback may be unavailable after restart: {e}"
+            )));
+            // Continue anyway - we still have the in-memory snapshot for this session
         }
 
         self.status = AppStatus::PendingConfirmation {
@@ -1152,20 +1198,15 @@ impl State {
     }
 
     fn handle_countdown_tick(&mut self) -> Task<Message> {
-        if let AppStatus::PendingConfirmation { .. } = self.status {
-            if self.countdown_remaining > 0 {
-                self.countdown_remaining -= 1;
+        if let AppStatus::PendingConfirmation { deadline, .. } = &self.status {
+            let now = Utc::now();
 
-                // Warning notification at 5 seconds remaining
-                if self.countdown_remaining == 5 {
-                    let _ = notify_rust::Notification::new()
-                        .summary("⚠️ DRFW — Auto-Revert Warning")
-                        .body("Firewall will revert in 5 seconds! Click Confirm to keep changes.")
-                        .urgency(notify_rust::Urgency::Critical)
-                        .timeout(5000)
-                        .show();
-                }
-            } else {
+            // Check if time is up first
+            if now >= *deadline {
+                // Time's up - transition to reverting state FIRST to prevent race
+                self.status = AppStatus::Reverting;
+                self.countdown_remaining = 0;
+
                 // Auto-revert notification
                 let _ = notify_rust::Notification::new()
                     .summary("↩️ DRFW — Auto-Reverted")
@@ -1175,6 +1216,24 @@ impl State {
                     .show();
 
                 return Task::done(Message::RevertClicked);
+            }
+
+            // Update countdown display based on actual time remaining
+            // Countdown is always < u32::MAX (15 seconds), cast is safe
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let remaining = (*deadline - now).num_seconds().max(0) as u32;
+            if self.countdown_remaining != remaining {
+                self.countdown_remaining = remaining;
+
+                // Warning notification at 5 seconds remaining
+                if remaining == 5 {
+                    let _ = notify_rust::Notification::new()
+                        .summary("⚠️ DRFW — Auto-Revert Warning")
+                        .body("Firewall will revert in 5 seconds! Click Confirm to keep changes.")
+                        .urgency(notify_rust::Urgency::Critical)
+                        .timeout(5000)
+                        .show();
+                }
             }
         }
         Task::none()
