@@ -13,13 +13,13 @@ pub fn main_container(theme: &AppTheme) -> container::Style {
 }
 
 pub fn sidebar_container(theme: &AppTheme) -> container::Style {
-    // Theme-aware gradient: light themes multiply (darken), dark themes hybrid (multiply + add)
+    // Theme-aware gradient: both light and dark go from darker → lighter (bottom to top)
     let gradient_end = if theme.is_light() {
-        // Light themes: multiplicative darkening
+        // Light themes: subtle darkening at bottom (10% darker)
         Color {
-            r: (theme.bg_sidebar.r * 0.80).max(0.0),
-            g: (theme.bg_sidebar.g * 0.80).max(0.0),
-            b: (theme.bg_sidebar.b * 0.80).max(0.0),
+            r: (theme.bg_sidebar.r * 0.90).max(0.0),
+            g: (theme.bg_sidebar.g * 0.90).max(0.0),
+            b: (theme.bg_sidebar.b * 0.90).max(0.0),
             ..theme.bg_sidebar
         }
     } else {
@@ -32,11 +32,20 @@ pub fn sidebar_container(theme: &AppTheme) -> container::Style {
         }
     };
 
-    let gradient = Gradient::Linear(
-        iced::gradient::Linear::new(0.0)
-            .add_stop(0.0, theme.bg_sidebar)
-            .add_stop(1.0, gradient_end),
-    );
+    // Light themes: swap gradient direction to match dark themes (darker bottom → lighter top)
+    let gradient = if theme.is_light() {
+        Gradient::Linear(
+            iced::gradient::Linear::new(0.0)
+                .add_stop(0.0, gradient_end)    // Darker at bottom
+                .add_stop(1.0, theme.bg_sidebar), // Lighter at top
+        )
+    } else {
+        Gradient::Linear(
+            iced::gradient::Linear::new(0.0)
+                .add_stop(0.0, theme.bg_sidebar)
+                .add_stop(1.0, gradient_end),
+        )
+    };
 
     container::Style {
         background: Some(gradient.into()),
