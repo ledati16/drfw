@@ -18,7 +18,7 @@
 //!
 //! ```no_run
 //! use drfw::command::{CommandHistory, AddRuleCommand};
-//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol, PortRange};
+//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol, PortRange, Chain};
 //! use uuid::Uuid;
 //!
 //! let mut ruleset = FirewallRuleset::new();
@@ -31,7 +31,7 @@
 //!     ports: Some(PortRange::single(80)),
 //!     source: None,
 //!     interface: None,
-//!     ipv6_only: false,
+//!     chain: Chain::Input,
 //!     enabled: true,
 //!     tags: vec![],
 //!     created_at: chrono::Utc::now(),
@@ -350,11 +350,11 @@ mod tests {
             Uuid::new_v4(),
             label.to_string(),
             Protocol::Tcp,
-            None,  // ports
-            None,  // source
-            None,  // interface
-            false, // ipv6_only
-            true,  // enabled
+            None,                                // ports
+            None,                                // source
+            None,                                // interface
+            crate::core::firewall::Chain::Input, // chain
+            true,                                // enabled
             chrono::Utc::now(),
             Vec::new(), // tags
         )

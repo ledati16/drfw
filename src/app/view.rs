@@ -97,6 +97,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 theme,
                 state.font_regular,
                 state.font_mono,
+                state.ruleset.advanced_security.egress_profile
+                    == crate::core::firewall::EgressProfile::Server,
             ))
             .style(move |_| modal_backdrop(theme))
             .width(Length::Fill)
@@ -997,6 +999,7 @@ fn view_rule_form<'a>(
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
     mono_font: iced::Font,
+    server_mode: bool,
 ) -> Element<'a, Message> {
     let title_text = if form.id.is_some() {
         "Edit Rule"
@@ -1070,6 +1073,7 @@ fn view_rule_form<'a>(
                             Protocol::Any,
                             Protocol::Tcp,
                             Protocol::Udp,
+                            Protocol::TcpAndUdp,
                             Protocol::Icmp,
                             Protocol::Icmpv6
                         ],
@@ -1151,6 +1155,29 @@ fn view_rule_form<'a>(
                 .menu_style(move |_| themed_pick_list_menu(theme))
             ]
             .spacing(4),
+            // Chain selection (only visible in Server Mode)
+            if server_mode {
+                column![
+                    container(text("CHAIN DIRECTION").size(10).color(theme.fg_muted))
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
+                    pick_list(
+                        vec![
+                            crate::core::firewall::Chain::Input,
+                            crate::core::firewall::Chain::Output,
+                        ],
+                        Some(form.chain),
+                        Message::RuleFormChainChanged
+                    )
+                    .width(Length::Fill)
+                    .padding(8)
+                    .style(move |_, status| themed_pick_list(theme, status))
+                    .menu_style(move |_| themed_pick_list_menu(theme))
+                ]
+                .spacing(4)
+            } else {
+                column![]
+            },
         ]
         .spacing(8),
         // Organization Section
@@ -1241,7 +1268,10 @@ fn view_port_inputs<'a>(
     theme: &'a crate::theme::AppTheme,
     mono_font: iced::Font,
 ) -> Element<'a, Message> {
-    if matches!(form.protocol, Protocol::Tcp | Protocol::Udp) {
+    if matches!(
+        form.protocol,
+        Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
+    ) {
         row![
             text_input("80", &form.port_start)
                 .on_input(Message::RuleFormPortStartChanged)

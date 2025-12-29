@@ -128,6 +128,7 @@ pub struct RuleForm {
     pub port_end: String,
     pub source: String,
     pub interface: String,
+    pub chain: crate::core::firewall::Chain,
     pub selected_preset: Option<crate::core::firewall::ServicePreset>,
     pub tags: Vec<String>,
     pub tag_input: String,
@@ -143,6 +144,7 @@ impl Default for RuleForm {
             port_end: String::new(),
             source: String::new(),
             interface: String::new(),
+            chain: crate::core::firewall::Chain::Input,
             selected_preset: None,
             tags: Vec::new(),
             tag_input: String::new(),
@@ -161,7 +163,10 @@ impl RuleForm {
         let mut errors = FormErrors::default();
         let mut has_errors = false;
 
-        let ports = if matches!(self.protocol, Protocol::Tcp | Protocol::Udp) {
+        let ports = if matches!(
+            self.protocol,
+            Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
+        ) {
             let port_start = self.port_start.parse::<u16>();
             let port_end = if self.port_end.is_empty() {
                 port_start.clone() // Clone needed - Result is not Copy
@@ -235,6 +240,7 @@ pub enum Message {
     RuleFormPortEndChanged(String),
     RuleFormSourceChanged(String),
     RuleFormInterfaceChanged(String),
+    RuleFormChainChanged(crate::core::firewall::Chain),
     RuleFormPresetSelected(crate::core::firewall::ServicePreset),
     RuleSearchChanged(String),
     ToggleRuleEnabled(uuid::Uuid),
@@ -564,6 +570,12 @@ impl State {
                     f.interface = s;
                 }
                 self.validate_form_realtime();
+            }
+            Message::RuleFormChainChanged(chain) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.chain = chain;
+                }
+                // No validation needed for chain selection
             }
             Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(&preset),
             Message::RuleSearchChanged(s) => {
@@ -928,6 +940,7 @@ impl State {
                     .as_ref()
                     .map_or_else(String::new, std::string::ToString::to_string),
                 interface: rule.interface.clone().unwrap_or_default(),
+                chain: rule.chain, // Copy, not clone
                 selected_preset: None,
                 tags: rule.tags.clone(),
                 tag_input: String::new(),
@@ -963,7 +976,7 @@ impl State {
                 ports,
                 source,
                 interface,
-                ipv6_only: false,
+                chain: form.chain,
                 enabled: true,
                 created_at: Utc::now(),
                 tags: form.tags, // No clone needed - we own form

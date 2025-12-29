@@ -6,18 +6,18 @@
 //! # Rule Structure
 //!
 //! A [`Rule`] represents a single firewall rule with:
-//! - Protocol filtering (TCP, UDP, ICMP, etc.)
+//! - Protocol filtering (TCP, UDP, TCP+UDP, ICMP, etc.)
 //! - Port ranges for applicable protocols
 //! - Source IP/network filtering
 //! - Network interface filtering
-//! - IPv6-only mode
+//! - Chain direction (Input/Output) - only relevant in Server Mode
 //! - Enable/disable state
 //! - Tags for organization
 //!
 //! # Example
 //!
 //! ```
-//! use drfw::core::firewall::{Rule, Protocol, PortRange};
+//! use drfw::core::firewall::{Rule, Protocol, PortRange, Chain};
 //! use uuid::Uuid;
 //!
 //! let mut rule = Rule {
@@ -27,7 +27,7 @@
 //!     ports: Some(PortRange::single(22)),
 //!     source: None,
 //!     interface: None,
-//!     ipv6_only: false,
+//!     chain: Chain::Input,
 //!     enabled: true,
 //!     created_at: chrono::Utc::now(),
 //!     tags: vec![],
@@ -59,6 +59,8 @@ pub enum Protocol {
     Tcp,
     /// User Datagram Protocol
     Udp,
+    /// Both TCP and UDP (common for services like DNS, VPNs, game servers)
+    TcpAndUdp,
     /// Internet Control Message Protocol (IPv4)
     Icmp,
     /// Internet Control Message Protocol version 6
@@ -72,6 +74,7 @@ impl Protocol {
             Protocol::Any => "any",
             Protocol::Tcp => "tcp",
             Protocol::Udp => "udp",
+            Protocol::TcpAndUdp => "tcp+udp",
             Protocol::Icmp => "icmp",
             Protocol::Icmpv6 => "icmpv6",
         }
@@ -82,6 +85,7 @@ impl Protocol {
         match self {
             Protocol::Tcp => "TCP",
             Protocol::Udp => "UDP",
+            Protocol::TcpAndUdp => "TCP+UDP",
             Protocol::Any => "ANY",
             Protocol::Icmp => "ICMP",
             Protocol::Icmpv6 => "ICMPv6",
@@ -95,6 +99,7 @@ impl fmt::Display for Protocol {
             Protocol::Any => write!(f, "any"),
             Protocol::Tcp => write!(f, "tcp"),
             Protocol::Udp => write!(f, "udp"),
+            Protocol::TcpAndUdp => write!(f, "tcp+udp"),
             Protocol::Icmp => write!(f, "icmp"),
             Protocol::Icmpv6 => write!(f, "icmpv6"),
         }
@@ -127,6 +132,25 @@ impl fmt::Display for PortRange {
     }
 }
 
+/// Firewall chain for rule direction (only relevant in Server Mode)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum Chain {
+    /// Incoming traffic (default for desktop users)
+    #[default]
+    Input,
+    /// Outgoing traffic (only useful in Server Mode with OUTPUT DROP policy)
+    Output,
+}
+
+impl fmt::Display for Chain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Chain::Input => write!(f, "input"),
+            Chain::Output => write!(f, "output"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Rule {
     pub id: Uuid,
@@ -135,8 +159,9 @@ pub struct Rule {
     pub ports: Option<PortRange>,
     pub source: Option<IpNetwork>,
     pub interface: Option<String>,
+    /// Chain direction (Input/Output) - only relevant in Server Mode
     #[serde(default)]
-    pub ipv6_only: bool,
+    pub chain: Chain,
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -237,7 +262,7 @@ impl Rule {
         ports: Option<PortRange>,
         source: Option<IpNetwork>,
         interface: Option<String>,
-        ipv6_only: bool,
+        chain: Chain,
         enabled: bool,
         created_at: chrono::DateTime<chrono::Utc>,
         tags: Vec<String>,
@@ -249,7 +274,7 @@ impl Rule {
             ports,
             source,
             interface,
-            ipv6_only,
+            chain,
             enabled,
             created_at,
             tags,
@@ -974,6 +999,10 @@ impl FirewallRuleset {
                 // Issue #9: Use as_str() for static string (no allocation)
                 expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": rule.protocol.as_str() } }));
             }
+            Protocol::TcpAndUdp => {
+                // Match both TCP and UDP using nftables set syntax
+                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "in", "right": ["tcp", "udp"] } }));
+            }
             Protocol::Icmp => {
                 expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }));
             }
@@ -1007,21 +1036,36 @@ impl FirewallRuleset {
         }
 
         if let Some(ref ports) = rule.ports
-            && matches!(rule.protocol, Protocol::Tcp | Protocol::Udp)
+            && matches!(
+                rule.protocol,
+                Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
+            )
         {
             let port_val = if ports.start == ports.end {
                 json!(ports.start)
             } else {
                 json!({ "range": [ports.start, ports.end] })
             };
-            expressions.push(json!({
-                "match": {
-                    // Issue #9: Use as_str() for static string (no allocation)
-                    "left": { "payload": { "protocol": rule.protocol.as_str(), "field": "dport" } },
-                    "op": "==",
-                    "right": port_val
-                }
-            }));
+
+            // For TcpAndUdp, we need to match ports using th (transport header) instead of specific protocol
+            if matches!(rule.protocol, Protocol::TcpAndUdp) {
+                expressions.push(json!({
+                    "match": {
+                        "left": { "payload": { "protocol": "th", "field": "dport" } },
+                        "op": "==",
+                        "right": port_val
+                    }
+                }));
+            } else {
+                expressions.push(json!({
+                    "match": {
+                        // Issue #9: Use as_str() for static string (no allocation)
+                        "left": { "payload": { "protocol": rule.protocol.as_str(), "field": "dport" } },
+                        "op": "==",
+                        "right": port_val
+                    }
+                }));
+            }
         }
 
         expressions.push(json!({ "accept": null }));
@@ -1031,7 +1075,7 @@ impl FirewallRuleset {
                 "rule": {
                     "family": "inet",
                     "table": "drfw",
-                    "chain": "input",
+                    "chain": rule.chain.to_string(),
                     "expr": expressions,
                     "comment": if rule.label.is_empty() { None } else { Some(&rule.label) }
                 }
@@ -1291,6 +1335,12 @@ impl FirewallRuleset {
                     let _ = write!(out, "{}", rule.protocol);
                     if let Some(ref ports) = rule.ports {
                         let _ = write!(out, " dport {ports} ");
+                    }
+                }
+                Protocol::TcpAndUdp => {
+                    let _ = write!(out, "meta l4proto {{ tcp, udp }}");
+                    if let Some(ref ports) = rule.ports {
+                        let _ = write!(out, " th dport {ports} ");
                     }
                 }
                 Protocol::Icmp => {
