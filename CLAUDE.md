@@ -558,6 +558,135 @@ When an AI assistant says:
 
 ---
 
+## 13. nftables Features: Implementation Decisions
+
+This section documents nftables capabilities that DRFW intentionally does NOT implement, either permanently or deferred until a user-friendly solution exists.
+
+### Features NOT Implemented (Intentional)
+
+#### ICMP Type Filtering
+**Decision:** Not implementing per-rule ICMP type filtering.
+
+**Reasoning:**
+- Baseline firewall already handles common cases (strict mode blocks redirects)
+- Established/related connection tracking allows ICMP replies automatically
+- 99% of custom ICMP rules just need "allow from this IP" (all types)
+- ICMPv6 type filtering is dangerous (blocking wrong types breaks IPv6 entirely - NDP, PMTU, router discovery)
+- Users don't understand the difference between 20+ ICMP types
+- 1% who need granular control can manually edit nftables config
+
+**Alternative Provided:**
+- Global "Strict ICMP filtering" in Advanced Security Settings
+- Protocol option: "ICMP (Both)" for dual-stack simplicity
+
+#### Per-Rule Logging
+**Decision:** Not implementing per-rule logging in rule creation UI.
+
+**Reasoning:**
+- Logs go to kernel ring buffer (`dmesg`/`journalctl`), not DRFW-specific logs
+- Requires terminal/sudo access to view (breaks GUI-first experience)
+- Output format is cryptic kernel log format mixed with other system logs
+- High-traffic rules generate massive log spam (1000 req/sec = 1000 log entries/sec)
+- Easy to accidentally DoS the system logs without realizing it
+- Not user-friendly for DRFW's target audience (desktop users)
+
+**Alternative Provided:**
+- Global "Log dropped packets" with rate limiting in Advanced Security Settings
+- Future: Could add Diagnostics tab viewer for kernel firewall logs
+
+#### Source Port Filtering
+**Decision:** Not implementing source port (sport) matching.
+
+**Reasoning:**
+- Extremely niche use case (<1% of users)
+- Only useful for specific scenarios (e.g., DNS responses from port 53)
+- Destination port filtering covers 99% of needs
+- Adds complexity to UI for minimal benefit
+
+#### TCP Flags Matching
+**Decision:** Not implementing TCP flag filtering (SYN, ACK, RST, etc.).
+
+**Reasoning:**
+- Too advanced for target audience (requires TCP protocol knowledge)
+- Baseline firewall handles connection state tracking (established/related)
+- Potential for users to break legitimate traffic by misunderstanding flags
+- Power users can manually edit nftables for advanced stateful filtering
+
+#### Packet Length / Size Matching
+**Decision:** Not implementing packet size filtering.
+
+**Reasoning:**
+- Very niche use case (fragmentation attacks, covert channels)
+- Not useful for typical desktop/server firewall needs
+- Adds complexity without clear user benefit
+
+#### MAC Address Filtering
+**Decision:** Not implementing MAC address filtering.
+
+**Reasoning:**
+- Only works on LAN (doesn't cross routers)
+- Easily spoofed (not a security mechanism)
+- Fragile (MAC changes when NIC is replaced)
+- Better handled at switch/AP level with 802.1X
+
+#### Time-Based Rules
+**Decision:** Not implementing time/schedule-based rules.
+
+**Reasoning:**
+- Complex UI (time pickers, timezone handling, recurring schedules)
+- Better handled by external tools (cron + nftables reload)
+- State management complexity (what happens when rule becomes inactive mid-connection?)
+- Very niche use case
+
+### Features Deferred (May Add Later)
+
+#### NAT / Port Forwarding
+**Status:** Deferred for future major feature addition.
+
+**Reasoning:**
+- Different feature scope entirely (not just filtering)
+- Requires understanding of masquerading, DNAT, SNAT
+- Complex UI (internal/external IP, port mapping)
+- Needs separate nftables table/chains
+- Would be a major feature release, not incremental addition
+
+**When to Add:**
+- When DRFW expands scope to include router/gateway functionality
+- When user demand is significant (currently 0 requests)
+- As a separate "Port Forwarding" tab, not in rule creation
+
+#### Custom nftables Expressions
+**Status:** Deferred indefinitely.
+
+**Reasoning:**
+- Would allow advanced users to inject arbitrary nftables syntax
+- Security risk (command injection, breaking firewall)
+- Defeats purpose of GUI (just edit nftables directly at that point)
+- Validation complexity
+
+**Alternative:**
+- Users needing custom expressions should edit `/etc/nftables.conf` directly
+- DRFW manages its own table (`drfw`) at priority -10, doesn't interfere
+
+### Features Implemented (For Reference)
+
+✅ **Protocol filtering:** TCP, UDP, TCP+UDP, ICMP (Both), ICMP (v4), ICMPv6, Any
+✅ **Destination port filtering:** Single port or range
+✅ **Source IP filtering:** Single IP or CIDR network
+✅ **Interface filtering:** Match specific network interface
+✅ **Chain selection:** Input/Output (Server Mode only)
+✅ **Enable/Disable rules:** Without deleting them
+✅ **Rule ordering:** Drag-and-drop priority
+✅ **Tags:** Organize and filter rules
+
+**Advanced Options (Implemented 2025-12-29):**
+✅ **Destination IP filtering:** For outbound traffic control in Server Mode
+✅ **Action selection:** Accept/Drop/Reject
+✅ **Per-rule rate limiting:** Prevent brute force attacks
+✅ **Connection limiting:** Max simultaneous connections per source
+
+---
+
 ## Appendix: Project-Specific Optimizations Applied
 
 ### Memory
@@ -577,5 +706,6 @@ When an AI assistant says:
 
 ---
 
-**Document Last Updated:** 2025-12-27
+**Document Last Updated:** 2025-12-29
 **Performance Optimizations:** Phases 2-5 completed, Phase 1 deferred
+**Advanced Rule Options:** Implemented destination IP, action, rate limiting, connection limiting

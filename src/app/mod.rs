@@ -132,6 +132,14 @@ pub struct RuleForm {
     pub selected_preset: Option<crate::core::firewall::ServicePreset>,
     pub tags: Vec<String>,
     pub tag_input: String,
+    // Advanced options
+    pub show_advanced: bool,
+    pub destination: String,
+    pub action: crate::core::firewall::Action,
+    pub rate_limit_enabled: bool,
+    pub rate_limit_count: String,
+    pub rate_limit_unit: crate::core::firewall::TimeUnit,
+    pub connection_limit: String,
 }
 
 impl Default for RuleForm {
@@ -148,6 +156,14 @@ impl Default for RuleForm {
             selected_preset: None,
             tags: Vec::new(),
             tag_input: String::new(),
+            // Advanced options - defaults
+            show_advanced: false,
+            destination: String::new(),
+            action: crate::core::firewall::Action::Accept,
+            rate_limit_enabled: false,
+            rate_limit_count: String::new(),
+            rate_limit_unit: crate::core::firewall::TimeUnit::Second,
+            connection_limit: String::new(),
         }
     }
 }
@@ -242,6 +258,14 @@ pub enum Message {
     RuleFormInterfaceChanged(String),
     RuleFormChainChanged(crate::core::firewall::Chain),
     RuleFormPresetSelected(crate::core::firewall::ServicePreset),
+    // Advanced options
+    RuleFormToggleAdvanced(bool),
+    RuleFormDestinationChanged(String),
+    RuleFormActionChanged(crate::core::firewall::Action),
+    RuleFormToggleRateLimit(bool),
+    RuleFormRateLimitCountChanged(String),
+    RuleFormRateLimitUnitChanged(crate::core::firewall::TimeUnit),
+    RuleFormConnectionLimitChanged(String),
     RuleSearchChanged(String),
     ToggleRuleEnabled(uuid::Uuid),
     DeleteRuleRequested(uuid::Uuid),
@@ -584,6 +608,42 @@ impl State {
                     f.chain = chain;
                 }
                 // No validation needed for chain selection
+            }
+            // Advanced options handlers
+            Message::RuleFormToggleAdvanced(show) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.show_advanced = show;
+                }
+            }
+            Message::RuleFormDestinationChanged(s) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.destination = s;
+                }
+            }
+            Message::RuleFormActionChanged(action) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.action = action;
+                }
+            }
+            Message::RuleFormToggleRateLimit(enabled) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.rate_limit_enabled = enabled;
+                }
+            }
+            Message::RuleFormRateLimitCountChanged(s) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.rate_limit_count = s;
+                }
+            }
+            Message::RuleFormRateLimitUnitChanged(unit) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.rate_limit_unit = unit;
+                }
+            }
+            Message::RuleFormConnectionLimitChanged(s) => {
+                if let Some(f) = &mut self.rule_form {
+                    f.connection_limit = s;
+                }
             }
             Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(&preset),
             Message::RuleSearchChanged(s) => {
@@ -931,6 +991,12 @@ impl State {
 
     fn handle_edit_clicked(&mut self, id: uuid::Uuid) {
         if let Some(rule) = self.ruleset.rules.iter().find(|r| r.id == id) {
+            // Check if any advanced options are set
+            let has_advanced = rule.destination.is_some()
+                || rule.action != crate::core::firewall::Action::Accept
+                || rule.rate_limit.is_some()
+                || rule.connection_limit > 0;
+
             self.rule_form = Some(RuleForm {
                 id: Some(rule.id),
                 label: rule.label.clone(),
@@ -952,6 +1018,27 @@ impl State {
                 selected_preset: None,
                 tags: rule.tags.clone(),
                 tag_input: String::new(),
+                // Advanced options
+                show_advanced: has_advanced, // Auto-expand if rule uses advanced features
+                destination: rule
+                    .destination
+                    .as_ref()
+                    .map_or_else(String::new, std::string::ToString::to_string),
+                action: rule.action,
+                rate_limit_enabled: rule.rate_limit.is_some(),
+                rate_limit_count: rule
+                    .rate_limit
+                    .as_ref()
+                    .map_or_else(String::new, |rl| rl.count.to_string()),
+                rate_limit_unit: rule
+                    .rate_limit
+                    .as_ref()
+                    .map_or(crate::core::firewall::TimeUnit::Second, |rl| rl.unit),
+                connection_limit: if rule.connection_limit > 0 {
+                    rule.connection_limit.to_string()
+                } else {
+                    String::new()
+                },
             });
             self.form_errors = None;
         }
@@ -977,6 +1064,31 @@ impl State {
                 Some(form.interface)
             };
 
+            // Parse advanced options
+            let destination = if form.destination.is_empty() {
+                None
+            } else {
+                form.destination.parse().ok()
+            };
+
+            let rate_limit = if form.rate_limit_enabled && !form.rate_limit_count.is_empty() {
+                form.rate_limit_count
+                    .parse()
+                    .ok()
+                    .map(|count| crate::core::firewall::RateLimit {
+                        count,
+                        unit: form.rate_limit_unit,
+                    })
+            } else {
+                None
+            };
+
+            let connection_limit = if form.connection_limit.is_empty() {
+                0
+            } else {
+                form.connection_limit.parse().unwrap_or(0)
+            };
+
             let mut rule = Rule {
                 id: form.id.unwrap_or_else(uuid::Uuid::new_v4),
                 label: sanitized_label,
@@ -988,6 +1100,11 @@ impl State {
                 enabled: true,
                 created_at: Utc::now(),
                 tags: form.tags, // No clone needed - we own form
+                // Advanced options
+                destination,
+                action: form.action,
+                rate_limit,
+                connection_limit,
                 // Initialize cached fields (Issue #1, #3, #5, #10)
                 label_lowercase: String::new(),
                 interface_lowercase: None,
@@ -995,6 +1112,8 @@ impl State {
                 protocol_lowercase: "",
                 port_display: String::new(), // Issue #5: Will be populated by rebuild_caches()
                 source_string: None,         // Issue #10: Will be populated by rebuild_caches()
+                destination_string: None,
+                rate_limit_display: None, // Will be populated by rebuild_caches()
             };
             rule.rebuild_caches();
 

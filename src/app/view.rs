@@ -460,6 +460,39 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .width(Length::Shrink) // Only take needed space
                 .clip(true); // Clip if extreme edge case
 
+                // Action badge (DROP/REJECT) - only if not Accept
+                let action_badge = if rule.action != crate::core::firewall::Action::Accept {
+                    let action_text = if let Some(ref rate_limit) = rule.rate_limit_display {
+                        format!("{} ({})", rule.action.display_name(), rate_limit)
+                    } else {
+                        rule.action.display_name().to_string()
+                    };
+
+                    Some(
+                        container(
+                            text(action_text)
+                                .size(9)
+                                .font(state.font_mono)
+                                .color(theme.fg_on_accent)
+                                .wrapping(Wrapping::None),
+                        )
+                        .padding([2, 6])
+                        .style(move |_| container::Style {
+                            background: Some(theme.danger.into()),
+                            border: Border {
+                                radius: 4.0.into(),
+                                color: theme.danger,
+                                width: 1.0,
+                            },
+                            ..Default::default()
+                        })
+                        .width(Length::Shrink)
+                        .clip(true),
+                    )
+                } else {
+                    None
+                };
+
                 // Main Content: Label + Tags
                 // Issue #20: Pre-allocate tag items Vec with exact capacity
                 let mut tag_items: Vec<Element<'_, Message>> = Vec::with_capacity(rule.tags.len());
@@ -503,10 +536,17 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     );
                 }
 
-                // Row 2: Interface (if present) + Badge
-                let row2 = if let Some(ref iface) = rule.interface {
-                    row![
-                        // Interface with @ prefix - clips if too long
+                // Row 2: Action badge + Interface (if present) + Protocol badge
+                let mut row2_items: Vec<Element<'_, Message>> = Vec::with_capacity(3);
+
+                // Add action badge (left side) if present
+                if let Some(action_badge_elem) = action_badge {
+                    row2_items.push(action_badge_elem.into());
+                }
+
+                // Add interface (middle, fills) OR spacer
+                if let Some(ref iface) = rule.interface {
+                    row2_items.push(
                         container(
                             text(format!("@{}", iface))
                                 .size(9)
@@ -519,18 +559,21 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                         ..theme.fg_muted
                                     }
                                 })
-                                .wrapping(Wrapping::None)
+                                .wrapping(Wrapping::None),
                         )
                         .width(Length::Fill)
-                        .clip(true),
-                        badge,
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                } else {
-                    // No interface - badge gets left alignment
-                    row![badge].align_y(Alignment::Center)
-                };
+                        .clip(true)
+                        .into(),
+                    );
+                } else if rule.action != crate::core::firewall::Action::Accept {
+                    // Add spacer to push protocol badge to the right
+                    row2_items.push(container(column![]).width(Length::Fill).into());
+                }
+
+                // Add protocol badge (right side, always present)
+                row2_items.push(badge.into());
+
+                let row2 = row(row2_items).spacing(8).align_y(Alignment::Center);
 
                 // Build main_info with dynamic rows
                 let mut main_info_rows: Vec<Element<'_, Message>> = Vec::with_capacity(3);
@@ -1132,6 +1175,7 @@ fn view_rule_form<'a>(
                             Protocol::Tcp,
                             Protocol::Udp,
                             Protocol::TcpAndUdp,
+                            Protocol::IcmpBoth,
                             Protocol::Icmp,
                             Protocol::Icmpv6
                         ],
@@ -1236,6 +1280,134 @@ fn view_rule_form<'a>(
             } else {
                 column![]
             },
+        ]
+        .spacing(8),
+        // Advanced Options Section
+        column![
+            row![
+                checkbox(form.show_advanced)
+                    .label("Show Advanced Options")
+                    .on_toggle(Message::RuleFormToggleAdvanced)
+                    .size(16)
+                    .spacing(8)
+                    .text_size(12)
+                    .style(move |_, status| themed_checkbox(theme, status)),
+            ],
+            if form.show_advanced {
+                column![
+                    container(text("ADVANCED OPTIONS").size(10).color(theme.fg_primary))
+                        .padding([4, 8])
+                        .style(move |_| section_header_container(theme)),
+                    // Destination IP
+                    column![
+                        container(
+                            text("DESTINATION ADDRESS (OPTIONAL)")
+                                .size(10)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
+                        text_input("e.g. 192.168.1.0/24 or specific IP", &form.destination)
+                            .on_input(Message::RuleFormDestinationChanged)
+                            .padding(8)
+                            .style(move |_, status| themed_text_input(theme, status)),
+                    ]
+                    .spacing(4),
+                    // Action
+                    column![
+                        container(text("ACTION").size(10).color(theme.fg_muted))
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
+                        pick_list(
+                            vec![
+                                crate::core::firewall::Action::Accept,
+                                crate::core::firewall::Action::Drop,
+                                crate::core::firewall::Action::Reject,
+                            ],
+                            Some(form.action),
+                            Message::RuleFormActionChanged
+                        )
+                        .width(Length::Fill)
+                        .padding(8)
+                        .style(move |_, status| themed_pick_list(theme, status))
+                        .menu_style(move |_| themed_pick_list_menu(theme))
+                    ]
+                    .spacing(4),
+                    // Rate Limiting
+                    column![
+                        row![
+                            checkbox(form.rate_limit_enabled)
+                                .label("Enable Rate Limiting")
+                                .on_toggle(Message::RuleFormToggleRateLimit)
+                                .size(16)
+                                .spacing(8)
+                                .text_size(12)
+                                .style(move |_, status| themed_checkbox(theme, status)),
+                        ],
+                        if form.rate_limit_enabled {
+                            row![
+                                column![
+                                    container(text("COUNT").size(10).color(theme.fg_muted))
+                                        .padding([2, 6])
+                                        .style(move |_| section_header_container(theme)),
+                                    text_input("e.g. 5", &form.rate_limit_count)
+                                        .on_input(Message::RuleFormRateLimitCountChanged)
+                                        .padding(8)
+                                        .style(move |_, status| themed_text_input(theme, status)),
+                                ]
+                                .spacing(4)
+                                .width(Length::Fill),
+                                column![
+                                    container(text("PER").size(10).color(theme.fg_muted))
+                                        .padding([2, 6])
+                                        .style(move |_| section_header_container(theme)),
+                                    pick_list(
+                                        vec![
+                                            crate::core::firewall::TimeUnit::Second,
+                                            crate::core::firewall::TimeUnit::Minute,
+                                            crate::core::firewall::TimeUnit::Hour,
+                                            crate::core::firewall::TimeUnit::Day,
+                                        ],
+                                        Some(form.rate_limit_unit),
+                                        Message::RuleFormRateLimitUnitChanged
+                                    )
+                                    .width(Length::Fill)
+                                    .padding(8)
+                                    .style(move |_, status| themed_pick_list(theme, status))
+                                    .menu_style(move |_| themed_pick_list_menu(theme))
+                                ]
+                                .spacing(4)
+                                .width(Length::Fill),
+                            ]
+                            .spacing(8)
+                        } else {
+                            row![]
+                        }
+                    ]
+                    .spacing(4),
+                    // Connection Limiting
+                    column![
+                        container(
+                            text("CONNECTION LIMIT (OPTIONAL)")
+                                .size(10)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
+                        text_input(
+                            "Max simultaneous connections (0 = unlimited)",
+                            &form.connection_limit
+                        )
+                        .on_input(Message::RuleFormConnectionLimitChanged)
+                        .padding(8)
+                        .style(move |_, status| themed_text_input(theme, status)),
+                    ]
+                    .spacing(4),
+                ]
+                .spacing(8)
+            } else {
+                column![]
+            }
         ]
         .spacing(8),
         // Organization Section

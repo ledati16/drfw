@@ -13,6 +13,7 @@
 //! - Chain direction (Input/Output) - only relevant in Server Mode
 //! - Enable/disable state
 //! - Tags for organization
+//! - Advanced options: destination IP, action (Accept/Drop/Reject), rate limiting, connection limiting
 //!
 //! # Example
 //!
@@ -31,6 +32,11 @@
 //!     enabled: true,
 //!     created_at: chrono::Utc::now(),
 //!     tags: vec![],
+//!     // Advanced options
+//!     destination: None,
+//!     action: drfw::core::firewall::Action::Accept,
+//!     rate_limit: None,
+//!     connection_limit: 0,
 //!     // Cached fields (populated by rebuild_caches())
 //!     label_lowercase: String::new(),
 //!     interface_lowercase: None,
@@ -38,6 +44,8 @@
 //!     protocol_lowercase: "",
 //!     port_display: String::new(),
 //!     source_string: None,
+//!     destination_string: None,
+//!     rate_limit_display: None,
 //! };
 //! rule.rebuild_caches();
 //! ```
@@ -65,6 +73,8 @@ pub enum Protocol {
     Icmp,
     /// Internet Control Message Protocol version 6
     Icmpv6,
+    /// Both ICMP and ICMPv6 (dual-stack support, recommended default)
+    IcmpBoth,
 }
 
 impl Protocol {
@@ -77,6 +87,7 @@ impl Protocol {
             Protocol::TcpAndUdp => "tcp+udp",
             Protocol::Icmp => "icmp",
             Protocol::Icmpv6 => "icmpv6",
+            Protocol::IcmpBoth => "icmp (both)",
         }
     }
 
@@ -87,8 +98,9 @@ impl Protocol {
             Protocol::Udp => "UDP",
             Protocol::TcpAndUdp => "TCP+UDP",
             Protocol::Any => "ANY",
-            Protocol::Icmp => "ICMP",
+            Protocol::Icmp => "ICMP (v4)",
             Protocol::Icmpv6 => "ICMPv6",
+            Protocol::IcmpBoth => "ICMP (Both)",
         }
     }
 }
@@ -102,6 +114,7 @@ impl fmt::Display for Protocol {
             Protocol::TcpAndUdp => write!(f, "tcp+udp"),
             Protocol::Icmp => write!(f, "icmp"),
             Protocol::Icmpv6 => write!(f, "icmpv6"),
+            Protocol::IcmpBoth => write!(f, "icmp (both)"),
         }
     }
 }
@@ -129,6 +142,99 @@ impl fmt::Display for PortRange {
         } else {
             write!(f, "{}-{}", self.start, self.end)
         }
+    }
+}
+
+/// Rule action (Accept, Drop, or Reject)
+///
+/// Controls what happens when a packet matches this rule.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum Action {
+    /// Accept the packet (allow it through)
+    #[default]
+    Accept,
+    /// Drop the packet silently (no response sent)
+    Drop,
+    /// Reject the packet and send ICMP unreachable response
+    Reject,
+}
+
+impl Action {
+    /// Returns lowercase action name for UI rendering
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Action::Accept => "accept",
+            Action::Drop => "drop",
+            Action::Reject => "reject",
+        }
+    }
+
+    /// Returns display name for UI rendering
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Action::Accept => "Accept",
+            Action::Drop => "Drop",
+            Action::Reject => "Reject",
+        }
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Time unit for rate limiting
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TimeUnit {
+    Second,
+    Minute,
+    Hour,
+    Day,
+}
+
+impl TimeUnit {
+    /// Returns nftables time unit string
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TimeUnit::Second => "second",
+            TimeUnit::Minute => "minute",
+            TimeUnit::Hour => "hour",
+            TimeUnit::Day => "day",
+        }
+    }
+
+    /// Returns display name for UI rendering
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            TimeUnit::Second => "Second",
+            TimeUnit::Minute => "Minute",
+            TimeUnit::Hour => "Hour",
+            TimeUnit::Day => "Day",
+        }
+    }
+}
+
+impl fmt::Display for TimeUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Rate limiting configuration
+///
+/// Limits the rate at which packets can match this rule.
+/// Useful for preventing brute force attacks.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RateLimit {
+    pub count: u32,
+    pub unit: TimeUnit,
+}
+
+impl fmt::Display for RateLimit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.count, self.unit)
     }
 }
 
@@ -169,6 +275,20 @@ pub struct Rule {
     #[serde(default)]
     pub tags: Vec<String>,
 
+    // Advanced options
+    /// Destination IP/network filtering (for outbound traffic control)
+    #[serde(default)]
+    pub destination: Option<IpNetwork>,
+    /// Action to take when packet matches (Accept/Drop/Reject)
+    #[serde(default)]
+    pub action: Action,
+    /// Rate limiting configuration (prevent brute force)
+    #[serde(default)]
+    pub rate_limit: Option<RateLimit>,
+    /// Connection limit (max simultaneous connections, 0 = disabled)
+    #[serde(default)]
+    pub connection_limit: u32,
+
     // Cached lowercase fields for search performance (Issue #1)
     /// Cached lowercase version of `label` for fast search filtering
     #[serde(skip)]
@@ -188,6 +308,12 @@ pub struct Rule {
     /// Cached source IP network string for efficient JSON generation (Issue #10)
     #[serde(skip)]
     pub source_string: Option<String>,
+    /// Cached destination IP network string for efficient JSON generation
+    #[serde(skip)]
+    pub destination_string: Option<String>,
+    /// Cached rate limit display string for efficient view rendering (e.g., "5/m", "10/s")
+    #[serde(skip)]
+    pub rate_limit_display: Option<String>,
 }
 
 impl Rule {
@@ -211,6 +337,18 @@ impl Rule {
         );
         // Issue #10: Cache source IP string for efficient JSON generation
         self.source_string = self.source.map(|s| s.to_string());
+        // Cache destination IP string for efficient JSON generation
+        self.destination_string = self.destination.map(|d| d.to_string());
+        // Cache rate limit display string for efficient view rendering
+        self.rate_limit_display = self.rate_limit.map(|rl| {
+            let unit_abbrev = match rl.unit {
+                TimeUnit::Second => "s",
+                TimeUnit::Minute => "m",
+                TimeUnit::Hour => "h",
+                TimeUnit::Day => "d",
+            };
+            format!("{}/{}", rl.count, unit_abbrev)
+        });
     }
 
     /// Updates label and its cached lowercase version
@@ -254,6 +392,7 @@ impl Rule {
 
     /// Creates a Rule with specified fields and auto-initializes caches.
     /// Useful for tests and manual rule creation.
+    /// Advanced options (destination, action, rate_limit, connection_limit) use defaults.
     #[allow(clippy::too_many_arguments)]
     pub fn with_caches(
         id: Uuid,
@@ -278,6 +417,11 @@ impl Rule {
             enabled,
             created_at,
             tags,
+            // Advanced options - use defaults
+            destination: None,
+            action: Action::default(),
+            rate_limit: None,
+            connection_limit: 0,
             // Initialize with empty caches - will be rebuilt next
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -285,6 +429,8 @@ impl Rule {
             protocol_lowercase: "",
             port_display: String::new(), // Issue #5: Will be populated by rebuild_caches()
             source_string: None,         // Issue #10: Will be populated by rebuild_caches()
+            destination_string: None,
+            rate_limit_display: None, // Will be populated by rebuild_caches()
         };
         rule.rebuild_caches();
         rule
@@ -1018,6 +1164,10 @@ impl FirewallRuleset {
             Protocol::Icmpv6 => {
                 expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }));
             }
+            Protocol::IcmpBoth => {
+                // Match both ICMP and ICMPv6 for dual-stack support
+                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "in", "right": ["icmp", "ipv6-icmp"] } }));
+            }
         }
 
         if let Some(src) = rule.source {
@@ -1077,7 +1227,51 @@ impl FirewallRuleset {
             }
         }
 
-        expressions.push(json!({ "accept": null }));
+        // Advanced options: destination IP filtering
+        if let Some(dest) = rule.destination {
+            let dest_string;
+            let dest_str = if let Some(ref cached) = rule.destination_string {
+                cached.as_str()
+            } else {
+                dest_string = dest.to_string();
+                &dest_string
+            };
+            expressions.push(json!({
+                "match": {
+                    "left": { "payload": { "protocol": if dest.is_ipv6() { "ip6" } else { "ip" }, "field": "daddr" } },
+                    "op": "==",
+                    "right": dest_str
+                }
+            }));
+        }
+
+        // Advanced options: rate limiting
+        if let Some(rate_limit) = rule.rate_limit {
+            expressions.push(json!({
+                "limit": {
+                    "rate": rate_limit.count,
+                    "per": rate_limit.unit.as_str()
+                }
+            }));
+        }
+
+        // Advanced options: connection limiting
+        if rule.connection_limit > 0 {
+            expressions.push(json!({
+                "match": {
+                    "left": { "ct": { "key": "count" } },
+                    "op": "<=",
+                    "right": rule.connection_limit
+                }
+            }));
+        }
+
+        // Action (Accept/Drop/Reject)
+        match rule.action {
+            Action::Accept => expressions.push(json!({ "accept": null })),
+            Action::Drop => expressions.push(json!({ "drop": null })),
+            Action::Reject => expressions.push(json!({ "reject": null })),
+        }
 
         nft_rules.push(json!({
             "add": {
@@ -1342,6 +1536,13 @@ impl FirewallRuleset {
                     if src.is_ipv4() { "ip" } else { "ip6" }
                 );
             }
+            if let Some(dest) = rule.destination {
+                let _ = write!(
+                    out,
+                    "{} daddr {dest} ",
+                    if dest.is_ipv4() { "ip" } else { "ip6" }
+                );
+            }
             if let Some(ref iface) = rule.interface {
                 let _ = write!(out, "iifname \"{iface}\" ");
             }
@@ -1365,8 +1566,21 @@ impl FirewallRuleset {
                 Protocol::Icmpv6 => {
                     let _ = write!(out, "icmpv6 ");
                 }
+                Protocol::IcmpBoth => {
+                    // Match both ICMP and ICMPv6 for dual-stack support
+                    let _ = write!(out, "meta l4proto {{ icmp, ipv6-icmp }} ");
+                }
             }
-            let _ = write!(out, "accept");
+            // Advanced options: rate limiting
+            if let Some(rate_limit) = rule.rate_limit {
+                let _ = write!(out, "limit rate {}/{} ", rate_limit.count, rate_limit.unit);
+            }
+            // Advanced options: connection limiting
+            if rule.connection_limit > 0 {
+                let _ = write!(out, "ct count <= {} ", rule.connection_limit);
+            }
+            // Action
+            let _ = write!(out, "{}", rule.action);
             if !rule.label.is_empty() {
                 let _ = write!(out, " comment \"{}\"", rule.label);
             }
