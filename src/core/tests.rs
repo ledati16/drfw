@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests_impl {
-    use crate::core::firewall::{FirewallRuleset, PortRange, Protocol, Rule};
+    use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -33,6 +33,11 @@ mod tests_impl {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -40,6 +45,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -74,6 +81,11 @@ mod tests_impl {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -81,6 +93,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -102,6 +116,11 @@ mod tests_impl {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -109,6 +128,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -212,6 +233,11 @@ mod tests_impl {
             enabled: true,
             tags: vec!["secure".to_string()],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -219,6 +245,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -235,6 +263,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -242,6 +275,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -255,6 +290,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -262,6 +302,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -331,6 +373,11 @@ mod tests_impl {
                 enabled: true,
                 tags: vec![],
                 created_at: Utc::now(),
+                // Advanced options
+                destination: None,
+                action: Action::Accept,
+                rate_limit: None,
+                connection_limit: 0,
                 // Cached fields
                 label_lowercase: String::new(),
                 interface_lowercase: None,
@@ -338,6 +385,8 @@ mod tests_impl {
                 protocol_lowercase: "",
                 port_display: String::new(),
                 source_string: None,
+                destination_string: None,
+                rate_limit_display: None,
             });
         }
 
@@ -393,6 +442,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -400,6 +454,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -413,6 +469,11 @@ mod tests_impl {
             enabled: false, // DISABLED
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -420,6 +481,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -433,6 +496,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -440,6 +508,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -484,6 +554,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -491,6 +566,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -504,6 +581,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -511,6 +593,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -524,6 +608,11 @@ mod tests_impl {
             enabled: true,
             tags: vec![],
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -531,6 +620,8 @@ mod tests_impl {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let text = ruleset.to_nft_text();
@@ -566,7 +657,7 @@ mod tests_impl {
 
 #[cfg(test)]
 mod property_tests {
-    use crate::core::firewall::{FirewallRuleset, PortRange, Protocol, Rule};
+    use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
     use chrono::Utc;
     use proptest::prelude::*;
     use uuid::Uuid;
@@ -607,13 +698,20 @@ mod property_tests {
                 enabled: true,
                 tags: Vec::new(),
                 created_at: Utc::now(),
+                // Advanced options
+                destination: None,
+                action: Action::Accept,
+                rate_limit: None,
+                connection_limit: 0,
                 // Cached fields
                 label_lowercase: String::new(),
                 interface_lowercase: None,
                 tags_lowercase: Vec::new(),
                 protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
+                port_display: String::new(),
+                source_string: None,
+                destination_string: None,
+                rate_limit_display: None,
             }
         }
     }
@@ -699,7 +797,7 @@ mod integration_tests {
     //! Without elevated privileges, verification tests will skip but other
     //! integration tests (checksums, audit logging, JSON generation) will run.
 
-    use crate::core::firewall::{FirewallRuleset, PortRange, Protocol, Rule};
+    use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
     use crate::core::nft_json;
     use crate::core::verify;
     use chrono::Utc;
@@ -731,6 +829,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -738,6 +841,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
         ruleset
     }
@@ -809,6 +914,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -816,6 +926,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -854,6 +966,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -861,6 +978,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let json2 = ruleset1.to_nftables_json();
@@ -950,6 +1069,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -957,6 +1081,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -970,6 +1096,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -977,6 +1108,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         ruleset.rules.push(Rule {
@@ -990,6 +1123,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -997,6 +1135,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let json = ruleset.to_nftables_json();
@@ -1043,6 +1183,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -1050,6 +1195,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         // UDP rule
@@ -1064,6 +1211,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -1071,6 +1223,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         // Any protocol rule
@@ -1085,6 +1239,11 @@ mod integration_tests {
             enabled: true,
             tags: Vec::new(),
             created_at: Utc::now(),
+            // Advanced options
+            destination: None,
+            action: Action::Accept,
+            rate_limit: None,
+            connection_limit: 0,
             // Cached fields
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -1092,6 +1251,8 @@ mod integration_tests {
             protocol_lowercase: "",
             port_display: String::new(),
             source_string: None,
+            destination_string: None,
+            rate_limit_display: None,
         });
 
         let json = ruleset.to_nftables_json();

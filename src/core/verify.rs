@@ -50,6 +50,7 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
 
     let mut child =
         crate::elevation::create_elevated_nft_command(&["--json", "--check", "-f", "-"])
+            .map_err(|e| Error::Internal(format!("Privilege escalation unavailable: {e}")))?
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

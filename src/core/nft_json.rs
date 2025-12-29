@@ -40,6 +40,10 @@ pub async fn apply_with_snapshot(mut json_payload: Value) -> Result<Value> {
     info!("Applying ruleset with integrated snapshot via single pkexec...");
 
     let mut child = crate::elevation::create_elevated_nft_command(&["--json", "-f", "-"])
+        .map_err(|e| {
+            error!("Privilege escalation unavailable: {e}");
+            Error::Internal(format!("Privilege escalation unavailable: {e}"))
+        })?
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -139,6 +143,10 @@ pub async fn restore_snapshot(snapshot: &Value) -> Result<()> {
     info!("Snapshot validation passed, proceeding with restore");
 
     let mut child = crate::elevation::create_elevated_nft_command(&["--json", "-f", "-"])
+        .map_err(|e| {
+            error!("Privilege escalation unavailable for restore: {e}");
+            Error::Internal(format!("Privilege escalation unavailable: {e}"))
+        })?
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -55,6 +55,19 @@ This document outlines universal best practices for LLM-based coding assistants 
       return;
   }
   ```
+- **Test Environment Variables**: Use `unsafe` blocks when setting/removing environment variables in tests (required since Rust 1.82):
+  ```rust
+  #[test]
+  fn test_with_env_var() {
+      unsafe {
+          std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+      }
+      // ... test code ...
+      unsafe {
+          std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+      }
+  }
+  ```
 - **Strict Isolation**: Tests must never touch real user data or environment configuration. Always use temporary directories and isolate environment variables (XDG paths, etc.).
 - **Mock External State**: Use mock servers or programmatic stubs to test protocol logic and external IPC without requiring a live environment.
 - **Parameterized Testing**: Use table-driven tests to cover edge cases and varied inputs efficiently.
@@ -123,10 +136,85 @@ This document outlines universal best practices for LLM-based coding assistants 
 - **Ownership Verification**: Before performing sensitive operations (like deleting a stale socket), verify the file type and owner UID.
 
 ### Privilege Escalation Safety
+
+#### Standard Approach: PolicyKit + pkexec
+DRFW uses **pkexec with a polkit policy file** for privilege escalation. This is the Linux desktop standard and provides proper integration with system authentication.
+
+**DO NOT:**
+- Create custom authentication dialogs (security complexity, maintenance burden)
+- Wrap pkexec with stdin piping (not supported, pkexec doesn't accept password on stdin)
+- Use sudo with NOPASSWD in sudoers (bypasses authentication entirely)
+- Implement PAM directly (synchronous API conflicts with async GUI)
+
+**PolicyKit Integration:**
+```xml
+<!-- /usr/share/polkit-1/actions/org.drfw.policy -->
+<action id="org.drfw.nftables.modify">
+  <description>Modify firewall rules</description>
+  <defaults>
+    <allow_any>auth_admin</allow_any>
+    <allow_inactive>auth_admin</allow_inactive>
+    <allow_active>auth_admin</allow_active>
+  </defaults>
+  <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/nft</annotate>
+</action>
+```
+
+**Invocation:**
+```rust
+Command::new("pkexec")
+    .arg("--action")
+    .arg("org.drfw.nftables.modify")
+    .arg("nft")
+    .args(["--json", "-f", "-"])
+```
+
+#### Privilege Escalation Patterns
 - **Minimize Elevated Code Paths**: Keep privileged operations isolated in dedicated modules (e.g., `elevation.rs`).
+- **Binary Availability Checks**: Verify `pkexec` and `nft` are available at startup using `check_elevation_available()`.
+- **Timeout Protection**: All elevated operations must have timeout (default: 2 minutes) to prevent indefinite hangs.
 - **Validate BEFORE Elevation**: Run `nft --check` (syntax validation) before attempting elevated apply.
+- **Error Translation**: Translate pkexec exit codes to user-friendly messages:
+  ```rust
+  match exit_code {
+      Some(126) => ElevationError::AuthenticationCancelled,  // User clicked Cancel
+      Some(127) => ElevationError::AuthenticationFailed,      // Wrong password
+      Some(1) if stderr.contains("Cannot run program") => ElevationError::NftNotFound,
+      _ => /* ... */
+  }
+  ```
 - **Audit All Privileged Operations**: Log all firewall rule applications, system saves, and privilege escalations with timestamps and outcomes.
 - **Snapshot Before Modify**: Always capture current state before applying changes for rollback capability.
+
+#### Error Handling for Elevation
+Use structured error types with user-facing translations:
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum ElevationError {
+    #[error("pkexec not found - please install PolicyKit")]
+    PkexecNotFound,
+    #[error("nft binary not found - please install nftables")]
+    NftNotFound,
+    #[error("Authentication cancelled by user")]
+    AuthenticationCancelled,
+    #[error("Authentication failed")]
+    AuthenticationFailed,
+    #[error("Operation timed out after {0:?}")]
+    Timeout(Duration),
+    // ...
+}
+```
+
+#### Test Mode
+Set `DRFW_TEST_NO_ELEVATION=1` to bypass pkexec in tests:
+```rust
+if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
+    Command::new("nft").args(args)  // Direct execution for testing
+} else {
+    Command::new("pkexec").arg("--action").arg("org.drfw.nftables.modify")
+        .arg("nft").args(args)
+}
+```
 
 ### Error Handling & Information Disclosure
 - **User-Friendly Error Messages**: Translate technical errors into actionable messages:
@@ -525,11 +613,39 @@ We went through multiple iterations trying to achieve perfect padding:
 - Pre-allocating collections with known sizes
 - Avoiding allocations in hot loops (view())
 
+### Privilege Escalation: The Custom Auth Dialog Trap (2025-12-29)
+
+**What Happened:** During privilege escalation improvements, we researched alternatives to pkexec including custom authentication dialogs using PAM or building a custom polkit authentication agent.
+
+**Why We Didn't Pursue Custom Auth:**
+1. **Security complexity**: Custom auth dialogs require SETUID binaries or capabilities, creating massive attack surface
+2. **PAM synchronous API**: Conflicts with async Iced GUI (blocks event loop)
+3. **Maintenance burden**: Must handle edge cases like multiple polkit agents, session types, display servers
+4. **1-2 weeks minimum**: Basic version needs 1-2 weeks, hardened version 3-4 weeks
+5. **pkexec already works**: It's the Linux desktop standard used by GNOME, KDE tools
+
+**Attempted Solutions:**
+1. ❌ Custom PAM dialog with Iced - Synchronous API blocks GUI
+2. ❌ Wrap pkexec with stdin - pkexec doesn't accept password on stdin (security design)
+3. ❌ Custom polkit authentication agent - Complex, security-critical, high maintenance
+4. ✅ Enhanced pkexec with polkit policy file - Standard approach, well-tested, secure
+
+**The Research:**
+- Examined 7+ approaches (PAM, polkit, D-Bus daemon, capabilities)
+- Analyzed real-world examples (GUFW, firewalld, Soteria authentication agent)
+- Researched available Rust crates (pam-client, zbus_polkit, runas, sudo-rs)
+- Conclusion: pkexec + polkit policy IS the proper approach
+
+**Lesson:** Don't reinvent authentication systems. Use the platform-provided mechanism (pkexec/polkit) and enhance error handling, timeout protection, and user messaging instead.
+
+**Reference:** See Section 5 "Privilege Escalation Safety" for implementation details.
+
 ### Documentation Red Flags
 When an AI assistant says:
 - "This is deprecated, we need to modernize" ← Verify in official docs first!
 - "The old way was X, the new way is Y" ← Confirm with documentation
 - "Let me implement this advanced pattern" ← Ask why it's needed
+- "We should build a custom authentication dialog" ← See privilege escalation trap above
 
 **Golden Rule:** If code works and follows official examples, it's probably correct. Don't fix what isn't broken.
 
@@ -709,3 +825,4 @@ This section documents nftables capabilities that DRFW intentionally does NOT im
 **Document Last Updated:** 2025-12-29
 **Performance Optimizations:** Phases 2-5 completed, Phase 1 deferred
 **Advanced Rule Options:** Implemented destination IP, action, rate limiting, connection limiting
+**Privilege Escalation:** Enhanced pkexec with polkit policy, error handling, timeout protection
