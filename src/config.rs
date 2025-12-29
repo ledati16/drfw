@@ -14,6 +14,14 @@ pub struct AppConfig {
     pub regular_font: crate::fonts::RegularFontChoice,
     #[serde(default)]
     pub mono_font: crate::fonts::MonoFontChoice,
+    #[serde(default = "default_true")]
+    pub show_diff: bool,
+    #[serde(default = "default_true")]
+    pub show_zebra_striping: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Saves the complete app config to disk using an atomic write pattern.
@@ -80,6 +88,8 @@ pub fn load_config() -> AppConfig {
                 theme_choice: crate::theme::ThemeChoice::default(),
                 regular_font: crate::fonts::RegularFontChoice::default(),
                 mono_font: crate::fonts::MonoFontChoice::default(),
+                show_diff: true,
+                show_zebra_striping: true,
             };
         }
     }
@@ -95,6 +105,8 @@ pub fn save_ruleset(ruleset: &FirewallRuleset) -> std::io::Result<()> {
         theme_choice: crate::theme::ThemeChoice::default(),
         regular_font: crate::fonts::RegularFontChoice::default(),
         mono_font: crate::fonts::MonoFontChoice::default(),
+        show_diff: true,
+        show_zebra_striping: true,
     };
     save_config(&config)
 }

@@ -328,6 +328,8 @@ impl State {
         let current_theme = config.theme_choice;
         let mut regular_font_choice = config.regular_font;
         let mut mono_font_choice = config.mono_font;
+        let show_diff = config.show_diff;
+        let show_zebra_striping = config.show_zebra_striping;
 
         // Resolve fonts (hydrate handles from system cache, handle deleted fonts)
         regular_font_choice.resolve(false);
@@ -382,8 +384,8 @@ impl State {
                 cached_filtered_rule_indices,
                 deleting_id: None,
                 pending_warning: None,
-                show_diff: true,
-                show_zebra_striping: true,
+                show_diff,
+                show_zebra_striping,
                 show_diagnostics: false,
                 show_export_modal: false,
                 show_shortcuts_help: false,
@@ -475,6 +477,8 @@ impl State {
             theme_choice: self.current_theme,
             regular_font: self.regular_font_choice.clone(),
             mono_font: self.mono_font_choice.clone(),
+            show_diff: self.show_diff,
+            show_zebra_striping: self.show_zebra_striping,
         };
         if let Err(e) = crate::config::save_config(&config) {
             eprintln!("Failed to save configuration: {e}");
@@ -613,8 +617,14 @@ impl State {
             }
             Message::SaveToSystemResult(Err(e)) => self.last_error = Some(ErrorInfo::new(e)),
             Message::EventOccurred(event) => return self.handle_event(event),
-            Message::ToggleDiff(enabled) => self.show_diff = enabled,
-            Message::ToggleZebraStriping(enabled) => self.show_zebra_striping = enabled,
+            Message::ToggleDiff(enabled) => {
+                self.show_diff = enabled;
+                return self.save_config();
+            }
+            Message::ToggleZebraStriping(enabled) => {
+                self.show_zebra_striping = enabled;
+                return self.save_config();
+            }
             // Advanced Security Settings
             Message::ToggleStrictIcmp(enabled) => {
                 self.ruleset.advanced_security.strict_icmp = enabled;
