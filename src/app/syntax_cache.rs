@@ -41,6 +41,10 @@ pub struct HighlightedLine {
     pub line_number: usize,
     pub indent: usize,
     pub tokens: Vec<Token>,
+    /// Pre-formatted line number for JSON view ("{:3} " format) - computed once, not every frame
+    pub formatted_line_number_json: String,
+    /// Pre-formatted line number for NFT view ("{:4}" format) - computed once, not every frame
+    pub formatted_line_number_nft: String,
 }
 
 /// Cached syntax highlighting for JSON
@@ -52,11 +56,14 @@ pub fn tokenize_json(content: &str) -> Vec<HighlightedLine> {
             let trimmed = line.trim_start();
             let indent = line.len().saturating_sub(trimmed.len()).min(32);
             let tokens = parse_json_line(trimmed);
+            let line_number = i + 1;
 
             HighlightedLine {
-                line_number: i + 1,
+                line_number,
                 indent,
                 tokens,
+                formatted_line_number_json: format!("{:3} ", line_number),
+                formatted_line_number_nft: format!("{:4}", line_number),
             }
         })
         .collect()
@@ -238,11 +245,14 @@ pub fn tokenize_nft(content: &str) -> Vec<HighlightedLine> {
             let trimmed = line.trim_start();
             let indent = line.len().saturating_sub(trimmed.len()).min(32);
             let tokens = parse_nft_line(trimmed);
+            let line_number = i + 1;
 
             HighlightedLine {
-                line_number: i + 1,
+                line_number,
                 indent,
                 tokens,
+                formatted_line_number_json: format!("{:3} ", line_number),
+                formatted_line_number_nft: format!("{:4}", line_number),
             }
         })
         .collect()
@@ -495,6 +505,9 @@ pub fn compute_and_tokenize_diff(
         if let Some(mut highlighted_line) = parsed.into_iter().next() {
             // Update line number to match diff line number
             highlighted_line.line_number = line_number;
+            // Re-compute formatted line numbers since we changed line_number
+            highlighted_line.formatted_line_number_json = format!("{:3} ", line_number);
+            highlighted_line.formatted_line_number_nft = format!("{:4}", line_number);
             result.push((diff_type, highlighted_line));
         }
     }

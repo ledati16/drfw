@@ -12,8 +12,8 @@ use crate::app::{
 use crate::core::firewall::{PRESETS, Protocol};
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    Id, button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, space,
-    stack, text, text_input, toggler,
+    Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, row, rule,
+    scrollable, space, stack, text, text_input, toggler,
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow};
 
@@ -890,6 +890,7 @@ fn view_tab_button<'a>(
 }
 
 /// Phase 1 Optimized: Build diff view from pre-tokenized cache (no parsing in view!)
+/// Uses keyed_column for efficient widget reconciliation during resize
 fn view_from_cached_diff_tokens<'a>(
     diff_tokens: &'a [(
         crate::app::syntax_cache::DiffType,
@@ -897,17 +898,22 @@ fn view_from_cached_diff_tokens<'a>(
     )],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
-) -> iced::widget::Column<'a, Message> {
+) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
-    let mut lines = column![].spacing(1);
+
+    // Use pre-computed zebra stripe color from theme (computed once, not every frame)
+    let even_stripe = theme.zebra_stripe;
+
+    let mut lines = keyed_column(Vec::new()).spacing(1);
 
     for (diff_type, highlighted_line) in diff_tokens {
+        let line_number = highlighted_line.line_number;
         let mut row_content = row![].spacing(0);
 
-        // Line number (same format as normal view - no extra diff indicator to prevent jumping)
+        // Line number (same format as normal view - no extra diff indicator, pre-formatted to avoid allocation)
         row_content = row_content.push(
             container(
-                text(format!("{:4}", highlighted_line.line_number))
+                text(&highlighted_line.formatted_line_number_nft)
                     .font(mono_font)
                     .size(14)
                     .color(crate::app::syntax_cache::TokenColor::LineNumberNft.to_color(theme)),
@@ -928,7 +934,7 @@ fn view_from_cached_diff_tokens<'a>(
             row_content = row_content.push(text(&token.text).font(mono_font).size(14).color(color));
         }
 
-        // Add subtle background for added/removed lines
+        // Background colors: diff colors for added/removed, zebra stripes for unchanged
         let bg_color = match diff_type {
             crate::app::syntax_cache::DiffType::Added => Some(Color {
                 a: 0.1,
@@ -938,15 +944,22 @@ fn view_from_cached_diff_tokens<'a>(
                 a: 0.1,
                 ..theme.danger
             }),
-            crate::app::syntax_cache::DiffType::Unchanged => None,
+            crate::app::syntax_cache::DiffType::Unchanged => {
+                // Apply zebra striping to unchanged lines
+                let is_even = line_number % 2 == 0;
+                if is_even { Some(even_stripe) } else { None }
+            }
         };
 
-        lines = lines.push(container(row_content).width(Length::Fill).style(move |_| {
-            container::Style {
-                background: bg_color.map(Into::into),
-                ..Default::default()
-            }
-        }));
+        lines = lines.push(
+            line_number,
+            container(row_content).width(Length::Fill).style(move |_| {
+                container::Style {
+                    background: bg_color.map(Into::into),
+                    ..Default::default()
+                }
+            }),
+        );
     }
 
     lines
@@ -2612,41 +2625,27 @@ fn view_shortcuts_help(
 
 /// Phase 1 Optimization: Build widgets from pre-tokenized JSON (cached in State)
 /// This avoids expensive character-by-character parsing every frame
+/// Uses keyed_column for efficient widget reconciliation during resize
 fn view_from_cached_json_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
-) -> iced::widget::Column<'a, Message> {
+) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
-    // Pre-calculate subtle zebra stripe color (1.5% difference)
-    let even_stripe = if theme.is_light() {
-        // Light themes: slightly darker
-        Color {
-            r: (theme.bg_surface.r * 0.985).max(0.0),
-            g: (theme.bg_surface.g * 0.985).max(0.0),
-            b: (theme.bg_surface.b * 0.985).max(0.0),
-            ..theme.bg_surface
-        }
-    } else {
-        // Dark themes: slightly lighter
-        Color {
-            r: (theme.bg_surface.r * 1.015 + 0.005).min(1.0),
-            g: (theme.bg_surface.g * 1.015 + 0.005).min(1.0),
-            b: (theme.bg_surface.b * 1.015 + 0.005).min(1.0),
-            ..theme.bg_surface
-        }
-    };
+    // Use pre-computed zebra stripe color from theme (computed once, not every frame)
+    let even_stripe = theme.zebra_stripe;
 
-    let mut lines = column![].spacing(2);
+    let mut lines = keyed_column(Vec::new()).spacing(2);
 
     for highlighted_line in tokens {
+        let line_number = highlighted_line.line_number;
         let mut row_content = row![].spacing(0);
 
-        // Line number
+        // Line number (pre-formatted to avoid allocation every frame)
         row_content = row_content.push(
             container(
-                text(format!("{:3} ", highlighted_line.line_number))
+                text(&highlighted_line.formatted_line_number_json)
                     .font(mono_font)
                     .size(14)
                     .color(crate::app::syntax_cache::TokenColor::LineNumber.to_color(theme)),
@@ -2676,56 +2675,45 @@ fn view_from_cached_json_tokens<'a>(
         }
 
         // Apply subtle zebra striping: even rows get background, odd rows transparent
-        let is_even = highlighted_line.line_number % 2 == 0;
+        let is_even = line_number % 2 == 0;
         let bg = if is_even { Some(even_stripe) } else { None };
 
-        lines = lines.push(container(row_content).width(Length::Fill).style(move |_| {
-            container::Style {
-                background: bg.map(Into::into),
-                ..Default::default()
-            }
-        }));
+        lines = lines.push(
+            line_number,
+            container(row_content).width(Length::Fill).style(move |_| {
+                container::Style {
+                    background: bg.map(Into::into),
+                    ..Default::default()
+                }
+            }),
+        );
     }
 
     lines
 }
 
 /// Phase 1 Optimization: Build widgets from pre-tokenized NFT (cached in State)
+/// Uses keyed_column for efficient widget reconciliation during resize
 fn view_from_cached_nft_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
-) -> iced::widget::Column<'a, Message> {
+) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
-    // Pre-calculate subtle zebra stripe color (1.5% difference)
-    let even_stripe = if theme.is_light() {
-        // Light themes: slightly darker
-        Color {
-            r: (theme.bg_surface.r * 0.985).max(0.0),
-            g: (theme.bg_surface.g * 0.985).max(0.0),
-            b: (theme.bg_surface.b * 0.985).max(0.0),
-            ..theme.bg_surface
-        }
-    } else {
-        // Dark themes: slightly lighter
-        Color {
-            r: (theme.bg_surface.r * 1.015 + 0.005).min(1.0),
-            g: (theme.bg_surface.g * 1.015 + 0.005).min(1.0),
-            b: (theme.bg_surface.b * 1.015 + 0.005).min(1.0),
-            ..theme.bg_surface
-        }
-    };
+    // Use pre-computed zebra stripe color from theme (computed once, not every frame)
+    let even_stripe = theme.zebra_stripe;
 
-    let mut lines = column![].spacing(1); // NFT uses tighter spacing than JSON
+    let mut lines = keyed_column(Vec::new()).spacing(1); // NFT uses tighter spacing than JSON
 
     for highlighted_line in tokens {
+        let line_number = highlighted_line.line_number;
         let mut row_content = row![].spacing(0);
 
-        // Line number (NFT uses darker gray and different format)
+        // Line number (NFT uses darker gray and different format, pre-formatted to avoid allocation)
         row_content = row_content.push(
             container(
-                text(format!("{:4}", highlighted_line.line_number))
+                text(&highlighted_line.formatted_line_number_nft)
                     .font(mono_font)
                     .size(14)
                     .color(crate::app::syntax_cache::TokenColor::LineNumberNft.to_color(theme)),
@@ -2751,15 +2739,18 @@ fn view_from_cached_nft_tokens<'a>(
         }
 
         // Apply subtle zebra striping: even rows get background, odd rows transparent
-        let is_even = highlighted_line.line_number % 2 == 0;
+        let is_even = line_number % 2 == 0;
         let bg = if is_even { Some(even_stripe) } else { None };
 
-        lines = lines.push(container(row_content).width(Length::Fill).style(move |_| {
-            container::Style {
-                background: bg.map(Into::into),
-                ..Default::default()
-            }
-        }));
+        lines = lines.push(
+            line_number,
+            container(row_content).width(Length::Fill).style(move |_| {
+                container::Style {
+                    background: bg.map(Into::into),
+                    ..Default::default()
+                }
+            }),
+        );
     }
 
     lines

@@ -46,6 +46,10 @@ pub struct AppTheme {
     // === Shadows ===
     pub shadow_color: Color,  // Shadow color (transparent black usually)
     pub shadow_strong: Color, // Stronger shadow for modals
+
+    // === Zebra Striping ===
+    /// Pre-calculated subtle background for even rows in code preview (1.5% difference from bg_surface)
+    pub zebra_stripe: Color,
 }
 
 impl AppTheme {
@@ -98,6 +102,26 @@ impl AppTheme {
             )
         };
 
+        // Calculate zebra stripe color (1.5% difference from bg_surface) once per theme
+        let bg_surface_color = hex_to_color(bg_surface);
+        let zebra_stripe = if is_light {
+            // Light themes: slightly darker
+            Color {
+                r: (bg_surface_color.r * 0.985).max(0.0),
+                g: (bg_surface_color.g * 0.985).max(0.0),
+                b: (bg_surface_color.b * 0.985).max(0.0),
+                ..bg_surface_color
+            }
+        } else {
+            // Dark themes: slightly lighter
+            Color {
+                r: (bg_surface_color.r * 1.015 + 0.005).min(1.0),
+                g: (bg_surface_color.g * 1.015 + 0.005).min(1.0),
+                b: (bg_surface_color.b * 1.015 + 0.005).min(1.0),
+                ..bg_surface_color
+            }
+        };
+
         Self {
             name: name.to_string(),
             bg_base: bg_base_color,
@@ -127,6 +151,7 @@ impl AppTheme {
             syntax_operator: hex_to_color(syntax_operator),
             shadow_color,
             shadow_strong,
+            zebra_stripe,
         }
     }
 
