@@ -744,21 +744,25 @@ fn view_workspace<'a>(
         .width(Length::Fill),
     ];
 
-    // Add diff toggle when on Nftables tab and we have a previous version
-    if state.active_tab == WorkspaceTab::Nftables && state.last_applied_ruleset.is_some() {
-        title_row = title_row.push(
-            checkbox(state.show_diff)
-                .label("Show diff")
-                .on_toggle(Message::ToggleDiff)
-                .size(16)
-                .text_size(12)
-                .spacing(6)
-                .style(move |_, status| themed_checkbox(theme, status)),
-        );
-    }
-
+    // Add checkboxes in a vertical column when on Nftables tab
     if state.active_tab == WorkspaceTab::Nftables {
-        title_row = title_row.push(
+        let mut checkboxes = column![].spacing(8);
+
+        // Add diff toggle when we have a previous version
+        if state.last_applied_ruleset.is_some() {
+            checkboxes = checkboxes.push(
+                checkbox(state.show_diff)
+                    .label("Show diff")
+                    .on_toggle(Message::ToggleDiff)
+                    .size(16)
+                    .text_size(12)
+                    .spacing(6)
+                    .style(move |_, status| themed_checkbox(theme, status)),
+            );
+        }
+
+        // Always show zebra toggle on Nftables tab
+        checkboxes = checkboxes.push(
             checkbox(state.show_zebra_striping)
                 .label("Show zebra")
                 .on_toggle(Message::ToggleZebraStriping)
@@ -767,6 +771,8 @@ fn view_workspace<'a>(
                 .spacing(6)
                 .style(move |_, status| themed_checkbox(theme, status)),
         );
+
+        title_row = title_row.push(checkboxes);
     }
 
     let preview_header = column![nav_row, title_row].spacing(20);
