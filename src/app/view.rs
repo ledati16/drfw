@@ -33,6 +33,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                         diff_tokens,
                         theme,
                         state.font_mono,
+                        state.show_zebra_striping,
                     ))
                     .width(Length::Fill)
                     .into()
@@ -42,6 +43,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                         &state.cached_nft_tokens,
                         theme,
                         state.font_mono,
+                        state.show_zebra_striping,
                     ))
                     .width(Length::Fill)
                     .into()
@@ -52,6 +54,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     &state.cached_nft_tokens,
                     theme,
                     state.font_mono,
+                    state.show_zebra_striping,
                 ))
                 .width(Length::Fill)
                 .into()
@@ -63,6 +66,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 &state.cached_json_tokens,
                 theme,
                 state.font_mono,
+                state.show_zebra_striping,
             ))
             .width(Length::Fill)
             .into()
@@ -753,6 +757,18 @@ fn view_workspace<'a>(
         );
     }
 
+    if state.active_tab == WorkspaceTab::Nftables {
+        title_row = title_row.push(
+            checkbox(state.show_zebra_striping)
+                .label("Show zebra")
+                .on_toggle(Message::ToggleZebraStriping)
+                .size(16)
+                .text_size(12)
+                .spacing(6)
+                .style(move |_, status| themed_checkbox(theme, status)),
+        );
+    }
+
     let preview_header = column![nav_row, title_row].spacing(20);
 
     let editor = container(
@@ -898,6 +914,7 @@ fn view_from_cached_diff_tokens<'a>(
     )],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
+    show_zebra_striping: bool,
 ) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
@@ -945,9 +962,13 @@ fn view_from_cached_diff_tokens<'a>(
                 ..theme.danger
             }),
             crate::app::syntax_cache::DiffType::Unchanged => {
-                // Apply zebra striping to unchanged lines
-                let is_even = line_number % 2 == 0;
-                if is_even { Some(even_stripe) } else { None }
+                // Apply zebra striping to unchanged lines (if enabled)
+                if show_zebra_striping {
+                    let is_even = line_number % 2 == 0;
+                    if is_even { Some(even_stripe) } else { None }
+                } else {
+                    None
+                }
             }
         };
 
@@ -2630,6 +2651,7 @@ fn view_from_cached_json_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
+    show_zebra_striping: bool,
 ) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
@@ -2674,9 +2696,13 @@ fn view_from_cached_json_tokens<'a>(
             );
         }
 
-        // Apply subtle zebra striping: even rows get background, odd rows transparent
-        let is_even = line_number % 2 == 0;
-        let bg = if is_even { Some(even_stripe) } else { None };
+        // Apply subtle zebra striping: even rows get background, odd rows transparent (if enabled)
+        let bg = if show_zebra_striping {
+            let is_even = line_number % 2 == 0;
+            if is_even { Some(even_stripe) } else { None }
+        } else {
+            None
+        };
 
         lines = lines.push(
             line_number,
@@ -2698,6 +2724,7 @@ fn view_from_cached_nft_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
+    show_zebra_striping: bool,
 ) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
@@ -2738,9 +2765,13 @@ fn view_from_cached_nft_tokens<'a>(
             );
         }
 
-        // Apply subtle zebra striping: even rows get background, odd rows transparent
-        let is_even = line_number % 2 == 0;
-        let bg = if is_even { Some(even_stripe) } else { None };
+        // Apply subtle zebra striping: even rows get background, odd rows transparent (if enabled)
+        let bg = if show_zebra_striping {
+            let is_even = line_number % 2 == 0;
+            if is_even { Some(even_stripe) } else { None }
+        } else {
+            None
+        };
 
         lines = lines.push(
             line_number,

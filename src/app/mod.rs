@@ -35,6 +35,7 @@ pub struct State {
     pub deleting_id: Option<uuid::Uuid>,
     pub pending_warning: Option<PendingWarning>,
     pub show_diff: bool,
+    pub show_zebra_striping: bool,
     pub show_diagnostics: bool,
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
@@ -255,6 +256,7 @@ pub enum Message {
     SaveToSystemResult(Result<(), String>),
     EventOccurred(iced::Event),
     ToggleDiff(bool),
+    ToggleZebraStriping(bool),
     // Advanced Security Settings
     ToggleStrictIcmp(bool),
     IcmpRateLimitChanged(u32),
@@ -381,6 +383,7 @@ impl State {
                 deleting_id: None,
                 pending_warning: None,
                 show_diff: true,
+                show_zebra_striping: true,
                 show_diagnostics: false,
                 show_export_modal: false,
                 show_shortcuts_help: false,
@@ -611,6 +614,7 @@ impl State {
             Message::SaveToSystemResult(Err(e)) => self.last_error = Some(ErrorInfo::new(e)),
             Message::EventOccurred(event) => return self.handle_event(event),
             Message::ToggleDiff(enabled) => self.show_diff = enabled,
+            Message::ToggleZebraStriping(enabled) => self.show_zebra_striping = enabled,
             // Advanced Security Settings
             Message::ToggleStrictIcmp(enabled) => {
                 self.ruleset.advanced_security.strict_icmp = enabled;
