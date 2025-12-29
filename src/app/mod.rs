@@ -281,7 +281,8 @@ pub enum Message {
     Undo,
     Redo,
     // Theme
-    #[allow(dead_code)] // Reserved for future direct theme switching (e.g., keyboard shortcuts, CLI args)
+    #[allow(dead_code)]
+    // Reserved for future direct theme switching (e.g., keyboard shortcuts, CLI args)
     ThemeChanged(crate::theme::ThemeChoice),
     OpenThemePicker,
     ThemePickerSearchChanged(String),

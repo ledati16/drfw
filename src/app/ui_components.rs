@@ -36,7 +36,7 @@ pub fn sidebar_container(theme: &AppTheme) -> container::Style {
     let gradient = if theme.is_light() {
         Gradient::Linear(
             iced::gradient::Linear::new(0.0)
-                .add_stop(0.0, gradient_end)    // Darker at bottom
+                .add_stop(0.0, gradient_end) // Darker at bottom
                 .add_stop(1.0, theme.bg_sidebar), // Lighter at top
         )
     } else {
@@ -70,50 +70,6 @@ pub fn card_container(theme: &AppTheme) -> container::Style {
             color: theme.shadow_color,
             offset: Vector::new(0.0, 2.0),
             blur_radius: 3.0,
-        },
-        ..Default::default()
-    }
-}
-
-/// Elevated card container for main content areas (nftables/json/settings)
-/// Larger shadow for more visual hierarchy with subtle background gradient
-pub fn elevated_card_container(theme: &AppTheme) -> container::Style {
-    // Subtle theme-aware gradient: light themes multiply, dark themes hybrid
-    let gradient_end = if theme.is_light() {
-        // Light themes: multiplicative darkening
-        Color {
-            r: (theme.bg_surface.r * 0.90).max(0.0),
-            g: (theme.bg_surface.g * 0.90).max(0.0),
-            b: (theme.bg_surface.b * 0.90).max(0.0),
-            ..theme.bg_surface
-        }
-    } else {
-        // Dark themes: hybrid (multiply + add boost for very dark themes)
-        Color {
-            r: (theme.bg_surface.r * 1.10 + 0.03).min(1.0),
-            g: (theme.bg_surface.g * 1.10 + 0.03).min(1.0),
-            b: (theme.bg_surface.b * 1.10 + 0.03).min(1.0),
-            ..theme.bg_surface
-        }
-    };
-
-    let gradient = Gradient::Linear(
-        iced::gradient::Linear::new(0.0)
-            .add_stop(0.0, theme.bg_surface)
-            .add_stop(1.0, gradient_end),
-    );
-
-    container::Style {
-        background: Some(gradient.into()),
-        border: Border {
-            color: theme.border,
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        shadow: Shadow {
-            color: theme.shadow_color,
-            offset: Vector::new(0.0, 4.0),
-            blur_radius: 6.0,
         },
         ..Default::default()
     }

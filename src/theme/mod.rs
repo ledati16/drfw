@@ -48,7 +48,7 @@ pub struct AppTheme {
     pub shadow_strong: Color, // Stronger shadow for modals
 
     // === Zebra Striping ===
-    /// Pre-calculated subtle background for even rows in code preview (1.5% difference from bg_surface)
+    /// Pre-calculated subtle background for even rows in code preview (1.5% difference from `bg_surface`)
     pub zebra_stripe: Color,
 }
 
@@ -162,6 +162,7 @@ impl AppTheme {
 }
 
 /// Converts hex color (0xRRGGBB) to iced Color
+#[allow(clippy::cast_precision_loss)] // RGB components (0-255) fit perfectly in f32 mantissa
 fn hex_to_color(hex: u32) -> Color {
     Color::from_rgb(
         ((hex >> 16) & 0xFF) as f32 / 255.0,
@@ -273,7 +274,7 @@ impl ThemeChoice {
         ]
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(self) -> String {
         match self {
             // Custom themes
             Self::Oxide => "Oxide".to_string(),

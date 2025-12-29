@@ -207,7 +207,12 @@ pub fn list_snapshots() -> Result<Vec<std::path::PathBuf>> {
         .filter(|path| {
             path.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("snapshot_") && n.ends_with(".json"))
+                .is_some_and(|n| {
+                    n.starts_with("snapshot_")
+                        && std::path::Path::new(n)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+                })
         })
         .collect();
 

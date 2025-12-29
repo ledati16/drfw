@@ -1,9 +1,9 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
-    danger_button, dirty_button, inactive_tab_button, main_container,
-    modal_backdrop, primary_button, secondary_button, section_header_container, sidebar_container,
-    themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
-    themed_scrollable, themed_slider, themed_text_input, themed_toggler,
+    danger_button, dirty_button, inactive_tab_button, main_container, modal_backdrop,
+    primary_button, secondary_button, section_header_container, sidebar_container, themed_checkbox,
+    themed_horizontal_rule, themed_pick_list, themed_pick_list_menu, themed_scrollable,
+    themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, ThemeFilter,
@@ -241,12 +241,14 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .size(24)
                     .font(state.font_regular)
                     .color(theme.accent),
-                container(text("DUMB RUST FIREWALL")
-                    .size(9)
-                    .color(theme.fg_muted)
-                    .font(state.font_mono))
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
+                container(
+                    text("DUMB RUST FIREWALL")
+                        .size(9)
+                        .color(theme.fg_muted)
+                        .font(state.font_mono)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
             ]
             .spacing(0)
         ]
@@ -303,12 +305,14 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         let tags_row = row(tag_elements).spacing(6).wrap();
 
         column![
-            container(text("FILTERS")
-                .size(9)
-                .font(state.font_mono)
-                .color(theme.fg_muted))
-                .padding([2, 6])
-                .style(move |_| section_header_container(theme)),
+            container(
+                text("FILTERS")
+                    .size(9)
+                    .font(state.font_mono)
+                    .color(theme.fg_muted)
+            )
+            .padding([2, 6])
+            .style(move |_| section_header_container(theme)),
             container(tags_row).width(Length::Fill).max_height(120)
         ]
         .spacing(8)
@@ -327,12 +331,14 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
     // 4. Rule List Header
     let list_header = row![
-        container(text("RULES")
-            .size(9)
-            .font(state.font_mono)
-            .color(theme.fg_muted))
-            .padding([2, 6])
-            .style(move |_| section_header_container(theme)),
+        container(
+            text("RULES")
+                .size(9)
+                .font(state.font_mono)
+                .color(theme.fg_muted)
+        )
+        .padding([2, 6])
+        .style(move |_| section_header_container(theme)),
         container(row![]).width(Length::Fill),
         text(format!(
             "{}/{}",
@@ -912,7 +918,7 @@ fn view_tab_button<'a>(
 }
 
 /// Phase 1 Optimized: Build diff view from pre-tokenized cache (no parsing in view!)
-/// Uses keyed_column for efficient widget reconciliation during resize
+/// Uses `keyed_column` for efficient widget reconciliation during resize
 fn view_from_cached_diff_tokens<'a>(
     diff_tokens: &'a [(
         crate::app::syntax_cache::DiffType,
@@ -980,12 +986,12 @@ fn view_from_cached_diff_tokens<'a>(
 
         lines = lines.push(
             line_number,
-            container(row_content).width(Length::Fill).style(move |_| {
-                container::Style {
+            container(row_content)
+                .width(Length::Fill)
+                .style(move |_| container::Style {
                     background: bg_color.map(Into::into),
                     ..Default::default()
-                }
-            }),
+                }),
         );
     }
 
@@ -1111,11 +1117,13 @@ fn view_rule_form<'a>(
                 .style(move |_| section_header_container(theme)),
             {
                 let mut source_col = column![
-                    container(text("SOURCE ADDRESS (OPTIONAL)")
-                        .size(10)
-                        .color(theme.fg_muted))
-                        .padding([2, 6])
-                        .style(move |_| section_header_container(theme)),
+                    container(
+                        text("SOURCE ADDRESS (OPTIONAL)")
+                            .size(10)
+                            .color(theme.fg_muted)
+                    )
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
                     text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
                         .on_input(Message::RuleFormSourceChanged)
                         .padding(8)
@@ -1295,12 +1303,14 @@ fn view_pending_confirmation(
     container(
         column![
             text("⏳").size(36),
-            container(text("Confirm Safety")
-                .size(24)
-                .font(regular_font)
-                .color(app_theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(app_theme)),
+            container(
+                text("Confirm Safety")
+                    .size(24)
+                    .font(regular_font)
+                    .color(app_theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(app_theme)),
             text(format!(
                 "Firewall updated. Automatic rollback in {remaining} seconds if not confirmed."
             ))
@@ -1984,15 +1994,17 @@ fn view_font_picker<'a>(
 
     container(
         column![
-            container(text(match picker.target {
-                FontPickerTarget::Regular => "Select UI Font",
-                FontPickerTarget::Mono => "Select Code Font",
-            })
-            .size(18)
-            .font(state.font_regular)
-            .color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
+            container(
+                text(match picker.target {
+                    FontPickerTarget::Regular => "Select UI Font",
+                    FontPickerTarget::Mono => "Select Code Font",
+                })
+                .size(18)
+                .font(state.font_regular)
+                .color(theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
             text_input("Search fonts...", &picker.search)
                 .on_input(Message::FontPickerSearchChanged)
                 .padding(10)
@@ -2023,8 +2035,7 @@ fn view_font_picker<'a>(
                         } else if filtered_count > display_limit {
                             container(
                                 text(format!(
-                                    "Showing {} of {} fonts — search to find more",
-                                    displayed_count, filtered_count
+                                    "Showing {displayed_count} of {filtered_count} fonts — search to find more"
                                 ))
                                 .size(11)
                                 .color(theme.fg_muted),
@@ -2054,16 +2065,18 @@ fn view_font_picker<'a>(
                 ..Default::default()
             }),
             row![
-                container(text(if filtered_count < state.available_fonts.len() {
-                    format!("{} fonts match", filtered_count)
-                } else {
-                    format!("{} fonts available", filtered_count)
-                })
-                .size(10)
-                .color(theme.fg_muted)
-                .font(state.font_mono))
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
+                container(
+                    text(if filtered_count < state.available_fonts.len() {
+                        format!("{filtered_count} fonts match")
+                    } else {
+                        format!("{filtered_count} fonts available")
+                    })
+                    .size(10)
+                    .color(theme.fg_muted)
+                    .font(state.font_mono)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
                 space::Space::new().width(Length::Fill),
                 button(text("Close").size(14))
                     .on_press(Message::CloseFontPicker)
@@ -2108,8 +2121,8 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             };
 
             // Filter by search (cached lowercase, ASCII-only for performance)
-            let matches_search = search_term.is_empty()
-                || choice.name().to_ascii_lowercase().contains(search_term);
+            let matches_search =
+                search_term.is_empty() || choice.name().to_ascii_lowercase().contains(search_term);
 
             if matches_filter && matches_search {
                 Some((*choice, theme_instance))
@@ -2137,7 +2150,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
     // Pre-allocate theme card vector (show all themes, no limit)
     let mut theme_cards = Vec::with_capacity(filtered_count);
 
-    for (choice, theme_preview) in filtered_themes.iter() {
+    for (choice, theme_preview) in &filtered_themes {
         let is_selected = state.current_theme == *choice;
 
         // Extract colors for use in closures (Color is Copy)
@@ -2208,9 +2221,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
     }
 
     // Create grid layout (3 columns) - wrapped row with better spacing
-    let theme_grid = row(theme_cards)
-        .spacing(CARD_SPACING)
-        .wrap();
+    let theme_grid = row(theme_cards).spacing(CARD_SPACING).wrap();
 
     // Filter buttons (identical to tag filtering pattern)
     let filter_buttons = row![
@@ -2251,12 +2262,14 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
     let preview_panel = container(
         column![
             row![
-                container(text("PREVIEW:")
-                    .size(11)
-                    .font(state.font_mono)
-                    .color(theme.fg_muted))
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
+                container(
+                    text("PREVIEW:")
+                        .size(11)
+                        .font(state.font_mono)
+                        .color(theme.fg_muted)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
                 text(state.current_theme.name())
                     .size(11)
                     .font(state.font_mono)
@@ -2293,12 +2306,14 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     .spacing(6),
                     // Text hierarchy
                     column![
-                        container(text("Text Hierarchy")
-                            .size(10)
-                            .font(state.font_mono)
-                            .color(theme.fg_muted))
-                            .padding([2, 6])
-                            .style(move |_| section_header_container(theme)),
+                        container(
+                            text("Text Hierarchy")
+                                .size(10)
+                                .font(state.font_mono)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
                         row![
                             text("Primary").size(11).color(theme.fg_primary),
                             text("•").size(11).color(theme.fg_muted),
@@ -2311,12 +2326,14 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     .spacing(4),
                     // Status colors
                     column![
-                        container(text("Status Colors")
-                            .size(10)
-                            .font(state.font_mono)
-                            .color(theme.fg_muted))
-                            .padding([2, 6])
-                            .style(move |_| section_header_container(theme)),
+                        container(
+                            text("Status Colors")
+                                .size(10)
+                                .font(state.font_mono)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
                         row![
                             make_color_dot(theme.success, STATUS_COLOR_SIZE),
                             make_color_dot(theme.warning, STATUS_COLOR_SIZE),
@@ -2405,12 +2422,14 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
 
     container(
         column![
-            container(text("Select Theme")
-                .size(18)
-                .font(state.font_regular)
-                .color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
+            container(
+                text("Select Theme")
+                    .size(18)
+                    .font(state.font_regular)
+                    .color(theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
             text_input("Search themes...", &picker.search)
                 .on_input(Message::ThemePickerSearchChanged)
                 .padding(10)
@@ -2418,18 +2437,16 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 .style(move |_, status| themed_text_input(theme, status)),
             filter_buttons,
             container(
-                scrollable(
-                    column![if filtered_count == 0 {
-                        container(
-                            text("No themes found — try a different search")
-                                .size(11)
-                                .color(theme.fg_muted),
-                        )
-                        .padding(GRID_PADDING) // Symmetric - simple and maintainable
-                    } else {
-                        container(theme_grid).padding(GRID_PADDING) // Symmetric - simple and maintainable
-                    }]
-                )
+                scrollable(column![if filtered_count == 0 {
+                    container(
+                        text("No themes found — try a different search")
+                            .size(11)
+                            .color(theme.fg_muted),
+                    )
+                    .padding(GRID_PADDING) // Symmetric - simple and maintainable
+                } else {
+                    container(theme_grid).padding(GRID_PADDING) // Symmetric - simple and maintainable
+                }])
                 .width(Length::Fill)
                 .style(move |_, status| themed_scrollable(theme, status))
             )
@@ -2445,16 +2462,18 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             }),
             preview_panel,
             row![
-                container(text(if filtered_count < crate::theme::ThemeChoice::all().len() {
-                    format!("{} themes match", filtered_count)
-                } else {
-                    format!("{} themes available", filtered_count)
-                })
-                .size(10)
-                .color(theme.fg_muted)
-                .font(state.font_mono))
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
+                container(
+                    text(if filtered_count < crate::theme::ThemeChoice::all().len() {
+                        format!("{filtered_count} themes match")
+                    } else {
+                        format!("{filtered_count} themes available")
+                    })
+                    .size(10)
+                    .color(theme.fg_muted)
+                    .font(state.font_mono)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
                 space::Space::new().width(Length::Fill),
                 button(text("Cancel").size(14))
                     .on_press(Message::CancelThemePicker)
@@ -2483,12 +2502,14 @@ fn view_shortcuts_help(
 ) -> Element<'_, Message> {
     container(
         column![
-            container(text("⌨️ Keyboard Shortcuts")
-                .size(24)
-                .font(regular_font)
-                .color(theme.warning))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
+            container(
+                text("⌨️ Keyboard Shortcuts")
+                    .size(24)
+                    .font(regular_font)
+                    .color(theme.warning)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
             column![
                 text("General").size(16).color(theme.fg_primary),
                 row![
@@ -2652,7 +2673,7 @@ fn view_shortcuts_help(
 
 /// Phase 1 Optimization: Build widgets from pre-tokenized JSON (cached in State)
 /// This avoids expensive character-by-character parsing every frame
-/// Uses keyed_column for efficient widget reconciliation during resize
+/// Uses `keyed_column` for efficient widget reconciliation during resize
 fn view_from_cached_json_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
@@ -2712,12 +2733,12 @@ fn view_from_cached_json_tokens<'a>(
 
         lines = lines.push(
             line_number,
-            container(row_content).width(Length::Fill).style(move |_| {
-                container::Style {
+            container(row_content)
+                .width(Length::Fill)
+                .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
-                }
-            }),
+                }),
         );
     }
 
@@ -2725,7 +2746,7 @@ fn view_from_cached_json_tokens<'a>(
 }
 
 /// Phase 1 Optimization: Build widgets from pre-tokenized NFT (cached in State)
-/// Uses keyed_column for efficient widget reconciliation during resize
+/// Uses `keyed_column` for efficient widget reconciliation during resize
 fn view_from_cached_nft_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
@@ -2781,12 +2802,12 @@ fn view_from_cached_nft_tokens<'a>(
 
         lines = lines.push(
             line_number,
-            container(row_content).width(Length::Fill).style(move |_| {
-                container::Style {
+            container(row_content)
+                .width(Length::Fill)
+                .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
-                }
-            }),
+                }),
         );
     }
 

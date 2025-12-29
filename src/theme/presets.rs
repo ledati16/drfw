@@ -532,7 +532,7 @@ pub fn night_owl() -> AppTheme {
     )
 }
 
-/// SynthWave '84 - Retro neon cyberpunk theme
+/// `SynthWave` '84 - Retro neon cyberpunk theme
 /// Dark background with vibrant neon pink, cyan, and purple
 pub fn synthwave_84() -> AppTheme {
     AppTheme::from_hex(

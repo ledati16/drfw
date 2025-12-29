@@ -62,8 +62,8 @@ pub fn tokenize_json(content: &str) -> Vec<HighlightedLine> {
                 line_number,
                 indent,
                 tokens,
-                formatted_line_number_json: format!("{:3} ", line_number),
-                formatted_line_number_nft: format!("{:4}", line_number),
+                formatted_line_number_json: format!("{line_number:3} "),
+                formatted_line_number_nft: format!("{line_number:4}"),
             }
         })
         .collect()
@@ -251,8 +251,8 @@ pub fn tokenize_nft(content: &str) -> Vec<HighlightedLine> {
                 line_number,
                 indent,
                 tokens,
-                formatted_line_number_json: format!("{:3} ", line_number),
-                formatted_line_number_nft: format!("{:4}", line_number),
+                formatted_line_number_json: format!("{line_number:3} "),
+                formatted_line_number_nft: format!("{line_number:4}"),
             }
         })
         .collect()
@@ -506,8 +506,8 @@ pub fn compute_and_tokenize_diff(
             // Update line number to match diff line number
             highlighted_line.line_number = line_number;
             // Re-compute formatted line numbers since we changed line_number
-            highlighted_line.formatted_line_number_json = format!("{:3} ", line_number);
-            highlighted_line.formatted_line_number_nft = format!("{:4}", line_number);
+            highlighted_line.formatted_line_number_json = format!("{line_number:3} ");
+            highlighted_line.formatted_line_number_nft = format!("{line_number:4}");
             result.push((diff_type, highlighted_line));
         }
     }
@@ -530,8 +530,7 @@ impl TokenColor {
             TokenColor::Number => theme.syntax_number,
             TokenColor::Comment => theme.syntax_comment,
             TokenColor::Bracket => theme.info, // Brackets use info color (matches old code)
-            TokenColor::LineNumber => theme.fg_muted,
-            TokenColor::LineNumberNft => theme.fg_muted, // Use theme's muted color for line numbers
+            TokenColor::LineNumber | TokenColor::LineNumberNft => theme.fg_muted, // Use theme's muted color for line numbers
         }
     }
 }
