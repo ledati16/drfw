@@ -721,9 +721,18 @@ impl FirewallRuleset {
 
         // 4. User Rules
         for rule in &self.rules {
-            if rule.enabled {
-                Self::add_user_rule(&mut nft_rules, rule);
+            if !rule.enabled {
+                continue; // Skip disabled rules
             }
+
+            // Skip OUTPUT rules in Desktop Mode (policy is ACCEPT, rules are redundant)
+            if self.advanced_security.egress_profile == EgressProfile::Desktop
+                && rule.chain == Chain::Output
+            {
+                continue;
+            }
+
+            Self::add_user_rule(&mut nft_rules, rule);
         }
 
         // 5. Termination Rules
@@ -1316,6 +1325,13 @@ impl FirewallRuleset {
         let _ = writeln!(out, "        # --- User Defined Rules ---");
         for rule in &self.rules {
             if !rule.enabled {
+                continue;
+            }
+
+            // Skip OUTPUT rules in Desktop Mode (policy is ACCEPT, rules are redundant)
+            if self.advanced_security.egress_profile == EgressProfile::Desktop
+                && rule.chain == Chain::Output
+            {
                 continue;
             }
             let _ = write!(out, "        ");
