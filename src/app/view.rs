@@ -883,7 +883,6 @@ fn view_workspace<'a>(
                 .width(Length::Fill)
                 .height(Length::Shrink),
         )
-        .horizontal() // Enable horizontal scrolling for long code lines
         .width(Length::Fill)
         .style(move |_, status| themed_scrollable(theme, status)),
     )
