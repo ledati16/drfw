@@ -338,7 +338,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         ]
         .spacing(12)
         .align_y(Alignment::Center),
-        profile_selector.padding(iced::Padding::new(0.0).top(16.0))
+        profile_selector.padding(iced::Padding::new(0.0).top(8.0))
     ])
     .padding(iced::Padding::new(0.0).bottom(10.0));
 
@@ -3232,7 +3232,15 @@ fn view_profile_switch_confirm<'a>(
         .padding(30)
         .max_width(500),
     )
-    .style(move |_| card_container(theme))
+    .style(move |_| {
+        let mut style = card_container(theme);
+        style.border = Border {
+            color: theme.danger,
+            width: 2.0,
+            radius: 8.0.into(),
+        };
+        style
+    })
     .into()
 }
 

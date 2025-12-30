@@ -194,42 +194,42 @@ pub fn check_elevation_available() -> Result<(), ElevationError> {
 /// and run nft directly (requires nft to already have necessary permissions,
 /// or tests to run as root).
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
+    // 1. Strict Test Mode Override (Highest Priority)
     if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
-        // Test mode: run nft directly
         let mut cmd = Command::new("nft");
         cmd.args(args);
+        return Ok(cmd);
+    }
+
+    // 2. Direct Root Execution (No prompt needed)
+    let is_root = nix::unistd::getuid().is_root();
+    if is_root {
+        let mut cmd = Command::new("nft");
+        cmd.args(args);
+        return Ok(cmd);
+    }
+
+    // 3. Elevation required (Potential for prompts)
+    // Decide between pkexec (GUI/Desktop) and sudo (CLI/Terminal)
+    use std::os::fd::AsFd;
+    let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
+
+    if is_atty {
+        // CLI: Standard sudo elevation
+        let mut cmd = Command::new("sudo");
+        cmd.arg("nft").args(args);
         Ok(cmd)
     } else {
-        // Production mode: check if we are root
-        let is_root = nix::unistd::getuid().is_root();
-        if is_root {
-            let mut cmd = Command::new("nft");
-            cmd.args(args);
-            return Ok(cmd);
+        // GUI: Standard pkexec/polkit elevation
+        if !binary_exists("pkexec") {
+            return Err(ElevationError::PkexecNotFound);
         }
-
-        // Not root - decide between pkexec (GUI) and sudo (CLI)
-        // We detect CLI by checking if we have a controlling terminal
-        use std::os::fd::AsFd;
-        let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
-
-        if is_atty {
-            // CLI: Prefer sudo
-            let mut cmd = Command::new("sudo");
-            cmd.arg("nft").args(args);
-            Ok(cmd)
-        } else {
-            // GUI: Use pkexec with polkit action
-            if !binary_exists("pkexec") {
-                return Err(ElevationError::PkexecNotFound);
-            }
-            let mut cmd = Command::new("pkexec");
-            cmd.arg("--action")
-                .arg("org.drfw.nftables.modify")
-                .arg("nft")
-                .args(args);
-            Ok(cmd)
-        }
+        let mut cmd = Command::new("pkexec");
+        cmd.arg("--action")
+            .arg("org.drfw.nftables.modify")
+            .arg("nft")
+            .args(args);
+        Ok(cmd)
     }
 }
 
@@ -400,10 +400,5 @@ mod tests {
 
         let cmd = create_elevated_nft_command(&["list", "ruleset"]);
         assert!(cmd.is_ok());
-
-        // Clean up
-        unsafe {
-            std::env::remove_var("DRFW_TEST_NO_ELEVATION");
-        }
     }
 }

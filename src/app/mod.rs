@@ -432,81 +432,61 @@ impl State {
             .chain(interfaces.iter().cloned())
             .collect();
 
-        let cached_nft_tokens = syntax_cache::tokenize_nft(&ruleset.to_nft_text());
-        let cached_json_tokens = syntax_cache::tokenize_json(
-            &serde_json::to_string_pretty(&ruleset.to_nftables_json()).unwrap_or_default(),
-        );
-
-        let cached_nft_width_px = Self::calculate_max_content_width(&cached_nft_tokens);
-        let cached_json_width_px = Self::calculate_max_content_width(&cached_json_tokens);
-        let cached_diff_width_px = cached_nft_width_px;
-
-        use std::collections::HashSet;
-        let mut all_tags: Vec<String> = ruleset
-            .rules
-            .iter()
-            .flat_map(|r| r.tags.iter())
-            .collect::<HashSet<&String>>()
-            .into_iter()
-            .cloned()
-            .collect();
-        all_tags.sort_unstable();
-        let cached_all_tags: Vec<Arc<String>> = all_tags.into_iter().map(Arc::new).collect();
-
-        let cached_filtered_rule_indices: Vec<usize> = (0..ruleset.rules.len()).collect();
         let theme = current_theme.to_theme();
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
         let available_fonts = crate::fonts::all_options();
 
-        (
-            Self {
-                last_applied_ruleset: Some(ruleset.clone()),
-                ruleset,
-                status: AppStatus::Idle,
-                last_error: None,
-                active_tab: WorkspaceTab::Nftables,
-                rule_form: None,
-                countdown_remaining: 15,
-                form_errors: None,
-                interfaces_with_any,
-                cached_nft_tokens,
-                cached_json_tokens,
-                cached_diff_tokens: None,
-                cached_nft_width_px,
-                cached_json_width_px,
-                cached_diff_width_px,
-                rule_search: String::new(),
-                rule_search_lowercase: String::new(),
-                cached_all_tags,
-                cached_filtered_rule_indices,
-                deleting_id: None,
-                pending_warning: None,
-                show_diff,
-                show_zebra_striping,
-                show_diagnostics: false,
-                show_export_modal: false,
-                show_shortcuts_help: false,
-                font_picker: None,
-                theme_picker: None,
-                profile_manager: None,
-                command_history: crate::command::CommandHistory::default(),
-                current_theme,
-                theme,
-                filter_tag: None,
-                dragged_rule_id: None,
-                hovered_drop_target_id: None,
-                regular_font_choice,
-                mono_font_choice,
-                font_regular,
-                font_mono,
-                available_fonts,
-                active_profile_name,
-                available_profiles,
-                pending_profile_switch: None,
-            },
-            Task::none(),
-        )
+        let mut state = Self {
+            last_applied_ruleset: Some(ruleset.clone()),
+            ruleset,
+            status: AppStatus::Idle,
+            last_error: None,
+            active_tab: WorkspaceTab::Nftables,
+            rule_form: None,
+            countdown_remaining: 15,
+            form_errors: None,
+            interfaces_with_any,
+            cached_nft_tokens: Vec::new(),
+            cached_json_tokens: Vec::new(),
+            cached_diff_tokens: None,
+            cached_nft_width_px: 800.0,
+            cached_json_width_px: 800.0,
+            cached_diff_width_px: 800.0,
+            rule_search: String::new(),
+            rule_search_lowercase: String::new(),
+            cached_all_tags: Vec::new(),
+            cached_filtered_rule_indices: Vec::new(),
+            deleting_id: None,
+            pending_warning: None,
+            show_diff,
+            show_zebra_striping,
+            show_diagnostics: false,
+            show_export_modal: false,
+            show_shortcuts_help: false,
+            font_picker: None,
+            theme_picker: None,
+            profile_manager: None,
+            command_history: crate::command::CommandHistory::default(),
+            current_theme,
+            theme,
+            filter_tag: None,
+            dragged_rule_id: None,
+            hovered_drop_target_id: None,
+            regular_font_choice,
+            mono_font_choice,
+            font_regular,
+            font_mono,
+            available_fonts,
+            active_profile_name,
+            available_profiles,
+            pending_profile_switch: None,
+        };
+
+        // Initialize all caches properly via centralized logic
+        state.update_cached_text();
+
+        (state, Task::none())
     }
 
     fn update_cached_text(&mut self) {
