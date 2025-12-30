@@ -1079,6 +1079,78 @@ Consistent filter UX across the application.
 
 ---
 
+## Preview Pane Scrolling
+
+### Horizontal Scrolling with Dynamic Width
+
+**Challenge:** Iced's `scrollable` with `Direction::Both` requires explicit content width. There's no automatic content measurement like web browsers or `Length::Shrink` for wrapped layouts.
+
+**Solution:** Calculate width dynamically based on longest line in current view:
+
+```rust
+// Separate width for each view stored in State
+cached_nft_width_px: f32,   // NFT view (active rules only)
+cached_json_width_px: f32,  // JSON view (fixed structure)
+cached_diff_width_px: f32,  // Diff view (includes disabled rules)
+
+// Select in view() based on current tab/diff state
+let content_width = match (state.active_tab, state.show_diff) {
+    (WorkspaceTab::Nftables, true) => state.cached_diff_width_px,
+    (WorkspaceTab::Nftables, false) => state.cached_nft_width_px,
+    (WorkspaceTab::Json, _) => state.cached_json_width_px,
+    _ => state.cached_nft_width_px,
+};
+```
+
+### Width Calculation
+
+**Formula:** `LINE_NUMBER_WIDTH (50px) + (char_count × 8.4px) + TRAILING_PADDING (60px)`
+
+**Constants:**
+- **8.4px per character** - Approximate width of monospace font at 14pt
+- **50px line numbers** - Fixed width for line number column
+- **60px trailing padding** - Breathing room at end of lines (~7 characters)
+- **800px minimum** - Prevents cramped appearance on large screens
+- **3000px maximum** - Safety cap for pathological cases
+
+### UX Rationale
+
+**Why Dynamic Width per View:**
+- NFT view excludes disabled rules → narrower when rules disabled
+- Diff view shows disabled rules with strikethrough → potentially wider
+- JSON view has fixed structure → consistently narrow (~800px minimum)
+- Switching views with different content widths should reflect actual content
+
+**Why Layout Shifts Are Acceptable:**
+- Toggling diff or switching tabs is an **explicit user action**
+- Layout shift is **immediate and predictable** (triggered by user)
+- More precise than "max of all views" which shows unnecessarily wide zebra stripes
+- Prevents scrollbar when switching to narrower view (better than always showing it)
+
+**Why 60px Trailing Padding:**
+- Zebra stripes felt cramped when ending exactly at last character
+- ~7 characters worth of breathing room improves aesthetics
+- Prevents horizontal scrollbar for lines that are "barely too long"
+- Comfortable visual spacing without excessive width
+
+### Edge Cases Handled
+
+✅ **Diff view with disabled long rules** - Uses `cached_diff_width_px` so disabled lines don't get clipped
+✅ **Tab switching** - Each tab uses its own width, no jarring jumps
+✅ **Empty rulesets** - `.unwrap_or(0)` fallback handles empty iterators
+✅ **JSON consistently narrow** - Uses 800px minimum for aesthetics on large screens
+✅ **Toggling diff** - Smooth layout shift when user explicitly toggles feature
+
+### Performance
+
+**Cost:** Negligible - one iteration per content change (not per frame), ~50-100 microseconds for 1000 lines.
+
+**Follows existing patterns:** Uses "cache in `update()`, reference in `view()`" pattern from performance optimizations (Phase 3-4).
+
+**Implementation:** `src/app/mod.rs:353-399` (calculation functions), `src/app/view.rs:38,49,61,74` (selection logic)
+
+---
+
 ## Reference: Key Files
 
 - **`src/theme/mod.rs`** - Theme struct, shadow calculation, luminance detection
@@ -1205,6 +1277,18 @@ Consistent filter UX across the application.
 - **Modal Windows Section:** Added comprehensive modal styling guidelines
 - **Font Picker Patterns Section:** Documented auto-focus, padding, and messaging patterns
 
+### 2025-12-30
+- **Dynamic Horizontal Scrolling:** Implemented intelligent width calculation for preview panes
+  - Separate width calculations for NFT, JSON, and diff views
+  - Width adjusts based on current tab and diff toggle state
+  - 60px trailing padding for comfortable visual spacing
+  - Scrollbar only appears when current view genuinely needs it
+- **Edge Case Fixes:**
+  - Diff view now correctly calculates width including disabled rules (prevents clipping strikethrough text)
+  - Tab switching uses view-specific width (prevents unnecessarily wide zebra stripes)
+- **UX Improvement:** Layout shifts on tab/diff toggle are intentional and acceptable (explicit user action)
+- **Documentation:** Added "Preview Pane Scrolling" section explaining technical approach and UX rationale
+
 ### 2025-12-27
 - **Tab Strip Redesign:** Made tabs square (radius 0.0) for visual distinction
 - **Separated Tab Styles:** Created `inactive_tab_button` separate from `secondary_button`
@@ -1213,6 +1297,6 @@ Consistent filter UX across the application.
 
 ---
 
-**Document Version:** 1.1
-**Last Updated:** 2025-12-28
+**Document Version:** 1.2
+**Last Updated:** 2025-12-30
 **Iced Version:** 0.14

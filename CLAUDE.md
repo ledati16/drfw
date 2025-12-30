@@ -502,6 +502,75 @@ column(rule_cards).spacing(8)
 ```
 **Impact:** Better frame consistency, reduced allocations
 
+#### Phase 6: Dynamic Horizontal Scrolling Width
+**Issue:** Horizontal scrollbar always visible even when content is narrow, or zebra stripes extend unnecessarily far when switching views.
+
+**Challenge:** Iced's `scrollable` with `Direction::Both` requires explicit content width. There's no automatic content measurement like `Length::Shrink` for wrapped layouts.
+
+**Solution:** Calculate width dynamically based on current view content:
+```rust
+// State stores separate width for each view
+pub struct State {
+    cached_nft_width_px: f32,    // NFT view (active rules only)
+    cached_json_width_px: f32,   // JSON view (fixed structure)
+    cached_diff_width_px: f32,   // Diff view (includes disabled rules)
+}
+
+// Calculate in update_cached_text() when content changes
+fn calculate_max_content_width(tokens: &[HighlightedLine]) -> f32 {
+    const CHAR_WIDTH_PX: f32 = 8.4; // Monospace char at 14pt
+    const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
+    const TRAILING_PADDING_PX: f32 = 60.0; // Breathing room (~7 chars)
+    const MIN_WIDTH_PX: f32 = 800.0; // Minimum for aesthetics
+    const MAX_WIDTH_PX: f32 = 3000.0; // Safety cap
+
+    let max_char_count = tokens.iter()
+        .map(|line| line.indent + line.tokens.iter().map(|t| t.text.len()).sum())
+        .max()
+        .unwrap_or(0);
+
+    let content_width = LINE_NUMBER_WIDTH_PX
+        + (max_char_count as f32 * CHAR_WIDTH_PX)
+        + TRAILING_PADDING_PX;
+    content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
+}
+
+// Select width in view() based on current tab and diff state
+let content_width = match (state.active_tab, state.show_diff) {
+    (WorkspaceTab::Nftables, true) => state.cached_diff_width_px,
+    (WorkspaceTab::Nftables, false) => state.cached_nft_width_px,
+    (WorkspaceTab::Json, _) => state.cached_json_width_px,
+    _ => state.cached_nft_width_px,
+};
+```
+
+**Why This Works:**
+1. **Not a workaround** - This is the correct solution for Iced's architecture. Explicit dimensions are required for bidirectional scrolling.
+2. **Character-based calculation** - Standard text rendering approach (char count × monospace width).
+3. **Follows existing patterns** - Uses "cache in update(), reference in view()" pattern from Phase 3-4.
+4. **Minimal cost** - One iteration per content change (not per frame), negligible performance impact.
+
+**Edge Cases Handled:**
+- ✅ Diff view showing disabled long rules (uses `cached_diff_width_px`)
+- ✅ Tab switching NFT ↔ JSON (no jarring scrollbar jumps)
+- ✅ Toggling diff on/off (smooth layout shift on explicit user action)
+- ✅ Empty rulesets (`.unwrap_or(0)` fallback)
+- ✅ JSON view consistently narrow (<800px, uses minimum for aesthetics)
+
+**Trailing Padding (60px):**
+- Prevents zebra stripes from feeling cramped at line endings
+- Gives visual breathing room (~7 characters worth)
+- Prevents scrollbar for "barely too long" lines
+- Improves overall aesthetics
+
+**Layout Shift Behavior:**
+- Width adjusts when user explicitly changes views (tab switch, diff toggle)
+- This is **intentional and acceptable** - user action triggers expected layout change
+- More precise than fixed "max of all views" approach
+- Prevents unnecessarily wide zebra stripes when longest line isn't in current view
+
+**Impact:** Scrollbar appears only when current view genuinely needs it, zebra stripes match actual content width, comfortable visual spacing
+
 ### String Allocation Minimization
 ```rust
 // ❌ BAD: Allocates String every frame
@@ -814,6 +883,13 @@ This section documents nftables capabilities that DRFW intentionally does NOT im
 - **Search Filtering:** 10-15% reduction (Phase 4)
 - **Rule Rendering:** Better frame consistency (Phase 5)
 
+### UX / Layout
+- **Dynamic Horizontal Scrolling:** Intelligent width calculation per view (Phase 6)
+  - Scrollbar only appears when current view genuinely needs it
+  - Zebra stripes match actual content width (no unnecessary extension)
+  - 60px trailing padding for comfortable visual spacing
+  - Layout shifts on explicit user actions (tab switch, diff toggle)
+
 ### Future Optimizations
 - **Syntax Highlighting Widget Caching (Phase 1):** Deferred due to complexity
   - Requires refactoring view() architecture or using interior mutability
@@ -822,7 +898,8 @@ This section documents nftables capabilities that DRFW intentionally does NOT im
 
 ---
 
-**Document Last Updated:** 2025-12-29
-**Performance Optimizations:** Phases 2-5 completed, Phase 1 deferred
+**Document Last Updated:** 2025-12-30
+**Performance Optimizations:** Phases 2-6 completed, Phase 1 deferred
 **Advanced Rule Options:** Implemented destination IP, action, rate limiting, connection limiting
 **Privilege Escalation:** Enhanced pkexec with polkit policy, error handling, timeout protection
+**Horizontal Scrolling:** Dynamic width calculation with view-specific sizing (Phase 6)

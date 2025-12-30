@@ -35,6 +35,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                         theme,
                         state.font_mono,
                         state.show_zebra_striping,
+                        state.cached_diff_width_px, // Dynamic width for diff view
                     ))
                     .width(Length::Fill)
                     .into()
@@ -45,6 +46,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                         theme,
                         state.font_mono,
                         state.show_zebra_striping,
+                        state.cached_nft_width_px, // Dynamic width for NFT view
                     ))
                     .width(Length::Fill)
                     .into()
@@ -56,6 +58,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     theme,
                     state.font_mono,
                     state.show_zebra_striping,
+                    state.cached_nft_width_px, // Dynamic width for NFT view
                 ))
                 .width(Length::Fill)
                 .into()
@@ -68,6 +71,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 theme,
                 state.font_mono,
                 state.show_zebra_striping,
+                state.cached_json_width_px, // Dynamic width for JSON view
             ))
             .width(Length::Fill)
             .into()
@@ -1032,6 +1036,7 @@ fn view_from_cached_diff_tokens<'a>(
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
     show_zebra_striping: bool,
+    content_width_px: f32,
 ) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
@@ -1093,7 +1098,7 @@ fn view_from_cached_diff_tokens<'a>(
         lines = lines.push(
             line_number,
             container(row_content)
-                .width(Length::Fixed(2000.0))
+                .width(Length::Fixed(content_width_px))
                 .style(move |_| container::Style {
                     background: bg_color.map(Into::into),
                     ..Default::default()
@@ -1114,7 +1119,7 @@ fn view_from_cached_diff_tokens<'a>(
     lines = lines.push(
         usize::MAX,
         container(space().height(Length::Fill))
-            .width(Length::Fixed(2000.0))
+            .width(Length::Fixed(content_width_px))
             .style(move |_| container::Style {
                 background: spacer_bg.map(Into::into),
                 ..Default::default()
@@ -2964,6 +2969,7 @@ fn view_from_cached_json_tokens<'a>(
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
     show_zebra_striping: bool,
+    content_width_px: f32,
 ) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
@@ -3020,7 +3026,7 @@ fn view_from_cached_json_tokens<'a>(
         lines = lines.push(
             line_number,
             container(row_content)
-                .width(Length::Fixed(2000.0))
+                .width(Length::Fixed(content_width_px))
                 .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
@@ -3041,7 +3047,7 @@ fn view_from_cached_json_tokens<'a>(
     lines = lines.push(
         usize::MAX,
         container(space().height(Length::Fill))
-            .width(Length::Fixed(2000.0))
+            .width(Length::Fixed(content_width_px))
             .style(move |_| container::Style {
                 background: spacer_bg.map(Into::into),
                 ..Default::default()
@@ -3058,6 +3064,7 @@ fn view_from_cached_nft_tokens<'a>(
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
     show_zebra_striping: bool,
+    content_width_px: f32,
 ) -> iced::widget::keyed::Column<'a, usize, Message> {
     const SPACES: &str = "                                ";
 
@@ -3110,7 +3117,7 @@ fn view_from_cached_nft_tokens<'a>(
         lines = lines.push(
             line_number,
             container(row_content)
-                .width(Length::Fixed(2000.0))
+                .width(Length::Fixed(content_width_px))
                 .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
@@ -3131,7 +3138,7 @@ fn view_from_cached_nft_tokens<'a>(
     lines = lines.push(
         usize::MAX,
         container(space().height(Length::Fill))
-            .width(Length::Fixed(2000.0))
+            .width(Length::Fixed(content_width_px))
             .style(move |_| container::Style {
                 background: spacer_bg.map(Into::into),
                 ..Default::default()

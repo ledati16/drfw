@@ -28,6 +28,10 @@ pub struct State {
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>, // Phase 1: Pre-parsed NFT tokens
     pub cached_json_tokens: Vec<syntax_cache::HighlightedLine>, // Phase 1: Pre-parsed JSON tokens
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>, // Phase 1: Pre-parsed diff tokens
+    // Separate width calculations for each view (allows dynamic adjustment when switching tabs/toggling diff)
+    pub cached_nft_width_px: f32,
+    pub cached_json_width_px: f32,
+    pub cached_diff_width_px: f32,
     pub rule_search: String,
     pub rule_search_lowercase: String,
     pub cached_all_tags: Vec<Arc<String>>, // Issue #2: Arc for cheap pointer cloning (thread-safe)
@@ -344,6 +348,56 @@ impl State {
         view::view(self)
     }
 
+    /// Calculate approximate maximum content width in pixels based on longest line
+    /// This prevents the scrollbar from always appearing when content is narrow
+    fn calculate_max_content_width(tokens: &[syntax_cache::HighlightedLine]) -> f32 {
+        const CHAR_WIDTH_PX: f32 = 8.4; // Approximate width of monospace char at 14pt
+        const LINE_NUMBER_WIDTH_PX: f32 = 50.0; // Fixed width for line numbers
+        const TRAILING_PADDING_PX: f32 = 60.0; // Breathing room at end of lines (~7 chars)
+        const MIN_WIDTH_PX: f32 = 800.0; // Minimum to ensure backgrounds look good
+        const MAX_WIDTH_PX: f32 = 3000.0; // Maximum cap for safety
+
+        let max_char_count = tokens
+            .iter()
+            .map(|line| {
+                // Count total characters: indent + all token text
+                let indent_chars = line.indent;
+                let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
+                indent_chars + token_chars
+            })
+            .max()
+            .unwrap_or(0);
+
+        let content_width = LINE_NUMBER_WIDTH_PX
+            + (max_char_count as f32 * CHAR_WIDTH_PX)
+            + TRAILING_PADDING_PX;
+        content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
+    }
+
+    /// Helper for calculating width from references (used for diff tokens)
+    fn calculate_max_content_width_from_refs(tokens: &[&syntax_cache::HighlightedLine]) -> f32 {
+        const CHAR_WIDTH_PX: f32 = 8.4;
+        const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
+        const TRAILING_PADDING_PX: f32 = 60.0; // Breathing room at end of lines (~7 chars)
+        const MIN_WIDTH_PX: f32 = 800.0;
+        const MAX_WIDTH_PX: f32 = 3000.0;
+
+        let max_char_count = tokens
+            .iter()
+            .map(|line| {
+                let indent_chars = line.indent;
+                let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
+                indent_chars + token_chars
+            })
+            .max()
+            .unwrap_or(0);
+
+        let content_width = LINE_NUMBER_WIDTH_PX
+            + (max_char_count as f32 * CHAR_WIDTH_PX)
+            + TRAILING_PADDING_PX;
+        content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
+    }
+
     /// Validates the current form and updates `form_errors` in real-time
     fn validate_form_realtime(&mut self) {
         if let Some(form) = &self.rule_form {
@@ -377,6 +431,11 @@ impl State {
         let cached_json_tokens = syntax_cache::tokenize_json(
             &serde_json::to_string_pretty(&ruleset.to_nftables_json()).unwrap_or_default(),
         );
+
+        // Calculate content widths for each view (allows dynamic width based on current tab/diff state)
+        let cached_nft_width_px = Self::calculate_max_content_width(&cached_nft_tokens);
+        let cached_json_width_px = Self::calculate_max_content_width(&cached_json_tokens);
+        let cached_diff_width_px = cached_nft_width_px; // No diff on startup
 
         // Phase 3: Pre-compute tag cache on startup
         // Issue #2: Wrap tags in Arc for cheap pointer cloning in view
@@ -420,6 +479,9 @@ impl State {
                 cached_nft_tokens,
                 cached_json_tokens,
                 cached_diff_tokens: None, // Phase 1: No diff on startup (no changes yet)
+                cached_nft_width_px,
+                cached_json_width_px,
+                cached_diff_width_px,
                 rule_search: String::new(),
                 rule_search_lowercase: String::new(),
                 cached_all_tags,
@@ -465,6 +527,21 @@ impl State {
             syntax_cache::compute_and_tokenize_diff(&old_text, &nft_text)
         } else {
             None
+        };
+
+        // Calculate content widths for each view separately (allows dynamic width on tab/diff toggle)
+        // This creates smooth layout shifts when user explicitly changes views
+        // Note: JSON view almost always uses MIN_WIDTH_PX (800px) due to consistent formatting,
+        // but we calculate it anyway for edge case protection (very long labels/tags).
+        self.cached_nft_width_px = Self::calculate_max_content_width(&self.cached_nft_tokens);
+        self.cached_json_width_px = Self::calculate_max_content_width(&self.cached_json_tokens);
+        self.cached_diff_width_px = if let Some(ref diff_tokens) = self.cached_diff_tokens {
+            // Extract HighlightedLine references from (DiffType, HighlightedLine) tuples
+            let diff_lines: Vec<&syntax_cache::HighlightedLine> =
+                diff_tokens.iter().map(|(_, line)| line).collect();
+            Self::calculate_max_content_width_from_refs(&diff_lines)
+        } else {
+            self.cached_nft_width_px // Fallback to NFT width when no diff available
         };
         // nft_text and json_text are dropped here, freeing memory!
 
