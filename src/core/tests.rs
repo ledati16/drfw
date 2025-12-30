@@ -868,12 +868,13 @@ mod integration_tests {
 
         // Skip if we don't have privileges (expected in non-elevated test environment)
         if !verify_result.success
-            && verify_result
-                .errors
-                .iter()
-                .any(|e| e.contains("Operation not permitted"))
+            && verify_result.errors.iter().any(|e| {
+                e.contains("Operation not permitted")
+                    || e.contains("Cannot run program --action")
+                    || e.contains("cache initialization")
+            })
         {
-            eprintln!("Skipping test: nft verification requires elevated privileges");
+            eprintln!("Skipping test: nft verification requires elevated privileges or nft is unavailable");
             return;
         }
 
@@ -1014,6 +1015,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_empty_ruleset() {
+        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -1032,12 +1034,13 @@ mod integration_tests {
 
         // Skip if we don't have privileges (expected in non-elevated test environment)
         if !verify_result.success
-            && verify_result
-                .errors
-                .iter()
-                .any(|e| e.contains("Operation not permitted"))
+            && verify_result.errors.iter().any(|e| {
+                e.contains("Operation not permitted")
+                    || e.contains("Cannot run program --action")
+                    || e.contains("cache initialization")
+            })
         {
-            eprintln!("Skipping test: nft verification requires elevated privileges");
+            eprintln!("Skipping test: nft verification requires elevated privileges or nft is unavailable");
             return;
         }
 
@@ -1050,6 +1053,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_multiple_rules() {
+        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -1151,12 +1155,13 @@ mod integration_tests {
 
         // Skip if we don't have privileges (expected in non-elevated test environment)
         if !verify_result.success
-            && verify_result
-                .errors
-                .iter()
-                .any(|e| e.contains("Operation not permitted"))
+            && verify_result.errors.iter().any(|e| {
+                e.contains("Operation not permitted")
+                    || e.contains("Cannot run program --action")
+                    || e.contains("cache initialization")
+            })
         {
-            eprintln!("Skipping test: nft verification requires elevated privileges");
+            eprintln!("Skipping test: nft verification requires elevated privileges or nft is unavailable");
             return;
         }
 

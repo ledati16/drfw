@@ -43,6 +43,8 @@ use tokio::process::Command;
 ///
 /// This prevents indefinite hangs if the polkit daemon is unresponsive
 /// or the user doesn't respond to the authentication prompt.
+// Suggested default for callers of execute_elevated_nft
+#[allow(dead_code)]
 const DEFAULT_PKEXEC_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Error type for privilege elevation operations
@@ -58,18 +60,22 @@ pub enum ElevationError {
 
     /// PolicyKit daemon not running or not accessible
     #[error("PolicyKit daemon not accessible: {0}")]
+    #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     PkexecUnavailable(String),
 
     /// User cancelled authentication
     #[error("Authentication cancelled by user")]
+    #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     AuthenticationCancelled,
 
     /// Authentication failed (wrong password, etc.)
     #[error("Authentication failed")]
+    #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     AuthenticationFailed,
 
     /// Operation timed out waiting for authentication
     #[error("Operation timed out after {0:?}")]
+    #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     Timeout(Duration),
 
     /// Generic I/O error
@@ -122,6 +128,8 @@ fn binary_exists(name: &str) -> bool {
 ///     Err(e) => eprintln!("Cannot elevate privileges: {e}"),
 /// }
 /// ```
+// Part of public API intended for startup checks, not yet integrated into GUI
+#[allow(dead_code)]
 pub fn check_elevation_available() -> Result<(), ElevationError> {
     // Skip checks in test mode
     if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
@@ -224,6 +232,8 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
 /// # Returns
 ///
 /// Appropriate `ElevationError` variant based on the failure mode
+// Used internally by execute_elevated_nft, which is part of public API not yet integrated
+#[allow(dead_code)]
 pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> ElevationError {
     match exit_code {
         Some(126) => {
@@ -232,11 +242,8 @@ pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> Elevation
         }
         Some(127) => {
             // pkexec: authentication failed (wrong password, etc.)
-            if stderr.contains("not authorized") || stderr.contains("authentication") {
-                ElevationError::AuthenticationFailed
-            } else {
-                ElevationError::AuthenticationFailed
-            }
+            // Exit code 127 always indicates auth failure regardless of stderr
+            ElevationError::AuthenticationFailed
         }
         Some(1) if stderr.contains("Cannot run program") => {
             // nft binary not found after pkexec succeeded
@@ -248,10 +255,7 @@ pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> Elevation
         }
         _ => {
             // Generic error - preserve stderr for debugging
-            ElevationError::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("pkexec failed: {stderr}"),
-            ))
+            ElevationError::Io(io::Error::other(format!("pkexec failed: {stderr}")))
         }
     }
 }
@@ -298,6 +302,8 @@ pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> Elevation
 /// # Ok(())
 /// # }
 /// ```
+// Part of public API for convenient elevated nft execution, not yet used in GUI
+#[allow(dead_code)]
 pub async fn execute_elevated_nft(
     args: &[&str],
     stdin_data: Option<&[u8]>,
@@ -319,6 +325,8 @@ pub async fn execute_elevated_nft(
     let mut child = cmd.spawn()?;
 
     // Write stdin if provided
+    // Note: Could use let-chains to collapse nested if, but that requires unstable feature
+    #[allow(clippy::collapsible_if)]
     if let Some(data) = stdin_data {
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(data).await?;
