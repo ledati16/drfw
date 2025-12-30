@@ -133,7 +133,6 @@ pub struct RuleForm {
     pub source: String,
     pub interface: String,
     pub chain: crate::core::firewall::Chain,
-    pub selected_preset: Option<crate::core::firewall::ServicePreset>,
     pub tags: Vec<String>,
     pub tag_input: String,
     // Advanced options
@@ -157,7 +156,6 @@ impl Default for RuleForm {
             source: String::new(),
             interface: String::new(),
             chain: crate::core::firewall::Chain::Input,
-            selected_preset: None,
             tags: Vec::new(),
             tag_input: String::new(),
             // Advanced options - defaults
@@ -261,7 +259,6 @@ pub enum Message {
     RuleFormSourceChanged(String),
     RuleFormInterfaceChanged(String),
     RuleFormChainChanged(crate::core::firewall::Chain),
-    RuleFormPresetSelected(crate::core::firewall::ServicePreset),
     // Advanced options
     RuleFormToggleAdvanced(bool),
     RuleFormDestinationChanged(String),
@@ -722,7 +719,6 @@ impl State {
                     f.connection_limit = s;
                 }
             }
-            Message::RuleFormPresetSelected(preset) => self.handle_preset_selected(&preset),
             Message::RuleSearchChanged(s) => {
                 self.rule_search_lowercase = s.to_lowercase();
                 self.rule_search = s;
@@ -1092,7 +1088,6 @@ impl State {
                     .map_or_else(String::new, std::string::ToString::to_string),
                 interface: rule.interface.clone().unwrap_or_default(),
                 chain: rule.chain, // Copy, not clone
-                selected_preset: None,
                 tags: rule.tags.clone(),
                 tag_input: String::new(),
                 // Advanced options
@@ -1215,18 +1210,6 @@ impl State {
             self.form_errors = None;
         }
         Task::none()
-    }
-
-    fn handle_preset_selected(&mut self, preset: &crate::core::firewall::ServicePreset) {
-        if let Some(form) = &mut self.rule_form {
-            form.selected_preset = Some(*preset); // No clone needed - Copy type
-            form.protocol = preset.protocol;
-            form.port_start = preset.port.to_string();
-            form.port_end = preset.port.to_string();
-            if form.label.is_empty() {
-                form.label = preset.name.to_string();
-            }
-        }
     }
 
     fn handle_toggle_rule(&mut self, id: uuid::Uuid) {

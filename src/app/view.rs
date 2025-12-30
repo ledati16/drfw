@@ -9,7 +9,7 @@ use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, ThemeFilter,
     ThemePickerState, WorkspaceTab,
 };
-use crate::core::firewall::{PRESETS, Protocol};
+use crate::core::firewall::Protocol;
 use iced::widget::text::Wrapping;
 use iced::widget::{
     Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, row, rule,
@@ -1110,7 +1110,7 @@ fn view_from_cached_diff_tokens<'a>(
     // Continue the zebra pattern: if last line_number is odd, next would be even
     let last_line_number = diff_tokens.last().map(|(_, hl)| hl.line_number).unwrap_or(0);
     let spacer_bg = if show_zebra_striping {
-        let is_even = (last_line_number + 1) % 2 == 0;
+        let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
     } else {
         None
@@ -1167,54 +1167,36 @@ fn view_rule_form<'a>(
         .spacing(4),
         // Basic Info Section
         column![
-            container(text("BASIC INFO").size(10).color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
-            column![
-                text("DESCRIPTION").size(10).color(theme.fg_muted),
-                text_input("e.g. Local Web Server", &form.label)
-                    .on_input(Message::RuleFormLabelChanged)
-                    .padding(8)
-                    .style(move |_, status| themed_text_input(theme, status))
-            ]
-            .spacing(4),
-            column![
-                text("SERVICE PRESET").size(10).color(theme.fg_muted),
-                pick_list(
-                    PRESETS,
-                    form.selected_preset, // No clone needed - Copy type
-                    Message::RuleFormPresetSelected
-                )
-                .placeholder("Select a common service...")
-                .width(Length::Fill)
+            text("DESCRIPTION").size(10).color(theme.fg_muted),
+            text_input("e.g. Local Web Server", &form.label)
+                .on_input(Message::RuleFormLabelChanged)
                 .padding(8)
-                .menu_height(300.0) // Limit menu height to prevent off-screen overflow
-                .style(move |_, status| themed_pick_list(theme, status))
-                .menu_style(move |_| themed_pick_list_menu(theme))
-            ]
-            .spacing(4),
+                .style(move |_, status| themed_text_input(theme, status))
         ]
-        .spacing(8),
+        .spacing(4),
         // Technical Details Section
         column![
-            container(text("TECHNICAL DETAILS").size(10).color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
             row![
                 column![
                     container(text("PROTOCOL").size(10).color(theme.fg_muted))
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                     pick_list(
-                        vec![
-                            Protocol::Any,
-                            Protocol::Tcp,
-                            Protocol::Udp,
-                            Protocol::TcpAndUdp,
-                            Protocol::IcmpBoth,
-                            Protocol::Icmp,
-                            Protocol::Icmpv6
-                        ],
+                        {
+                            let mut protocols = vec![
+                                Protocol::Any,
+                                Protocol::Tcp,
+                                Protocol::Udp,
+                                Protocol::TcpAndUdp,
+                                Protocol::IcmpBoth,
+                            ];
+                            // Only show individual ICMP versions in advanced mode
+                            if form.show_advanced {
+                                protocols.push(Protocol::Icmp);
+                                protocols.push(Protocol::Icmpv6);
+                            }
+                            protocols
+                        },
                         Some(form.protocol),
                         Message::RuleFormProtocolChanged
                     )
@@ -1243,12 +1225,9 @@ fn view_rule_form<'a>(
             ]
             .spacing(16),
         ]
-        .spacing(8),
+        .spacing(6),
         // Context Section
         column![
-            container(text("CONTEXT").size(10).color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
             {
                 let mut source_col = column![
                     container(
@@ -1317,7 +1296,7 @@ fn view_rule_form<'a>(
                 column![]
             },
         ]
-        .spacing(8),
+        .spacing(6),
         // Advanced Options Section
         column![
             row![
@@ -1331,9 +1310,6 @@ fn view_rule_form<'a>(
             ],
             if form.show_advanced {
                 column![
-                    container(text("ADVANCED OPTIONS").size(10).color(theme.fg_primary))
-                        .padding([4, 8])
-                        .style(move |_| section_header_container(theme)),
                     // Destination IP
                     column![
                         container(
@@ -1447,12 +1423,8 @@ fn view_rule_form<'a>(
         ]
         .spacing(8),
         // Organization Section
-        column![
-            container(text("ORGANIZATION").size(10).color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
-            {
-                let mut org_col = column![
+        {
+            let mut org_col = column![
                     container(text("TAGS").size(10).color(theme.fg_muted))
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
@@ -1470,7 +1442,7 @@ fn view_rule_form<'a>(
                     .spacing(8)
                     .align_y(Alignment::Center),
                 ]
-                .spacing(10);
+                .spacing(4);
 
                 if !form.tags.is_empty() {
                     // Issue #6: Capture only needed colors instead of cloning entire theme
@@ -1503,8 +1475,6 @@ fn view_rule_form<'a>(
                 }
                 org_col
             },
-        ]
-        .spacing(8),
         // Footer Actions
         row![
             button(text("Cancel").size(14))
@@ -3038,7 +3008,7 @@ fn view_from_cached_json_tokens<'a>(
     // Continue the zebra pattern: if last line_number is odd, next would be even
     let last_line_number = tokens.last().map(|hl| hl.line_number).unwrap_or(0);
     let spacer_bg = if show_zebra_striping {
-        let is_even = (last_line_number + 1) % 2 == 0;
+        let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
     } else {
         None
@@ -3129,7 +3099,7 @@ fn view_from_cached_nft_tokens<'a>(
     // Continue the zebra pattern: if last line_number is odd, next would be even
     let last_line_number = tokens.last().map(|hl| hl.line_number).unwrap_or(0);
     let spacer_bg = if show_zebra_striping {
-        let is_even = (last_line_number + 1) % 2 == 0;
+        let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
     } else {
         None
