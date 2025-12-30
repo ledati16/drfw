@@ -876,14 +876,26 @@ fn view_workspace<'a>(
 
     let preview_header = column![nav_row, title_row].spacing(20);
 
+    // Settings tab only needs vertical scrolling, other tabs need both
+    let scroll_direction = if matches!(state.active_tab, WorkspaceTab::Settings) {
+        scrollable::Direction::Vertical(Default::default())
+    } else {
+        scrollable::Direction::Both {
+            vertical: Default::default(),
+            horizontal: Default::default(),
+        }
+    };
+
     let editor = container(
         scrollable(
             container(preview_content)
                 .padding(24)
                 .width(Length::Fill)
-                .height(Length::Shrink),
+                .height(Length::Fill),
         )
+        .direction(scroll_direction)
         .width(Length::Fill)
+        .height(Length::Fill)
         .style(move |_, status| themed_scrollable(theme, status)),
     )
     .width(Length::Fill)
@@ -1081,13 +1093,33 @@ fn view_from_cached_diff_tokens<'a>(
         lines = lines.push(
             line_number,
             container(row_content)
-                .width(Length::Fill)
+                .width(Length::Fixed(2000.0))
                 .style(move |_| container::Style {
                     background: bg_color.map(Into::into),
                     ..Default::default()
                 }),
         );
     }
+
+    // Add a spacer at the end to fill remaining vertical space with zebra background
+    // Continue the zebra pattern: if last line_number is odd, next would be even
+    let last_line_number = diff_tokens.last().map(|(_, hl)| hl.line_number).unwrap_or(0);
+    let spacer_bg = if show_zebra_striping {
+        let is_even = (last_line_number + 1) % 2 == 0;
+        if is_even { Some(even_stripe) } else { None }
+    } else {
+        None
+    };
+
+    lines = lines.push(
+        usize::MAX,
+        container(space().height(Length::Fill))
+            .width(Length::Fixed(2000.0))
+            .style(move |_| container::Style {
+                background: spacer_bg.map(Into::into),
+                ..Default::default()
+            })
+    );
 
     lines
 }
@@ -2988,13 +3020,33 @@ fn view_from_cached_json_tokens<'a>(
         lines = lines.push(
             line_number,
             container(row_content)
-                .width(Length::Fill)
+                .width(Length::Fixed(2000.0))
                 .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
                 }),
         );
     }
+
+    // Add a spacer at the end to fill remaining vertical space with zebra background
+    // Continue the zebra pattern: if last line_number is odd, next would be even
+    let last_line_number = tokens.last().map(|hl| hl.line_number).unwrap_or(0);
+    let spacer_bg = if show_zebra_striping {
+        let is_even = (last_line_number + 1) % 2 == 0;
+        if is_even { Some(even_stripe) } else { None }
+    } else {
+        None
+    };
+
+    lines = lines.push(
+        usize::MAX,
+        container(space().height(Length::Fill))
+            .width(Length::Fixed(2000.0))
+            .style(move |_| container::Style {
+                background: spacer_bg.map(Into::into),
+                ..Default::default()
+            })
+    );
 
     lines
 }
@@ -3058,13 +3110,33 @@ fn view_from_cached_nft_tokens<'a>(
         lines = lines.push(
             line_number,
             container(row_content)
-                .width(Length::Fill)
+                .width(Length::Fixed(2000.0))
                 .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
                 }),
         );
     }
+
+    // Add a spacer at the end to fill remaining vertical space with zebra background
+    // Continue the zebra pattern: if last line_number is odd, next would be even
+    let last_line_number = tokens.last().map(|hl| hl.line_number).unwrap_or(0);
+    let spacer_bg = if show_zebra_striping {
+        let is_even = (last_line_number + 1) % 2 == 0;
+        if is_even { Some(even_stripe) } else { None }
+    } else {
+        None
+    };
+
+    lines = lines.push(
+        usize::MAX,
+        container(space().height(Length::Fill))
+            .width(Length::Fixed(2000.0))
+            .style(move |_| container::Style {
+                background: spacer_bg.map(Into::into),
+                ..Default::default()
+            })
+    );
 
     lines
 }

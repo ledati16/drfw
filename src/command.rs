@@ -18,7 +18,7 @@
 //!
 //! ```no_run
 //! use drfw::command::{CommandHistory, AddRuleCommand};
-//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol, PortRange, Chain};
+//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol, PortRange, Chain, Action};
 //! use uuid::Uuid;
 //!
 //! let mut ruleset = FirewallRuleset::new();
@@ -35,6 +35,10 @@
 //!     enabled: true,
 //!     tags: vec![],
 //!     created_at: chrono::Utc::now(),
+//!     destination: None,
+//!     action: Action::Accept,
+//!     rate_limit: None,
+//!     connection_limit: 0,
 //!     // Cached fields (populated by rebuild_caches())
 //!     label_lowercase: String::new(),
 //!     interface_lowercase: None,
@@ -42,6 +46,8 @@
 //!     protocol_lowercase: "",
 //!     port_display: String::new(),
 //!     source_string: None,
+//!     destination_string: None,
+//!     rate_limit_display: None,
 //! };
 //! rule.rebuild_caches();
 //!
