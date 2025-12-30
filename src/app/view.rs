@@ -3391,7 +3391,7 @@ fn view_profile_manager<'a>(
         ]
         .spacing(20)
         .padding(32)
-        .max_width(600),
+        .width(Length::Fixed(600.0)),
     )
     .style(move |_| card_container(theme))
     .into()

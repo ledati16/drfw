@@ -137,8 +137,18 @@ This document outlines universal best practices for LLM-based coding assistants 
 
 ### Privilege Escalation Safety
 
-#### Standard Approach: PolicyKit + pkexec
-DRFW uses **pkexec with a polkit policy file** for privilege escalation. This is the Linux desktop standard and provides proper integration with system authentication.
+#### Elevation Strategy
+DRFW uses different elevation methods with automatic fallback:
+
+1. **Preferred (all modes)**: `run0` when available (systemd v256+, better security, no SUID)
+2. **CLI fallback**: `sudo` for standard CLI workflow
+3. **GUI fallback**: `pkexec` for graphical authentication
+
+**Benefits of run0:**
+- No SUID bit (better security)
+- Uses polkit for authentication (like pkexec)
+- Automatic adaptation: GUI dialog if polkit agent available, terminal fallback otherwise
+- Better process isolation via systemd
 
 **DO NOT:**
 - Create custom authentication dialogs (security complexity, maintenance burden)
@@ -146,27 +156,23 @@ DRFW uses **pkexec with a polkit policy file** for privilege escalation. This is
 - Use sudo with NOPASSWD in sudoers (bypasses authentication entirely)
 - Implement PAM directly (synchronous API conflicts with async GUI)
 
-**PolicyKit Integration:**
-```xml
-<!-- /usr/share/polkit-1/actions/org.drfw.policy -->
-<action id="org.drfw.nftables.modify">
-  <description>Modify firewall rules</description>
-  <defaults>
-    <allow_any>auth_admin</allow_any>
-    <allow_inactive>auth_admin</allow_inactive>
-    <allow_active>auth_admin</allow_active>
-  </defaults>
-  <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/nft</annotate>
-</action>
-```
-
 **Invocation:**
 ```rust
-Command::new("pkexec")
-    .arg("--action")
-    .arg("org.drfw.nftables.modify")
-    .arg("nft")
-    .args(["--json", "-f", "-"])
+// Prefer run0 everywhere (better security, no SUID)
+if binary_exists("run0") {
+    Command::new("run0").arg("nft").args(args)
+}
+// Fall back based on environment
+else {
+    use std::os::fd::AsFd;
+    let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
+
+    if is_atty {
+        Command::new("sudo").arg("nft").args(args)
+    } else {
+        Command::new("pkexec").arg("nft").args(args)
+    }
+}
 ```
 
 #### Privilege Escalation Patterns
@@ -206,13 +212,13 @@ pub enum ElevationError {
 ```
 
 #### Test Mode
-Set `DRFW_TEST_NO_ELEVATION=1` to bypass pkexec in tests:
+Set `DRFW_TEST_NO_ELEVATION=1` to bypass pkexec/sudo in tests:
 ```rust
 if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
     Command::new("nft").args(args)  // Direct execution for testing
 } else {
-    Command::new("pkexec").arg("--action").arg("org.drfw.nftables.modify")
-        .arg("nft").args(args)
+    // Use sudo or pkexec depending on environment
+    create_elevated_nft_command(args)
 }
 ```
 
@@ -684,7 +690,7 @@ We went through multiple iterations trying to achieve perfect padding:
 
 ### Privilege Escalation: The Custom Auth Dialog Trap (2025-12-29)
 
-**What Happened:** During privilege escalation improvements, we researched alternatives to pkexec including custom authentication dialogs using PAM or building a custom polkit authentication agent.
+**What Happened:** During privilege escalation improvements, we researched alternatives to pkexec including custom authentication dialogs using PAM, building a custom polkit authentication agent, and polkit policy files for better UX.
 
 **Why We Didn't Pursue Custom Auth:**
 1. **Security complexity**: Custom auth dialogs require SETUID binaries or capabilities, creating massive attack surface
@@ -693,19 +699,26 @@ We went through multiple iterations trying to achieve perfect padding:
 4. **1-2 weeks minimum**: Basic version needs 1-2 weeks, hardened version 3-4 weeks
 5. **pkexec already works**: It's the Linux desktop standard used by GNOME, KDE tools
 
+**Why We Didn't Use Polkit Policy Files:**
+1. **Complexity vs. benefit**: 40+ lines of fallback logic for a slightly prettier auth dialog
+2. **Low adoption**: Most users (<20%) would have the policy installed
+3. **Minimal UX difference**: Generic pkexec dialog is clear enough
+4. **Works everywhere**: Plain pkexec requires no installation/configuration
+
 **Attempted Solutions:**
 1. ❌ Custom PAM dialog with Iced - Synchronous API blocks GUI
 2. ❌ Wrap pkexec with stdin - pkexec doesn't accept password on stdin (security design)
 3. ❌ Custom polkit authentication agent - Complex, security-critical, high maintenance
-4. ✅ Enhanced pkexec with polkit policy file - Standard approach, well-tested, secure
+4. ❌ Polkit policy with fallback logic - Too complex for minimal UX gain
+5. ✅ run0 (preferred) + pkexec (GUI) + sudo (CLI) - Simple, works everywhere, better security
 
 **The Research:**
 - Examined 7+ approaches (PAM, polkit, D-Bus daemon, capabilities)
 - Analyzed real-world examples (GUFW, firewalld, Soteria authentication agent)
 - Researched available Rust crates (pam-client, zbus_polkit, runas, sudo-rs)
-- Conclusion: pkexec + polkit policy IS the proper approach
+- **Final conclusion**: Keep it simple - plain pkexec/sudo is sufficient
 
-**Lesson:** Don't reinvent authentication systems. Use the platform-provided mechanism (pkexec/polkit) and enhance error handling, timeout protection, and user messaging instead.
+**Lesson:** Don't reinvent authentication systems. Use the platform-provided mechanism (pkexec for GUI, sudo for CLI) without unnecessary complexity.
 
 **Reference:** See Section 5 "Privilege Escalation Safety" for implementation details.
 
@@ -901,5 +914,5 @@ This section documents nftables capabilities that DRFW intentionally does NOT im
 **Document Last Updated:** 2025-12-30
 **Performance Optimizations:** Phases 2-6 completed, Phase 1 deferred
 **Advanced Rule Options:** Implemented destination IP, action, rate limiting, connection limiting
-**Privilege Escalation:** Enhanced pkexec with polkit policy, error handling, timeout protection
+**Privilege Escalation:** Simplified to plain pkexec (GUI) + sudo (CLI), removed polkit policy complexity
 **Horizontal Scrolling:** Dynamic width calculation with view-specific sizing (Phase 6)

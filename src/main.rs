@@ -84,13 +84,14 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let _ = crate::utils::ensure_dirs();
     let cli = Cli::parse();
 
     if let Some(command) = cli.command {
-        match handle_cli(command).await {
+        // Create Tokio runtime only for CLI commands
+        let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        match runtime.block_on(handle_cli(command)) {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -98,6 +99,7 @@ async fn main() -> ExitCode {
             }
         }
     } else {
+        // GUI runs in normal sync context (Iced has its own async runtime)
         launch_gui()
     }
 }

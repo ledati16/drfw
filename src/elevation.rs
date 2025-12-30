@@ -1,25 +1,22 @@
 //! Privilege elevation for nftables operations
 //!
-//! This module provides controlled privilege escalation using `pkexec` (PolicyKit)
-//! to execute nftables commands with root privileges. DRFW runs as an unprivileged
-//! user and only elevates for specific firewall modification operations.
+//! This module provides controlled privilege escalation to execute nftables commands
+//! with root privileges. DRFW runs as an unprivileged user and only elevates for
+//! specific firewall modification operations.
 //!
-//! # PolicyKit Integration
+//! # Elevation Strategy
 //!
-//! DRFW uses a polkit policy file (`org.drfw.policy`) that defines the authorization
-//! action `org.drfw.nftables.modify`. This policy should be installed to:
-//! `/usr/share/polkit-1/actions/org.drfw.policy`
-//!
-//! The policy is configured for one-shot authentication (no credential caching).
-//! Each privileged operation will require the user to re-authenticate.
+//! - **Preferred (all modes)**: Uses `run0` when available (systemd v256+, no SUID, better security)
+//! - **CLI fallback**: Uses `sudo` for standard CLI workflow
+//! - **GUI fallback**: Uses `pkexec` for graphical authentication
 //!
 //! # Security
 //!
-//! - Uses `pkexec` (part of PolicyKit) for proper privilege escalation
+//! - Uses `pkexec` (GUI) or `sudo` (CLI) for proper privilege escalation
 //! - All inputs are validated before elevation
 //! - Commands are constructed safely without shell interpolation
 //! - Audit logging tracks all privileged operations (via caller)
-//! - Binaries (pkexec, nft) are checked for availability
+//! - Binaries (pkexec/sudo, nft) are checked for availability
 //! - Timeout protection prevents indefinite hangs
 //!
 //! # Example
@@ -62,6 +59,11 @@ pub enum ElevationError {
     #[error("PolicyKit daemon not accessible: {0}")]
     #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     PkexecUnavailable(String),
+
+    /// No polkit authentication agent available (GUI mode requires one)
+    #[error("No polkit authentication agent available. Please start a polkit agent (e.g., polkit-gnome-authentication-agent-1, polkit-kde-authentication-agent-1)")]
+    #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
+    NoPolkitAgent,
 
     /// User cancelled authentication
     #[error("Authentication cancelled by user")]
@@ -147,14 +149,17 @@ pub fn check_elevation_available() -> Result<(), ElevationError> {
     Ok(())
 }
 
-/// Creates a `pkexec nft` command with the specified arguments
+/// Creates an elevated `nft` command with the specified arguments
 ///
-/// This function constructs a command that will execute `nft` with root privileges
-/// via `pkexec`. The arguments are passed directly without shell interpretation,
-/// preventing command injection.
+/// This function constructs a command that will execute `nft` with root privileges.
+/// The arguments are passed directly without shell interpretation, preventing
+/// command injection.
 ///
-/// The command is configured with the polkit action `org.drfw.nftables.modify`,
-/// which should be defined in `/usr/share/polkit-1/actions/org.drfw.policy`.
+/// # Elevation Strategy
+///
+/// 1. **Preferred**: `run0 nft` when available (systemd v256+, better security, no SUID)
+/// 2. **CLI fallback**: `sudo nft` for terminal environments
+/// 3. **GUI fallback**: `pkexec nft` for graphical authentication
 ///
 /// # Arguments
 ///
@@ -163,7 +168,7 @@ pub fn check_elevation_available() -> Result<(), ElevationError> {
 /// # Returns
 ///
 /// - `Ok(Command)` - Configured tokio Command ready to spawn
-/// - `Err(ElevationError)` - If pkexec or nft are not available
+/// - `Err(ElevationError)` - If pkexec/sudo or nft are not available
 ///
 /// # Example
 ///
@@ -190,7 +195,7 @@ pub fn check_elevation_available() -> Result<(), ElevationError> {
 ///
 /// # Testing
 ///
-/// Set the environment variable `DRFW_TEST_NO_ELEVATION=1` to bypass pkexec
+/// Set the environment variable `DRFW_TEST_NO_ELEVATION=1` to bypass pkexec/sudo
 /// and run nft directly (requires nft to already have necessary permissions,
 /// or tests to run as root).
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
@@ -209,8 +214,16 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
         return Ok(cmd);
     }
 
-    // 3. Elevation required (Potential for prompts)
-    // Decide between pkexec (GUI/Desktop) and sudo (CLI/Terminal)
+    // 3. Elevation required - prefer run0 (modern, no SUID), fallback to sudo/pkexec
+
+    // Prefer run0 everywhere when available (better security, no SUID bit)
+    if binary_exists("run0") {
+        let mut cmd = Command::new("run0");
+        cmd.arg("nft").args(args);
+        return Ok(cmd);
+    }
+
+    // Fall back based on environment when run0 not available
     use std::os::fd::AsFd;
     let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
 
@@ -220,28 +233,26 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
         cmd.arg("nft").args(args);
         Ok(cmd)
     } else {
-        // GUI: Standard pkexec/polkit elevation
+        // GUI: pkexec elevation
         if !binary_exists("pkexec") {
             return Err(ElevationError::PkexecNotFound);
         }
+
         let mut cmd = Command::new("pkexec");
-        cmd.arg("--action")
-            .arg("org.drfw.nftables.modify")
-            .arg("nft")
-            .args(args);
+        cmd.arg("nft").args(args);
         Ok(cmd)
     }
 }
 
-/// Translates pkexec/polkit exit codes and stderr to user-friendly errors
+/// Translates pkexec/run0/polkit exit codes and stderr to user-friendly errors
 ///
-/// pkexec returns specific exit codes for different failure modes.
+/// Elevation tools return specific exit codes for different failure modes.
 /// This function converts them to actionable error messages.
 ///
 /// # Arguments
 ///
-/// * `exit_code` - Exit code from pkexec process
-/// * `stderr` - Standard error output from pkexec
+/// * `exit_code` - Exit code from elevation process (pkexec, run0, etc.)
+/// * `stderr` - Standard error output from the process
 ///
 /// # Returns
 ///
@@ -249,9 +260,17 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
 // Used internally by execute_elevated_nft, which is part of public API not yet integrated
 #[allow(dead_code)]
 pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> ElevationError {
+    // Check for no polkit agent (common in both pkexec and run0)
+    if stderr.contains("No session for pid")
+        || stderr.contains("No authentication agent found")
+        || stderr.contains("not registered")
+    {
+        return ElevationError::NoPolkitAgent;
+    }
+
     match exit_code {
         Some(126) => {
-            // pkexec: user cancelled authentication
+            // pkexec/run0: user cancelled authentication
             ElevationError::AuthenticationCancelled
         }
         Some(127) => {
@@ -259,8 +278,8 @@ pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> Elevation
             // Exit code 127 always indicates auth failure regardless of stderr
             ElevationError::AuthenticationFailed
         }
-        Some(1) if stderr.contains("Cannot run program") => {
-            // nft binary not found after pkexec succeeded
+        Some(1) if stderr.contains("Cannot run program") || stderr.contains("not found") => {
+            // nft binary not found after elevation succeeded
             ElevationError::NftNotFound
         }
         Some(1) if stderr.contains("polkit") || stderr.contains("PolicyKit") => {
@@ -269,7 +288,7 @@ pub fn translate_pkexec_error(exit_code: Option<i32>, stderr: &str) -> Elevation
         }
         _ => {
             // Generic error - preserve stderr for debugging
-            ElevationError::Io(io::Error::other(format!("pkexec failed: {stderr}")))
+            ElevationError::Io(io::Error::other(format!("Elevation failed: {stderr}")))
         }
     }
 }

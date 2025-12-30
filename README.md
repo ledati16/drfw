@@ -53,7 +53,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 **Required:**
 - Linux kernel 4.14+ with nftables support
 - `nftables` package installed
-- `pkexec` (usually from `polkit`) for privilege escalation
+- Privilege escalation: `run0` (preferred, systemd v256+) OR `pkexec` (GUI) OR `sudo` (CLI)
 - Rust 1.83+ (for building from source)
 
 **Check if nftables is installed:**
