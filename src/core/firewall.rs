@@ -657,7 +657,7 @@ impl FirewallRuleset {
             (
                 "allow tracked connections",
                 vec![
-                    json!({ "match": { "left": { "ct": { "key": "state" } }, "op": "in", "right": ["established", "related"] } }),
+                    json!({ "match": { "left": { "ct": { "key": "state" } }, "op": "==", "right": {"set": ["established", "related"]} } }),
                     json!({ "accept": null }),
                 ],
             ),
@@ -706,12 +706,12 @@ impl FirewallRuleset {
             // IPv4 ICMP - essential types only
             let mut ipv4_expr = vec![
                 json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }),
-                json!({ "match": { "left": { "payload": { "protocol": "icmp", "field": "type" } }, "op": "in", "right": [
+                json!({ "match": { "left": { "payload": { "protocol": "icmp", "field": "type" } }, "op": "==", "right": {"set": [
                     "echo-reply",           // Type 0: ping responses
                     "destination-unreachable", // Type 3: path MTU discovery
                     "echo-request",         // Type 8: allow being pinged
                     "time-exceeded"         // Type 11: traceroute
-                ] } }),
+                ]} } }),
             ];
 
             // Optional: Add rate limiting
@@ -739,7 +739,7 @@ impl FirewallRuleset {
             // IPv6 ICMP - essential types only (more types required for IPv6 to function)
             let mut ipv6_expr = vec![
                 json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }),
-                json!({ "match": { "left": { "payload": { "protocol": "icmpv6", "field": "type" } }, "op": "in", "right": [
+                json!({ "match": { "left": { "payload": { "protocol": "icmpv6", "field": "type" } }, "op": "==", "right": {"set": [
                     "destination-unreachable", // Type 1
                     "packet-too-big",         // Type 2: path MTU (CRITICAL for IPv6)
                     "time-exceeded",          // Type 3
@@ -747,7 +747,7 @@ impl FirewallRuleset {
                     "echo-reply",             // Type 129
                     "nd-neighbor-solicit",    // Type 135 (CRITICAL for IPv6)
                     "nd-neighbor-advert"      // Type 136 (CRITICAL for IPv6)
-                ] } }),
+                ]} } }),
             ];
 
             if advanced.icmp_rate_limit > 0 {
@@ -838,7 +838,7 @@ impl FirewallRuleset {
             }
             Protocol::TcpAndUdp => {
                 // Match both TCP and UDP using nftables set syntax
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "in", "right": ["tcp", "udp"] } }));
+                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": {"set": ["tcp", "udp"]} } }));
             }
             Protocol::Icmp => {
                 expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }));
@@ -848,7 +848,7 @@ impl FirewallRuleset {
             }
             Protocol::IcmpBoth => {
                 // Match both ICMP and ICMPv6 for dual-stack support
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "in", "right": ["icmp", "ipv6-icmp"] } }));
+                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": {"set": ["icmp", "ipv6-icmp"]} } }));
             }
         }
 
