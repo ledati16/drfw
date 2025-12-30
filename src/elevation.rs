@@ -200,22 +200,36 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
         cmd.args(args);
         Ok(cmd)
     } else {
-        // Production mode: verify binaries exist
-        if !binary_exists("pkexec") {
-            return Err(ElevationError::PkexecNotFound);
-        }
-        if !binary_exists("nft") {
-            return Err(ElevationError::NftNotFound);
+        // Production mode: check if we are root
+        let is_root = nix::unistd::getuid().is_root();
+        if is_root {
+            let mut cmd = Command::new("nft");
+            cmd.args(args);
+            return Ok(cmd);
         }
 
-        // Create pkexec command with polkit action
-        let mut cmd = Command::new("pkexec");
-        cmd.arg("--action")
-            .arg("org.drfw.nftables.modify")
-            .arg("nft")
-            .args(args);
+        // Not root - decide between pkexec (GUI) and sudo (CLI)
+        // We detect CLI by checking if we have a controlling terminal
+        use std::os::fd::AsFd;
+        let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
 
-        Ok(cmd)
+        if is_atty {
+            // CLI: Prefer sudo
+            let mut cmd = Command::new("sudo");
+            cmd.arg("nft").args(args);
+            Ok(cmd)
+        } else {
+            // GUI: Use pkexec with polkit action
+            if !binary_exists("pkexec") {
+                return Err(ElevationError::PkexecNotFound);
+            }
+            let mut cmd = Command::new("pkexec");
+            cmd.arg("--action")
+                .arg("org.drfw.nftables.modify")
+                .arg("nft")
+                .args(args);
+            Ok(cmd)
+        }
     }
 }
 

@@ -8,10 +8,8 @@ use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Element, Task};
-use std::sync::Arc; // Issue #2: Atomic reference-counted strings for tags (thread-safe for Iced)
+use std::sync::Arc;
 use std::time::Duration;
-
-// Fonts are now dynamically selected via settings
 
 pub struct State {
     pub ruleset: FirewallRuleset,
@@ -22,20 +20,17 @@ pub struct State {
     pub rule_form: Option<RuleForm>,
     pub countdown_remaining: u32,
     pub form_errors: Option<FormErrors>,
-    pub interfaces_with_any: Vec<String>, // Issue #4: Cached ["Any", "eth0", "wlan0", ...] for pick_list
-    // Phase 1 Memory Optimization: Removed cached_nft_text and cached_json_text
-    // Text is already stored in tokens, no need to duplicate it
-    pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>, // Phase 1: Pre-parsed NFT tokens
-    pub cached_json_tokens: Vec<syntax_cache::HighlightedLine>, // Phase 1: Pre-parsed JSON tokens
-    pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>, // Phase 1: Pre-parsed diff tokens
-    // Separate width calculations for each view (allows dynamic adjustment when switching tabs/toggling diff)
+    pub interfaces_with_any: Vec<String>,
+    pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
+    pub cached_json_tokens: Vec<syntax_cache::HighlightedLine>,
+    pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>,
     pub cached_nft_width_px: f32,
     pub cached_json_width_px: f32,
     pub cached_diff_width_px: f32,
     pub rule_search: String,
     pub rule_search_lowercase: String,
-    pub cached_all_tags: Vec<Arc<String>>, // Issue #2: Arc for cheap pointer cloning (thread-safe)
-    pub cached_filtered_rule_indices: Vec<usize>, // Phase 1: Cache filtered rule indices (updated when search/filter changes)
+    pub cached_all_tags: Vec<Arc<String>>,
+    pub cached_filtered_rule_indices: Vec<usize>,
     pub deleting_id: Option<uuid::Uuid>,
     pub pending_warning: Option<PendingWarning>,
     pub show_diff: bool,
@@ -45,10 +40,11 @@ pub struct State {
     pub show_shortcuts_help: bool,
     pub font_picker: Option<FontPickerState>,
     pub theme_picker: Option<ThemePickerState>,
+    pub profile_manager: Option<ProfileManagerState>,
     pub command_history: crate::command::CommandHistory,
     pub current_theme: crate::theme::ThemeChoice,
     pub theme: crate::theme::AppTheme,
-    pub filter_tag: Option<Arc<String>>, // Issue #2: Arc for cheap pointer cloning (thread-safe)
+    pub filter_tag: Option<Arc<String>>,
     pub dragged_rule_id: Option<uuid::Uuid>,
     pub hovered_drop_target_id: Option<uuid::Uuid>,
     pub regular_font_choice: crate::fonts::RegularFontChoice,
@@ -56,13 +52,17 @@ pub struct State {
     pub font_regular: iced::Font,
     pub font_mono: iced::Font,
     pub available_fonts: &'static [crate::fonts::FontChoice],
+    // Profile management
+    pub active_profile_name: String,
+    pub available_profiles: Vec<String>,
+    pub pending_profile_switch: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FontPickerState {
     pub target: FontPickerTarget,
     pub search: String,
-    pub search_lowercase: String, // Phase 1: Cache lowercase to avoid allocations every frame
+    pub search_lowercase: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,9 +74,9 @@ pub enum FontPickerTarget {
 #[derive(Debug, Clone)]
 pub struct ThemePickerState {
     pub search: String,
-    pub search_lowercase: String, // Cache lowercase to avoid allocations every frame
+    pub search_lowercase: String,
     pub filter: ThemeFilter,
-    pub original_theme: crate::theme::ThemeChoice, // For revert on Cancel
+    pub original_theme: crate::theme::ThemeChoice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,14 @@ pub enum ThemeFilter {
     All,
     Light,
     Dark,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileManagerState {
+    pub renaming_name: Option<(String, String)>, // (old, current_new)
+    pub deleting_name: Option<String>,
+    pub creating_new: bool,
+    pub new_name_input: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,7 +143,6 @@ pub struct RuleForm {
     pub chain: crate::core::firewall::Chain,
     pub tags: Vec<String>,
     pub tag_input: String,
-    // Advanced options
     pub show_advanced: bool,
     pub destination: String,
     pub action: crate::core::firewall::Action,
@@ -158,7 +165,6 @@ impl Default for RuleForm {
             chain: crate::core::firewall::Chain::Input,
             tags: Vec::new(),
             tag_input: String::new(),
-            // Advanced options - defaults
             show_advanced: false,
             destination: String::new(),
             action: crate::core::firewall::Action::Accept,
@@ -187,7 +193,7 @@ impl RuleForm {
         ) {
             let port_start = self.port_start.parse::<u16>();
             let port_end = if self.port_end.is_empty() {
-                port_start.clone() // Clone needed - Result is not Copy
+                port_start.clone()
             } else {
                 self.port_end.parse::<u16>()
             };
@@ -230,7 +236,6 @@ impl RuleForm {
             }
         }
 
-        // Validate interface name
         if !self.interface.is_empty()
             && let Err(msg) = crate::validators::validate_interface(&self.interface)
         {
@@ -259,7 +264,6 @@ pub enum Message {
     RuleFormSourceChanged(String),
     RuleFormInterfaceChanged(String),
     RuleFormChainChanged(crate::core::firewall::Chain),
-    // Advanced options
     RuleFormToggleAdvanced(bool),
     RuleFormDestinationChanged(String),
     RuleFormActionChanged(crate::core::firewall::Action),
@@ -288,7 +292,6 @@ pub enum Message {
     EventOccurred(iced::Event),
     ToggleDiff(bool),
     ToggleZebraStriping(bool),
-    // Advanced Security Settings
     ToggleStrictIcmp(bool),
     IcmpRateLimitChanged(u32),
     ToggleRpfRequested(bool),
@@ -299,21 +302,15 @@ pub enum Message {
     LogPrefixChanged(String),
     ServerModeToggled(bool),
     ConfirmServerMode,
-    // Diagnostics
     ToggleDiagnostics(bool),
     OpenLogsFolder,
-    // Export
     ExportAsJson,
     ExportAsNft,
     ExportResult(Result<String, String>),
-    // Help
     ToggleShortcutsHelp(bool),
-    // Undo/Redo
     Undo,
     Redo,
-    // Theme
     #[allow(dead_code)]
-    // Reserved for future direct theme switching (e.g., keyboard shortcuts, CLI args)
     ThemeChanged(crate::theme::ThemeChoice),
     OpenThemePicker,
     ThemePickerSearchChanged(String),
@@ -321,23 +318,39 @@ pub enum Message {
     ThemePreview(crate::theme::ThemeChoice),
     ApplyTheme,
     CancelThemePicker,
-    ThemePreviewButtonClick, // No-op for preview buttons to show hover/click effects
-    // Fonts
+    ThemePreviewButtonClick,
     RegularFontChanged(crate::fonts::RegularFontChoice),
     MonoFontChanged(crate::fonts::MonoFontChoice),
     OpenFontPicker(FontPickerTarget),
     FontPickerSearchChanged(String),
     CloseFontPicker,
-    // Rule Tagging
     RuleFormTagInputChanged(String),
     RuleFormAddTag,
     RuleFormRemoveTag(String),
-    FilterByTag(Option<Arc<String>>), // Issue #2: Arc for cheap pointer cloning (thread-safe)
-    // Drag and Drop
+    FilterByTag(Option<Arc<String>>),
     RuleDragStart(uuid::Uuid),
     RuleDropped(uuid::Uuid),
     RuleHoverStart(uuid::Uuid),
     RuleHoverEnd,
+    // Profile messages
+    ProfileSelected(String),
+    SaveProfileClicked,
+    SaveProfileAs(String),
+    StartCreatingNewProfile,
+    NewProfileNameChanged(String),
+    CancelCreatingNewProfile,
+    OpenProfileManager,
+    CloseProfileManager,
+    DeleteProfileRequested(String),
+    ConfirmDeleteProfile,
+    CancelDeleteProfile,
+    RenameProfileRequested(String),
+    ProfileNewNameChanged(String),
+    ConfirmRenameProfile,
+    CancelRenameProfile,
+    ConfirmProfileSwitch,
+    DiscardProfileSwitch,
+    CancelProfileSwitch,
 }
 
 impl State {
@@ -345,37 +358,10 @@ impl State {
         view::view(self)
     }
 
-    /// Calculate approximate maximum content width in pixels based on longest line
-    /// This prevents the scrollbar from always appearing when content is narrow
     fn calculate_max_content_width(tokens: &[syntax_cache::HighlightedLine]) -> f32 {
-        const CHAR_WIDTH_PX: f32 = 8.4; // Approximate width of monospace char at 14pt
-        const LINE_NUMBER_WIDTH_PX: f32 = 50.0; // Fixed width for line numbers
-        const TRAILING_PADDING_PX: f32 = 60.0; // Breathing room at end of lines (~7 chars)
-        const MIN_WIDTH_PX: f32 = 800.0; // Minimum to ensure backgrounds look good
-        const MAX_WIDTH_PX: f32 = 3000.0; // Maximum cap for safety
-
-        let max_char_count = tokens
-            .iter()
-            .map(|line| {
-                // Count total characters: indent + all token text
-                let indent_chars = line.indent;
-                let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
-                indent_chars + token_chars
-            })
-            .max()
-            .unwrap_or(0);
-
-        let content_width = LINE_NUMBER_WIDTH_PX
-            + (max_char_count as f32 * CHAR_WIDTH_PX)
-            + TRAILING_PADDING_PX;
-        content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
-    }
-
-    /// Helper for calculating width from references (used for diff tokens)
-    fn calculate_max_content_width_from_refs(tokens: &[&syntax_cache::HighlightedLine]) -> f32 {
         const CHAR_WIDTH_PX: f32 = 8.4;
         const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
-        const TRAILING_PADDING_PX: f32 = 60.0; // Breathing room at end of lines (~7 chars)
+        const TRAILING_PADDING_PX: f32 = 60.0;
         const MIN_WIDTH_PX: f32 = 800.0;
         const MAX_WIDTH_PX: f32 = 3000.0;
 
@@ -389,13 +375,33 @@ impl State {
             .max()
             .unwrap_or(0);
 
-        let content_width = LINE_NUMBER_WIDTH_PX
-            + (max_char_count as f32 * CHAR_WIDTH_PX)
-            + TRAILING_PADDING_PX;
+        let content_width =
+            LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
         content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
     }
 
-    /// Validates the current form and updates `form_errors` in real-time
+    fn calculate_max_content_width_from_refs(tokens: &[&syntax_cache::HighlightedLine]) -> f32 {
+        const CHAR_WIDTH_PX: f32 = 8.4;
+        const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
+        const TRAILING_PADDING_PX: f32 = 60.0;
+        const MIN_WIDTH_PX: f32 = 800.0;
+        const MAX_WIDTH_PX: f32 = 3000.0;
+
+        let max_char_count = tokens
+            .iter()
+            .map(|line| {
+                let indent_chars = line.indent;
+                let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
+                indent_chars + token_chars
+            })
+            .max()
+            .unwrap_or(0);
+
+        let content_width =
+            LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
+        content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
+    }
+
     fn validate_form_realtime(&mut self) {
         if let Some(form) = &self.rule_form {
             let (_, _, errors) = form.validate();
@@ -404,39 +410,37 @@ impl State {
     }
 
     pub fn new() -> (Self, Task<Message>) {
-        // Load complete config including theme choice and fonts
         let config = crate::config::load_config();
-        let ruleset = config.ruleset;
         let current_theme = config.theme_choice;
         let mut regular_font_choice = config.regular_font;
         let mut mono_font_choice = config.mono_font;
         let show_diff = config.show_diff;
         let show_zebra_striping = config.show_zebra_striping;
+        let active_profile_name = config.active_profile;
 
-        // Resolve fonts (hydrate handles from system cache, handle deleted fonts)
         regular_font_choice.resolve(false);
         mono_font_choice.resolve(true);
 
+        let ruleset = crate::core::profiles::load_profile(&active_profile_name)
+            .unwrap_or_else(|_| FirewallRuleset::default());
+
+        let available_profiles = crate::core::profiles::list_profiles()
+            .unwrap_or_else(|_| vec![crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()]);
+
         let interfaces = crate::utils::list_interfaces();
-        // Issue #4: Cache interface list with "Any" prepended for pick_list
         let interfaces_with_any: Vec<String> = std::iter::once("Any".to_string())
             .chain(interfaces.iter().cloned())
             .collect();
 
-        // Phase 1: Pre-tokenize syntax highlighting on startup (no text caching - saves memory!)
         let cached_nft_tokens = syntax_cache::tokenize_nft(&ruleset.to_nft_text());
         let cached_json_tokens = syntax_cache::tokenize_json(
             &serde_json::to_string_pretty(&ruleset.to_nftables_json()).unwrap_or_default(),
         );
 
-        // Calculate content widths for each view (allows dynamic width based on current tab/diff state)
         let cached_nft_width_px = Self::calculate_max_content_width(&cached_nft_tokens);
         let cached_json_width_px = Self::calculate_max_content_width(&cached_json_tokens);
-        let cached_diff_width_px = cached_nft_width_px; // No diff on startup
+        let cached_diff_width_px = cached_nft_width_px;
 
-        // Phase 3: Pre-compute tag cache on startup
-        // Issue #2: Wrap tags in Arc for cheap pointer cloning in view
-        // Issue #7: Use HashSet (O(n)) instead of BTreeSet (O(n log n)) for deduplication
         use std::collections::HashSet;
         let mut all_tags: Vec<String> = ruleset
             .rules
@@ -449,17 +453,10 @@ impl State {
         all_tags.sort_unstable();
         let cached_all_tags: Vec<Arc<String>> = all_tags.into_iter().map(Arc::new).collect();
 
-        // Phase 1: Initialize filtered rule indices (all rules visible on startup)
         let cached_filtered_rule_indices: Vec<usize> = (0..ruleset.rules.len()).collect();
-
-        // Apply the theme
         let theme = current_theme.to_theme();
-
-        // Apply the fonts
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
-
-        // Get available fonts (cached static slice)
         let available_fonts = crate::fonts::all_options();
 
         (
@@ -475,7 +472,7 @@ impl State {
                 interfaces_with_any,
                 cached_nft_tokens,
                 cached_json_tokens,
-                cached_diff_tokens: None, // Phase 1: No diff on startup (no changes yet)
+                cached_diff_tokens: None,
                 cached_nft_width_px,
                 cached_json_width_px,
                 cached_diff_width_px,
@@ -492,6 +489,7 @@ impl State {
                 show_shortcuts_help: false,
                 font_picker: None,
                 theme_picker: None,
+                profile_manager: None,
                 command_history: crate::command::CommandHistory::default(),
                 current_theme,
                 theme,
@@ -503,22 +501,22 @@ impl State {
                 font_regular,
                 font_mono,
                 available_fonts,
+                active_profile_name,
+                available_profiles,
+                pending_profile_switch: None,
             },
             Task::none(),
         )
     }
 
     fn update_cached_text(&mut self) {
-        // Phase 1 Memory Optimization: Generate text temporarily for tokenization only (don't store)
         let nft_text = self.ruleset.to_nft_text();
         let json_text =
             serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
 
-        // Phase 1: Pre-tokenize syntax highlighting (60-80% CPU savings, 50% memory savings)
         self.cached_nft_tokens = syntax_cache::tokenize_nft(&nft_text);
         self.cached_json_tokens = syntax_cache::tokenize_json(&json_text);
 
-        // Phase 1: Pre-compute diff tokens (optimal: parse once when rules change, not every frame)
         self.cached_diff_tokens = if let Some(ref last) = self.last_applied_ruleset {
             let old_text = last.to_nft_text();
             syntax_cache::compute_and_tokenize_diff(&old_text, &nft_text)
@@ -526,25 +524,16 @@ impl State {
             None
         };
 
-        // Calculate content widths for each view separately (allows dynamic width on tab/diff toggle)
-        // This creates smooth layout shifts when user explicitly changes views
-        // Note: JSON view almost always uses MIN_WIDTH_PX (800px) due to consistent formatting,
-        // but we calculate it anyway for edge case protection (very long labels/tags).
         self.cached_nft_width_px = Self::calculate_max_content_width(&self.cached_nft_tokens);
         self.cached_json_width_px = Self::calculate_max_content_width(&self.cached_json_tokens);
         self.cached_diff_width_px = if let Some(ref diff_tokens) = self.cached_diff_tokens {
-            // Extract HighlightedLine references from (DiffType, HighlightedLine) tuples
             let diff_lines: Vec<&syntax_cache::HighlightedLine> =
                 diff_tokens.iter().map(|(_, line)| line).collect();
             Self::calculate_max_content_width_from_refs(&diff_lines)
         } else {
-            self.cached_nft_width_px // Fallback to NFT width when no diff available
+            self.cached_nft_width_px
         };
-        // nft_text and json_text are dropped here, freeing memory!
 
-        // Update tag cache (Phase 3: Cache Tag Collection)
-        // Issue #2: Wrap tags in Arc for cheap pointer cloning in view
-        // Issue #7: Use HashSet (O(n)) instead of BTreeSet (O(n log n)) for deduplication
         use std::collections::HashSet;
         let mut all_tags: Vec<String> = self
             .ruleset
@@ -558,11 +547,9 @@ impl State {
         all_tags.sort_unstable();
         self.cached_all_tags = all_tags.into_iter().map(Arc::new).collect();
 
-        // Phase 1: Update filtered rule indices (rules changed, filters need updating)
         self.update_filter_cache();
     }
 
-    /// Phase 1 Optimization: Cache filtered rule indices to avoid filtering 60 times/second in `view()`
     fn update_filter_cache(&mut self) {
         self.cached_filtered_rule_indices = self
             .ruleset
@@ -570,7 +557,6 @@ impl State {
             .iter()
             .enumerate()
             .filter(|(_, r)| {
-                // Hide OUTPUT rules in Desktop Mode (they're harmless but confusing)
                 if self.ruleset.advanced_security.egress_profile
                     == crate::core::firewall::EgressProfile::Desktop
                     && r.chain == crate::core::firewall::Chain::Output
@@ -578,19 +564,16 @@ impl State {
                     return false;
                 }
 
-                // Issue #14: Early return optimization - check tag filter first (cheaper)
                 if let Some(ref filter_tag) = self.filter_tag
                     && !r.tags.contains(filter_tag)
                 {
-                    return false; // Skip expensive search if tag doesn't match
+                    return false;
                 }
 
-                // Skip search if no search term
                 if self.rule_search.is_empty() {
                     return true;
                 }
 
-                // Issue #1, #3: Use cached lowercase fields - no allocations!
                 let search_term = self.rule_search_lowercase.as_str();
                 r.label_lowercase.contains(search_term)
                     || r.protocol_lowercase.contains(search_term)
@@ -605,7 +588,7 @@ impl State {
 
     fn save_config(&self) -> Task<Message> {
         let config = crate::config::AppConfig {
-            ruleset: self.ruleset.clone(),
+            active_profile: self.active_profile_name.clone(),
             theme_choice: self.current_theme,
             regular_font: self.regular_font_choice.clone(),
             mono_font: self.mono_font_choice.clone(),
@@ -623,6 +606,35 @@ impl State {
             last.rules != self.ruleset.rules
                 || last.advanced_security != self.ruleset.advanced_security
         })
+    }
+
+    pub fn is_profile_dirty(&self) -> bool {
+        if let Ok(on_disk) = crate::core::profiles::load_profile(&self.active_profile_name) {
+            on_disk.rules != self.ruleset.rules
+                || on_disk.advanced_security != self.ruleset.advanced_security
+        } else {
+            true
+        }
+    }
+
+    fn handle_switch_profile(&mut self, name: String) -> Task<Message> {
+        if self.is_profile_dirty() {
+            self.pending_profile_switch = Some(name);
+            return Task::none();
+        }
+        self.perform_profile_switch(name)
+    }
+
+    fn perform_profile_switch(&mut self, name: String) -> Task<Message> {
+        if let Ok(ruleset) = crate::core::profiles::load_profile(&name) {
+            self.ruleset = ruleset;
+            self.active_profile_name = name;
+            self.pending_profile_switch = None;
+            self.command_history = crate::command::CommandHistory::default();
+            self.update_cached_text();
+            return self.save_config();
+        }
+        Task::none()
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -644,13 +656,11 @@ impl State {
                 if let Some(f) = &mut self.rule_form {
                     f.label = s;
                 }
-                // No validation needed for label (auto-sanitized)
             }
             Message::RuleFormProtocolChanged(p) => {
                 if let Some(f) = &mut self.rule_form {
                     f.protocol = p;
                 }
-                // Revalidate in case port/source validation changes with protocol
                 self.validate_form_realtime();
             }
             Message::RuleFormPortStartChanged(s) => {
@@ -681,9 +691,7 @@ impl State {
                 if let Some(f) = &mut self.rule_form {
                     f.chain = chain;
                 }
-                // No validation needed for chain selection
             }
-            // Advanced options handlers
             Message::RuleFormToggleAdvanced(show) => {
                 if let Some(f) = &mut self.rule_form {
                     f.show_advanced = show;
@@ -722,7 +730,6 @@ impl State {
             Message::RuleSearchChanged(s) => {
                 self.rule_search_lowercase = s.to_lowercase();
                 self.rule_search = s;
-                // Phase 1: Update filtered indices when search changes
                 self.update_filter_cache();
             }
             Message::ToggleRuleEnabled(id) => self.handle_toggle_rule(id),
@@ -738,10 +745,8 @@ impl State {
             }
             Message::ApplyResult(Ok(snapshot)) => self.handle_apply_result(snapshot),
             Message::ConfirmClicked => {
-                // Only confirm if still in PendingConfirmation state (prevent race with countdown)
                 if matches!(self.status, AppStatus::PendingConfirmation { .. }) {
                     self.status = AppStatus::Confirmed;
-                    // Confirmation notification
                     let _ = notify_rust::Notification::new()
                         .summary("✅ DRFW — Changes Confirmed")
                         .body("Firewall rules have been saved and will persist.")
@@ -754,7 +759,6 @@ impl State {
             Message::RevertResult(Ok(())) => {
                 self.status = AppStatus::Idle;
                 self.last_error = None;
-                // Manual revert notification
                 let _ = notify_rust::Notification::new()
                     .summary("↩️ DRFW — Rules Reverted")
                     .body("Firewall rules have been restored to previous state.")
@@ -771,7 +775,6 @@ impl State {
             Message::ExportAsNft => return self.handle_export_nft(),
             Message::ExportResult(Ok(path)) => {
                 self.show_export_modal = false;
-                // Could show a success notification here
                 let _ = notify_rust::Notification::new()
                     .summary("✅ DRFW — Export Successful")
                     .body(&format!("Rules exported to: {path}"))
@@ -801,7 +804,6 @@ impl State {
                 self.show_zebra_striping = enabled;
                 return self.save_config();
             }
-            // Advanced Security Settings
             Message::ToggleStrictIcmp(enabled) => {
                 self.ruleset.advanced_security.strict_icmp = enabled;
                 self.update_cached_text();
@@ -814,10 +816,8 @@ impl State {
             }
             Message::ToggleRpfRequested(enabled) => {
                 if enabled {
-                    // Show warning modal
                     self.pending_warning = Some(PendingWarning::EnableRpf);
                 } else {
-                    // Can disable without warning
                     self.ruleset.advanced_security.enable_rpf = false;
                     self.update_cached_text();
                     return self.save_config();
@@ -849,10 +849,8 @@ impl State {
             }
             Message::ServerModeToggled(enabled) => {
                 if enabled {
-                    // Show warning modal before enabling Server mode
                     self.pending_warning = Some(PendingWarning::EnableServerMode);
                 } else {
-                    // Can switch to Desktop without warning
                     self.ruleset.advanced_security.egress_profile =
                         crate::core::firewall::EgressProfile::Desktop;
                     self.update_cached_text();
@@ -885,7 +883,6 @@ impl State {
             Message::ThemeChanged(choice) => {
                 self.current_theme = choice;
                 self.theme = choice.to_theme();
-                tracing::info!("Theme changed to: {}", choice.name());
                 return self.save_config();
             }
             Message::OpenThemePicker => {
@@ -898,7 +895,7 @@ impl State {
             }
             Message::ThemePickerSearchChanged(search) => {
                 if let Some(picker) = &mut self.theme_picker {
-                    picker.search_lowercase = search.to_lowercase(); // Cache lowercase
+                    picker.search_lowercase = search.to_lowercase();
                     picker.search = search;
                 }
             }
@@ -908,43 +905,30 @@ impl State {
                 }
             }
             Message::ThemePreview(choice) => {
-                // Apply theme temporarily for preview (don't save)
                 self.current_theme = choice;
                 self.theme = choice.to_theme();
-                tracing::info!("Previewing theme: {}", choice.name());
             }
             Message::ApplyTheme => {
-                // Confirm theme selection and save
                 self.theme_picker = None;
-                tracing::info!("Applied theme: {}", self.current_theme.name());
                 return self.save_config();
             }
             Message::CancelThemePicker => {
-                // Revert to original theme and close picker
                 if let Some(picker) = &self.theme_picker {
                     self.current_theme = picker.original_theme;
                     self.theme = picker.original_theme.to_theme();
-                    tracing::info!(
-                        "Cancelled theme selection, reverted to: {}",
-                        self.current_theme.name()
-                    );
                 }
                 self.theme_picker = None;
             }
-            Message::ThemePreviewButtonClick => {
-                // No-op: preview buttons are just for showing hover/click effects
-            }
+            Message::ThemePreviewButtonClick => {}
             Message::RegularFontChanged(choice) => {
                 self.regular_font_choice = choice.clone();
                 self.font_regular = choice.to_font();
-                tracing::info!("Regular font changed to: {}", choice.name());
                 return self.save_config();
             }
             Message::MonoFontChanged(choice) => {
                 self.mono_font_choice = choice.clone();
                 self.font_mono = choice.to_font();
-                tracing::info!("Monospace font changed to: {}", choice.name());
-                self.font_picker = None; // Close picker after selection
+                self.font_picker = None;
                 return self.save_config();
             }
             Message::OpenFontPicker(target) => {
@@ -953,12 +937,11 @@ impl State {
                     search: String::new(),
                     search_lowercase: String::new(),
                 });
-                // Auto-focus search input when picker opens
                 return focus(Id::from(view::FONT_SEARCH_INPUT_ID));
             }
             Message::FontPickerSearchChanged(search) => {
                 if let Some(picker) = &mut self.font_picker {
-                    picker.search_lowercase = search.to_lowercase(); // Phase 1: Update lowercase cache
+                    picker.search_lowercase = search.to_lowercase();
                     picker.search = search;
                 }
             }
@@ -972,15 +955,11 @@ impl State {
             }
             Message::RuleFormAddTag => {
                 if let Some(f) = &mut self.rule_form {
-                    // Sanitize tag input to prevent injection attacks
                     let tag = crate::validators::sanitize_label(f.tag_input.trim());
-                    // Validate: non-empty, unique, and reasonable length
                     if !tag.is_empty() && !f.tags.contains(&tag) && tag.len() <= 32 {
                         f.tags.push(tag);
                         f.tag_input.clear();
                     }
-                    // Note: sanitize_label strips invalid characters
-                    // Empty result means input contained only invalid chars
                 }
             }
             Message::RuleFormRemoveTag(tag) => {
@@ -994,34 +973,31 @@ impl State {
                     self.rule_search.clear();
                     self.rule_search_lowercase.clear();
                 }
-                // Phase 1: Update filtered indices when tag filter changes
                 self.update_filter_cache();
             }
             Message::OpenLogsFolder => {
-                if let Some(state_dir) = crate::utils::get_state_dir() {
-                    // Validate path exists and is safe before opening
-                    if state_dir.exists() && state_dir.is_dir() {
-                        // Use canonicalize for safety - prevents path traversal issues
-                        if let Ok(canonical) = state_dir.canonicalize() {
-                            #[cfg(target_os = "linux")]
-                            {
-                                let _ = std::process::Command::new("xdg-open")
-                                    .arg(canonical.as_os_str())
-                                    .spawn();
-                            }
-                            #[cfg(target_os = "macos")]
-                            {
-                                let _ = std::process::Command::new("open")
-                                    .arg(canonical.as_os_str())
-                                    .spawn();
-                            }
-                            #[cfg(target_os = "windows")]
-                            {
-                                let _ = std::process::Command::new("explorer")
-                                    .arg(canonical.as_os_str())
-                                    .spawn();
-                            }
-                        }
+                if let Some(state_dir) = crate::utils::get_state_dir()
+                    && state_dir.exists()
+                    && state_dir.is_dir()
+                    && let Ok(canonical) = state_dir.canonicalize()
+                {
+                    #[cfg(target_os = "linux")]
+                    {
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(canonical.as_os_str())
+                            .spawn();
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = std::process::Command::new("open")
+                            .arg(canonical.as_os_str())
+                            .spawn();
+                    }
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = std::process::Command::new("explorer")
+                            .arg(canonical.as_os_str())
+                            .spawn();
                     }
                 }
             }
@@ -1058,13 +1034,144 @@ impl State {
             Message::RuleHoverEnd => {
                 self.hovered_drop_target_id = None;
             }
+            Message::ProfileSelected(name) => {
+                return self.handle_switch_profile(name);
+            }
+            Message::SaveProfileClicked => {
+                if let Err(e) =
+                    crate::core::profiles::save_profile(&self.active_profile_name, &self.ruleset)
+                {
+                    self.last_error = Some(ErrorInfo::new(format!("Failed to save profile: {e}")));
+                } else {
+                    tracing::info!("Profile '{}' saved to disk.", self.active_profile_name);
+                }
+            }
+            Message::SaveProfileAs(name) => {
+                if let Err(e) = crate::core::profiles::save_profile(&name, &self.ruleset) {
+                    self.last_error = Some(ErrorInfo::new(format!(
+                        "Failed to save profile as '{}': {e}",
+                        name
+                    )));
+                } else {
+                    self.active_profile_name = name;
+                    self.available_profiles =
+                        crate::core::profiles::list_profiles().unwrap_or_default();
+                    if let Some(mgr) = &mut self.profile_manager {
+                        mgr.creating_new = false;
+                        mgr.new_name_input.clear();
+                    }
+                    let _ = self.save_config();
+                }
+            }
+            Message::StartCreatingNewProfile => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.creating_new = true;
+                    mgr.new_name_input = String::new();
+                }
+            }
+            Message::NewProfileNameChanged(name) => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.new_name_input = name;
+                }
+            }
+            Message::CancelCreatingNewProfile => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.creating_new = false;
+                    mgr.new_name_input.clear();
+                }
+            }
+            Message::OpenProfileManager => {
+                self.profile_manager = Some(ProfileManagerState {
+                    renaming_name: None,
+                    deleting_name: None,
+                    creating_new: false,
+                    new_name_input: String::new(),
+                });
+            }
+            Message::CloseProfileManager => {
+                self.profile_manager = None;
+            }
+            Message::DeleteProfileRequested(name) => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.deleting_name = Some(name);
+                }
+            }
+            Message::ConfirmDeleteProfile => {
+                if let Some(mgr) = &mut self.profile_manager
+                    && let Some(name) = mgr.deleting_name.take()
+                {
+                    let _ = crate::core::profiles::delete_profile(&name);
+                    self.available_profiles =
+                        crate::core::profiles::list_profiles().unwrap_or_default();
+                    if self.active_profile_name == name {
+                        let next = self.available_profiles.first().cloned().unwrap_or_else(|| {
+                            crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()
+                        });
+                        return self.perform_profile_switch(next);
+                    }
+                }
+            }
+            Message::CancelDeleteProfile => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.deleting_name = None;
+                }
+            }
+            Message::RenameProfileRequested(name) => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.renaming_name = Some((name.clone(), name));
+                }
+            }
+            Message::ProfileNewNameChanged(new_name) => {
+                if let Some(mgr) = &mut self.profile_manager
+                    && let Some((old, _)) = &mgr.renaming_name
+                {
+                    mgr.renaming_name = Some((old.clone(), new_name));
+                }
+            }
+            Message::ConfirmRenameProfile => {
+                if let Some(mgr) = &mut self.profile_manager
+                    && let Some((old, new)) = mgr.renaming_name.take()
+                {
+                    if let Err(e) = crate::core::profiles::rename_profile(&old, &new) {
+                        self.last_error = Some(ErrorInfo::new(format!("Rename failed: {e}")));
+                    } else {
+                        if self.active_profile_name == old {
+                            self.active_profile_name = new;
+                            let _ = self.save_config();
+                        }
+                        self.available_profiles =
+                            crate::core::profiles::list_profiles().unwrap_or_default();
+                    }
+                }
+            }
+            Message::CancelRenameProfile => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.renaming_name = None;
+                }
+            }
+            Message::ConfirmProfileSwitch => {
+                if let Some(name) = self.pending_profile_switch.take() {
+                    let _ = crate::core::profiles::save_profile(
+                        &self.active_profile_name,
+                        &self.ruleset,
+                    );
+                    return self.perform_profile_switch(name);
+                }
+            }
+            Message::DiscardProfileSwitch => {
+                if let Some(name) = self.pending_profile_switch.take() {
+                    return self.perform_profile_switch(name);
+                }
+            }
+            Message::CancelProfileSwitch => {
+                self.pending_profile_switch = None;
+            }
         }
         Task::none()
     }
 
     fn handle_edit_clicked(&mut self, id: uuid::Uuid) {
         if let Some(rule) = self.ruleset.rules.iter().find(|r| r.id == id) {
-            // Check if any advanced options are set
             let has_advanced = rule.destination.is_some()
                 || rule.action != crate::core::firewall::Action::Accept
                 || rule.rate_limit.is_some()
@@ -1073,7 +1180,7 @@ impl State {
             self.rule_form = Some(RuleForm {
                 id: Some(rule.id),
                 label: rule.label.clone(),
-                protocol: rule.protocol, // Copy, not clone
+                protocol: rule.protocol,
                 port_start: rule
                     .ports
                     .as_ref()
@@ -1087,11 +1194,10 @@ impl State {
                     .as_ref()
                     .map_or_else(String::new, std::string::ToString::to_string),
                 interface: rule.interface.clone().unwrap_or_default(),
-                chain: rule.chain, // Copy, not clone
+                chain: rule.chain,
                 tags: rule.tags.clone(),
                 tag_input: String::new(),
-                // Advanced options
-                show_advanced: has_advanced, // Auto-expand if rule uses advanced features
+                show_advanced: has_advanced,
                 destination: rule
                     .destination
                     .as_ref()
@@ -1117,7 +1223,6 @@ impl State {
     }
 
     fn handle_save_rule_form(&mut self) -> Task<Message> {
-        // First validate without taking ownership
         if let Some(form_ref) = &self.rule_form {
             let (ports, source, errors) = form_ref.validate();
             if let Some(errs) = errors {
@@ -1125,10 +1230,7 @@ impl State {
                 return Task::none();
             }
 
-            // Validation succeeded - now take ownership to avoid clone
             let form = self.rule_form.take().unwrap();
-
-            // Sanitize label to prevent injection attacks
             let sanitized_label = crate::validators::sanitize_label(&form.label);
             let interface = if form.interface.is_empty() {
                 None
@@ -1136,7 +1238,6 @@ impl State {
                 Some(form.interface)
             };
 
-            // Parse advanced options
             let destination = if form.destination.is_empty() {
                 None
             } else {
@@ -1171,27 +1272,23 @@ impl State {
                 chain: form.chain,
                 enabled: true,
                 created_at: Utc::now(),
-                tags: form.tags, // No clone needed - we own form
-                // Advanced options
+                tags: form.tags,
                 destination,
                 action: form.action,
                 rate_limit,
                 connection_limit,
-                // Initialize cached fields (Issue #1, #3, #5, #10)
                 label_lowercase: String::new(),
                 interface_lowercase: None,
                 tags_lowercase: Vec::new(),
                 protocol_lowercase: "",
-                port_display: String::new(), // Issue #5: Will be populated by rebuild_caches()
-                source_string: None,         // Issue #10: Will be populated by rebuild_caches()
+                port_display: String::new(),
+                source_string: None,
                 destination_string: None,
-                rate_limit_display: None, // Will be populated by rebuild_caches()
+                rate_limit_display: None,
             };
             rule.rebuild_caches();
 
-            // Use command pattern for undo/redo support
             if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == rule.id) {
-                // Editing existing rule
                 let old_rule = self.ruleset.rules[pos].clone();
                 let command = crate::command::EditRuleCommand {
                     old_rule,
@@ -1200,7 +1297,6 @@ impl State {
                 self.command_history
                     .execute(Box::new(command), &mut self.ruleset);
             } else {
-                // Adding new rule
                 let command = crate::command::AddRuleCommand { rule };
                 self.command_history
                     .execute(Box::new(command), &mut self.ruleset);
@@ -1245,10 +1341,8 @@ impl State {
             return Task::none();
         }
 
-        // Start verification first
         self.status = AppStatus::Verifying;
         self.last_error = None;
-        // Phase 1: Don't clone ruleset! Generate JSON directly
         let nft_json = self.ruleset.to_nftables_json();
 
         Task::perform(
@@ -1265,7 +1359,6 @@ impl State {
         &mut self,
         result: Result<crate::core::verify::VerifyResult, String>,
     ) -> Task<Message> {
-        // Log verification result (fire and forget)
         match &result {
             Ok(verify_result) => {
                 let success = verify_result.success;
@@ -1289,13 +1382,11 @@ impl State {
 
         match result {
             Ok(verify_result) if verify_result.success => {
-                // Verification passed, show confirmation modal
                 self.status = AppStatus::AwaitingApply;
                 self.last_error = None;
                 Task::none()
             }
             Ok(verify_result) => {
-                // Verification failed with errors
                 let error_msg = if verify_result.errors.is_empty() {
                     "Ruleset verification failed".to_string()
                 } else {
@@ -1306,7 +1397,6 @@ impl State {
                 Task::none()
             }
             Err(e) => {
-                // Verification command failed
                 self.status = AppStatus::Error(e.clone());
                 self.last_error = Some(ErrorInfo::new(e));
                 Task::none()
@@ -1317,21 +1407,16 @@ impl State {
     fn handle_proceed_to_apply(&mut self) -> Task<Message> {
         self.status = AppStatus::Applying;
         self.last_error = None;
-        // Phase 1: Don't clone entire ruleset! Just get what we need
         let nft_json = self.ruleset.to_nftables_json();
         let rule_count = self.ruleset.rules.len();
         let enabled_count = self.ruleset.rules.iter().filter(|r| r.enabled).count();
 
         Task::perform(
             async move {
-                // Phase 1: Pass JSON directly, no ruleset clone needed!
                 let result = crate::core::nft_json::apply_with_snapshot(nft_json).await;
-
-                // Log the operation
                 let success = result.is_ok();
                 let error = result.as_ref().err().map(std::string::ToString::to_string);
                 crate::audit::log_apply(rule_count, enabled_count, success, error.clone()).await;
-
                 result.map_err(|e| e.to_string())
             },
             Message::ApplyResult,
@@ -1341,15 +1426,11 @@ impl State {
     fn handle_apply_result(&mut self, snapshot: serde_json::Value) {
         self.last_applied_ruleset = Some(self.ruleset.clone());
         self.countdown_remaining = 15;
-
-        // Save snapshot to disk for persistence
         if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
             eprintln!("Failed to save snapshot to disk: {e}");
-            // Show warning to user - rollback may be unavailable after restart
             self.last_error = Some(ErrorInfo::new(format!(
                 "Warning: Failed to save snapshot to disk. Rollback may be unavailable after restart: {e}"
             )));
-            // Continue anyway - we still have the in-memory snapshot for this session
         }
 
         self.status = AppStatus::PendingConfirmation {
@@ -1370,25 +1451,18 @@ impl State {
             self.status = AppStatus::Reverting;
             return Task::perform(
                 async move {
-                    // Try in-memory snapshot first
                     let result = crate::core::nft_json::restore_snapshot(&snapshot).await;
-
-                    // If that fails, try fallback cascade from disk
                     let final_result = if result.is_err() {
-                        eprintln!("In-memory snapshot failed, trying fallback cascade...");
                         crate::core::nft_json::restore_with_fallback().await
                     } else {
                         result
                     };
-
-                    // Log the revert operation
                     let success = final_result.is_ok();
                     let error = final_result
                         .as_ref()
                         .err()
                         .map(std::string::ToString::to_string);
                     crate::audit::log_revert(success, error.clone()).await;
-
                     final_result.map_err(|e| e.to_string())
                 },
                 Message::RevertResult,
@@ -1400,32 +1474,22 @@ impl State {
     fn handle_countdown_tick(&mut self) -> Task<Message> {
         if let AppStatus::PendingConfirmation { deadline, .. } = &self.status {
             let now = Utc::now();
-
-            // Check if time is up first
             if now >= *deadline {
-                // Time's up - transition to reverting state FIRST to prevent race
                 self.status = AppStatus::Reverting;
                 self.countdown_remaining = 0;
-
-                // Auto-revert notification
                 let _ = notify_rust::Notification::new()
                     .summary("↩️ DRFW — Auto-Reverted")
                     .body("Firewall rules automatically reverted due to timeout.")
                     .urgency(notify_rust::Urgency::Normal)
                     .timeout(10000)
                     .show();
-
                 return Task::done(Message::RevertClicked);
             }
 
-            // Update countdown display based on actual time remaining
-            // Countdown is always < u32::MAX (15 seconds), cast is safe
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let remaining = (*deadline - now).num_seconds().max(0) as u32;
             if self.countdown_remaining != remaining {
                 self.countdown_remaining = remaining;
-
-                // Warning notification at 5 seconds remaining
                 if remaining == 5 {
                     let _ = notify_rust::Notification::new()
                         .summary("⚠️ DRFW — Auto-Revert Warning")
@@ -1445,12 +1509,8 @@ impl State {
             async move {
                 use std::io::Write;
                 use tempfile::NamedTempFile;
-
-                // Create secure temp file with restricted permissions
                 let mut temp =
                     NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
-
-                // Set restrictive permissions (Unix only)
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -1459,22 +1519,15 @@ impl State {
                         .set_permissions(perms)
                         .map_err(|e| format!("Failed to set permissions: {e}"))?;
                 }
-
-                // Write configuration to temp file
                 temp.write_all(text.as_bytes())
                     .map_err(|e| format!("Failed to write temp file: {e}"))?;
                 temp.flush()
                     .map_err(|e| format!("Failed to flush temp file: {e}"))?;
-
-                // Get path and keep temp file alive
                 let temp_path_str = temp
                     .path()
                     .to_str()
                     .ok_or_else(|| "Invalid temp path".to_string())?
                     .to_string();
-
-                // Use cp instead of mv to avoid TOCTOU issues
-                // --preserve=mode ensures permissions are maintained
                 let status = tokio::process::Command::new("pkexec")
                     .args([
                         "cp",
@@ -1485,7 +1538,6 @@ impl State {
                     .status()
                     .await
                     .map_err(|e| format!("Failed to execute pkexec: {e}"))?;
-
                 if status.success() {
                     Ok(())
                 } else {
@@ -1497,20 +1549,16 @@ impl State {
     }
 
     fn handle_export_json(&self) -> Task<Message> {
-        // Generate JSON on-demand (export is rare, don't waste memory caching it)
         let json =
             serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("drfw_rules_{timestamp}.json");
-
         Task::perform(
             async move {
-                // Try to save to Downloads folder first, fall back to data dir
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                 let downloads_path = std::path::PathBuf::from(&home)
                     .join("Downloads")
                     .join(&filename);
-
                 let path = if downloads_path.parent().is_some_and(std::path::Path::exists) {
                     downloads_path
                 } else {
@@ -1522,7 +1570,6 @@ impl State {
                         },
                     )
                 };
-
                 std::fs::write(&path, json)
                     .map(|()| path.to_string_lossy().to_string())
                     .map_err(|e| format!("Failed to export JSON: {e}"))
@@ -1532,18 +1579,15 @@ impl State {
     }
 
     fn handle_export_nft(&self) -> Task<Message> {
-        // Generate text on-demand (export is rare, don't waste memory caching it)
         let nft_text = self.ruleset.to_nft_text();
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("drfw_rules_{timestamp}.nft");
-
         Task::perform(
             async move {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                 let downloads_path = std::path::PathBuf::from(&home)
                     .join("Downloads")
                     .join(&filename);
-
                 let path = if downloads_path.parent().is_some_and(std::path::Path::exists) {
                     downloads_path
                 } else {
@@ -1555,7 +1599,6 @@ impl State {
                         },
                     )
                 };
-
                 std::fs::write(&path, nft_text)
                     .map(|()| path.to_string_lossy().to_string())
                     .map_err(|e| format!("Failed to export nftables text: {e}"))
@@ -1596,6 +1639,9 @@ impl State {
                     if self.theme_picker.is_some() {
                         return Task::done(Message::CancelThemePicker);
                     }
+                    if self.profile_manager.is_some() {
+                        return Task::done(Message::CloseProfileManager);
+                    }
                     if !self.rule_search.is_empty() {
                         self.rule_search.clear();
                     }
@@ -1623,7 +1669,6 @@ impl State {
                 iced::keyboard::Key::Character("z")
                     if (modifiers.command() || modifiers.control()) && !modifiers.shift() =>
                 {
-                    // Ctrl+Z: Undo
                     if self.command_history.can_undo() {
                         return Task::done(Message::Undo);
                     }
@@ -1631,7 +1676,6 @@ impl State {
                 iced::keyboard::Key::Character("z")
                     if (modifiers.command() || modifiers.control()) && modifiers.shift() =>
                 {
-                    // Ctrl+Shift+Z: Redo
                     if self.command_history.can_redo() {
                         return Task::done(Message::Redo);
                     }
@@ -1639,7 +1683,6 @@ impl State {
                 iced::keyboard::Key::Character("y")
                     if modifiers.command() || modifiers.control() =>
                 {
-                    // Ctrl+Y: Redo (alternative)
                     if self.command_history.can_redo() {
                         return Task::done(Message::Redo);
                     }
@@ -1652,13 +1695,9 @@ impl State {
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
         iced::Subscription::batch(vec![
-            // Phase 1 Optimization: Only listen to keyboard events (not mouse/window events)
-            // This prevents constant redraws from mouse movements
-            iced::event::listen_with(|event, _status, _id| {
-                match event {
-                    iced::Event::Keyboard(_) => Some(event),
-                    _ => None, // Ignore mouse, window, touch events
-                }
+            iced::event::listen_with(|event, _status, _id| match event {
+                iced::Event::Keyboard(_) => Some(event),
+                _ => None,
             })
             .map(Message::EventOccurred),
             match self.status {

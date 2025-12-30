@@ -6,8 +6,8 @@ use crate::app::ui_components::{
     themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
-    AppStatus, FontPickerTarget, Message, PendingWarning, RuleForm, State, ThemeFilter,
-    ThemePickerState, WorkspaceTab,
+    AppStatus, FontPickerTarget, Message, PendingWarning, ProfileManagerState, RuleForm, State,
+    ThemeFilter, ThemePickerState, WorkspaceTab,
 };
 use crate::core::firewall::Protocol;
 use iced::widget::text::Wrapping;
@@ -215,10 +215,42 @@ pub fn view(state: &State) -> Element<'_, Message> {
         with_font_picker
     };
 
+    // Profile switch confirmation overlay
+    let with_profile_confirm = if state.pending_profile_switch.is_some() {
+        stack![
+            with_theme_picker,
+            container(view_profile_switch_confirm(theme, state.font_regular))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+        ]
+        .into()
+    } else {
+        with_theme_picker
+    };
+
+    // Profile manager modal overlay
+    let with_profile_manager = if let Some(ref mgr_state) = state.profile_manager {
+        stack![
+            with_profile_confirm,
+            container(view_profile_manager(state, mgr_state))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+        ]
+        .into()
+    } else {
+        with_profile_confirm
+    };
+
     // Keyboard shortcuts help overlay
     if state.show_shortcuts_help {
         stack![
-            with_theme_picker,
+            with_profile_manager,
             container(view_shortcuts_help(
                 theme,
                 state.font_regular,
@@ -232,14 +264,59 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_theme_picker
+        with_profile_manager
     }
 }
 
 fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
 
-    // 1. Branding Header
+    // 1. Branding & Profile Header
+    let is_dirty = state.is_profile_dirty();
+
+    let profile_selector = column![
+        row![
+            container(
+                text("PROFILE")
+                    .size(9)
+                    .font(state.font_mono)
+                    .color(theme.fg_muted)
+            )
+            .padding([2, 6])
+            .style(move |_| section_header_container(theme)),
+            container(row![]).width(Length::Fill),
+            if is_dirty {
+                text("Unsaved Changes*")
+                    .size(9)
+                    .font(state.font_mono)
+                    .color(theme.warning)
+            } else {
+                text("Saved")
+                    .size(9)
+                    .font(state.font_mono)
+                    .color(theme.success)
+            }
+        ]
+        .align_y(Alignment::Center),
+        row![
+            pick_list(
+                &state.available_profiles[..],
+                Some(state.active_profile_name.clone()),
+                Message::ProfileSelected
+            )
+            .width(Length::Fill)
+            .padding(8)
+            .style(move |_, status| themed_pick_list(theme, status))
+            .menu_style(move |_| themed_pick_list_menu(theme)),
+            button(text("⚙").size(16))
+                .on_press(Message::OpenProfileManager)
+                .padding([8, 12])
+                .style(move |_, status| secondary_button(theme, status)),
+        ]
+        .spacing(8)
+    ]
+    .spacing(4);
+
     let branding = container(column![
         row![
             container(text("🛡️").size(28).color(theme.accent)).padding(4),
@@ -260,7 +337,8 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             .spacing(0)
         ]
         .spacing(12)
-        .align_y(Alignment::Center)
+        .align_y(Alignment::Center),
+        profile_selector.padding(iced::Padding::new(0.0).top(16.0))
     ])
     .padding(iced::Padding::new(0.0).bottom(10.0));
 
@@ -1108,7 +1186,10 @@ fn view_from_cached_diff_tokens<'a>(
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
     // Continue the zebra pattern: if last line_number is odd, next would be even
-    let last_line_number = diff_tokens.last().map(|(_, hl)| hl.line_number).unwrap_or(0);
+    let last_line_number = diff_tokens
+        .last()
+        .map(|(_, hl)| hl.line_number)
+        .unwrap_or(0);
     let spacer_bg = if show_zebra_striping {
         let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
@@ -1123,7 +1204,7 @@ fn view_from_cached_diff_tokens<'a>(
             .style(move |_| container::Style {
                 background: spacer_bg.map(Into::into),
                 ..Default::default()
-            })
+            }),
     );
 
     lines
@@ -1425,56 +1506,56 @@ fn view_rule_form<'a>(
         // Organization Section
         {
             let mut org_col = column![
-                    container(text("TAGS").size(10).color(theme.fg_muted))
-                        .padding([2, 6])
-                        .style(move |_| section_header_container(theme)),
-                    row![
-                        text_input("Add a tag...", &form.tag_input)
-                            .on_input(Message::RuleFormTagInputChanged)
-                            .on_submit(Message::RuleFormAddTag)
-                            .padding(8)
-                            .style(move |_, status| themed_text_input(theme, status)),
-                        button(text("+").size(16))
-                            .on_press(Message::RuleFormAddTag)
-                            .padding([8, 16])
-                            .style(move |_, status| primary_button(theme, status)),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
+                container(text("TAGS").size(10).color(theme.fg_muted))
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
+                row![
+                    text_input("Add a tag...", &form.tag_input)
+                        .on_input(Message::RuleFormTagInputChanged)
+                        .on_submit(Message::RuleFormAddTag)
+                        .padding(8)
+                        .style(move |_, status| themed_text_input(theme, status)),
+                    button(text("+").size(16))
+                        .on_press(Message::RuleFormAddTag)
+                        .padding([8, 16])
+                        .style(move |_, status| primary_button(theme, status)),
                 ]
-                .spacing(4);
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(4);
 
-                if !form.tags.is_empty() {
-                    // Issue #6: Capture only needed colors instead of cloning entire theme
-                    let accent_color = theme.accent;
-                    let fg_on_accent = theme.fg_on_accent;
-                    org_col = org_col.push(Element::from(
-                        row(form.tags.iter().map(|tag| -> Element<'_, Message> {
-                            container(
-                                row![
-                                    text(tag).size(12).color(fg_on_accent),
-                                    button(text("×").size(14))
-                                        .on_press(Message::RuleFormRemoveTag(tag.clone()))
-                                        .padding([2, 6])
-                                        .style(button::text),
-                                ]
-                                .spacing(6)
-                                .align_y(Alignment::Center),
-                            )
-                            .padding([4, 10])
-                            .style(move |t| {
-                                let mut style = container::rounded_box(t);
-                                style.background = Some(accent_color.into());
-                                style
-                            })
-                            .into()
-                        }))
-                        .spacing(8)
-                        .wrap(),
-                    ));
-                }
-                org_col
-            },
+            if !form.tags.is_empty() {
+                // Issue #6: Capture only needed colors instead of cloning entire theme
+                let accent_color = theme.accent;
+                let fg_on_accent = theme.fg_on_accent;
+                org_col = org_col.push(Element::from(
+                    row(form.tags.iter().map(|tag| -> Element<'_, Message> {
+                        container(
+                            row![
+                                text(tag).size(12).color(fg_on_accent),
+                                button(text("×").size(14))
+                                    .on_press(Message::RuleFormRemoveTag(tag.clone()))
+                                    .padding([2, 6])
+                                    .style(button::text),
+                            ]
+                            .spacing(6)
+                            .align_y(Alignment::Center),
+                        )
+                        .padding([4, 10])
+                        .style(move |t| {
+                            let mut style = container::rounded_box(t);
+                            style.background = Some(accent_color.into());
+                            style
+                        })
+                        .into()
+                    }))
+                    .spacing(8)
+                    .wrap(),
+                ));
+            }
+            org_col
+        },
         // Footer Actions
         row![
             button(text("Cancel").size(14))
@@ -3021,7 +3102,7 @@ fn view_from_cached_json_tokens<'a>(
             .style(move |_| container::Style {
                 background: spacer_bg.map(Into::into),
                 ..Default::default()
-            })
+            }),
     );
 
     lines
@@ -3112,8 +3193,198 @@ fn view_from_cached_nft_tokens<'a>(
             .style(move |_| container::Style {
                 background: spacer_bg.map(Into::into),
                 ..Default::default()
-            })
+            }),
     );
 
     lines
+}
+
+fn view_profile_switch_confirm<'a>(
+    theme: &'a crate::theme::AppTheme,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    container(
+        column![
+            text("⚠️ Unsaved Changes")
+                .size(20)
+                .font(font)
+                .color(theme.warning),
+            text("You have unsaved changes in your current profile. What would you like to do?")
+                .size(14)
+                .color(theme.fg_primary),
+            row![
+                button(text("Cancel").size(14))
+                    .on_press(Message::CancelProfileSwitch)
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(theme, status)),
+                button(text("Discard").size(14))
+                    .on_press(Message::DiscardProfileSwitch)
+                    .padding([10, 20])
+                    .style(move |_, status| danger_button(theme, status)),
+                button(text("Save & Switch").size(14))
+                    .on_press(Message::ConfirmProfileSwitch)
+                    .padding([10, 24])
+                    .style(move |_, status| primary_button(theme, status)),
+            ]
+            .spacing(12),
+        ]
+        .spacing(20)
+        .padding(30)
+        .max_width(500),
+    )
+    .style(move |_| card_container(theme))
+    .into()
+}
+
+fn view_profile_manager<'a>(
+    state: &'a State,
+    mgr: &'a ProfileManagerState,
+) -> Element<'a, Message> {
+    let theme = &state.theme;
+
+    let profiles_list: Element<'_, Message> = if state.available_profiles.is_empty() {
+        text("No profiles found.").color(theme.fg_muted).into()
+    } else {
+        let mut list = column![].spacing(8);
+        for name in &state.available_profiles {
+            let is_active = name == &state.active_profile_name;
+
+            let mut row_content = row![
+                text(name)
+                    .size(14)
+                    .color(if is_active {
+                        theme.accent
+                    } else {
+                        theme.fg_primary
+                    })
+                    .width(Length::Fill),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center);
+
+            if let Some((old, current)) = &mgr.renaming_name
+                && old == name
+            {
+                row_content = row![
+                    text_input("New name...", current)
+                        .on_input(Message::ProfileNewNameChanged)
+                        .on_submit(Message::ConfirmRenameProfile)
+                        .padding(8)
+                        .style(move |_, status| themed_text_input(theme, status))
+                        .width(Length::Fill),
+                    button(text("OK").size(12))
+                        .on_press(Message::ConfirmRenameProfile)
+                        .style(move |_, status| primary_button(theme, status)),
+                    button(text("Cancel").size(12))
+                        .on_press(Message::CancelRenameProfile)
+                        .style(move |_, status| secondary_button(theme, status)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center);
+            } else if let Some(del_name) = &mgr.deleting_name
+                && del_name == name
+            {
+                row_content = row![
+                    text("Delete profile?")
+                        .size(12)
+                        .color(theme.danger)
+                        .width(Length::Fill),
+                    button(text("No").size(12))
+                        .on_press(Message::CancelDeleteProfile)
+                        .style(move |_, status| secondary_button(theme, status)),
+                    button(text("Yes, Delete").size(12))
+                        .on_press(Message::ConfirmDeleteProfile)
+                        .style(move |_, status| danger_button(theme, status)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center);
+            } else if !is_active {
+                row_content = row_content
+                    .push(
+                        button(text("✎").size(14))
+                            .on_press(Message::RenameProfileRequested(name.clone()))
+                            .style(button::text),
+                    )
+                    .push(
+                        button(text("🗑").size(14))
+                            .on_press(Message::DeleteProfileRequested(name.clone()))
+                            .style(button::text),
+                    );
+            } else {
+                row_content = row_content.push(text("(Active)").size(11).color(theme.fg_muted));
+            }
+
+            list = list.push(
+                container(row_content)
+                    .padding(12)
+                    .style(move |_| card_container(theme)),
+            );
+        }
+        scrollable(list).height(Length::Fixed(300.0)).into()
+    };
+
+    container(
+        column![
+            row![
+                text("🗂 Profile Manager")
+                    .size(24)
+                    .font(state.font_regular)
+                    .color(theme.accent),
+                container(row![]).width(Length::Fill),
+                button(text("×").size(20))
+                    .on_press(Message::CloseProfileManager)
+                    .style(button::text),
+            ]
+            .align_y(Alignment::Center),
+            profiles_list,
+            if mgr.creating_new {
+                container(
+                    row![
+                        text_input("New profile name...", &mgr.new_name_input)
+                            .on_input(Message::NewProfileNameChanged)
+                            .on_submit(Message::SaveProfileAs(mgr.new_name_input.clone()))
+                            .padding(8)
+                            .style(move |_, status| themed_text_input(theme, status))
+                            .width(Length::Fill),
+                        button(text("Save").size(12))
+                            .on_press(Message::SaveProfileAs(mgr.new_name_input.clone()))
+                            .style(move |_, status| primary_button(theme, status)),
+                        button(text("Cancel").size(12))
+                            .on_press(Message::CancelCreatingNewProfile)
+                            .style(move |_, status| secondary_button(theme, status)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                )
+                .padding(12)
+                .style(move |_| card_container(theme))
+            } else {
+                container(
+                    button(text("+ Add Profile from Current Rules").size(13))
+                        .on_press(Message::StartCreatingNewProfile)
+                        .width(Length::Fill)
+                        .padding(12)
+                        .style(move |_, status| secondary_button(theme, status)),
+                )
+                .width(Length::Fill)
+            },
+            row![
+                button(text("Save Current Profile").size(13))
+                    .on_press(Message::SaveProfileClicked)
+                    .padding([10, 20])
+                    .style(move |_, status| primary_button(theme, status)),
+                container(row![]).width(Length::Fill),
+                button(text("Close").size(13))
+                    .on_press(Message::CloseProfileManager)
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(theme, status)),
+            ]
+            .spacing(12)
+        ]
+        .spacing(20)
+        .padding(32)
+        .max_width(600),
+    )
+    .style(move |_| card_container(theme))
+    .into()
 }

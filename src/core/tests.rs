@@ -874,7 +874,9 @@ mod integration_tests {
                     || e.contains("cache initialization")
             })
         {
-            eprintln!("Skipping test: nft verification requires elevated privileges or nft is unavailable");
+            eprintln!(
+                "Skipping test: nft verification requires elevated privileges or nft is unavailable"
+            );
             return;
         }
 
@@ -1040,7 +1042,9 @@ mod integration_tests {
                     || e.contains("cache initialization")
             })
         {
-            eprintln!("Skipping test: nft verification requires elevated privileges or nft is unavailable");
+            eprintln!(
+                "Skipping test: nft verification requires elevated privileges or nft is unavailable"
+            );
             return;
         }
 
@@ -1161,7 +1165,9 @@ mod integration_tests {
                     || e.contains("cache initialization")
             })
         {
-            eprintln!("Skipping test: nft verification requires elevated privileges or nft is unavailable");
+            eprintln!(
+                "Skipping test: nft verification requires elevated privileges or nft is unavailable"
+            );
             return;
         }
 

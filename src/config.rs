@@ -1,13 +1,14 @@
-use crate::core::firewall::FirewallRuleset;
+use crate::core::profiles::DEFAULT_PROFILE_NAME;
 use crate::utils::get_data_dir;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 
-/// Complete application configuration including ruleset and UI settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Complete application configuration including UI settings and current profile
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub ruleset: FirewallRuleset,
+    #[serde(default = "default_profile")]
+    pub active_profile: String,
     #[serde(default)]
     pub theme_choice: crate::theme::ThemeChoice,
     #[serde(default)]
@@ -18,6 +19,23 @@ pub struct AppConfig {
     pub show_diff: bool,
     #[serde(default = "default_true")]
     pub show_zebra_striping: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            active_profile: default_profile(),
+            theme_choice: crate::theme::ThemeChoice::default(),
+            regular_font: crate::fonts::RegularFontChoice::default(),
+            mono_font: crate::fonts::MonoFontChoice::default(),
+            show_diff: true,
+            show_zebra_striping: true,
+        }
+    }
+}
+
+fn default_profile() -> String {
+    DEFAULT_PROFILE_NAME.to_string()
 }
 
 fn default_true() -> bool {
@@ -71,57 +89,11 @@ pub fn save_config(config: &AppConfig) -> std::io::Result<()> {
 pub fn load_config() -> AppConfig {
     if let Some(mut path) = get_data_dir() {
         path.push("config.json");
-        if let Ok(mut config) = fs::read_to_string(&path).and_then(|json| {
+        if let Ok(config) = fs::read_to_string(&path).and_then(|json| {
             serde_json::from_str::<AppConfig>(&json).map_err(std::io::Error::other)
         }) {
-            // Rebuild caches after deserialization (Issue #1, #3)
-            for rule in &mut config.ruleset.rules {
-                rule.rebuild_caches();
-            }
             return config;
-        }
-
-        // Fallback: Try loading old ruleset.json format for backward compatibility
-        path.pop();
-        path.push("ruleset.json");
-        if let Ok(mut ruleset) = fs::read_to_string(path).and_then(|json| {
-            serde_json::from_str::<FirewallRuleset>(&json).map_err(std::io::Error::other)
-        }) {
-            // Rebuild caches after deserialization (Issue #1, #3)
-            for rule in &mut ruleset.rules {
-                rule.rebuild_caches();
-            }
-            return AppConfig {
-                ruleset,
-                theme_choice: crate::theme::ThemeChoice::default(),
-                regular_font: crate::fonts::RegularFontChoice::default(),
-                mono_font: crate::fonts::MonoFontChoice::default(),
-                show_diff: true,
-                show_zebra_striping: true,
-            };
         }
     }
     AppConfig::default()
-}
-
-/// Legacy function for backward compatibility - saves only the ruleset
-#[deprecated(note = "Use save_config() instead")]
-#[allow(dead_code)]
-pub fn save_ruleset(ruleset: &FirewallRuleset) -> std::io::Result<()> {
-    let config = AppConfig {
-        ruleset: ruleset.clone(),
-        theme_choice: crate::theme::ThemeChoice::default(),
-        regular_font: crate::fonts::RegularFontChoice::default(),
-        mono_font: crate::fonts::MonoFontChoice::default(),
-        show_diff: true,
-        show_zebra_striping: true,
-    };
-    save_config(&config)
-}
-
-/// Legacy function for backward compatibility - loads only the ruleset
-#[deprecated(note = "Use load_config() instead")]
-#[allow(dead_code)]
-pub fn load_ruleset() -> FirewallRuleset {
-    load_config().ruleset
 }

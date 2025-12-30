@@ -7,10 +7,12 @@
 //! - [`nft_json`]: JSON-based nftables rule application and snapshot management
 //! - [`verify`]: Ruleset validation and syntax checking
 //! - [`error`]: Error types for firewall operations
+//! - [`profiles`]: Firewall profile management
 
 pub mod error;
 pub mod firewall;
 pub mod nft_json;
+pub mod profiles;
 pub mod verify;
 
 #[cfg(test)]
