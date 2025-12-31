@@ -646,8 +646,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         container(
                             text(if is_being_dragged {
                                 "↕"
-                            } else if is_hover_target {
-                                "○"
+                            } else if any_drag_active {
+                                if is_hover_target {
+                                    "◎"
+                                } else {
+                                    "○"
+                                }
                             } else {
                                 "⠿"
                             })
