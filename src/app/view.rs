@@ -338,8 +338,17 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         ]
         .spacing(12)
         .align_y(Alignment::Center),
-        profile_selector.padding(iced::Padding::new(0.0).top(8.0))
-    ])
+        // Branding Separator
+        container(row![])
+            .height(Length::Fixed(1.0))
+            .width(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(theme.border.into()),
+                ..Default::default()
+            }),
+        profile_selector
+    ]
+    .spacing(16))
     .padding(iced::Padding::new(0.0).bottom(10.0));
 
     // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags, Phase 1: Use cached filtered indices)
