@@ -667,10 +667,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                             .wrapping(Wrapping::None)
                         )
                         .width(Length::Shrink)
+                        .padding([2, 8])
+                        .style(move |_| section_header_container(theme))
                         .align_x(iced::alignment::Horizontal::Left)
                     )
                     .on_press(Message::EditRuleClicked(rule.id))
-                    .padding([0, 4])
+                    .padding(0)
                     .style(button::text),
                     // Accent Line
                     rule::horizontal(1).style(move |_| rule::Style {
