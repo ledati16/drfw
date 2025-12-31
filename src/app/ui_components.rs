@@ -179,15 +179,78 @@ pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style
 }
 
 pub fn dirty_button(theme: &AppTheme, status: button::Status) -> button::Style {
-    let mut style = primary_button(theme, status);
-    style.shadow = Shadow {
-        color: Color::from_rgba(theme.warning.r, theme.warning.g, theme.warning.b, 0.2),
-        offset: Vector::new(0.0, 0.0),
-        blur_radius: 8.0,
+    // Workaround: Shift the warning color by 20% to ensure it's always distinct
+    // from the base 'accent' even if the theme defined them similarly.
+    let shifted_warning = if theme.is_light() {
+        // Light themes: darken it
+        Color {
+            r: (theme.warning.r * 0.80).max(0.0),
+            g: (theme.warning.g * 0.80).max(0.0),
+            b: (theme.warning.b * 0.80).max(0.0),
+            ..theme.warning
+        }
+    } else {
+        // Dark themes: brighten it
+        Color {
+            r: (theme.warning.r * 1.20).min(1.0),
+            g: (theme.warning.g * 1.20).min(1.0),
+            b: (theme.warning.b * 1.20).min(1.0),
+            ..theme.warning
+        }
     };
-    style.border.width = 2.0;
-    style.border.color = theme.warning;
-    style
+
+    let base = button::Style {
+        background: Some(shifted_warning.into()),
+        text_color: theme.fg_on_accent,
+        border: Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 3.0,
+        },
+        ..Default::default()
+    };
+
+    match status {
+        button::Status::Hovered => button::Style {
+            background: Some(
+                Color {
+                    r: (shifted_warning.r * 1.08).min(1.0),
+                    g: (shifted_warning.g * 1.08).min(1.0),
+                    b: (shifted_warning.b * 1.08).min(1.0),
+                    ..shifted_warning
+                }
+                .into(),
+            ),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 2.5),
+                blur_radius: 4.0,
+            },
+            ..base
+        },
+        button::Status::Pressed => button::Style {
+            background: Some(
+                Color {
+                    r: (shifted_warning.r * 0.95).min(1.0),
+                    g: (shifted_warning.g * 0.95).min(1.0),
+                    b: (shifted_warning.b * 0.95).min(1.0),
+                    ..shifted_warning
+                }
+                .into(),
+            ),
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: Vector::new(0.0, 0.5),
+                blur_radius: 1.5,
+            },
+            ..base
+        },
+        _ => base,
+    }
 }
 
 pub fn danger_button(theme: &AppTheme, status: button::Status) -> button::Style {
