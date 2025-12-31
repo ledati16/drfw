@@ -655,57 +655,8 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 // Add protocol badge (right side, always present)
                 row2_items.push(badge.into());
 
-                let row2 = row(row2_items).spacing(8).align_y(Alignment::Center);
-
-                // Build main_info with dynamic rows
-                let mut main_info_rows: Vec<Element<'_, Message>> = Vec::with_capacity(3);
-
-                // Row 1: Label (always present)
-                main_info_rows.push(
-                    container(
-                        text(if rule.label.is_empty() {
-                            "Unnamed Rule"
-                        } else {
-                            &rule.label
-                        })
-                        .size(13)
-                        .font(state.font_regular)
-                        .color(if rule.enabled {
-                            theme.fg_primary
-                        } else {
-                            theme.fg_muted
-                        })
-                        .wrapping(Wrapping::None),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fixed(18.0))
-                    .padding(iced::Padding::new(0.0).right(4.0))
-                    .clip(true)
-                    .into(),
-                );
-
-                // Row 2: Interface + Badge (always present)
-                main_info_rows.push(
-                    container(row2)
-                        .width(Length::Fill)
-                        .height(Length::Fixed(18.0))
-                        .into(),
-                );
-
-                // Row 3: Tags (only if tags exist)
-                if !rule.tags.is_empty() {
-                    main_info_rows.push(
-                        container(row(tag_items).spacing(4).align_y(Alignment::Center))
-                            .width(Length::Fill)
-                            .height(Length::Fixed(18.0))
-                            .clip(true) // Clip if too many tags
-                            .into(),
-                    );
-                }
-
-                let main_info = column(main_info_rows).spacing(2).width(Length::Fill);
-
-                row![
+                // Row 1: Controls (Drag, Toggle) + Label + Delete
+                let top_row = row![
                     // Drag Handle
                     button(
                         container(text("::").size(12).color(handle_color))
@@ -714,37 +665,36 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .on_press(handle_action)
                     .padding([0, 2])
                     .style(button::text),
-                    // Status Strip
-                    container(column![])
-                        .width(Length::Fixed(3.0))
-                        .height(Length::Fixed(24.0))
-                        .style(move |_: &_| container::Style {
-                            background: Some(
-                                (if rule.enabled {
-                                    theme.info
-                                } else {
-                                    theme.fg_muted
-                                })
-                                .into()
-                            ),
-                            border: Border {
-                                radius: 2.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }),
                     // Checkbox
                     checkbox(rule.enabled)
                         .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
                         .size(16)
                         .spacing(0)
                         .style(move |_, status| themed_checkbox(theme, status)),
-                    // Info Click Area
-                    button(main_info)
-                        .on_press(Message::EditRuleClicked(rule.id))
-                        .padding(0)
-                        .style(button::text)
-                        .width(Length::Fill),
+                    // Label (Clickable area for editing)
+                    button(
+                        container(
+                            text(if rule.label.is_empty() {
+                                "Unnamed Rule"
+                            } else {
+                                &rule.label
+                            })
+                            .size(13)
+                            .font(state.font_regular)
+                            .color(if rule.enabled {
+                                theme.fg_primary
+                            } else {
+                                theme.fg_muted
+                            })
+                            .wrapping(Wrapping::None)
+                        )
+                        .width(Length::Fill)
+                        .align_x(iced::alignment::Horizontal::Left)
+                    )
+                    .on_press(Message::EditRuleClicked(rule.id))
+                    .padding([0, 4])
+                    .style(button::text)
+                    .width(Length::Fill),
                     // Delete
                     button(text("×").size(14).color(theme.fg_muted))
                         .on_press(Message::DeleteRuleRequested(rule.id))
@@ -752,9 +702,38 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         .style(button::text),
                 ]
                 .spacing(8)
-                .padding([6, 8])
-                .align_y(Alignment::Center)
-                .into()
+                .align_y(Alignment::Center);
+
+                // Row 2: Detail Row (Interface, Action, Protocol/Ports) - now full width
+                let details_row = button(
+                    container(row(row2_items).spacing(8).align_y(Alignment::Center))
+                        .width(Length::Fill)
+                )
+                .on_press(Message::EditRuleClicked(rule.id))
+                .padding([0, 8]) // Match outer padding
+                .style(button::text)
+                .width(Length::Fill);
+
+                // Row 3: Tags (if present)
+                let mut card_rows = vec![top_row.into(), details_row.into()];
+
+                if !rule.tags.is_empty() {
+                    let tag_row = button(
+                        container(row(tag_items).spacing(4).align_y(Alignment::Center))
+                            .width(Length::Fill)
+                    )
+                    .on_press(Message::EditRuleClicked(rule.id))
+                    .padding([0, 8])
+                    .style(button::text)
+                    .width(Length::Fill);
+
+                    card_rows.push(tag_row.into());
+                }
+
+                column(card_rows)
+                    .spacing(2)
+                    .padding([4, 0])
+                    .into()
             };
 
             let card = container(card_content).style(move |_| {
