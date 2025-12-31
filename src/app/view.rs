@@ -618,43 +618,6 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     );
                 }
 
-                // Row 2: Action badge + Interface (if present) + Protocol badge
-                let mut row2_items: Vec<Element<'_, Message>> = Vec::with_capacity(3);
-
-                // Add action badge (left side) if present
-                if let Some(action_badge_elem) = action_badge {
-                    row2_items.push(action_badge_elem.into());
-                }
-
-                // Add interface (middle, fills) OR spacer
-                if let Some(ref iface) = rule.interface {
-                    row2_items.push(
-                        container(
-                            text(format!("@{}", iface))
-                                .size(9)
-                                .font(state.font_mono)
-                                .color(if rule.enabled {
-                                    theme.fg_muted
-                                } else {
-                                    Color {
-                                        a: 0.5,
-                                        ..theme.fg_muted
-                                    }
-                                })
-                                .wrapping(Wrapping::None),
-                        )
-                        .width(Length::Fill)
-                        .clip(true)
-                        .into(),
-                    );
-                } else if rule.action != crate::core::firewall::Action::Accept {
-                    // Add spacer to push protocol badge to the right
-                    row2_items.push(container(column![]).width(Length::Fill).into());
-                }
-
-                // Add protocol badge (right side, always present)
-                row2_items.push(badge.into());
-
                 // Row 1: Controls (Drag, Toggle) + Label + Delete
                 let top_row = row![
                     // Drag Handle
@@ -702,11 +665,49 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         .style(button::text),
                 ]
                 .spacing(8)
+                .padding([0, 8]) // Add horizontal padding to match other rows
                 .align_y(Alignment::Center);
 
                 // Row 2: Detail Row (Interface, Action, Protocol/Ports) - now full width
+                // Re-build row2_items to ensure protocol is always on the right
+                let mut detail_items: Vec<Element<'_, Message>> = Vec::with_capacity(3);
+
+                // 1. Action badge (Left)
+                if let Some(action_badge_elem) = action_badge {
+                    detail_items.push(action_badge_elem.into());
+                }
+
+                // 2. Interface (Middle, Fill) OR Spacer (Fill)
+                if let Some(ref iface) = rule.interface {
+                    detail_items.push(
+                        container(
+                            text(format!("@{}", iface))
+                                .size(9)
+                                .font(state.font_mono)
+                                .color(if rule.enabled {
+                                    theme.fg_muted
+                                } else {
+                                    Color {
+                                        a: 0.5,
+                                        ..theme.fg_muted
+                                    }
+                                })
+                                .wrapping(Wrapping::None),
+                        )
+                        .width(Length::Fill)
+                        .clip(true)
+                        .into(),
+                    );
+                } else {
+                    // No interface - add spacer to push protocol to the right
+                    detail_items.push(container(column![]).width(Length::Fill).into());
+                }
+
+                // 3. Protocol Badge (Right)
+                detail_items.push(badge.into());
+
                 let details_row = button(
-                    container(row(row2_items).spacing(8).align_y(Alignment::Center))
+                    container(row(detail_items).spacing(8).align_y(Alignment::Center))
                         .width(Length::Fill)
                 )
                 .on_press(Message::EditRuleClicked(rule.id))
