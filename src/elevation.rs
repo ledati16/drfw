@@ -56,7 +56,7 @@ pub enum ElevationError {
     NftNotFound,
 
     /// PolicyKit daemon not running or not accessible
-    #[error("PolicyKit daemon not accessible: {0}")]
+    #[error("`PolicyKit` daemon not accessible: {0}")]
     #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     PkexecUnavailable(String),
 
@@ -201,6 +201,8 @@ pub fn check_elevation_available() -> Result<(), ElevationError> {
 /// and run nft directly (requires nft to already have necessary permissions,
 /// or tests to run as root).
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
+    use std::os::fd::AsFd;
+
     // 1. Strict Test Mode Override (Highest Priority)
     if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
         let mut cmd = Command::new("nft");
@@ -226,7 +228,6 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
     }
 
     // Fall back based on environment when run0 not available
-    use std::os::fd::AsFd;
     let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
 
     if is_atty {

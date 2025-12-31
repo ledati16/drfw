@@ -92,7 +92,7 @@ fn main() -> ExitCode {
         // Create Tokio runtime only for CLI commands
         let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         match runtime.block_on(handle_cli(command)) {
-            Ok(_) => ExitCode::SUCCESS,
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("Error: {e}");
                 ExitCode::FAILURE
@@ -123,7 +123,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             let nft_json = ruleset.to_nftables_json();
 
             // Verify first
-            println!("Verifying profile '{}'...", name);
+            println!("Verifying profile '{name}'...");
             let verify_result = core::verify::verify_ruleset(nft_json.clone()).await?;
             if !verify_result.success {
                 return Err(
@@ -222,7 +222,7 @@ fn launch_gui() -> ExitCode {
         .run();
 
     match result {
-        Ok(_) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::FAILURE,
     }
 }

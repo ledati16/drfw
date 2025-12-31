@@ -73,7 +73,7 @@ pub enum Protocol {
     Icmp,
     /// Internet Control Message Protocol version 6
     Icmpv6,
-    /// Both ICMP and ICMPv6 (dual-stack support, recommended default)
+    /// Both ICMP and `ICMPv6` (dual-stack support, recommended default)
     IcmpBoth,
 }
 
@@ -392,7 +392,7 @@ impl Rule {
 
     /// Creates a Rule with specified fields and auto-initializes caches.
     /// Useful for tests and manual rule creation.
-    /// Advanced options (destination, action, rate_limit, connection_limit) use defaults.
+    /// Advanced options (destination, action, `rate_limit`, `connection_limit`) use defaults.
     #[allow(clippy::too_many_arguments)]
     pub fn with_caches(
         id: Uuid,

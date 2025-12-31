@@ -490,6 +490,8 @@ impl State {
     }
 
     fn update_cached_text(&mut self) {
+        use std::collections::HashSet;
+
         let nft_text = self.ruleset.to_nft_text();
         let json_text =
             serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
@@ -514,7 +516,6 @@ impl State {
             self.cached_nft_width_px
         };
 
-        use std::collections::HashSet;
         let mut all_tags: Vec<String> = self
             .ruleset
             .rules
@@ -1029,8 +1030,7 @@ impl State {
             Message::SaveProfileAs(name) => {
                 if let Err(e) = crate::core::profiles::save_profile(&name, &self.ruleset) {
                     self.last_error = Some(ErrorInfo::new(format!(
-                        "Failed to save profile as '{}': {e}",
-                        name
+                        "Failed to save profile as '{name}': {e}"
                     )));
                 } else {
                     self.active_profile_name = name;

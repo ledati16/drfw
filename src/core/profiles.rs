@@ -87,7 +87,7 @@ pub fn get_profiles_dir() -> Result<PathBuf, ProfileError> {
 pub fn get_profile_path(name: &str) -> Result<PathBuf, ProfileError> {
     validate_profile_name(name)?;
     let mut path = get_profiles_dir()?;
-    path.push(format!("{}.json", name));
+    path.push(format!("{name}.json"));
     Ok(path)
 }
 

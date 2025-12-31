@@ -530,7 +530,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 };
 
                 let badge = container(
-                    text(format!("{}{}: {}", chain_arrow, proto_text, port_text))
+                    text(format!("{chain_arrow}{proto_text}: {port_text}"))
                         .size(9)
                         .font(state.font_mono)
                         .color(if rule.enabled {
@@ -554,7 +554,9 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .clip(true); // Clip if extreme edge case
 
                 // Action badge (DROP/REJECT) - only if not Accept
-                let action_badge = if rule.action != crate::core::firewall::Action::Accept {
+                let action_badge = if rule.action == crate::core::firewall::Action::Accept {
+                    None
+                } else {
                     let action_char = match rule.action {
                         crate::core::firewall::Action::Drop => "D",
                         crate::core::firewall::Action::Reject => "R",
@@ -562,7 +564,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     };
 
                     let action_text = if let Some(ref rate_limit) = rule.rate_limit_display {
-                        format!("{} ({})", action_char, rate_limit)
+                        format!("{action_char} ({rate_limit})")
                     } else {
                         action_char.to_string()
                     };
@@ -588,8 +590,6 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         .width(Length::Shrink)
                         .clip(true),
                     )
-                } else {
-                    None
                 };
 
                 // Main Content: Label + Tags
@@ -736,7 +736,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 if let Some(ref iface) = rule.interface {
                     detail_items.push(
                         container(
-                            text(format!("@{}", iface))
+                            text(format!("@{iface}"))
                                 .size(9)
                                 .font(state.font_mono)
                                 .color(if rule.enabled {
@@ -992,11 +992,11 @@ fn view_workspace<'a>(
 
     // Settings tab only needs vertical scrolling, other tabs need both
     let scroll_direction = if matches!(state.active_tab, WorkspaceTab::Settings) {
-        scrollable::Direction::Vertical(Default::default())
+        scrollable::Direction::Vertical(scrollable::Scrollbar::default())
     } else {
         scrollable::Direction::Both {
-            vertical: Default::default(),
-            horizontal: Default::default(),
+            vertical: scrollable::Scrollbar::default(),
+            horizontal: scrollable::Scrollbar::default(),
         }
     };
 
@@ -1220,8 +1220,7 @@ fn view_from_cached_diff_tokens<'a>(
     // Continue the zebra pattern: if last line_number is odd, next would be even
     let last_line_number = diff_tokens
         .last()
-        .map(|(_, hl)| hl.line_number)
-        .unwrap_or(0);
+        .map_or(0, |(_, hl)| hl.line_number);
     let spacer_bg = if show_zebra_striping {
         let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
@@ -3130,7 +3129,7 @@ fn view_from_cached_json_tokens<'a>(
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
     // Continue the zebra pattern: if last line_number is odd, next would be even
-    let last_line_number = tokens.last().map(|hl| hl.line_number).unwrap_or(0);
+    let last_line_number = tokens.last().map_or(0, |hl| hl.line_number);
     let spacer_bg = if show_zebra_striping {
         let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
@@ -3221,7 +3220,7 @@ fn view_from_cached_nft_tokens<'a>(
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
     // Continue the zebra pattern: if last line_number is odd, next would be even
-    let last_line_number = tokens.last().map(|hl| hl.line_number).unwrap_or(0);
+    let last_line_number = tokens.last().map_or(0, |hl| hl.line_number);
     let spacer_bg = if show_zebra_striping {
         let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
@@ -3242,10 +3241,10 @@ fn view_from_cached_nft_tokens<'a>(
     lines
 }
 
-fn view_profile_switch_confirm<'a>(
-    theme: &'a crate::theme::AppTheme,
+fn view_profile_switch_confirm(
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     container(
         column![
             text("⚠️ Unsaved Changes")
