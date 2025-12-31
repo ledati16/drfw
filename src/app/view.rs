@@ -666,13 +666,22 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                             })
                             .wrapping(Wrapping::None)
                         )
-                        .width(Length::Fill)
+                        .width(Length::Shrink)
                         .align_x(iced::alignment::Horizontal::Left)
                     )
                     .on_press(Message::EditRuleClicked(rule.id))
                     .padding([0, 4])
-                    .style(button::text)
-                    .width(Length::Fill),
+                    .style(button::text),
+                    // Accent Line
+                    rule::horizontal(1).style(move |_| rule::Style {
+                        color: Color {
+                            a: 0.1,
+                            ..theme.fg_muted
+                        },
+                        fill_mode: rule::FillMode::Full,
+                        radius: 0.0.into(),
+                        snap: true,
+                    }),
                     // Delete
                     button(text("×").size(14).color(theme.fg_muted))
                         .on_press(Message::DeleteRuleRequested(rule.id))
