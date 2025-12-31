@@ -544,10 +544,16 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
                 // Action badge (DROP/REJECT) - only if not Accept
                 let action_badge = if rule.action != crate::core::firewall::Action::Accept {
+                    let action_char = match rule.action {
+                        crate::core::firewall::Action::Drop => "D",
+                        crate::core::firewall::Action::Reject => "R",
+                        crate::core::firewall::Action::Accept => "", // unreachable
+                    };
+
                     let action_text = if let Some(ref rate_limit) = rule.rate_limit_display {
-                        format!("{} ({})", rule.action.display_name(), rate_limit)
+                        format!("{} ({})", action_char, rate_limit)
                     } else {
-                        rule.action.display_name().to_string()
+                        action_char.to_string()
                     };
 
                     Some(
