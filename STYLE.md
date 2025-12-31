@@ -815,6 +815,33 @@ Heavy shadows (`shadow_strong`, large blur radius) create muddy appearance. The 
 
 ---
 
+## Floating Popups & Tooltips
+
+### Design Principles
+
+Tooltips and other small floating overlays should be distinct from the structural elements (cards) and primary interactive elements (modals). They use a "lighter-than-surface" approach to appear as if they are floating closer to the user.
+
+### Popup Styling Standard
+
+**All floating tooltips use:**
+```rust
+.style(move |_| popup_container(theme))
+```
+
+This provides:
+- **Lighter background**: Noticeably brighter than `bg_surface` to pop against cards.
+- **Faded border**: `15%` opacity border to provide a soft edge without clutter.
+- **Tight radius**: `radius: 6.0` (slightly tighter than 8.0px cards).
+- **Crisp shadow**: Standard directional shadow for professional depth.
+
+### Usage Guidelines
+
+1. **Delay**: Standard tooltips should have a **1.0 second delay** (`1000ms`) to avoid flickering while moving the mouse.
+2. **Positioning**: Prefer `tooltip::Position::Bottom` for rule cards to avoid obscuring the management icons.
+3. **Content**: Always wrap the tooltip element in a `container` with `popup_container` styling.
+
+---
+
 ## Font Picker Patterns
 
 ### Search Auto-Focus

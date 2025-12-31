@@ -104,6 +104,44 @@ pub fn section_header_container(theme: &AppTheme) -> container::Style {
     }
 }
 
+pub fn popup_container(theme: &AppTheme) -> container::Style {
+    let popup_bg = if theme.is_light() {
+        // Light themes: slightly brighter/whiter
+        Color {
+            r: (theme.bg_elevated.r * 1.02).min(1.0),
+            g: (theme.bg_elevated.g * 1.02).min(1.0),
+            b: (theme.bg_elevated.b * 1.02).min(1.0),
+            ..theme.bg_elevated
+        }
+    } else {
+        // Dark themes: noticeably lighter than surface
+        Color {
+            r: (theme.bg_elevated.r * 1.1 + 0.05).min(1.0),
+            g: (theme.bg_elevated.g * 1.1 + 0.05).min(1.0),
+            b: (theme.bg_elevated.b * 1.1 + 0.05).min(1.0),
+            ..theme.bg_elevated
+        }
+    };
+
+    container::Style {
+        background: Some(popup_bg.into()),
+        border: Border {
+            color: Color {
+                a: 0.15,
+                ..theme.border
+            },
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        shadow: Shadow {
+            color: theme.shadow_color,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 3.0,
+        },
+        ..Default::default()
+    }
+}
+
 pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style {
     let base = button::Style {
         background: Some(theme.accent.into()),

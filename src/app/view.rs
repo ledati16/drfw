@@ -1,9 +1,9 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
     danger_button, dirty_button, inactive_tab_button, main_container, modal_backdrop,
-    primary_button, secondary_button, section_header_container, sidebar_container, themed_checkbox,
-    themed_horizontal_rule, themed_pick_list, themed_pick_list_menu, themed_scrollable,
-    themed_slider, themed_text_input, themed_toggler,
+    popup_container, primary_button, secondary_button, section_header_container, sidebar_container,
+    themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
+    themed_scrollable, themed_slider, themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, ProfileManagerState, RuleForm, State,
@@ -13,7 +13,7 @@ use crate::core::firewall::Protocol;
 use iced::widget::text::Wrapping;
 use iced::widget::{
     Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, row, rule,
-    scrollable, space, stack, text, text_input, toggler,
+    scrollable, space, stack, text, text_input, toggler, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow};
 use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
@@ -633,15 +633,9 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     );
                 }
 
-                // Row 1: Controls (Toggle, Drag) + Label + Delete
+                // Row 1: Controls (Drag) + Label + Accent + Controls (Toggle, Delete)
                 let top_row = row![
-                    // Checkbox (Far Left)
-                    checkbox(rule.enabled)
-                        .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
-                        .size(16)
-                        .spacing(0)
-                        .style(move |_, status| themed_checkbox(theme, status)),
-                    // Drag Handle (Between Checkbox and Label)
+                    // Drag Handle (Far Left)
                     button(
                         container(
                             text(if is_being_dragged {
@@ -663,32 +657,49 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .on_press(handle_action)
                     .padding([0, 2])
                     .style(button::text),
-                    // Label (Clickable area for editing)
+                    // Label (Clickable area for editing with distinctive popup Tooltip)
                     button(
-                        container(
-                            text(if rule.label.is_empty() {
-                                "Unnamed Rule"
-                            } else {
-                                &rule.label
-                            })
-                            .size(13)
-                            .font(state.font_regular)
-                            .color(if rule.enabled {
-                                theme.fg_primary
-                            } else {
-                                theme.fg_muted
-                            })
-                            .wrapping(Wrapping::None)
+                        tooltip(
+                            container(
+                                text(if rule.label.is_empty() {
+                                    "Unnamed Rule"
+                                } else {
+                                    &rule.label
+                                })
+                                .size(13)
+                                .font(state.font_regular)
+                                .color(if rule.enabled {
+                                    theme.fg_primary
+                                } else {
+                                    theme.fg_muted
+                                })
+                                .wrapping(Wrapping::None)
+                            )
+                            .max_width(140.0)
+                            .padding([2, 8])
+                            .style(move |_| section_header_container(theme))
+                            .align_x(iced::alignment::Horizontal::Left)
+                            .clip(true),
+                            container(
+                                text(if rule.label.is_empty() {
+                                    "Unnamed Rule"
+                                } else {
+                                    &rule.label
+                                })
+                                .size(12)
+                                .font(state.font_regular)
+                                .color(theme.fg_primary)
+                            )
+                            .padding([6, 10])
+                            .style(move |_| popup_container(theme)),
+                            tooltip::Position::Bottom
                         )
-                        .width(Length::Shrink)
-                        .padding([2, 8])
-                        .style(move |_| section_header_container(theme))
-                        .align_x(iced::alignment::Horizontal::Left)
+                        .delay(std::time::Duration::from_millis(1000)),
                     )
                     .on_press(Message::EditRuleClicked(rule.id))
                     .padding(0)
                     .style(button::text),
-                    // Accent Line
+                    // Accent Line (Absorbs all remaining space)
                     rule::horizontal(1).style(move |_| rule::Style {
                         color: Color {
                             a: 0.1,
@@ -698,11 +709,22 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         radius: 0.0.into(),
                         snap: true,
                     }),
-                    // Delete
-                    button(text("×").size(14).color(theme.fg_muted))
-                        .on_press(Message::DeleteRuleRequested(rule.id))
-                        .padding(6)
-                        .style(button::text),
+                    // Management Cluster (Always stays on far right)
+                    row![
+                        // Checkbox
+                        checkbox(rule.enabled)
+                            .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
+                            .size(16)
+                            .spacing(0)
+                            .style(move |_, status| themed_checkbox(theme, status)),
+                        // Delete
+                        button(text("×").size(14).color(theme.fg_muted))
+                            .on_press(Message::DeleteRuleRequested(rule.id))
+                            .padding(6)
+                            .style(button::text),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
                 ]
                 .spacing(8)
                 .padding([0, 8]) // Add horizontal padding to match other rows
