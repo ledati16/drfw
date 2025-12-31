@@ -635,11 +635,11 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
                 // Row 1: Controls (Drag) + Label + Accent + Controls (Toggle, Delete)
                 let top_row = row![
-                    // Drag Handle (Far Left)
+                    // Drag Handle (Between Checkbox and Label)
                     button(
                         container(
                             text(if is_being_dragged {
-                                "↕"
+                                "●"
                             } else if any_drag_active {
                                 if is_hover_target {
                                     "◎"
