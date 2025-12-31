@@ -2609,6 +2609,15 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     .size(11)
                     .font(state.font_mono)
                     .color(theme.fg_muted),
+                rule::horizontal(1).style(move |_| rule::Style {
+                    color: Color {
+                        a: 0.1,
+                        ..theme.fg_muted
+                    },
+                    fill_mode: rule::FillMode::Full,
+                    radius: 0.0.into(),
+                    snap: true,
+                }),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
@@ -2616,25 +2625,25 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             row![
                 // Left column: Buttons, text hierarchy, status colors (45% width)
                 column![
-                    // Buttons in 2x2 grid (larger size)
+                    // Buttons in 2x2 grid (standard secondary style)
                     row![
                         button(text("Apply").size(12))
-                            .padding([7, 16])
+                            .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| primary_button(theme, status)),
                         button(text("Cancel").size(12))
-                            .padding([7, 16])
+                            .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| secondary_button(theme, status)),
                     ]
                     .spacing(6),
                     row![
                         button(text("Delete").size(12))
-                            .padding([7, 16])
+                            .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| danger_button(theme, status)),
                         button(text("Save").size(12))
-                            .padding([7, 16])
+                            .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| dirty_button(theme, status)),
                     ]
@@ -2679,9 +2688,9 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     ]
                     .spacing(4),
                 ]
-                .spacing(10)
-                .width(Length::FillPortion(9)),
-                // Right column: Taller code snippet (55% width)
+                .spacing(12)
+                .width(Length::FillPortion(7)),
+                // Right column: Taller code snippet (65% width) - Fills more space
                 container(
                     column![
                         text("fn process_data(items: Vec<String>) -> u32 {")
@@ -2727,8 +2736,9 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     ]
                     .spacing(1)
                 )
-                .padding(8)
-                .width(Length::FillPortion(11))
+                .padding(12)
+                .width(Length::FillPortion(13))
+                .height(Length::Shrink)
                 .style(move |_| container::Style {
                     background: Some(theme.bg_elevated.into()),
                     border: Border {
@@ -2738,13 +2748,14 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     ..Default::default()
                 }),
             ]
-            .spacing(8)
+            .spacing(12)
             .align_y(Alignment::Center),
         ]
         .spacing(8)
         .padding(12),
     )
     .width(Length::Fill)
+    .height(Length::Shrink)
     .style(move |_| container::Style {
         background: Some(theme.bg_surface.into()),
         border: Border {
