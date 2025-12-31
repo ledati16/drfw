@@ -669,15 +669,10 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .align_y(Alignment::Center);
 
                 // Row 2: Detail Row (Interface, Action, Protocol/Ports) - now full width
-                // Re-build row2_items to ensure protocol is always on the right
-                let mut detail_items: Vec<Element<'_, Message>> = Vec::with_capacity(3);
+                // Re-build detail_items to ensure interface is far left and protocol is far right
+                let mut detail_items: Vec<Element<'_, Message>> = Vec::with_capacity(4);
 
-                // 1. Action badge (Left)
-                if let Some(action_badge_elem) = action_badge {
-                    detail_items.push(action_badge_elem.into());
-                }
-
-                // 2. Interface (Middle, Fill) OR Spacer (Fill)
+                // 1. Interface (Far Left)
                 if let Some(ref iface) = rule.interface {
                     detail_items.push(
                         container(
@@ -694,16 +689,20 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 })
                                 .wrapping(Wrapping::None),
                         )
-                        .width(Length::Fill)
                         .clip(true)
                         .into(),
                     );
-                } else {
-                    // No interface - add spacer to push protocol to the right
-                    detail_items.push(container(column![]).width(Length::Fill).into());
                 }
 
-                // 3. Protocol Badge (Right)
+                // 2. Action badge (Next to interface)
+                if let Some(action_badge_elem) = action_badge {
+                    detail_items.push(action_badge_elem.into());
+                }
+
+                // 3. Spacer (Fills middle to push protocol to right)
+                detail_items.push(container(column![]).width(Length::Fill).into());
+
+                // 4. Protocol Badge (Far Right)
                 detail_items.push(badge.into());
 
                 let details_row = button(
