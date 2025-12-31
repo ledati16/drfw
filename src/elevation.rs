@@ -61,7 +61,9 @@ pub enum ElevationError {
     PkexecUnavailable(String),
 
     /// No polkit authentication agent available (GUI mode requires one)
-    #[error("No polkit authentication agent available. Please start a polkit agent (e.g., polkit-gnome-authentication-agent-1, polkit-kde-authentication-agent-1)")]
+    #[error(
+        "No polkit authentication agent available. Please start a polkit agent (e.g., polkit-gnome-authentication-agent-1, polkit-kde-authentication-agent-1)"
+    )]
     #[allow(dead_code)] // Part of public API, will be used when GUI integrates elevation
     NoPolkitAgent,
 

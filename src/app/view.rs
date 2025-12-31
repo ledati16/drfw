@@ -317,38 +317,40 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     ]
     .spacing(4);
 
-    let branding = container(column![
-        row![
-            container(text("🛡️").size(28).color(theme.accent)).padding(4),
-            column![
-                text("DRFW")
-                    .size(24)
-                    .font(state.font_regular)
-                    .color(theme.accent),
-                container(
-                    text("DUMB RUST FIREWALL")
-                        .size(9)
-                        .color(theme.fg_muted)
-                        .font(state.font_mono)
-                )
-                .padding([2, 6])
-                .style(move |_| section_header_container(theme)),
+    let branding = container(
+        column![
+            row![
+                container(text("🛡️").size(28).color(theme.accent)).padding(4),
+                column![
+                    text("DRFW")
+                        .size(24)
+                        .font(state.font_regular)
+                        .color(theme.accent),
+                    container(
+                        text("DUMB RUST FIREWALL")
+                            .size(9)
+                            .color(theme.fg_muted)
+                            .font(state.font_mono)
+                    )
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
+                ]
+                .spacing(0)
             ]
-            .spacing(0)
+            .spacing(12)
+            .align_y(Alignment::Center),
+            // Branding Separator
+            container(row![])
+                .height(Length::Fixed(1.0))
+                .width(Length::Fill)
+                .style(move |_| container::Style {
+                    background: Some(theme.border.into()),
+                    ..Default::default()
+                }),
+            profile_selector
         ]
-        .spacing(12)
-        .align_y(Alignment::Center),
-        // Branding Separator
-        container(row![])
-            .height(Length::Fixed(1.0))
-            .width(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(theme.border.into()),
-                ..Default::default()
-            }),
-        profile_selector
-    ]
-    .spacing(16))
+        .spacing(16),
+    )
     .padding(iced::Padding::new(0.0).bottom(10.0));
 
     // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags, Phase 1: Use cached filtered indices)
@@ -641,11 +643,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                             text(if is_being_dragged {
                                 "●"
                             } else if any_drag_active {
-                                if is_hover_target {
-                                    "◎"
-                                } else {
-                                    "○"
-                                }
+                                if is_hover_target { "◎" } else { "○" }
                             } else {
                                 "⠿"
                             })
@@ -769,7 +767,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
                 let details_row = button(
                     container(row(detail_items).spacing(8).align_y(Alignment::Center))
-                        .width(Length::Fill)
+                        .width(Length::Fill),
                 )
                 .on_press(Message::EditRuleClicked(rule.id))
                 .padding([0, 8]) // Match outer padding
@@ -782,7 +780,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 if !rule.tags.is_empty() {
                     let tag_row = button(
                         container(row(tag_items).spacing(4).align_y(Alignment::Center))
-                            .width(Length::Fill)
+                            .width(Length::Fill),
                     )
                     .on_press(Message::EditRuleClicked(rule.id))
                     .padding([0, 8])
@@ -792,10 +790,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     card_rows.push(tag_row.into());
                 }
 
-                column(card_rows)
-                    .spacing(2)
-                    .padding([4, 0])
-                    .into()
+                column(card_rows).spacing(2).padding([4, 0]).into()
             };
 
             let card = container(card_content).style(move |_| {
@@ -920,12 +915,7 @@ fn view_workspace<'a>(
     // Header: Tab Strip (Left) and Global Tools (Right)
     let nav_row = row![
         // Tab buttons - simple rounded buttons like Export/Diagnostics
-        view_tab_button(
-            "Ruleset",
-            WorkspaceTab::Nftables,
-            state.active_tab,
-            theme
-        ),
+        view_tab_button("Ruleset", WorkspaceTab::Nftables, state.active_tab, theme),
         view_tab_button("JSON", WorkspaceTab::Json, state.active_tab, theme),
         view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
         container(row![]).width(Length::Fill),
@@ -954,7 +944,8 @@ fn view_workspace<'a>(
             .font(state.font_regular)
             .color(theme.fg_primary),
             text(match state.active_tab {
-                WorkspaceTab::Nftables => "Current nftables configuration generated from your rules.",
+                WorkspaceTab::Nftables =>
+                    "Current nftables configuration generated from your rules.",
                 WorkspaceTab::Json => "Low-level JSON representation for debugging or automation.",
                 WorkspaceTab::Settings =>
                     "Configure application appearance and advanced firewall security hardening.",
