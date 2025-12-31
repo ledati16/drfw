@@ -633,22 +633,32 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                     );
                 }
 
-                // Row 1: Controls (Drag, Toggle) + Label + Delete
+                // Row 1: Controls (Toggle, Drag) + Label + Delete
                 let top_row = row![
-                    // Drag Handle
-                    button(
-                        container(text("::").size(12).color(handle_color))
-                            .center_x(Length::Fixed(20.0))
-                    )
-                    .on_press(handle_action)
-                    .padding([0, 2])
-                    .style(button::text),
-                    // Checkbox
+                    // Checkbox (Far Left)
                     checkbox(rule.enabled)
                         .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
                         .size(16)
                         .spacing(0)
                         .style(move |_, status| themed_checkbox(theme, status)),
+                    // Drag Handle (Between Checkbox and Label)
+                    button(
+                        container(
+                            text(if is_being_dragged {
+                                "↕"
+                            } else if is_hover_target {
+                                "○"
+                            } else {
+                                "⠿"
+                            })
+                            .size(14)
+                            .color(handle_color),
+                        )
+                        .center_x(Length::Fixed(20.0))
+                    )
+                    .on_press(handle_action)
+                    .padding([0, 2])
+                    .style(button::text),
                     // Label (Clickable area for editing)
                     button(
                         container(
