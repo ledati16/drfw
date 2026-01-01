@@ -157,7 +157,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 .banners
                 .iter()
                 .take(2)
-                .map(|banner| notification_banner(banner, theme))
+                .enumerate()
+                .map(|(index, banner)| notification_banner(banner, theme, index))
                 .collect::<Vec<_>>(),
         )
         .spacing(8)

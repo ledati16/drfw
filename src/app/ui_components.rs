@@ -1046,11 +1046,13 @@ pub fn themed_scrollable(theme: &AppTheme, status: scrollable::Status) -> scroll
 ///
 /// Banners appear at the top of the content area with appropriate coloring based on severity.
 /// Uses shadow for depth and semantic colors from the theme.
-pub fn notification_banner<'a, Message: 'a>(
+/// Supports click-to-dismiss functionality.
+pub fn notification_banner<'a>(
     banner: &'a crate::app::NotificationBanner,
     theme: &'a crate::theme::AppTheme,
-) -> iced::Element<'a, Message> {
-    use iced::widget::{container, row, text};
+    index: usize,
+) -> iced::Element<'a, crate::app::Message> {
+    use iced::widget::{container, mouse_area, row, text};
     use iced::{Background, Border, Shadow};
 
     // Determine colors based on severity
@@ -1067,7 +1069,8 @@ pub fn notification_banner<'a, Message: 'a>(
     .spacing(12)
     .padding([8, 16]);
 
-    container(content)
+    let styled_container = container(content)
+        .max_width(450)
         .style(move |_theme| container::Style {
             background: Some(Background::Color(bg_color)),
             border: Border {
@@ -1080,6 +1083,10 @@ pub fn notification_banner<'a, Message: 'a>(
                 blur_radius: 8.0,
             },
             ..Default::default()
-        })
+        });
+
+    // Wrap in mouse_area for click-to-dismiss
+    mouse_area(styled_container)
+        .on_press(crate::app::Message::DismissBanner(index))
         .into()
 }

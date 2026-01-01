@@ -9,8 +9,43 @@ use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Element, Task};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Smart truncate a file path to fit in notifications
+///
+/// Keeps the filename and 1-2 parent directories for context.
+/// Example: "/very/long/path/to/configs/production/rules.nft"
+///       -> ".../production/rules.nft"
+fn truncate_path_smart(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        return path.to_string();
+    }
+
+    let path_obj = Path::new(path);
+
+    // Always keep filename
+    let filename = path_obj
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("file");
+
+    // Try to keep parent directory for context
+    let parent = path_obj.parent();
+
+    if let Some(parent) = parent {
+        if let Some(parent_name) = parent.file_name().and_then(|f| f.to_str()) {
+            let short = format!(".../{parent_name}/{filename}");
+            if short.len() <= max_len {
+                return short;
+            }
+        }
+    }
+
+    // Fallback: just filename with ellipsis
+    format!(".../{filename}")
+}
 
 /// Fuzzy filter fonts with relevance scoring
 ///
@@ -533,6 +568,8 @@ pub enum Message {
     ProfileListUpdated(Vec<String>),
     /// Periodic tick to prune expired banners
     PruneBanners,
+    /// Dismiss a specific banner (click to dismiss)
+    DismissBanner(usize),
     /// No-op message for async operations that don't need a result
     Noop,
 }
@@ -971,8 +1008,9 @@ impl State {
             Message::ExportAsNft => return self.handle_export_nft(),
             Message::ExportResult(Ok(path)) => {
                 self.show_export_modal = false;
+                let display_path = truncate_path_smart(&path, 50);
                 self.push_banner(
-                    format!("Rules exported to: {path}"),
+                    format!("Rules exported to: {display_path}"),
                     BannerSeverity::Success,
                     5,
                 );
@@ -1462,6 +1500,11 @@ impl State {
             }
             Message::PruneBanners => {
                 self.prune_expired_banners();
+            }
+            Message::DismissBanner(index) => {
+                if index < self.banners.len() {
+                    self.banners.remove(index);
+                }
             }
             Message::Noop => {
                 // No-op for async operations that don't need handling
