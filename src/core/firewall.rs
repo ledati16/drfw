@@ -59,8 +59,19 @@ use uuid::Uuid;
 ///
 /// Supports common protocols used in nftables filtering.
 /// `Copy` trait allows efficient passing by value for this small enum.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum Protocol {
     /// Match all protocols
     #[strum(serialize = "any")]
@@ -142,8 +153,20 @@ impl fmt::Display for PortRange {
 /// Rule action (Accept, Drop, or Reject)
 ///
 /// Controls what happens when a packet matches this rule.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Default,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum Action {
     /// Accept the packet (allow it through)
     #[default]
@@ -178,8 +201,19 @@ impl Action {
 }
 
 /// Time unit for rate limiting
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum TimeUnit {
     #[strum(serialize = "second")]
     Second,
@@ -230,8 +264,20 @@ impl fmt::Display for RateLimit {
 }
 
 /// Firewall chain for rule direction (only relevant in Server Mode)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Default,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum Chain {
     /// Incoming traffic (default for desktop users)
     #[default]
@@ -428,8 +474,20 @@ fn default_true() -> bool {
 
 // ServicePreset removed - presets dropdown removed from UI for simplicity
 /// Egress filtering profile
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Default,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum EgressProfile {
     /// Desktop mode: Allow all outbound connections (OUTPUT ACCEPT)
     #[default]

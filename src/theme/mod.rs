@@ -196,8 +196,19 @@ fn color_luminance(color: &Color) -> f32 {
 }
 
 /// All available built-in themes
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[derive(strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Default,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // CUSTOM THEMES (Project Defaults)
