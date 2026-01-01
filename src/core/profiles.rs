@@ -5,8 +5,6 @@
 
 use crate::core::firewall::FirewallRuleset;
 use crate::utils::get_data_dir;
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 /// The canonical name for the initial/fallback profile.
@@ -71,12 +69,15 @@ pub fn validate_profile_name(name: &str) -> Result<(), ProfileError> {
 
 /// Gets the directory where profiles are stored.
 /// Creates the directory if it doesn't exist to ensure subsequent file operations succeed.
-pub fn get_profiles_dir() -> Result<PathBuf, ProfileError> {
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking I/O.
+pub async fn get_profiles_dir() -> Result<PathBuf, ProfileError> {
     let mut path = get_data_dir().ok_or(ProfileError::DataDirUnavailable)?;
     path.push("profiles");
 
-    if !path.exists() {
-        fs::create_dir_all(&path)?;
+    if !tokio::fs::try_exists(&path).await? {
+        tokio::fs::create_dir_all(&path).await?;
     }
 
     Ok(path)
@@ -84,21 +85,27 @@ pub fn get_profiles_dir() -> Result<PathBuf, ProfileError> {
 
 /// Returns the path to a specific profile file.
 /// Validates the name first to prevent directory traversal attacks before file access.
-pub fn get_profile_path(name: &str) -> Result<PathBuf, ProfileError> {
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking directory operations.
+pub async fn get_profile_path(name: &str) -> Result<PathBuf, ProfileError> {
     validate_profile_name(name)?;
-    let mut path = get_profiles_dir()?;
+    let mut path = get_profiles_dir().await?;
     path.push(format!("{name}.json"));
     Ok(path)
 }
 
 /// Lists all available profile names.
 /// Scans the profiles directory for .json files and extracts their stems.
-pub fn list_profiles() -> Result<Vec<String>, ProfileError> {
-    let dir = get_profiles_dir()?;
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking directory scanning.
+pub async fn list_profiles() -> Result<Vec<String>, ProfileError> {
+    let dir = get_profiles_dir().await?;
     let mut profiles = Vec::new();
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
 
         if path.is_file()
@@ -116,14 +123,17 @@ pub fn list_profiles() -> Result<Vec<String>, ProfileError> {
 /// Loads a profile by name.
 /// Rebuilds rule caches after deserialization to ensure UI search and rendering
 /// are performant immediately after load.
-pub fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
-    let path = get_profile_path(name)?;
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking file I/O.
+pub async fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
+    let path = get_profile_path(name).await?;
 
-    if !path.exists() {
+    if !tokio::fs::try_exists(&path).await? {
         return Err(ProfileError::NotFound(name.to_string()));
     }
 
-    let json = fs::read_to_string(path)?;
+    let json = tokio::fs::read_to_string(path).await?;
     let mut ruleset: FirewallRuleset = serde_json::from_str(&json)?;
 
     // Rebuild caches for each rule to ensure performant UI rendering/filtering
@@ -137,8 +147,11 @@ pub fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
 /// Saves a profile atomically.
 /// Uses a temporary file + rename pattern to prevent data corruption if the
 /// process crashes or the disk fills up during write.
-pub fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), ProfileError> {
-    let path = get_profile_path(name)?;
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking file I/O.
+pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), ProfileError> {
+    let path = get_profile_path(name).await?;
     let json = serde_json::to_string_pretty(ruleset)?;
 
     let mut temp_path = path.clone();
@@ -146,8 +159,8 @@ pub fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), Profile
 
     #[cfg(unix)]
     {
-        use std::fs::OpenOptions;
-        use std::os::unix::fs::OpenOptionsExt;
+        use tokio::fs::OpenOptions;
+        use tokio::io::AsyncWriteExt;
 
         // Set restrictive permissions (0o600) BEFORE writing sensitive firewall rules
         let mut file = OpenOptions::new()
@@ -155,34 +168,38 @@ pub fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), Profile
             .write(true)
             .truncate(true)
             .mode(0o600)
-            .open(&temp_path)?;
+            .open(&temp_path)
+            .await?;
 
-        file.write_all(json.as_bytes())?;
-        file.sync_all()?; // Ensure bits are on the platter before renaming
+        file.write_all(json.as_bytes()).await?;
+        file.sync_all().await?; // Ensure bits are on the platter before renaming
     }
 
     #[cfg(not(unix))]
     {
-        fs::write(&temp_path, json)?;
+        tokio::fs::write(&temp_path, json).await?;
     }
 
-    fs::rename(temp_path, path)?;
+    tokio::fs::rename(temp_path, path).await?;
     Ok(())
 }
 
 /// Deletes a profile.
 /// Protects the default profile from deletion to prevent the app from
 /// entering an invalid "no-profile" state.
-pub fn delete_profile(name: &str) -> Result<(), ProfileError> {
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking file I/O.
+pub async fn delete_profile(name: &str) -> Result<(), ProfileError> {
     if name == DEFAULT_PROFILE_NAME {
         return Err(ProfileError::InvalidName(
             "Cannot delete default profile".into(),
         ));
     }
 
-    let path = get_profile_path(name)?;
-    if path.exists() {
-        fs::remove_file(path)?;
+    let path = get_profile_path(name).await?;
+    if tokio::fs::try_exists(&path).await? {
+        tokio::fs::remove_file(path).await?;
     }
     Ok(())
 }
@@ -190,7 +207,10 @@ pub fn delete_profile(name: &str) -> Result<(), ProfileError> {
 /// Renames a profile.
 /// Ensures the new name is valid and doesn't conflict with existing profiles.
 /// Protects the default profile from being renamed to maintain system consistency.
-pub fn rename_profile(old_name: &str, new_name: &str) -> Result<(), ProfileError> {
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking file I/O.
+pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), ProfileError> {
     validate_profile_name(new_name)?;
 
     if old_name == DEFAULT_PROFILE_NAME {
@@ -199,19 +219,47 @@ pub fn rename_profile(old_name: &str, new_name: &str) -> Result<(), ProfileError
         ));
     }
 
-    let old_path = get_profile_path(old_name)?;
-    let new_path = get_profile_path(new_name)?;
+    let old_path = get_profile_path(old_name).await?;
+    let new_path = get_profile_path(new_name).await?;
 
-    if !old_path.exists() {
+    if !tokio::fs::try_exists(&old_path).await? {
         return Err(ProfileError::NotFound(old_name.to_string()));
     }
 
-    if new_path.exists() {
+    if tokio::fs::try_exists(&new_path).await? {
         return Err(ProfileError::InvalidName(
             "Profile with new name already exists".into(),
         ));
     }
 
-    fs::rename(old_path, new_path)?;
+    tokio::fs::rename(old_path, new_path).await?;
     Ok(())
+}
+
+/// Synchronous wrapper for `list_profiles()` for use during startup initialization.
+///
+/// This blocks the current thread and should only be used in `State::new()` where
+/// async initialization isn't possible. Everywhere else should use async `list_profiles()`.
+pub fn list_profiles_blocking() -> Result<Vec<String>, ProfileError> {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(list_profiles())
+    } else {
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create runtime")
+            .block_on(list_profiles())
+    }
+}
+
+/// Synchronous wrapper for `load_profile()` for use during startup initialization.
+///
+/// This blocks the current thread and should only be used in `State::new()` where
+/// async initialization isn't possible. Everywhere else should use async `load_profile()`.
+pub fn load_profile_blocking(name: &str) -> Result<FirewallRuleset, ProfileError> {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(load_profile(name))
+    } else {
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create runtime")
+            .block_on(load_profile(name))
+    }
 }
