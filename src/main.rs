@@ -52,6 +52,79 @@ use clap::{Parser, Subcommand};
 use iced::Size;
 use std::process::ExitCode;
 
+/// Result of the countdown confirmation process
+enum ConfirmResult {
+    Confirmed,
+    Reverted,
+    Error(String),
+}
+
+/// Interactive countdown with confirmation/revert controls
+///
+/// Displays a countdown timer and polls for keypresses:
+/// - 'c' or Enter: Confirm changes immediately
+/// - 'r': Revert changes immediately
+/// - Any other key or timeout: Auto-revert
+async fn countdown_confirmation(
+    timeout_secs: u64,
+    snapshot: &serde_json::Value,
+) -> ConfirmResult {
+    use crossterm::event::{self, Event, KeyCode};
+    use std::io::Write;
+
+    // Enable raw mode for immediate keypress detection
+    if let Err(e) = crossterm::terminal::enable_raw_mode() {
+        return ConfirmResult::Error(format!("Failed to enable raw mode: {e}"));
+    }
+
+    let result = async {
+        for remaining in (1..=timeout_secs).rev() {
+            print!(
+                "\rAuto-revert in {:3}s  [c/Enter=confirm, r=revert now]   ",
+                remaining
+            );
+            std::io::stdout().flush().ok();
+
+            // Poll for keypresses for 1 second
+            if let Ok(true) = event::poll(std::time::Duration::from_secs(1))
+                && let Ok(Event::Key(key)) = event::read()
+            {
+                match key.code {
+                    KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
+                        return ConfirmResult::Confirmed;
+                    }
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        print!("\r\x1b[K");  // Clear line
+                        println!("Reverting...");
+                        match core::nft_json::restore_snapshot(snapshot).await {
+                            Ok(()) => return ConfirmResult::Reverted,
+                            Err(e) => {
+                                return ConfirmResult::Error(format!("Revert failed: {e}"))
+                            }
+                        }
+                    }
+                    _ => {
+                        // Any other key ignored, continue countdown
+                    }
+                }
+            }
+        }
+
+        // Timeout expired - auto-revert
+        print!("\r\x1b[K");  // Clear line
+        println!("Timeout - reverting...");
+        match core::nft_json::restore_snapshot(snapshot).await {
+            Ok(()) => ConfirmResult::Reverted,
+            Err(e) => ConfirmResult::Error(format!("Auto-revert failed: {e}")),
+        }
+    }
+    .await;
+
+    // Always restore terminal to normal mode
+    let _ = crossterm::terminal::disable_raw_mode();
+    result
+}
+
 #[derive(Parser)]
 #[command(name = "drfw")]
 #[command(about = "Dumb Rust Firewall - A minimal nftables manager", long_about = None)]
@@ -68,9 +141,9 @@ enum Commands {
     Apply {
         /// Name of the profile to apply
         name: String,
-        /// Enable 15-second auto-revert safety window
-        #[arg(short, long)]
-        test: bool,
+        /// Enable auto-revert with confirmation timeout (seconds, default: 15, max: 300)
+        #[arg(short, long, value_name = "SECONDS")]
+        confirm: Option<u64>,
     },
     /// Show current active profile and kernel status
     Status,
@@ -118,7 +191,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         }
-        Commands::Apply { name, test } => {
+        Commands::Apply { name, confirm } => {
             let ruleset = core::profiles::load_profile(&name).await?;
             let nft_json = ruleset.to_nftables_json();
 
@@ -134,36 +207,36 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             // Elevation check
             let is_root = nix::unistd::getuid().is_root();
             if !is_root {
-                println!("Note: Not running as root. Will use sudo for apply.");
+                println!("Note: Not running as root. Will use sudo/pkexec for apply.");
             }
 
             println!("Applying ruleset...");
             let snapshot = core::nft_json::apply_with_snapshot(nft_json).await?;
             let _ = core::nft_json::save_snapshot_to_disk(&snapshot);
 
-            if test {
-                println!("Success! Rules applied. AUTO-REVERT ENABLED (15 seconds).");
-                println!("Press Enter to confirm and stay, or wait for revert...");
+            if let Some(timeout_secs) = confirm {
+                // Clamp timeout to reasonable range (1-300 seconds / 5 minutes)
+                let timeout_secs = timeout_secs.clamp(1, 300);
 
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
-                std::thread::spawn(move || {
-                    let mut input = String::new();
-                    let _ = std::io::stdin().read_line(&mut input);
-                    let _ = tx.blocking_send(());
-                });
+                println!("✓ Firewall rules applied!");
+                println!();
 
-                tokio::select! {
-                    _ = rx.recv() => {
-                        println!("Changes confirmed.");
+                match countdown_confirmation(timeout_secs, &snapshot).await {
+                    ConfirmResult::Confirmed => {
+                        println!("\n✓ Changes confirmed and saved.");
                     }
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
-                        println!("\nTimeout reached. Reverting to snapshot...");
+                    ConfirmResult::Reverted => {
+                        println!("\n✓ Reverted to previous state.");
+                    }
+                    ConfirmResult::Error(e) => {
+                        eprintln!("\n✗ Error during confirmation: {e}");
+                        eprintln!("Attempting emergency revert...");
                         core::nft_json::restore_snapshot(&snapshot).await?;
-                        println!("Revert complete.");
+                        println!("✓ Emergency revert complete.");
                     }
                 }
             } else {
-                println!("Success! Rules applied to kernel.");
+                println!("✓ Rules applied to kernel.");
             }
         }
         Commands::Status => {
