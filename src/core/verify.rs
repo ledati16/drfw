@@ -110,7 +110,12 @@ fn parse_nft_errors(stderr: &str) -> Vec<String> {
         .collect()
 }
 
-/// Validates a single rule using nft --check (NO privileges required)
+/// Validates a single rule using nft --check
+///
+/// **NOTE**: This function is currently unused because `nft --check` requires root privileges
+/// even for syntax validation, making it impractical for real-time validation.
+/// Pre-apply validation uses `verify_ruleset()` which properly handles elevation.
+#[allow(dead_code)]
 ///
 /// Creates a minimal test ruleset with just this rule and validates it.
 /// This catches nftables-specific errors like invalid ICMP configurations
@@ -123,7 +128,6 @@ fn parse_nft_errors(stderr: &str) -> Vec<String> {
 /// # Errors
 ///
 /// Returns `Error::ValidationFailed` with specific nft error messages if validation fails.
-#[allow(dead_code)]
 pub async fn validate_rule_with_nft(rule: &crate::core::firewall::Rule) -> Result<()> {
     // Create minimal test ruleset
     let test_ruleset = create_test_ruleset_for_rule(rule);

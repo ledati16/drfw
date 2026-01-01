@@ -149,7 +149,7 @@ pub fn validate_rate_limit(
 
     if count > warn {
         return Ok(Some(format!(
-            "⚠️ High rate ({}/{}) - typical: 10-{}",
+            "High rate ({}/{}) - typical: 10-{}",
             count,
             unit.as_str(),
             warn / 10
@@ -178,7 +178,7 @@ pub fn validate_connection_limit(limit: u32) -> Result<Option<String>, String> {
 
     if limit > 10_000 {
         return Ok(Some(format!(
-            "⚠️ High connection limit ({}) - typical: 10-1000",
+            "High connection limit ({}) - typical: 10-1000",
             limit
         )));
     }
@@ -205,7 +205,7 @@ pub fn validate_icmp_rate_limit(rate: u32) -> Result<Option<String>, String> {
 
     if rate > 100 {
         return Ok(Some(format!(
-            "⚠️ ICMP rate ({}/sec) is high - typical: 10 pps",
+            "ICMP rate ({}/sec) is high - typical: 10 pps",
             rate
         )));
     }
@@ -234,7 +234,7 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
 
     if rate > 60 {
         return Ok(Some(format!(
-            "⚠️ High log rate ({}/min) - default: 5/min",
+            "High log rate ({}/min) - default: 5/min",
             rate
         )));
     }
@@ -287,9 +287,9 @@ pub fn check_well_known_port(port: u16) -> Option<String> {
             25 => "SMTP",
             21 => "FTP",
             3389 => "RDP",
-            _ => return Some(format!("⚠️ Privileged port {} (requires admin)", port)),
+            _ => return Some(format!("Privileged port {} (requires admin)", port)),
         };
-        Some(format!("ℹ️ Port {}: {}", port, name))
+        Some(format!("Port {}: {}", port, name))
     } else {
         None
     }
@@ -311,30 +311,30 @@ pub fn check_reserved_ip(ip: ipnetwork::IpNetwork) -> Option<String> {
                 || (octets[0] == 172 && (16..=31).contains(&octets[1]))
                 || (octets[0] == 192 && octets[1] == 168)
             {
-                return Some("⚠️ Private IP range (RFC 1918) - usually safe for LAN".to_string());
+                return Some("Private IP range (RFC 1918) - usually safe for LAN".to_string());
             }
 
             // Loopback
             if octets[0] == 127 {
                 return Some(
-                    "⚠️ Loopback range (127.x) - loopback rules already exist".to_string(),
+                    "Loopback range (127.x) - loopback rules already exist".to_string(),
                 );
             }
 
             // Link-local
             if octets[0] == 169 && octets[1] == 254 {
-                return Some("⚠️ Link-local range (169.254.x.x) - APIPA addresses".to_string());
+                return Some("Link-local range (169.254.x.x) - APIPA addresses".to_string());
             }
 
             None
         }
         IpAddr::V6(ipv6) => {
             if ipv6.is_loopback() {
-                return Some("⚠️ IPv6 loopback (::1) - loopback rules already exist".to_string());
+                return Some("IPv6 loopback (::1) - loopback rules already exist".to_string());
             }
 
             if ipv6.segments()[0] & 0xffc0 == 0xfe80 {
-                return Some("⚠️ IPv6 link-local (fe80::/10) - local network only".to_string());
+                return Some("IPv6 link-local (fe80::/10) - local network only".to_string());
             }
 
             None
@@ -485,7 +485,7 @@ mod tests {
 
         let result = validate_rate_limit(5000, TimeUnit::Second).unwrap();
         assert!(result.is_some());
-        assert!(result.unwrap().contains("⚠️"));
+        assert!(result.unwrap().contains("High rate"));
     }
 
     #[test]
@@ -512,7 +512,7 @@ mod tests {
     fn test_validate_connection_limit_warning() {
         let result = validate_connection_limit(50000).unwrap();
         assert!(result.is_some());
-        assert!(result.unwrap().contains("⚠️"));
+        assert!(result.unwrap().contains("High connection limit"));
     }
 
     #[test]
@@ -537,7 +537,7 @@ mod tests {
     fn test_validate_icmp_rate_limit_warning() {
         let result = validate_icmp_rate_limit(200).unwrap();
         assert!(result.is_some());
-        assert!(result.unwrap().contains("⚠️"));
+        assert!(result.unwrap().contains("ICMP rate"));
     }
 
     #[test]
@@ -561,7 +561,7 @@ mod tests {
     fn test_validate_log_rate_warning() {
         let result = validate_log_rate(100).unwrap();
         assert!(result.is_some());
-        assert!(result.unwrap().contains("⚠️"));
+        assert!(result.unwrap().contains("High log rate"));
     }
 
     #[test]

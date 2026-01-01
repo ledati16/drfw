@@ -233,6 +233,7 @@ pub struct FormErrors {
     pub port: Option<String>,
     pub source: Option<String>,
     pub interface: Option<String>,
+    pub destination: Option<String>,
     pub rate_limit: Option<String>,
     pub connection_limit: Option<String>,
     pub warnings: Vec<String>,
@@ -327,8 +328,11 @@ impl RuleForm {
             None
         } else if let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() {
             Some(ip)
+        } else if self.source.len() < 7 {
+            // Don't show error while user is still typing (minimum valid IP: "1.2.3.4" = 7 chars)
+            None
         } else {
-            errors.source = Some("Invalid IP address or CIDR".to_string());
+            errors.source = Some("Invalid IP address or CIDR (e.g. 192.168.1.0/24)".to_string());
             has_errors = true;
             None
         };
@@ -347,6 +351,16 @@ impl RuleForm {
             && let Err(msg) = crate::validators::validate_interface(&self.interface)
         {
             errors.interface = Some(msg);
+            has_errors = true;
+        }
+
+        // Validate destination IP (if provided in advanced settings)
+        if !self.destination.is_empty()
+            && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
+            && self.destination.len() >= 7
+        {
+            // Only show error if they've typed enough characters
+            errors.destination = Some("Invalid destination IP or CIDR (domains not supported)".to_string());
             has_errors = true;
         }
 
@@ -998,14 +1012,39 @@ impl State {
                 return self.save_config();
             }
             Message::LogRateChanged(rate) => {
+                // Validate log rate (slider ensures 1-100 range, but check for warnings)
+                match crate::validators::validate_log_rate(rate) {
+                    Ok(Some(warning)) => {
+                        // Valid but with warning - still accept it
+                        tracing::debug!("Log rate {rate}/min: {warning}");
+                    }
+                    Ok(None) => {
+                        // Valid with no warnings
+                    }
+                    Err(e) => {
+                        // Should not happen with slider, but handle it
+                        tracing::warn!("Invalid log rate {rate}: {e}");
+                        return Task::none();
+                    }
+                }
                 self.ruleset.advanced_security.log_rate_per_minute = rate;
                 self.update_cached_text();
                 return self.save_config();
             }
             Message::LogPrefixChanged(prefix) => {
-                self.ruleset.advanced_security.log_prefix = prefix;
-                self.update_cached_text();
-                return self.save_config();
+                // Validate and sanitize log prefix
+                match crate::validators::validate_log_prefix(&prefix) {
+                    Ok(sanitized) => {
+                        self.ruleset.advanced_security.log_prefix = sanitized;
+                        self.update_cached_text();
+                        return self.save_config();
+                    }
+                    Err(e) => {
+                        // Invalid prefix - don't save, just log the error
+                        tracing::warn!("Invalid log prefix '{prefix}': {e}");
+                        return Task::none();
+                    }
+                }
             }
             Message::ServerModeToggled(enabled) => {
                 if enabled {

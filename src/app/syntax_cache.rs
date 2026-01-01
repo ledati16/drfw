@@ -12,12 +12,14 @@ const AVG_JSON_TOKENS_PER_LINE: usize = 20;
 /// Average number of syntax tokens per line in nftables text output (pre-allocation optimization)
 const AVG_NFT_TOKENS_PER_LINE: usize = 15;
 
-/// A highlighted token with its color
+/// A highlighted token with its color and optional styling
 /// Uses Cow to avoid heap allocations for common static tokens like "{", "}", ":", etc.
 #[derive(Debug, Clone)]
 pub struct Token {
     pub text: Cow<'static, str>,
     pub color: TokenColor,
+    pub bold: bool,
+    pub italic: bool,
 }
 
 /// Token color category (resolved to actual color in view based on theme)
@@ -32,6 +34,8 @@ pub enum TokenColor {
     Bracket,       // Brackets (theme.info)
     LineNumber,    // Line numbers (gray) for JSON
     LineNumberNft, // Line numbers (darker gray) for NFT
+    ActionAccept,  // Accept action (green, rendered bold)
+    ActionDeny,    // Drop/Reject actions (red, rendered bold)
 }
 
 /// JSON lexer tokens (declarative DFA-based lexing via logos)
@@ -178,9 +182,75 @@ enum NftToken {
     #[token("policy")]
     Policy,
 
+    // Additional keywords for advanced rules
+    #[token("fib")]
+    Fib,
+    #[token("iif")]
+    Iif,
+    #[token("oif")]
+    Oif,
+    #[token("eq")]
+    Eq,
+    #[token("protocol")]
+    Protocol,
+    #[token("redirect")]
+    Redirect,
+    #[token("ipv6-icmp")]
+    Ipv6Icmp,
+    #[token("icmpv6")]
+    Icmpv6,
+    #[token("limit")]
+    Limit,
+    #[token("rate")]
+    Rate,
+    #[token("second")]
+    Second,
+    #[token("minute")]
+    Minute,
+    #[token("hour")]
+    Hour,
+    #[token("day")]
+    Day,
+    #[token("week")]
+    Week,
+    #[token("log")]
+    Log,
+    #[token("prefix")]
+    Prefix,
+    #[token("level")]
+    Level,
+    #[token("info")]
+    Info,
+    #[token("warn")]
+    Warn,
+    #[token("debug")]
+    Debug,
+    #[token("pkttype")]
+    Pkttype,
+    #[token("host")]
+    Host,
+    #[token("counter")]
+    Counter,
+    #[token("with")]
+    With,
+    #[token("icmpx")]
+    Icmpx,
+    #[token("th")]
+    Th,
+    #[token("count")]
+    Count,
+
     // Strings and numbers
     #[regex(r#""([^"\\]|\\.)*""#)]
     String,
+
+    // IP addresses with optional CIDR (must come before Number to match first)
+    #[regex(r"\d+\.\d+\.\d+\.\d+(\/\d+)?")]
+    IpAddress,
+
+    // IPv6 addresses (basic pattern - hex digits with colons)
+    #[regex(r"[0-9a-fA-F:]+:[0-9a-fA-F:]+(\/\d+)?")]
+    Ipv6Address,
 
     #[regex(r"\d+")]
     Number,
@@ -204,6 +274,18 @@ enum NftToken {
     Colon,
     #[token(",")]
     Comma,
+    #[token(".")]
+    Period,
+    #[token("<=")]
+    LessEqual,
+    #[token("<")]
+    Less,
+    #[token(">=")]
+    GreaterEqual,
+    #[token(">")]
+    Greater,
+    #[token("=")]
+    Equal,
 
     // Identifiers (interface names, etc.)
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_\-\.]*")]
@@ -283,72 +365,96 @@ fn parse_json_line(line: &str) -> Vec<Token> {
                     } else {
                         TokenColor::String // JSON value
                     },
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::Number => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Number,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::True => {
                 tokens.push(Token {
                     text: Cow::Borrowed("true"),
                     color: TokenColor::Keyword,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::False => {
                 tokens.push(Token {
                     text: Cow::Borrowed("false"),
                     color: TokenColor::Keyword,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::Null => {
                 tokens.push(Token {
                     text: Cow::Borrowed("null"),
                     color: TokenColor::Keyword,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::LBrace => {
                 tokens.push(Token {
                     text: Cow::Borrowed("{"),
                     color: TokenColor::Bracket,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::RBrace => {
                 tokens.push(Token {
                     text: Cow::Borrowed("}"),
                     color: TokenColor::Bracket,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::LBracket => {
                 tokens.push(Token {
                     text: Cow::Borrowed("["),
                     color: TokenColor::Bracket,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::RBracket => {
                 tokens.push(Token {
                     text: Cow::Borrowed("]"),
                     color: TokenColor::Bracket,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::Colon => {
                 tokens.push(Token {
                     text: Cow::Borrowed(":"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::Comma => {
                 tokens.push(Token {
                     text: Cow::Borrowed(","),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             JsonToken::Whitespace => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
         }
@@ -396,6 +502,8 @@ fn parse_nft_line(line: &str) -> Vec<Token> {
         tokens.push(Token {
             text: Cow::Owned(comment_text.to_string()),
             color: TokenColor::Comment,
+            bold: false,
+            italic: true,
         });
     } else {
         tokens = parse_nft_tokens(line);
@@ -419,87 +527,189 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
 
         use NftToken::*;
         match token {
+            // Actions - semantic colors + bold for maximum visibility
+            Accept => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::ActionAccept,
+                    bold: true,
+                    italic: false,
+                });
+            }
+            Drop | Reject => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::ActionDeny,
+                    bold: true,
+                    italic: false,
+                });
+            }
             // Keywords - use owned strings since text is a slice
             Table | Chain | Rule | Add | Delete | Flush | List | Inet | Ip | Ip6 | Filter | Nat
-            | Route | Input | Forward | Output | Prerouting | Postrouting | Accept | Drop
-            | Reject | Queue | Continue | Return | Jump | Goto | Ct | State | Established
-            | Related | Invalid | New | Comment | Iifname | Oifname | Meta | L4proto | Tcp
-            | Udp | Icmp | Dport | Sport | Saddr | Daddr | Type | Hook | Priority | Policy => {
+            | Route | Input | Forward | Output | Prerouting | Postrouting | Queue | Continue
+            | Return | Jump | Goto | Ct | State | Established | Related | Invalid | New
+            | Comment | Iifname | Oifname | Meta | L4proto | Tcp | Udp | Icmp | Dport | Sport
+            | Saddr | Daddr | Type | Hook | Priority | Policy | Fib | Iif | Oif | Eq | Protocol
+            | Redirect | Ipv6Icmp | Icmpv6 | Limit | Rate | Second | Minute | Hour | Day | Week
+            | Log | Prefix | Level | Info | Warn | Debug | Pkttype | Host | Counter | With
+            | Icmpx | Th | Count => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Keyword,
+                    bold: false,
+                    italic: false,
                 });
             }
             String => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::String,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            IpAddress | Ipv6Address => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Number,
+                    bold: false,
+                    italic: false,
                 });
             }
             Number => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Number,
+                    bold: false,
+                    italic: false,
                 });
             }
             CommentText => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Comment,
+                    bold: false,
+                    italic: true,
                 });
             }
             LBrace => {
                 tokens.push(Token {
                     text: Cow::Borrowed("{"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             RBrace => {
                 tokens.push(Token {
                     text: Cow::Borrowed("}"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Semicolon => {
                 tokens.push(Token {
                     text: Cow::Borrowed(";"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Slash => {
                 tokens.push(Token {
                     text: Cow::Borrowed("/"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Dash => {
                 tokens.push(Token {
                     text: Cow::Borrowed("-"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Colon => {
                 tokens.push(Token {
                     text: Cow::Borrowed(":"),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Comma => {
                 tokens.push(Token {
                     text: Cow::Borrowed(","),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            Period => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("."),
+                    color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            LessEqual => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("<="),
+                    color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            Less => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("<"),
+                    color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            GreaterEqual => {
+                tokens.push(Token {
+                    text: Cow::Borrowed(">="),
+                    color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            Greater => {
+                tokens.push(Token {
+                    text: Cow::Borrowed(">"),
+                    color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
+                });
+            }
+            Equal => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("="),
+                    color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Identifier => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
             Whitespace => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Primary,
+                    bold: false,
+                    italic: false,
                 });
             }
         }
@@ -569,7 +779,9 @@ impl TokenColor {
             TokenColor::Number => theme.syntax_number,
             TokenColor::Comment => theme.syntax_comment,
             TokenColor::Bracket => theme.info, // Brackets use info color (matches old code)
-            TokenColor::LineNumber | TokenColor::LineNumberNft => theme.fg_muted, // Use theme's muted color for line numbers
+            TokenColor::LineNumber | TokenColor::LineNumberNft => theme.fg_muted,
+            TokenColor::ActionAccept => theme.success, // Green for accept (rendered bold)
+            TokenColor::ActionDeny => theme.danger,    // Red for drop/reject (rendered bold)
         }
     }
 }

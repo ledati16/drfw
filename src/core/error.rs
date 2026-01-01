@@ -26,8 +26,9 @@ pub enum Error {
     Validation { field: String, message: String },
 
     /// nft --check validation failed with specific errors
-    #[error("Rule validation failed: {}", .0.join(", "))]
+    /// NOTE: Currently unused because nft --check requires privileges
     #[allow(dead_code)]
+    #[error("Rule validation failed: {}", .0.join(", "))]
     ValidationFailed(Vec<String>),
 
     /// Snapshot operation failed

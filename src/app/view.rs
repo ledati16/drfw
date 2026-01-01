@@ -1182,7 +1182,12 @@ fn view_from_cached_diff_tokens<'a>(
         // Tokens (already parsed - just build widgets!)
         for token in &highlighted_line.tokens {
             let color = token.color.to_color(theme);
-            row_content = row_content.push(text(&token.text).font(mono_font).size(14).color(color));
+            let font = iced::Font {
+                weight: if token.bold { iced::font::Weight::Bold } else { iced::font::Weight::Normal },
+                style: if token.italic { iced::font::Style::Italic } else { iced::font::Style::Normal },
+                ..mono_font
+            };
+            row_content = row_content.push(text(&token.text).font(font).size(14).color(color));
         }
 
         // Background colors: diff colors for added/removed, zebra stripes for unchanged
@@ -1261,6 +1266,7 @@ fn view_rule_form<'a>(
     };
     let port_error = errors.and_then(|e| e.port.as_ref());
     let source_error = errors.and_then(|e| e.source.as_ref());
+    let destination_error = errors.and_then(|e| e.destination.as_ref());
     let rate_limit_error = errors.and_then(|e| e.rate_limit.as_ref());
     let connection_limit_error = errors.and_then(|e| e.connection_limit.as_ref());
     let warnings = errors.map(|e| &e.warnings).filter(|w| !w.is_empty());
@@ -1437,6 +1443,11 @@ fn view_rule_form<'a>(
                             .on_input(Message::RuleFormDestinationChanged)
                             .padding(8)
                             .style(move |_, status| themed_text_input(theme, status)),
+                        if let Some(err) = destination_error {
+                            Element::from(text(err).size(11).color(theme.danger))
+                        } else {
+                            Element::from(text(""))
+                        },
                     ]
                     .spacing(4),
                     // Action
@@ -3145,9 +3156,14 @@ fn view_from_cached_json_tokens<'a>(
 
         // Tokens (already parsed!)
         for token in &highlighted_line.tokens {
+            let font = iced::Font {
+                weight: if token.bold { iced::font::Weight::Bold } else { iced::font::Weight::Normal },
+                style: if token.italic { iced::font::Style::Italic } else { iced::font::Style::Normal },
+                ..mono_font
+            };
             row_content = row_content.push(
                 text(&token.text)
-                    .font(mono_font)
+                    .font(font)
                     .size(14)
                     .color(token.color.to_color(theme)),
             );
@@ -3236,9 +3252,14 @@ fn view_from_cached_nft_tokens<'a>(
 
         // Tokens (already parsed!)
         for token in &highlighted_line.tokens {
+            let font = iced::Font {
+                weight: if token.bold { iced::font::Weight::Bold } else { iced::font::Weight::Normal },
+                style: if token.italic { iced::font::Style::Italic } else { iced::font::Style::Normal },
+                ..mono_font
+            };
             row_content = row_content.push(
                 text(&token.text)
-                    .font(mono_font)
+                    .font(font)
                     .size(14)
                     .color(token.color.to_color(theme)),
             );
