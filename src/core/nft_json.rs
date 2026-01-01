@@ -80,12 +80,15 @@ pub async fn apply_with_snapshot(mut json_payload: Value) -> Result<Value> {
 
 /// Validates that a snapshot has correct structure for nftables.
 ///
+/// Accepts two formats:
+/// 1. Command format: `{"nftables": [{"add": {"table": ...}}, ...]}`
+/// 2. Output format: `{"nftables": [{"table": ...}, {"chain": ...}, ...]}`
+///
 /// # Errors
 ///
 /// Returns `Err` if:
 /// - Snapshot is missing required `nftables` array
-/// - Snapshot is empty (no rules)
-/// - Snapshot contains no table operations
+/// - Snapshot contains neither table operations nor table objects
 pub fn validate_snapshot(snapshot: &Value) -> Result<()> {
     // Check top-level structure
     let nftables = snapshot
@@ -99,16 +102,19 @@ pub fn validate_snapshot(snapshot: &Value) -> Result<()> {
         // Don't fail - might be intentional for emergency recovery
     }
 
-    // Verify it contains table operations (add, list, or flush)
+    // Verify it contains table operations (command format: add/list/flush)
     let has_table_ops = nftables.iter().any(|v| {
         v.get("add").and_then(|a| a.get("table")).is_some()
             || v.get("list").and_then(|l| l.get("table")).is_some()
             || v.get("flush").and_then(|f| f.get("table")).is_some()
     });
 
-    if !has_table_ops {
+    // OR it contains table objects (output format from nft list)
+    let has_table_objects = nftables.iter().any(|v| v.get("table").is_some());
+
+    if !has_table_ops && !has_table_objects {
         return Err(Error::Internal(
-            "Invalid snapshot: no table operations found".to_string(),
+            "Invalid snapshot: no table operations or table objects found".to_string(),
         ));
     }
 
@@ -618,6 +624,19 @@ mod tests {
         let valid_snapshot = json!({
             "nftables": [
                 { "flush": { "table": { "family": "inet", "name": "test" } } }
+            ]
+        });
+
+        assert!(validate_snapshot(&valid_snapshot).is_ok());
+    }
+
+    #[test]
+    fn test_validate_snapshot_with_table_objects() {
+        // Output format from nft --json list table (contains table objects, not operations)
+        let valid_snapshot = json!({
+            "nftables": [
+                { "table": { "family": "inet", "name": "drfw", "handle": 1 } },
+                { "chain": { "family": "inet", "table": "drfw", "name": "input", "handle": 2 } }
             ]
         });
 
