@@ -478,22 +478,22 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
 
             let card_content: Element<'_, Message> = if is_deleting {
                 row![
-                    text("Delete?")
-                        .size(12)
+                    text("Delete this rule?")
+                        .size(11)
                         .color(theme.danger)
                         .width(Length::Fill),
-                    button(text("No").size(14))
+                    button(text("Cancel").size(11))
                         .on_press(Message::CancelDelete)
-                        .padding(6)
+                        .padding([4, 10])
                         .style(move |_, status| secondary_button(theme, status)),
-                    button(text("Yes").size(14))
+                    button(text("Delete").size(11))
                         .on_press(Message::DeleteRule(rule.id))
-                        .padding(6)
+                        .padding([4, 10])
                         .style(move |_, status| danger_button(theme, status)),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center)
-                .padding(iced::Padding::new(10.0))
+                .padding(8.0)
                 .into()
             } else {
                 let handle_action = if any_drag_active {
