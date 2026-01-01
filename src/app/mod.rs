@@ -1709,9 +1709,11 @@ impl State {
     }
 
     fn handle_countdown_tick(&mut self) -> Task<Message> {
-        if let AppStatus::PendingConfirmation { deadline, .. } = &self.status {
+        if let AppStatus::PendingConfirmation { deadline, snapshot } = &self.status {
             let now = Utc::now();
             if now >= *deadline {
+                // Extract snapshot BEFORE changing status (fixes race condition)
+                let snapshot = snapshot.clone();
                 self.status = AppStatus::Reverting;
                 self.countdown_remaining = 0;
                 let _ = notify_rust::Notification::new()
@@ -1720,7 +1722,26 @@ impl State {
                     .urgency(notify_rust::Urgency::Normal)
                     .timeout(10000)
                     .show();
-                return Task::done(Message::RevertClicked);
+
+                // Spawn revert task directly instead of going through RevertClicked message
+                return Task::perform(
+                    async move {
+                        let result = crate::core::nft_json::restore_snapshot(&snapshot).await;
+                        let final_result = if result.is_err() {
+                            crate::core::nft_json::restore_with_fallback().await
+                        } else {
+                            result
+                        };
+                        let success = final_result.is_ok();
+                        let error = final_result
+                            .as_ref()
+                            .err()
+                            .map(std::string::ToString::to_string);
+                        crate::audit::log_revert(success, error.clone()).await;
+                        final_result.map_err(|e| e.to_string())
+                    },
+                    Message::RevertResult,
+                );
             }
 
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
