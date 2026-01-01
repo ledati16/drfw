@@ -16,7 +16,7 @@ use iced::widget::{
     Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, row, rule,
     scrollable, space, stack, text, text_input, toggler, tooltip,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow};
+use iced::{alignment, Alignment, Border, Color, Element, Length, Padding, Shadow};
 use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
 use strum::IntoEnumIterator; // For ThemeChoice::iter()
 
@@ -143,10 +143,37 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .height(Length::Fill)
         .style(move |_| main_container(theme));
 
-    let with_overlay = if let Some(overlay) = overlay {
-        stack![base, overlay].into()
+    // Banner overlay layer (free-floating at top-right)
+    let with_banners: Element<'_, Message> = if !state.banners.is_empty() {
+        let banner_column = column(
+            state
+                .banners
+                .iter()
+                .take(2)
+                .map(|banner| notification_banner(banner, theme))
+                .collect::<Vec<_>>(),
+        )
+        .spacing(8)
+        .width(Length::Shrink)
+        .padding(16);
+
+        stack![
+            base,
+            container(banner_column)
+                .width(Length::Fill)
+                .height(Length::Shrink)
+                .align_x(alignment::Horizontal::Right)
+                .align_y(alignment::Vertical::Top)
+        ]
+        .into()
     } else {
         base.into()
+    };
+
+    let with_overlay = if let Some(overlay) = overlay {
+        stack![with_banners, overlay].into()
+    } else {
+        with_banners
     };
 
     // Diagnostics modal overlay
@@ -1109,26 +1136,13 @@ fn view_workspace<'a>(
     .spacing(16)
     .align_y(Alignment::Center);
 
-    // Render notification banners (max 2 visible)
-    let mut workspace_column = column![preview_header];
-
-    if !state.banners.is_empty() {
-        let banner_container = column(
-            state.banners.iter().take(2).map(|banner| {
-                notification_banner(banner, theme)
-            }).collect::<Vec<_>>()
-        )
-        .spacing(8)
-        .width(Length::Fill);
-
-        workspace_column = workspace_column.push(banner_container);
-    }
-
-    workspace_column = workspace_column.push(editor).push(footer);
-
-    container(workspace_column.spacing(24).padding(32))
-        .width(Length::Fill)
-        .into()
+    container(
+        column![preview_header, editor, footer]
+            .spacing(24)
+            .padding(32),
+    )
+    .width(Length::Fill)
+    .into()
 }
 
 fn view_tab_button<'a>(
