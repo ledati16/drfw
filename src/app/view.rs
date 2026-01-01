@@ -143,7 +143,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .height(Length::Fill)
         .style(move |_| main_container(theme));
 
-    // Banner overlay layer (free-floating at top-right)
+    // Modal overlay layer (fades base content)
+    let with_overlay = if let Some(overlay) = overlay {
+        stack![base, overlay].into()
+    } else {
+        base.into()
+    };
+
+    // Banner overlay layer (free-floating at top-right, ABOVE modal backdrop)
     let with_banners: Element<'_, Message> = if !state.banners.is_empty() {
         let banner_column = column(
             state
@@ -158,7 +165,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .padding(16);
 
         stack![
-            base,
+            with_overlay,
             container(banner_column)
                 .width(Length::Fill)
                 .height(Length::Shrink)
@@ -167,19 +174,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        base.into()
+        with_overlay
     };
 
-    let with_overlay = if let Some(overlay) = overlay {
-        stack![with_banners, overlay].into()
-    } else {
-        with_banners
-    };
-
-    // Diagnostics modal overlay
+    // Diagnostics modal overlay (on top of everything)
     let with_diagnostics = if state.show_diagnostics {
         stack![
-            with_overlay,
+            with_banners,
             container(view_diagnostics_modal(
                 theme,
                 state.font_regular,
@@ -193,7 +194,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_overlay
+        with_banners
     };
 
     // Export modal overlay
