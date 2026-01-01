@@ -1430,25 +1430,27 @@ fn view_rule_form<'a>(
             if form.show_advanced {
                 column![
                     // Destination IP
-                    column![
-                        container(
-                            text("DESTINATION ADDRESS (OPTIONAL)")
-                                .size(10)
-                                .color(theme.fg_muted)
-                        )
-                        .padding([2, 6])
-                        .style(move |_| section_header_container(theme)),
-                        text_input("e.g. 192.168.1.0/24 or specific IP", &form.destination)
-                            .on_input(Message::RuleFormDestinationChanged)
-                            .padding(8)
-                            .style(move |_, status| themed_text_input(theme, status)),
+                    {
+                        let mut dest_col = column![
+                            container(
+                                text("DESTINATION ADDRESS (OPTIONAL)")
+                                    .size(10)
+                                    .color(theme.fg_muted)
+                            )
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
+                            text_input("e.g. 192.168.1.0/24 or specific IP", &form.destination)
+                                .on_input(Message::RuleFormDestinationChanged)
+                                .padding(8)
+                                .style(move |_, status| themed_text_input(theme, status)),
+                        ]
+                        .spacing(4);
+
                         if let Some(err) = destination_error {
-                            Element::from(text(err).size(11).color(theme.danger))
-                        } else {
-                            Element::from(text(""))
-                        },
-                    ]
-                    .spacing(4),
+                            dest_col = dest_col.push(text(err).size(11).color(theme.danger));
+                        }
+                        dest_col
+                    },
                     // Action
                     column![
                         container(text("ACTION").size(10).color(theme.fg_muted))
@@ -1470,85 +1472,89 @@ fn view_rule_form<'a>(
                     ]
                     .spacing(4),
                     // Rate Limiting
-                    column![
-                        row![
-                            checkbox(form.rate_limit_enabled)
-                                .label("Enable Rate Limiting")
-                                .on_toggle(Message::RuleFormToggleRateLimit)
-                                .size(16)
-                                .spacing(8)
-                                .text_size(12)
-                                .style(move |_, status| themed_checkbox(theme, status)),
-                        ],
-                        if form.rate_limit_enabled {
+                    {
+                        let mut rate_limit_col = column![
                             row![
-                                column![
-                                    container(text("COUNT").size(10).color(theme.fg_muted))
-                                        .padding([2, 6])
-                                        .style(move |_| section_header_container(theme)),
-                                    text_input("e.g. 5", &form.rate_limit_count)
-                                        .on_input(Message::RuleFormRateLimitCountChanged)
+                                checkbox(form.rate_limit_enabled)
+                                    .label("Enable Rate Limiting")
+                                    .on_toggle(Message::RuleFormToggleRateLimit)
+                                    .size(16)
+                                    .spacing(8)
+                                    .text_size(12)
+                                    .style(move |_, status| themed_checkbox(theme, status)),
+                            ],
+                            if form.rate_limit_enabled {
+                                row![
+                                    column![
+                                        container(text("COUNT").size(10).color(theme.fg_muted))
+                                            .padding([2, 6])
+                                            .style(move |_| section_header_container(theme)),
+                                        text_input("e.g. 5", &form.rate_limit_count)
+                                            .on_input(Message::RuleFormRateLimitCountChanged)
+                                            .padding(8)
+                                            .style(move |_, status| themed_text_input(theme, status)),
+                                    ]
+                                    .spacing(4)
+                                    .width(Length::Fill),
+                                    column![
+                                        container(text("PER").size(10).color(theme.fg_muted))
+                                            .padding([2, 6])
+                                            .style(move |_| section_header_container(theme)),
+                                        pick_list(
+                                            vec![
+                                                crate::core::firewall::TimeUnit::Second,
+                                                crate::core::firewall::TimeUnit::Minute,
+                                                crate::core::firewall::TimeUnit::Hour,
+                                                crate::core::firewall::TimeUnit::Day,
+                                            ],
+                                            Some(form.rate_limit_unit),
+                                            Message::RuleFormRateLimitUnitChanged
+                                        )
+                                        .width(Length::Fill)
                                         .padding(8)
-                                        .style(move |_, status| themed_text_input(theme, status)),
+                                        .style(move |_, status| themed_pick_list(theme, status))
+                                        .menu_style(move |_| themed_pick_list_menu(theme))
+                                    ]
+                                    .spacing(4)
+                                    .width(Length::Fill),
                                 ]
-                                .spacing(4)
-                                .width(Length::Fill),
-                                column![
-                                    container(text("PER").size(10).color(theme.fg_muted))
-                                        .padding([2, 6])
-                                        .style(move |_| section_header_container(theme)),
-                                    pick_list(
-                                        vec![
-                                            crate::core::firewall::TimeUnit::Second,
-                                            crate::core::firewall::TimeUnit::Minute,
-                                            crate::core::firewall::TimeUnit::Hour,
-                                            crate::core::firewall::TimeUnit::Day,
-                                        ],
-                                        Some(form.rate_limit_unit),
-                                        Message::RuleFormRateLimitUnitChanged
-                                    )
-                                    .width(Length::Fill)
-                                    .padding(8)
-                                    .style(move |_, status| themed_pick_list(theme, status))
-                                    .menu_style(move |_| themed_pick_list_menu(theme))
-                                ]
-                                .spacing(4)
-                                .width(Length::Fill),
-                            ]
-                            .spacing(8)
-                        } else {
-                            row![]
-                        },
+                                .spacing(8)
+                            } else {
+                                row![]
+                            },
+                        ]
+                        .spacing(4);
+
                         if let Some(err) = rate_limit_error {
-                            Element::from(text(err).size(11).color(theme.danger))
-                        } else {
-                            Element::from(text(""))
+                            rate_limit_col = rate_limit_col.push(text(err).size(11).color(theme.danger));
                         }
-                    ]
-                    .spacing(4),
+                        rate_limit_col
+                    },
                     // Connection Limiting
-                    column![
-                        container(
-                            text("CONNECTION LIMIT (OPTIONAL)")
-                                .size(10)
-                                .color(theme.fg_muted)
-                        )
-                        .padding([2, 6])
-                        .style(move |_| section_header_container(theme)),
-                        text_input(
-                            "Max simultaneous connections (0 = unlimited)",
-                            &form.connection_limit
-                        )
-                        .on_input(Message::RuleFormConnectionLimitChanged)
-                        .padding(8)
-                        .style(move |_, status| themed_text_input(theme, status)),
+                    {
+                        let mut conn_col = column![
+                            container(
+                                text("CONNECTION LIMIT (OPTIONAL)")
+                                    .size(10)
+                                    .color(theme.fg_muted)
+                            )
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
+                            text_input(
+                                "Max simultaneous connections (0 = unlimited)",
+                                &form.connection_limit
+                            )
+                            .on_input(Message::RuleFormConnectionLimitChanged)
+                            .padding(8)
+                            .style(move |_, status| themed_text_input(theme, status)),
+                        ]
+                        .spacing(4);
+
                         if let Some(err) = connection_limit_error {
-                            Element::from(text(err).size(11).color(theme.danger))
-                        } else {
-                            Element::from(text(""))
+                            conn_col = conn_col.push(text(err).size(11).color(theme.danger));
                         }
-                    ]
-                    .spacing(4),
+                        conn_col
+                    },
                 ]
                 .spacing(6)
             } else {
