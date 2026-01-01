@@ -1535,21 +1535,17 @@ impl State {
         let filename = format!("drfw_rules_{timestamp}.json");
         Task::perform(
             async move {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                let downloads_path = std::path::PathBuf::from(&home)
-                    .join("Downloads")
-                    .join(&filename);
-                let path = if downloads_path.parent().is_some_and(std::path::Path::exists) {
-                    downloads_path
-                } else {
-                    crate::utils::get_data_dir().map_or_else(
-                        || std::path::PathBuf::from(&filename),
-                        |mut p| {
+                // Use native file dialog for better UX
+                let path = crate::utils::pick_save_path(&filename, "json")
+                    .or_else(|| {
+                        // Fallback if user cancels dialog
+                        crate::utils::get_data_dir().map(|mut p| {
                             p.push(&filename);
                             p
-                        },
-                    )
-                };
+                        })
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from(&filename));
+
                 std::fs::write(&path, json)
                     .map(|()| path.to_string_lossy().to_string())
                     .map_err(|e| format!("Failed to export JSON: {e}"))
@@ -1564,21 +1560,17 @@ impl State {
         let filename = format!("drfw_rules_{timestamp}.nft");
         Task::perform(
             async move {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                let downloads_path = std::path::PathBuf::from(&home)
-                    .join("Downloads")
-                    .join(&filename);
-                let path = if downloads_path.parent().is_some_and(std::path::Path::exists) {
-                    downloads_path
-                } else {
-                    crate::utils::get_data_dir().map_or_else(
-                        || std::path::PathBuf::from(&filename),
-                        |mut p| {
+                // Use native file dialog for better UX
+                let path = crate::utils::pick_save_path(&filename, "nft")
+                    .or_else(|| {
+                        // Fallback if user cancels dialog
+                        crate::utils::get_data_dir().map(|mut p| {
                             p.push(&filename);
                             p
-                        },
-                    )
-                };
+                        })
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from(&filename));
+
                 std::fs::write(&path, nft_text)
                     .map(|()| path.to_string_lossy().to_string())
                     .map_err(|e| format!("Failed to export nftables text: {e}"))

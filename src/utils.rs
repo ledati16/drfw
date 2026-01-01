@@ -82,6 +82,33 @@ pub fn list_interfaces() -> Vec<String> {
     interfaces
 }
 
+/// Opens a native save file dialog
+///
+/// Returns the chosen path, or `None` if user cancelled the dialog.
+///
+/// # Arguments
+///
+/// * `default_name` - Default filename to suggest
+/// * `extension` - File extension (e.g., "json", "nft")
+///
+/// # Example
+///
+/// ```no_run
+/// use drfw::utils::pick_save_path;
+///
+/// if let Some(path) = pick_save_path("rules.json", "json") {
+///     // User selected a path
+/// } else {
+///     // User cancelled dialog
+/// }
+/// ```
+pub fn pick_save_path(default_name: &str, extension: &str) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_file_name(default_name)
+        .add_filter(extension, &[extension])
+        .save_file()
+}
+
 /// Truncates a string to a maximum length and adds an ellipsis if needed
 #[allow(dead_code)]
 pub fn truncate_string(s: &str, max_len: usize) -> String {
