@@ -60,20 +60,28 @@ use uuid::Uuid;
 /// Supports common protocols used in nftables filtering.
 /// `Copy` trait allows efficient passing by value for this small enum.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum Protocol {
     /// Match all protocols
+    #[strum(serialize = "any")]
     Any,
     /// Transmission Control Protocol
+    #[strum(serialize = "tcp")]
     Tcp,
     /// User Datagram Protocol
+    #[strum(serialize = "udp")]
     Udp,
     /// Both TCP and UDP (common for services like DNS, VPNs, game servers)
+    #[strum(serialize = "tcp+udp")]
     TcpAndUdp,
     /// Internet Control Message Protocol (IPv4)
+    #[strum(serialize = "icmp")]
     Icmp,
     /// Internet Control Message Protocol version 6
+    #[strum(serialize = "icmpv6")]
     Icmpv6,
     /// Both ICMP and `ICMPv6` (dual-stack support, recommended default)
+    #[strum(serialize = "icmp (both)")]
     IcmpBoth,
 }
 
@@ -101,20 +109,6 @@ impl Protocol {
             Protocol::Icmp => "ICMP (v4)",
             Protocol::Icmpv6 => "ICMPv6",
             Protocol::IcmpBoth => "ICMP (Both)",
-        }
-    }
-}
-
-impl fmt::Display for Protocol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Protocol::Any => write!(f, "any"),
-            Protocol::Tcp => write!(f, "tcp"),
-            Protocol::Udp => write!(f, "udp"),
-            Protocol::TcpAndUdp => write!(f, "tcp+udp"),
-            Protocol::Icmp => write!(f, "icmp"),
-            Protocol::Icmpv6 => write!(f, "icmpv6"),
-            Protocol::IcmpBoth => write!(f, "icmp (both)"),
         }
     }
 }
