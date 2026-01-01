@@ -1261,6 +1261,9 @@ fn view_rule_form<'a>(
     };
     let port_error = errors.and_then(|e| e.port.as_ref());
     let source_error = errors.and_then(|e| e.source.as_ref());
+    let rate_limit_error = errors.and_then(|e| e.rate_limit.as_ref());
+    let connection_limit_error = errors.and_then(|e| e.connection_limit.as_ref());
+    let warnings = errors.map(|e| &e.warnings).filter(|w| !w.is_empty());
     // Issue #4: Use pre-cached interface list with "Any" - no allocation!
     let iface_options = interfaces;
 
@@ -1505,6 +1508,11 @@ fn view_rule_form<'a>(
                             .spacing(8)
                         } else {
                             row![]
+                        },
+                        if let Some(err) = rate_limit_error {
+                            Element::from(text(err).size(11).color(theme.danger))
+                        } else {
+                            Element::from(text(""))
                         }
                     ]
                     .spacing(4),
@@ -1524,6 +1532,11 @@ fn view_rule_form<'a>(
                         .on_input(Message::RuleFormConnectionLimitChanged)
                         .padding(8)
                         .style(move |_, status| themed_text_input(theme, status)),
+                        if let Some(err) = connection_limit_error {
+                            Element::from(text(err).size(11).color(theme.danger))
+                        } else {
+                            Element::from(text(""))
+                        }
                     ]
                     .spacing(4),
                 ]
@@ -1585,6 +1598,45 @@ fn view_rule_form<'a>(
                 ));
             }
             org_col
+        },
+        // Warnings Section (informational only, doesn't block save)
+        if let Some(warn_list) = warnings {
+            let warning_color = theme.warning;
+            container(
+                column(
+                    warn_list
+                        .iter()
+                        .map(|w| {
+                            row![
+                                text("⚠").size(14).color(warning_color),
+                                text(w).size(12).color(warning_color)
+                            ]
+                            .spacing(8)
+                            .into()
+                        })
+                        .collect::<Vec<Element<'_, Message>>>(),
+                )
+                .spacing(4),
+            )
+            .padding(12)
+            .style(move |_| container::Style {
+                background: Some(
+                    iced::Color {
+                        a: 0.1,
+                        ..warning_color
+                    }
+                    .into(),
+                ),
+                border: iced::Border {
+                    color: warning_color,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+        } else {
+            Element::from(text(""))
         },
         // Footer Actions
         row![

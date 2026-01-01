@@ -233,6 +233,9 @@ pub struct FormErrors {
     pub port: Option<String>,
     pub source: Option<String>,
     pub interface: Option<String>,
+    pub rate_limit: Option<String>,
+    pub connection_limit: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -345,6 +348,59 @@ impl RuleForm {
         {
             errors.interface = Some(msg);
             has_errors = true;
+        }
+
+        // Validate rate limit if enabled
+        if self.rate_limit_enabled {
+            if let Ok(count) = self.rate_limit_count.parse::<u32>() {
+                match crate::validators::validate_rate_limit(count, self.rate_limit_unit) {
+                    Err(msg) => {
+                        errors.rate_limit = Some(msg);
+                        has_errors = true;
+                    }
+                    Ok(Some(warning)) => {
+                        errors.warnings.push(warning);
+                    }
+                    Ok(None) => {}
+                }
+            } else if !self.rate_limit_count.is_empty() {
+                errors.rate_limit = Some("Invalid rate limit number".to_string());
+                has_errors = true;
+            }
+        }
+
+        // Validate connection limit if present
+        if !self.connection_limit.is_empty() {
+            if let Ok(limit) = self.connection_limit.parse::<u32>() {
+                match crate::validators::validate_connection_limit(limit) {
+                    Err(msg) => {
+                        errors.connection_limit = Some(msg);
+                        has_errors = true;
+                    }
+                    Ok(Some(warning)) => {
+                        errors.warnings.push(warning);
+                    }
+                    Ok(None) => {}
+                }
+            } else {
+                errors.connection_limit = Some("Invalid connection limit number".to_string());
+                has_errors = true;
+            }
+        }
+
+        // Add informational warnings for well-known ports
+        if let Some(ref range) = ports
+            && let Some(warning) = crate::validators::check_well_known_port(range.start)
+        {
+            errors.warnings.push(warning);
+            // Don't spam warnings if it's a range - only check start port
+        }
+
+        // Add informational warnings for reserved IP ranges
+        if let Some(ip) = source
+            && let Some(warning) = crate::validators::check_reserved_ip(ip)
+        {
+            errors.warnings.push(warning);
         }
 
         if has_errors {

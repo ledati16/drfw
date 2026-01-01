@@ -130,7 +130,6 @@ pub fn validate_interface(name: &str) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns `Err` if rate exceeds reasonable maximum for the given time unit.
-#[allow(dead_code)]
 pub fn validate_rate_limit(
     count: u32,
     unit: crate::core::firewall::TimeUnit,
@@ -168,7 +167,6 @@ pub fn validate_rate_limit(
 /// # Errors
 ///
 /// Returns `Err` if limit exceeds kernel maximum (65535).
-#[allow(dead_code)]
 pub fn validate_connection_limit(limit: u32) -> Result<Option<String>, String> {
     if limit == 0 {
         return Ok(None); // 0 = disabled
@@ -279,7 +277,6 @@ pub fn validate_log_prefix(prefix: &str) -> Result<String, String> {
 /// Checks if a port is well-known and returns informational message.
 ///
 /// This is informational only and does not block saving.
-#[allow(dead_code)]
 pub fn check_well_known_port(port: u16) -> Option<String> {
     if port <= 1024 {
         let name = match port {
@@ -302,7 +299,6 @@ pub fn check_well_known_port(port: u16) -> Option<String> {
 ///
 /// This is informational only and does not block saving.
 /// Helps users understand if they're targeting private/special ranges.
-#[allow(dead_code)]
 pub fn check_reserved_ip(ip: ipnetwork::IpNetwork) -> Option<String> {
     use std::net::IpAddr;
 
