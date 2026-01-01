@@ -1481,16 +1481,18 @@ fn view_rule_form<'a>(
                     // Rate Limiting
                     {
                         let mut rate_limit_col = column![
-                            row![
-                                checkbox(form.rate_limit_enabled)
-                                    .label("Enable Rate Limiting")
-                                    .on_toggle(Message::RuleFormToggleRateLimit)
-                                    .size(16)
-                                    .spacing(8)
-                                    .text_size(12)
-                                    .style(move |_, status| themed_checkbox(theme, status)),
-                            ],
-                            if form.rate_limit_enabled {
+                            checkbox(form.rate_limit_enabled)
+                                .label("Enable Rate Limiting")
+                                .on_toggle(Message::RuleFormToggleRateLimit)
+                                .size(16)
+                                .spacing(8)
+                                .text_size(12)
+                                .style(move |_, status| themed_checkbox(theme, status)),
+                        ]
+                        .spacing(4);
+
+                        if form.rate_limit_enabled {
+                            rate_limit_col = rate_limit_col.push(
                                 row![
                                     column![
                                         container(text("COUNT").size(10).color(theme.fg_muted))
@@ -1526,11 +1528,8 @@ fn view_rule_form<'a>(
                                     .width(Length::Fill),
                                 ]
                                 .spacing(8)
-                            } else {
-                                row![]
-                            },
-                        ]
-                        .spacing(4);
+                            );
+                        }
 
                         if let Some(err) = rate_limit_error {
                             rate_limit_col = rate_limit_col.push(text(err).size(11).color(theme.danger));
@@ -1619,10 +1618,10 @@ fn view_rule_form<'a>(
                                 )
                                 .into()
                             }))
-                            .spacing(8)
+                            .spacing(6)
                             .wrap(),
                         )
-                        .height(140) // Max height ~4-5 rows of tags
+                        .height(60) // Max height ~2 rows of tags
                     ]
                 );
             }
