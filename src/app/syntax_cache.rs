@@ -65,6 +65,93 @@ enum JsonToken {
     Null,
 }
 
+/// Nftables lexer tokens (declarative DFA-based lexing via logos)
+#[derive(Logos, Debug, Clone, Copy, PartialEq)]
+#[logos(skip r"[ \t]+")]  // Skip whitespace
+enum NftToken {
+    // Keywords (grouped logically for readability)
+    #[token("table")] Table,
+    #[token("chain")] Chain,
+    #[token("rule")] Rule,
+    #[token("add")] Add,
+    #[token("delete")] Delete,
+    #[token("flush")] Flush,
+    #[token("list")] List,
+
+    #[token("inet")] Inet,
+    #[token("ip")] Ip,
+    #[token("ip6")] Ip6,
+
+    #[token("filter")] Filter,
+    #[token("nat")] Nat,
+    #[token("route")] Route,
+
+    #[token("input")] Input,
+    #[token("forward")] Forward,
+    #[token("output")] Output,
+    #[token("prerouting")] Prerouting,
+    #[token("postrouting")] Postrouting,
+
+    #[token("accept")] Accept,
+    #[token("drop")] Drop,
+    #[token("reject")] Reject,
+    #[token("queue")] Queue,
+    #[token("continue")] Continue,
+    #[token("return")] Return,
+    #[token("jump")] Jump,
+    #[token("goto")] Goto,
+
+    #[token("ct")] Ct,
+    #[token("state")] State,
+    #[token("established")] Established,
+    #[token("related")] Related,
+    #[token("invalid")] Invalid,
+    #[token("new")] New,
+
+    #[token("comment")] Comment,
+    #[token("iifname")] Iifname,
+    #[token("oifname")] Oifname,
+    #[token("meta")] Meta,
+    #[token("l4proto")] L4proto,
+
+    #[token("tcp")] Tcp,
+    #[token("udp")] Udp,
+    #[token("icmp")] Icmp,
+
+    #[token("dport")] Dport,
+    #[token("sport")] Sport,
+    #[token("saddr")] Saddr,
+    #[token("daddr")] Daddr,
+
+    #[token("type")] Type,
+    #[token("hook")] Hook,
+    #[token("priority")] Priority,
+    #[token("policy")] Policy,
+
+    // Strings and numbers
+    #[regex(r#""([^"\\]|\\.)*""#)]
+    String,
+
+    #[regex(r"\d+")]
+    Number,
+
+    // Comments
+    #[regex(r"#[^\n]*")]
+    CommentText,
+
+    // Structural tokens
+    #[token("{")]
+    LBrace,
+    #[token("}")]
+    RBrace,
+    #[token(";")]
+    Semicolon,
+
+    // Identifiers (interface names, etc.)
+    #[regex(r"[a-zA-Z_][a-zA-Z0-9_\-\.]*")]
+    Identifier,
+}
+
 /// Diff line type (for background coloring in diff view)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffType {
@@ -419,6 +506,87 @@ fn parse_nft_line(line: &str) -> Vec<Token> {
 }
 
 fn parse_nft_tokens(line: &str) -> Vec<Token> {
+    let mut tokens = Vec::with_capacity(AVG_NFT_TOKENS_PER_LINE);
+    let mut lex = NftToken::lexer(line);
+
+    while let Some(token_result) = lex.next() {
+        let Ok(token) = token_result else {
+            // Skip invalid tokens
+            continue;
+        };
+
+        let span = lex.span();
+        let text = &line[span];
+
+        use NftToken::*;
+        match token {
+            // Keywords - use owned strings since text is a slice
+            Table | Chain | Rule | Add | Delete | Flush | List |
+            Inet | Ip | Ip6 |
+            Filter | Nat | Route |
+            Input | Forward | Output | Prerouting | Postrouting |
+            Accept | Drop | Reject | Queue | Continue | Return | Jump | Goto |
+            Ct | State | Established | Related | Invalid | New |
+            Comment | Iifname | Oifname | Meta | L4proto |
+            Tcp | Udp | Icmp |
+            Dport | Sport | Saddr | Daddr |
+            Type | Hook | Priority | Policy => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Keyword,
+                });
+            }
+            String => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::String,
+                });
+            }
+            Number => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Number,
+                });
+            }
+            CommentText => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Comment,
+                });
+            }
+            LBrace => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("{"),
+                    color: TokenColor::Primary,
+                });
+            }
+            RBrace => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("}"),
+                    color: TokenColor::Primary,
+                });
+            }
+            Semicolon => {
+                tokens.push(Token {
+                    text: Cow::Borrowed(";"),
+                    color: TokenColor::Primary,
+                });
+            }
+            Identifier => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Primary,
+                });
+            }
+        }
+    }
+
+    tokens
+}
+
+// Old manual implementation - will be removed in cleanup
+#[allow(dead_code)]
+fn parse_nft_tokens_old(line: &str) -> Vec<Token> {
     let keywords = [
         "table",
         "chain",
