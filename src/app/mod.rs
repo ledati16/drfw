@@ -671,6 +671,15 @@ impl State {
         all_tags.sort_unstable();
         self.cached_all_tags = all_tags.into_iter().map(Arc::new).collect();
 
+        // Reset tag filter if the currently selected tag no longer exists
+        if let Some(ref current_filter) = self.filter_tag
+            && !self.cached_all_tags.iter().any(|t| t.as_ref() == current_filter.as_ref())
+        {
+            self.filter_tag = None;
+            self.rule_search.clear();
+            self.rule_search_lowercase.clear();
+        }
+
         self.update_filter_cache();
     }
 
