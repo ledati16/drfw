@@ -1041,3 +1041,45 @@ pub fn themed_scrollable(theme: &AppTheme, status: scrollable::Status) -> scroll
         }
     }
 }
+
+/// Renders an in-app notification banner
+///
+/// Banners appear at the top of the content area with appropriate coloring based on severity.
+/// Uses shadow for depth and semantic colors from the theme.
+pub fn notification_banner<'a, Message: 'a>(
+    banner: &'a crate::app::NotificationBanner,
+    theme: &'a crate::theme::AppTheme,
+) -> iced::Element<'a, Message> {
+    use iced::widget::{container, row, text};
+    use iced::{Background, Border, Shadow};
+
+    // Determine colors based on severity
+    let (bg_color, fg_color, icon) = match banner.severity {
+        crate::app::BannerSeverity::Success => (theme.success, theme.fg_on_accent, "✓"),
+        crate::app::BannerSeverity::Info => (theme.info, theme.fg_on_accent, "ℹ"),
+        crate::app::BannerSeverity::Warning => (theme.warning, theme.fg_on_accent, "⚠"),
+    };
+
+    let content = row![
+        text(icon).size(16).color(fg_color),
+        text(&banner.message).size(14).color(fg_color),
+    ]
+    .spacing(12)
+    .padding([8, 16]);
+
+    container(content)
+        .style(move |_theme| container::Style {
+            background: Some(Background::Color(bg_color)),
+            border: Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            shadow: Shadow {
+                color: theme.shadow_color,
+                offset: iced::Vector::new(0.0, 2.0),
+                blur_radius: 8.0,
+            },
+            ..Default::default()
+        })
+        .into()
+}

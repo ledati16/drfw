@@ -1,9 +1,10 @@
 use crate::app::ui_components::{
     active_card_button, active_card_container, active_tab_button, card_button, card_container,
     danger_button, dirty_button, inactive_tab_button, main_container, modal_backdrop,
-    popup_container, primary_button, secondary_button, section_header_container, sidebar_container,
-    themed_checkbox, themed_horizontal_rule, themed_pick_list, themed_pick_list_menu,
-    themed_scrollable, themed_slider, themed_text_input, themed_toggler,
+    notification_banner, popup_container, primary_button, secondary_button,
+    section_header_container, sidebar_container, themed_checkbox, themed_horizontal_rule,
+    themed_pick_list, themed_pick_list_menu, themed_scrollable, themed_slider,
+    themed_text_input, themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, ProfileManagerState, RuleForm, State,
@@ -1108,13 +1109,26 @@ fn view_workspace<'a>(
     .spacing(16)
     .align_y(Alignment::Center);
 
-    container(
-        column![preview_header, editor, footer]
-            .spacing(24)
-            .padding(32),
-    )
-    .width(Length::Fill)
-    .into()
+    // Render notification banners (max 2 visible)
+    let mut workspace_column = column![preview_header];
+
+    if !state.banners.is_empty() {
+        let banner_container = column(
+            state.banners.iter().take(2).map(|banner| {
+                notification_banner(banner, theme)
+            }).collect::<Vec<_>>()
+        )
+        .spacing(8)
+        .width(Length::Fill);
+
+        workspace_column = workspace_column.push(banner_container);
+    }
+
+    workspace_column = workspace_column.push(editor).push(footer);
+
+    container(workspace_column.spacing(24).padding(32))
+        .width(Length::Fill)
+        .into()
 }
 
 fn view_tab_button<'a>(

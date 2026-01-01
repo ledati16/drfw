@@ -76,11 +76,41 @@ pub fn fuzzy_filter_themes(
     results
 }
 
+/// In-app notification banner severity levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BannerSeverity {
+    Success, // Green - positive outcomes (confirmed, exported)
+    Info,    // Blue/Cyan - neutral information (applied)
+    Warning, // Yellow/Orange - attention needed (auto-revert, warnings)
+}
+
+/// In-app notification banner
+#[derive(Debug, Clone)]
+pub struct NotificationBanner {
+    pub message: String,
+    pub severity: BannerSeverity,
+    pub created_at: std::time::SystemTime,
+    pub duration_secs: u64,
+}
+
+impl NotificationBanner {
+    /// Check if banner should be dismissed based on elapsed time
+    pub fn is_expired(&self) -> bool {
+        if let Ok(elapsed) = self.created_at.elapsed() {
+            elapsed.as_secs() >= self.duration_secs
+        } else {
+            // If SystemTime went backwards (rare), keep banner visible
+            false
+        }
+    }
+}
+
 pub struct State {
     pub ruleset: FirewallRuleset,
     pub last_applied_ruleset: Option<FirewallRuleset>,
     pub status: AppStatus,
     pub last_error: Option<ErrorInfo>,
+    pub banners: std::collections::VecDeque<NotificationBanner>,
     pub active_tab: WorkspaceTab,
     pub rule_form: Option<RuleForm>,
     pub countdown_remaining: u32,
@@ -501,6 +531,8 @@ pub enum Message {
     DiscardProfileSwitch,
     CancelProfileSwitch,
     ProfileListUpdated(Vec<String>),
+    /// Periodic tick to prune expired banners
+    PruneBanners,
     /// No-op message for async operations that don't need a result
     Noop,
 }
@@ -587,6 +619,7 @@ impl State {
             ruleset,
             status: AppStatus::Idle,
             last_error: None,
+            banners: std::collections::VecDeque::new(),
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
             countdown_remaining: 15,
@@ -632,6 +665,26 @@ impl State {
         state.update_cached_text();
 
         (state, Task::none())
+    }
+
+    /// Add a banner to the notification queue (max 2 visible)
+    pub fn push_banner(&mut self, message: impl Into<String>, severity: BannerSeverity, duration_secs: u64) {
+        // Remove oldest if at capacity
+        while self.banners.len() >= 2 {
+            self.banners.pop_front();
+        }
+
+        self.banners.push_back(NotificationBanner {
+            message: message.into(),
+            severity,
+            created_at: std::time::SystemTime::now(),
+            duration_secs,
+        });
+    }
+
+    /// Remove expired banners from the queue
+    pub fn prune_expired_banners(&mut self) {
+        self.banners.retain(|banner| !banner.is_expired());
     }
 
     fn update_cached_text(&mut self) {
@@ -892,24 +945,22 @@ impl State {
             Message::ConfirmClicked => {
                 if matches!(self.status, AppStatus::PendingConfirmation { .. }) {
                     self.status = AppStatus::Confirmed;
-                    let _ = notify_rust::Notification::new()
-                        .summary("✅ DRFW — Changes Confirmed")
-                        .body("Firewall rules have been saved and will persist.")
-                        .urgency(notify_rust::Urgency::Normal)
-                        .timeout(5000)
-                        .show();
+                    self.push_banner(
+                        "Firewall rules have been saved and will persist.",
+                        BannerSeverity::Success,
+                        5,
+                    );
                 }
             }
             Message::RevertClicked => return self.handle_revert_clicked(),
             Message::RevertResult(Ok(())) => {
                 self.status = AppStatus::Idle;
                 self.last_error = None;
-                let _ = notify_rust::Notification::new()
-                    .summary("↩️ DRFW — Rules Reverted")
-                    .body("Firewall rules have been restored to previous state.")
-                    .urgency(notify_rust::Urgency::Normal)
-                    .timeout(5000)
-                    .show();
+                self.push_banner(
+                    "Firewall rules have been restored to previous state.",
+                    BannerSeverity::Warning,
+                    5,
+                );
             }
             Message::CountdownTick => return self.handle_countdown_tick(),
             Message::TabChanged(tab) => self.active_tab = tab,
@@ -920,11 +971,11 @@ impl State {
             Message::ExportAsNft => return self.handle_export_nft(),
             Message::ExportResult(Ok(path)) => {
                 self.show_export_modal = false;
-                let _ = notify_rust::Notification::new()
-                    .summary("✅ DRFW — Export Successful")
-                    .body(&format!("Rules exported to: {path}"))
-                    .timeout(5000)
-                    .show();
+                self.push_banner(
+                    format!("Rules exported to: {path}"),
+                    BannerSeverity::Success,
+                    5,
+                );
             }
             Message::ExportResult(Err(e)) => {
                 self.show_export_modal = false;
@@ -1409,6 +1460,9 @@ impl State {
             Message::CancelProfileSwitch => {
                 self.pending_profile_switch = None;
             }
+            Message::PruneBanners => {
+                self.prune_expired_banners();
+            }
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
@@ -1684,11 +1738,11 @@ impl State {
             snapshot,
         };
         self.last_error = None;
-        let _ = notify_rust::Notification::new()
-            .summary("DRFW — Firewall Changes Applied")
-            .body("Changes will be automatically reverted in 15 seconds if not confirmed.")
-            .timeout(15000)
-            .show();
+        self.push_banner(
+            "Firewall rules applied! Changes will auto-revert in 15s if not confirmed.",
+            BannerSeverity::Info,
+            15,
+        );
     }
 
     fn handle_revert_clicked(&mut self) -> Task<Message> {
@@ -1725,12 +1779,11 @@ impl State {
                 let snapshot = snapshot.clone();
                 self.status = AppStatus::Reverting;
                 self.countdown_remaining = 0;
-                let _ = notify_rust::Notification::new()
-                    .summary("↩️ DRFW — Auto-Reverted")
-                    .body("Firewall rules automatically reverted due to timeout.")
-                    .urgency(notify_rust::Urgency::Normal)
-                    .timeout(10000)
-                    .show();
+                self.push_banner(
+                    "Firewall rules automatically reverted due to timeout.",
+                    BannerSeverity::Warning,
+                    10,
+                );
 
                 // Spawn revert task directly instead of going through RevertClicked message
                 return Task::perform(
@@ -1758,12 +1811,11 @@ impl State {
             if self.countdown_remaining != remaining {
                 self.countdown_remaining = remaining;
                 if remaining == 5 {
-                    let _ = notify_rust::Notification::new()
-                        .summary("⚠️ DRFW — Auto-Revert Warning")
-                        .body("Firewall will revert in 5 seconds! Click Confirm to keep changes.")
-                        .urgency(notify_rust::Urgency::Critical)
-                        .timeout(5000)
-                        .show();
+                    self.push_banner(
+                        "Firewall will revert in 5 seconds! Click Confirm to keep changes.",
+                        BannerSeverity::Warning,
+                        5,
+                    );
                 }
             }
         }
@@ -1964,6 +2016,12 @@ impl State {
                     iced::time::every(Duration::from_secs(1)).map(|_| Message::CountdownTick)
                 }
                 _ => iced::Subscription::none(),
+            },
+            // Prune expired banners every second
+            if !self.banners.is_empty() {
+                iced::time::every(Duration::from_secs(1)).map(|_| Message::PruneBanners)
+            } else {
+                iced::Subscription::none()
             },
         ])
     }
