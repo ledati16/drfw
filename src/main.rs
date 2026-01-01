@@ -70,28 +70,6 @@ enum ConfirmResult {
     Error(String),
 }
 
-/// Helper functions for colored CLI output
-fn print_success(msg: &str) {
-    let _ = stdout().execute(SetForegroundColor(Color::Green));
-    print!("{msg}");
-    let _ = stdout().execute(ResetColor);
-    println!();
-}
-
-fn print_error(msg: &str) {
-    let _ = stdout().execute(SetForegroundColor(Color::Red));
-    eprint!("{msg}");
-    let _ = stdout().execute(ResetColor);
-    eprintln!();
-}
-
-fn print_warning(msg: &str) {
-    let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-    print!("{msg}");
-    let _ = stdout().execute(ResetColor);
-    println!();
-}
-
 /// Interactive countdown with confirmation/revert controls
 ///
 /// Displays a countdown timer and polls for keypresses:
@@ -109,13 +87,12 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
 
     let result = async {
         for remaining in (1..=timeout_secs).rev() {
-            // Yellow countdown message
+            // Countdown with only the timer colored
+            print!("\rAuto-revert in ");
             let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-            print!(
-                "\rAuto-revert in {:3}s  [c/Enter=confirm, r=revert now]   ",
-                remaining
-            );
+            print!("{:2}s", remaining);
             let _ = stdout().execute(ResetColor);
+            print!("  [c/Enter=confirm, r=revert now]   ");
             std::io::stdout().flush().ok();
 
             // Poll for keypresses for 1 second
@@ -128,10 +105,7 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         print!("\r\x1b[K"); // Clear line
-                        let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-                        print!("Reverting...");
-                        let _ = stdout().execute(ResetColor);
-                        println!();
+                        println!("Reverting...");
                         match core::nft_json::restore_snapshot(snapshot).await {
                             Ok(()) => return ConfirmResult::Reverted,
                             Err(e) => return ConfirmResult::Error(format!("Revert failed: {e}")),
@@ -146,10 +120,7 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
 
         // Timeout expired - auto-revert
         print!("\r\x1b[K"); // Clear line
-        let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-        print!("Timeout - reverting...");
-        let _ = stdout().execute(ResetColor);
-        println!();
+        println!("Timeout - reverting...");
         match core::nft_json::restore_snapshot(snapshot).await {
             Ok(()) => ConfirmResult::Reverted,
             Err(e) => ConfirmResult::Error(format!("Auto-revert failed: {e}")),
@@ -246,9 +217,14 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             println!("Verifying profile '{name}'...");
             let verify_result = core::verify::verify_ruleset(nft_json.clone()).await?;
             if !verify_result.success {
-                print_error("✗ Verification failed:");
+                let _ = stdout().execute(SetForegroundColor(Color::Red));
+                eprint!("✗");
+                let _ = stdout().execute(ResetColor);
+                eprintln!(" Verification failed:");
                 for error in &verify_result.errors {
-                    print_error(&format!("  {error}"));
+                    let _ = stdout().execute(SetForegroundColor(Color::Red));
+                    eprintln!("  {error}");
+                    let _ = stdout().execute(ResetColor);
                 }
                 return Err("Verification failed".into());
             }
@@ -259,35 +235,54 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 println!("Note: Not running as root. Will use run0/sudo/pkexec for apply.");
             }
 
+            println!();
             println!("Applying ruleset...");
             let snapshot = core::nft_json::apply_with_snapshot(nft_json).await?;
             let _ = core::nft_json::save_snapshot_to_disk(&snapshot);
 
             if no_confirm {
                 // Skip auto-revert (power user mode)
-                print_success("✓ Rules applied permanently (no auto-revert).");
+                let _ = stdout().execute(SetForegroundColor(Color::Green));
+                print!("✓");
+                let _ = stdout().execute(ResetColor);
+                println!(" Rules applied permanently (no auto-revert).");
             } else {
                 // Safe by default: use auto-revert
                 let timeout_secs = confirm.clamp(5, 120);
 
-                print_success("✓ Firewall rules applied!");
+                let _ = stdout().execute(SetForegroundColor(Color::Green));
+                print!("✓");
+                let _ = stdout().execute(ResetColor);
+                println!(" Firewall rules applied!");
                 println!();
 
                 match countdown_confirmation(timeout_secs, &snapshot).await {
                     ConfirmResult::Confirmed => {
-                        println!(); // Clear line after countdown
-                        print_success("✓ Changes confirmed and saved.");
+                        println!();
+                        let _ = stdout().execute(SetForegroundColor(Color::Green));
+                        print!("✓");
+                        let _ = stdout().execute(ResetColor);
+                        println!(" Changes confirmed and saved.");
                     }
                     ConfirmResult::Reverted => {
-                        println!(); // Clear line after countdown
-                        print_warning("✓ Reverted to previous state.");
+                        println!();
+                        let _ = stdout().execute(SetForegroundColor(Color::Yellow));
+                        print!("✓");
+                        let _ = stdout().execute(ResetColor);
+                        println!(" Reverted to previous state.");
                     }
                     ConfirmResult::Error(e) => {
-                        println!(); // Clear line after countdown
-                        print_error(&format!("✗ Error during confirmation: {e}"));
+                        println!();
+                        let _ = stdout().execute(SetForegroundColor(Color::Red));
+                        print!("✗");
+                        let _ = stdout().execute(ResetColor);
+                        println!(" Error during confirmation: {e}");
                         println!("Attempting emergency revert...");
                         core::nft_json::restore_snapshot(&snapshot).await?;
-                        print_success("✓ Emergency revert complete.");
+                        let _ = stdout().execute(SetForegroundColor(Color::Green));
+                        print!("✓");
+                        let _ = stdout().execute(ResetColor);
+                        println!(" Emergency revert complete.");
                     }
                 }
             }
