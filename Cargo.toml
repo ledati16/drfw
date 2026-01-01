@@ -59,6 +59,8 @@ similar = "2"  # Diff algorithm for ruleset comparison (show changes)
 rfd = "0.15"  # Native OS file dialogs (save/export)
 network-interface = "2.0"  # Cross-platform network interface discovery
 logos = "0.14"  # Declarative lexer generator (compile-time DFA)
+strum = { version = "0.26", features = ["derive"] }  # Enum boilerplate elimination (Display, iter, etc.)
+palette = "0.7"  # Perceptual color manipulation (lighten/darken in Lab space)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Error Handling & Logging
