@@ -58,6 +58,7 @@ chrono = { version = "0.4", features = ["serde"] }  # Rule creation timestamps
 similar = "2"  # Diff algorithm for ruleset comparison (show changes)
 rfd = "0.15"  # Native OS file dialogs (save/export)
 network-interface = "2.0"  # Cross-platform network interface discovery
+logos = "0.14"  # Declarative lexer generator (compile-time DFA)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Error Handling & Logging
