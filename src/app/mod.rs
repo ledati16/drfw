@@ -8,8 +8,73 @@ use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Element, Task};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Fuzzy filter fonts with relevance scoring
+///
+/// Returns fonts sorted by match quality (best matches first).
+/// Empty query returns all fonts unsorted.
+pub fn fuzzy_filter_fonts<'a>(
+    fonts: impl Iterator<Item = &'a crate::fonts::FontChoice>,
+    query: &str,
+) -> Vec<(&'a crate::fonts::FontChoice, u16)> {
+    if query.is_empty() {
+        return fonts.map(|f| (f, 0)).collect();
+    }
+
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut needle_buf = Vec::new();
+    let needle = Utf32Str::new(query, &mut needle_buf);
+
+    let mut results: Vec<_> = fonts
+        .filter_map(|font| {
+            let mut haystack_buf = Vec::new();
+            let haystack = Utf32Str::new(font.name_lowercase(), &mut haystack_buf);
+            matcher
+                .fuzzy_match(haystack, needle)
+                .map(|score| (font, score))
+        })
+        .collect();
+
+    // Sort by score descending (highest relevance first)
+    results.sort_by(|a, b| b.1.cmp(&a.1));
+    results
+}
+
+/// Fuzzy filter themes with relevance scoring
+///
+/// Returns themes sorted by match quality (best matches first).
+/// Empty query returns all themes unsorted.
+pub fn fuzzy_filter_themes(
+    themes: impl Iterator<Item = crate::theme::ThemeChoice>,
+    query: &str,
+) -> Vec<(crate::theme::ThemeChoice, u16)> {
+    if query.is_empty() {
+        return themes.map(|t| (t, 0)).collect();
+    }
+
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let query_lowercase = query.to_lowercase();
+    let mut needle_buf = Vec::new();
+    let needle = Utf32Str::new(&query_lowercase, &mut needle_buf);
+
+    let mut results: Vec<_> = themes
+        .filter_map(|theme| {
+            let theme_name_lowercase = theme.name().to_lowercase();
+            let mut haystack_buf = Vec::new();
+            let haystack = Utf32Str::new(&theme_name_lowercase, &mut haystack_buf);
+            matcher
+                .fuzzy_match(haystack, needle)
+                .map(|score| (theme, score))
+        })
+        .collect();
+
+    // Sort by score descending (highest relevance first)
+    results.sort_by(|a, b| b.1.cmp(&a.1));
+    results
+}
 
 pub struct State {
     pub ruleset: FirewallRuleset,
@@ -65,8 +130,17 @@ pub struct FontPickerState {
     pub search_lowercase: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum FontPickerTarget {
     #[strum(serialize = "regular")]
     Regular,
@@ -82,8 +156,17 @@ pub struct ThemePickerState {
     pub original_theme: crate::theme::ThemeChoice,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum ThemeFilter {
     #[strum(serialize = "all")]
     All,
@@ -107,8 +190,18 @@ pub enum PendingWarning {
     EnableServerMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
 pub enum WorkspaceTab {
     #[default]
     #[strum(serialize = "nftables")]

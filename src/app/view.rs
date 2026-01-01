@@ -2271,22 +2271,20 @@ fn view_font_picker<'a>(
     picker: &'a crate::app::FontPickerState,
 ) -> Element<'a, Message> {
     let theme = &state.theme;
-    // Phase 1: Use cached lowercase search term (avoid allocation every frame)
+    // Phase 4: Use cached lowercase search term for fuzzy matching
     let search_term = &picker.search_lowercase;
 
-    // Phase 1: Filter by target (mono vs regular) AND search term
+    // Phase 4: Filter by target (mono vs regular) THEN fuzzy match
     let is_mono_picker = matches!(picker.target, crate::app::FontPickerTarget::Mono);
-    let filtered_fonts: Vec<_> = state
-        .available_fonts
-        .iter()
-        .filter(|f| {
-            // Filter monospace fonts for code font picker
-            if is_mono_picker && !f.is_monospace() {
-                return false;
-            }
-            // Search filter (use cached lowercase name - zero allocations!)
-            search_term.is_empty() || f.name_lowercase().contains(search_term)
-        })
+    let target_filtered = state.available_fonts.iter().filter(|f| {
+        // Filter monospace fonts for code font picker
+        !is_mono_picker || f.is_monospace()
+    });
+
+    // Phase 4: Apply fuzzy matching (returns fonts sorted by relevance)
+    let filtered_fonts: Vec<_> = crate::app::fuzzy_filter_fonts(target_filtered, search_term)
+        .into_iter()
+        .map(|(font, _score)| font) // Discard scores, just use sorted order
         .collect();
 
     // Track counts for display
@@ -2477,28 +2475,23 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
     let theme = &state.theme;
     let search_term = &picker.search_lowercase;
 
-    // Filter themes by search term and light/dark filter
+    // Phase 4: Filter by light/dark THEN fuzzy match
+    let filter_passed = crate::theme::ThemeChoice::iter().filter(|choice| {
+        let theme_instance = choice.to_theme();
+        match picker.filter {
+            ThemeFilter::All => true,
+            ThemeFilter::Light => theme_instance.is_light(),
+            ThemeFilter::Dark => !theme_instance.is_light(),
+        }
+    });
+
+    // Phase 4: Apply fuzzy matching (returns themes sorted by relevance)
     // Cache to_theme() results to avoid duplicate calls (performance optimization)
-    let filtered_themes: Vec<_> = crate::theme::ThemeChoice::iter()
-        .filter_map(|choice| {
-            let theme_instance = choice.to_theme();
-
-            // Filter by light/dark
-            let matches_filter = match picker.filter {
-                ThemeFilter::All => true,
-                ThemeFilter::Light => theme_instance.is_light(),
-                ThemeFilter::Dark => !theme_instance.is_light(),
-            };
-
-            // Filter by search (cached lowercase, ASCII-only for performance)
-            let matches_search =
-                search_term.is_empty() || choice.name().to_ascii_lowercase().contains(search_term);
-
-            if matches_filter && matches_search {
-                Some((choice, theme_instance))
-            } else {
-                None
-            }
+    let filtered_themes: Vec<_> = crate::app::fuzzy_filter_themes(filter_passed, search_term)
+        .into_iter()
+        .map(|(choice, _score)| {
+            // Cache theme instance to avoid duplicate to_theme() calls
+            (choice, choice.to_theme())
         })
         .collect();
 
@@ -2844,11 +2837,13 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             preview_panel,
             row![
                 container(
-                    text(if filtered_count < crate::theme::ThemeChoice::iter().count() {
-                        format!("{filtered_count} themes match")
-                    } else {
-                        format!("{filtered_count} themes available")
-                    })
+                    text(
+                        if filtered_count < crate::theme::ThemeChoice::iter().count() {
+                            format!("{filtered_count} themes match")
+                        } else {
+                            format!("{filtered_count} themes available")
+                        }
+                    )
                     .size(10)
                     .color(theme.fg_muted)
                     .font(state.font_mono)
