@@ -108,7 +108,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
     match command {
         Commands::List => {
             let profiles = core::profiles::list_profiles()?;
-            let config = config::load_config();
+            let config = config::load_config().await;
             println!("Available profiles (* = active):");
             for p in profiles {
                 if p == config.active_profile {
@@ -167,7 +167,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Commands::Status => {
-            let config = config::load_config();
+            let config = config::load_config().await;
             println!("Active profile: {}", config.active_profile);
             if let Ok(ruleset) = core::profiles::load_profile(&config.active_profile) {
                 println!("Rules: {}", ruleset.rules.len());

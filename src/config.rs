@@ -1,8 +1,6 @@
 use crate::core::profiles::DEFAULT_PROFILE_NAME;
 use crate::utils::get_data_dir;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::Write;
 
 /// Complete application configuration including UI settings and current profile
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +44,10 @@ fn default_true() -> bool {
 /// 1. Writes to a temporary file.
 /// 2. Sets restrictive permissions (0o600).
 /// 3. Atomically renames to the target path.
-pub fn save_config(config: &AppConfig) -> std::io::Result<()> {
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking I/O to avoid blocking the event loop.
+pub async fn save_config(config: &AppConfig) -> std::io::Result<()> {
     if let Some(mut path) = get_data_dir() {
         let json = serde_json::to_string_pretty(config)?;
 
@@ -59,41 +60,65 @@ pub fn save_config(config: &AppConfig) -> std::io::Result<()> {
         // race condition where file is briefly world-readable
         #[cfg(unix)]
         {
-            use std::fs::OpenOptions;
-            use std::os::unix::fs::OpenOptionsExt;
+            use tokio::fs::OpenOptions;
+            use tokio::io::AsyncWriteExt;
 
             let mut file = OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .mode(0o600) // Set permissions BEFORE any data is written
-                .open(&temp_path)?;
+                .open(&temp_path)
+                .await?;
 
-            file.write_all(json.as_bytes())?;
-            file.sync_all()?; // Ensure data is flushed to physical media
+            file.write_all(json.as_bytes()).await?;
+            file.sync_all().await?; // Ensure data is flushed to physical media
         }
 
         #[cfg(not(unix))]
         {
-            let mut file = fs::File::create(&temp_path)?;
-            file.write_all(json.as_bytes())?;
-            file.sync_all()?;
+            use tokio::io::AsyncWriteExt;
+
+            let mut file = tokio::fs::File::create(&temp_path).await?;
+            file.write_all(json.as_bytes()).await?;
+            file.sync_all().await?;
         }
 
         // Atomic rename
-        fs::rename(temp_path, path)?;
+        tokio::fs::rename(temp_path, path).await?;
     }
     Ok(())
 }
 
-pub fn load_config() -> AppConfig {
+/// Loads the app config from disk, or returns default if not found.
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking I/O to avoid blocking the event loop.
+pub async fn load_config() -> AppConfig {
     if let Some(mut path) = get_data_dir() {
         path.push("config.json");
-        if let Ok(config) = fs::read_to_string(&path).and_then(|json| {
-            serde_json::from_str::<AppConfig>(&json).map_err(std::io::Error::other)
-        }) {
+        if let Ok(json) = tokio::fs::read_to_string(&path).await
+            && let Ok(config) = serde_json::from_str::<AppConfig>(&json)
+        {
             return config;
         }
     }
     AppConfig::default()
+}
+
+/// Synchronous wrapper for `load_config()` for use during startup initialization.
+///
+/// This blocks the current thread and should only be used in `State::new()` where
+/// async initialization isn't possible. Everywhere else should use async `load_config()`.
+pub fn load_config_blocking() -> AppConfig {
+    // Use Handle::current() if available (we're in a Tokio context),
+    // otherwise create a temporary runtime
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(load_config())
+    } else {
+        // Fallback: create temporary runtime (shouldn't happen in practice)
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create runtime")
+            .block_on(load_config())
+    }
 }

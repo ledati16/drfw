@@ -455,6 +455,8 @@ pub enum Message {
     ConfirmProfileSwitch,
     DiscardProfileSwitch,
     CancelProfileSwitch,
+    /// No-op message for async operations that don't need a result
+    Noop,
 }
 
 impl State {
@@ -514,7 +516,7 @@ impl State {
     }
 
     pub fn new() -> (Self, Task<Message>) {
-        let config = crate::config::load_config();
+        let config = crate::config::load_config_blocking();
         let current_theme = config.theme_choice;
         let mut regular_font_choice = config.regular_font;
         let mut mono_font_choice = config.mono_font;
@@ -680,10 +682,16 @@ impl State {
             show_diff: self.show_diff,
             show_zebra_striping: self.show_zebra_striping,
         };
-        if let Err(e) = crate::config::save_config(&config) {
-            eprintln!("Failed to save configuration: {e}");
-        }
-        Task::none()
+
+        // Async save using Task::perform
+        Task::perform(
+            async move {
+                if let Err(e) = crate::config::save_config(&config).await {
+                    eprintln!("Failed to save configuration: {e}");
+                }
+            },
+            |()| Message::Noop,
+        )
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -1249,6 +1257,9 @@ impl State {
             }
             Message::CancelProfileSwitch => {
                 self.pending_profile_switch = None;
+            }
+            Message::Noop => {
+                // No-op for async operations that don't need handling
             }
         }
         Task::none()
