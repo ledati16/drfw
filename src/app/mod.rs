@@ -236,7 +236,6 @@ pub struct FormErrors {
     pub destination: Option<String>,
     pub rate_limit: Option<String>,
     pub connection_limit: Option<String>,
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -328,9 +327,6 @@ impl RuleForm {
             None
         } else if let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() {
             Some(ip)
-        } else if self.source.len() < 7 {
-            // Don't show error while user is still typing (minimum valid IP: "1.2.3.4" = 7 chars)
-            None
         } else {
             errors.source = Some("Invalid IP address or CIDR (e.g. 192.168.1.0/24)".to_string());
             has_errors = true;
@@ -357,9 +353,7 @@ impl RuleForm {
         // Validate destination IP (if provided in advanced settings)
         if !self.destination.is_empty()
             && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
-            && self.destination.len() >= 7
         {
-            // Only show error if they've typed enough characters
             errors.destination = Some("Invalid destination IP or CIDR (domains not supported)".to_string());
             has_errors = true;
         }
@@ -372,10 +366,7 @@ impl RuleForm {
                         errors.rate_limit = Some(msg);
                         has_errors = true;
                     }
-                    Ok(Some(warning)) => {
-                        errors.warnings.push(warning);
-                    }
-                    Ok(None) => {}
+                    Ok(_) => {} // Ignore warnings
                 }
             } else if !self.rate_limit_count.is_empty() {
                 errors.rate_limit = Some("Invalid rate limit number".to_string());
@@ -391,30 +382,12 @@ impl RuleForm {
                         errors.connection_limit = Some(msg);
                         has_errors = true;
                     }
-                    Ok(Some(warning)) => {
-                        errors.warnings.push(warning);
-                    }
-                    Ok(None) => {}
+                    Ok(_) => {} // Ignore warnings
                 }
             } else {
                 errors.connection_limit = Some("Invalid connection limit number".to_string());
                 has_errors = true;
             }
-        }
-
-        // Add informational warnings for well-known ports
-        if let Some(ref range) = ports
-            && let Some(warning) = crate::validators::check_well_known_port(range.start)
-        {
-            errors.warnings.push(warning);
-            // Don't spam warnings if it's a range - only check start port
-        }
-
-        // Add informational warnings for reserved IP ranges
-        if let Some(ip) = source
-            && let Some(warning) = crate::validators::check_reserved_ip(ip)
-        {
-            errors.warnings.push(warning);
         }
 
         if has_errors {
@@ -581,13 +554,6 @@ impl State {
         let content_width =
             LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
         content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
-    }
-
-    fn validate_form_realtime(&mut self) {
-        if let Some(form) = &self.rule_form {
-            let (_, _, errors) = form.validate();
-            self.form_errors = errors;
-        }
     }
 
     pub fn new() -> (Self, Task<Message>) {
@@ -835,31 +801,26 @@ impl State {
                 if let Some(f) = &mut self.rule_form {
                     f.protocol = p;
                 }
-                self.validate_form_realtime();
             }
             Message::RuleFormPortStartChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.port_start = s;
                 }
-                self.validate_form_realtime();
             }
             Message::RuleFormPortEndChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.port_end = s;
                 }
-                self.validate_form_realtime();
             }
             Message::RuleFormSourceChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.source = s;
                 }
-                self.validate_form_realtime();
             }
             Message::RuleFormInterfaceChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.interface = s;
                 }
-                self.validate_form_realtime();
             }
             Message::RuleFormChainChanged(chain) => {
                 if let Some(f) = &mut self.rule_form {

@@ -1269,7 +1269,6 @@ fn view_rule_form<'a>(
     let destination_error = errors.and_then(|e| e.destination.as_ref());
     let rate_limit_error = errors.and_then(|e| e.rate_limit.as_ref());
     let connection_limit_error = errors.and_then(|e| e.connection_limit.as_ref());
-    let warnings = errors.map(|e| &e.warnings).filter(|w| !w.is_empty());
     // Issue #4: Use pre-cached interface list with "Any" - no allocation!
     let iface_options = interfaces;
 
@@ -1610,45 +1609,6 @@ fn view_rule_form<'a>(
             }
             org_col
         },
-        // Warnings Section (informational only, doesn't block save)
-        if let Some(warn_list) = warnings {
-            let warning_color = theme.warning;
-            container(
-                column(
-                    warn_list
-                        .iter()
-                        .map(|w| {
-                            row![
-                                text("⚠").size(14).color(warning_color),
-                                text(w).size(12).color(warning_color)
-                            ]
-                            .spacing(8)
-                            .into()
-                        })
-                        .collect::<Vec<Element<'_, Message>>>(),
-                )
-                .spacing(4),
-            )
-            .padding(12)
-            .style(move |_| container::Style {
-                background: Some(
-                    iced::Color {
-                        a: 0.1,
-                        ..warning_color
-                    }
-                    .into(),
-                ),
-                border: iced::Border {
-                    color: warning_color,
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..Default::default()
-            })
-            .into()
-        } else {
-            Element::from(text(""))
-        },
         // Footer Actions
         row![
             button(text("Cancel").size(14))
@@ -1664,8 +1624,8 @@ fn view_rule_form<'a>(
         .spacing(16)
         .align_y(Alignment::Center)
     ]
-    .spacing(12)
-    .padding(32);
+    .spacing(8)
+    .padding(20);
     container(form_box)
         .max_width(520)
         .style(move |_| card_container(theme))
