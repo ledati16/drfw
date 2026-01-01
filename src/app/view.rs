@@ -1346,76 +1346,80 @@ fn view_rule_form<'a>(
         ]
         .spacing(6),
         // Context Section
-        column![
-            {
-                let mut source_col = column![
-                    container(
-                        text("SOURCE ADDRESS (OPTIONAL)")
-                            .size(10)
-                            .color(theme.fg_muted)
-                    )
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
-                    text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
-                        .on_input(Message::RuleFormSourceChanged)
-                        .padding(8)
-                        .style(move |_, status| themed_text_input(theme, status)),
-                ]
-                .spacing(4);
+        {
+            let mut context_col = column![
+                {
+                    let mut source_col = column![
+                        container(
+                            text("SOURCE ADDRESS (OPTIONAL)")
+                                .size(10)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
+                        text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
+                            .on_input(Message::RuleFormSourceChanged)
+                            .padding(8)
+                            .style(move |_, status| themed_text_input(theme, status)),
+                    ]
+                    .spacing(4);
 
-                if let Some(err) = source_error {
-                    source_col = source_col.push(text(err).size(11).color(theme.danger));
-                }
-                source_col
-            },
-            column![
-                container(text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted))
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
-                pick_list(
-                    iface_options,
-                    Some(if form.interface.is_empty() {
-                        "Any".to_string()
-                    } else {
-                        form.interface.clone()
-                    }),
-                    |s| if s == "Any" {
-                        Message::RuleFormInterfaceChanged(String::new())
-                    } else {
-                        Message::RuleFormInterfaceChanged(s)
+                    if let Some(err) = source_error {
+                        source_col = source_col.push(text(err).size(11).color(theme.danger));
                     }
-                )
-                .width(Length::Fill)
-                .padding(8)
-                .style(move |_, status| themed_pick_list(theme, status))
-                .menu_style(move |_| themed_pick_list_menu(theme))
-            ]
-            .spacing(4),
-            // Chain selection (only visible in Server Mode)
-            if server_mode {
+                    source_col
+                },
                 column![
-                    container(text("CHAIN DIRECTION").size(10).color(theme.fg_muted))
+                    container(text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted))
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                     pick_list(
-                        vec![
-                            crate::core::firewall::Chain::Input,
-                            crate::core::firewall::Chain::Output,
-                        ],
-                        Some(form.chain),
-                        Message::RuleFormChainChanged
+                        iface_options,
+                        Some(if form.interface.is_empty() {
+                            "Any".to_string()
+                        } else {
+                            form.interface.clone()
+                        }),
+                        |s| if s == "Any" {
+                            Message::RuleFormInterfaceChanged(String::new())
+                        } else {
+                            Message::RuleFormInterfaceChanged(s)
+                        }
                     )
                     .width(Length::Fill)
                     .padding(8)
                     .style(move |_, status| themed_pick_list(theme, status))
                     .menu_style(move |_| themed_pick_list_menu(theme))
                 ]
-                .spacing(4)
-            } else {
-                column![]
-            },
-        ]
-        .spacing(6),
+                .spacing(4),
+            ]
+            .spacing(6);
+
+            // Chain selection (only visible in Server Mode)
+            if server_mode {
+                context_col = context_col.push(
+                    column![
+                        container(text("CHAIN DIRECTION").size(10).color(theme.fg_muted))
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
+                        pick_list(
+                            vec![
+                                crate::core::firewall::Chain::Input,
+                                crate::core::firewall::Chain::Output,
+                            ],
+                            Some(form.chain),
+                            Message::RuleFormChainChanged
+                        )
+                        .width(Length::Fill)
+                        .padding(8)
+                        .style(move |_, status| themed_pick_list(theme, status))
+                        .menu_style(move |_| themed_pick_list_menu(theme))
+                    ]
+                    .spacing(4)
+                );
+            }
+            context_col
+        },
         // Advanced Options Section
         {
             let mut adv_col = column![
@@ -1591,31 +1595,35 @@ fn view_rule_form<'a>(
                 let accent_color = theme.accent;
                 let fg_on_accent = theme.fg_on_accent;
                 org_col = org_col.push(
-                    scrollable(
-                        row(form.tags.iter().map(|tag| -> Element<'_, Message> {
-                            container(
-                                row![
-                                    text(tag).size(12).color(fg_on_accent),
-                                    button(text("×").size(14))
-                                        .on_press(Message::RuleFormRemoveTag(tag.clone()))
-                                        .padding([2, 6])
-                                        .style(button::text),
-                                ]
-                                .spacing(6)
-                                .align_y(Alignment::Center),
-                            )
-                            .padding([4, 10])
-                            .style(move |t| {
-                                let mut style = container::rounded_box(t);
-                                style.background = Some(accent_color.into());
-                                style
-                            })
-                            .into()
-                        }))
-                        .spacing(8)
-                        .wrap(),
-                    )
-                    .height(80) // Max height ~3 rows of tags
+                    row![
+                        space().width(8), // Left padding to separate tags from scrollbar
+                        scrollable(
+                            row(form.tags.iter().map(|tag| -> Element<'_, Message> {
+                                container(
+                                    row![
+                                        text(tag).size(12).color(fg_on_accent),
+                                        button(text("×").size(14))
+                                            .on_press(Message::RuleFormRemoveTag(tag.clone()))
+                                            .padding([2, 6])
+                                            .style(button::text),
+                                    ]
+                                    .spacing(6)
+                                    .align_y(Alignment::Center),
+                                )
+                                .padding([4, 10])
+                                .style(move |t| {
+                                    let mut style = container::rounded_box(t);
+                                    style.background = Some(accent_color.into());
+                                    style
+                                }
+                                )
+                                .into()
+                            }))
+                            .spacing(8)
+                            .wrap(),
+                        )
+                        .height(140) // Max height ~4-5 rows of tags
+                    ]
                 );
             }
             org_col
