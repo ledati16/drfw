@@ -57,7 +57,10 @@ mod utils;
 mod validators;
 
 use clap::{Parser, Subcommand};
+use crossterm::style::{Color, ResetColor, SetForegroundColor};
+use crossterm::ExecutableCommand;
 use iced::Size;
+use std::io::{stdout, Write};
 use std::process::ExitCode;
 
 /// Result of the countdown confirmation process
@@ -67,16 +70,42 @@ enum ConfirmResult {
     Error(String),
 }
 
+/// Helper functions for colored CLI output
+fn print_info(msg: &str) {
+    let _ = stdout().execute(SetForegroundColor(Color::Cyan));
+    print!("{msg}");
+    let _ = stdout().execute(ResetColor);
+    println!();
+}
+
+fn print_success(msg: &str) {
+    let _ = stdout().execute(SetForegroundColor(Color::Green));
+    print!("{msg}");
+    let _ = stdout().execute(ResetColor);
+    println!();
+}
+
+fn print_error(msg: &str) {
+    let _ = stdout().execute(SetForegroundColor(Color::Red));
+    eprint!("{msg}");
+    let _ = stdout().execute(ResetColor);
+    eprintln!();
+}
+
+fn print_warning(msg: &str) {
+    let _ = stdout().execute(SetForegroundColor(Color::Yellow));
+    print!("{msg}");
+    let _ = stdout().execute(ResetColor);
+    println!();
+}
+
 /// Interactive countdown with confirmation/revert controls
 ///
 /// Displays a countdown timer and polls for keypresses:
 /// - 'c' or Enter: Confirm changes immediately
 /// - 'r': Revert changes immediately
 /// - Any other key or timeout: Auto-revert
-async fn countdown_confirmation(
-    timeout_secs: u64,
-    snapshot: &serde_json::Value,
-) -> ConfirmResult {
+async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value) -> ConfirmResult {
     use crossterm::event::{self, Event, KeyCode};
     use std::io::Write;
 
@@ -87,10 +116,13 @@ async fn countdown_confirmation(
 
     let result = async {
         for remaining in (1..=timeout_secs).rev() {
+            // Yellow countdown message
+            let _ = stdout().execute(SetForegroundColor(Color::Yellow));
             print!(
                 "\rAuto-revert in {:3}s  [c/Enter=confirm, r=revert now]   ",
                 remaining
             );
+            let _ = stdout().execute(ResetColor);
             std::io::stdout().flush().ok();
 
             // Poll for keypresses for 1 second
@@ -102,13 +134,14 @@ async fn countdown_confirmation(
                         return ConfirmResult::Confirmed;
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        print!("\r\x1b[K");  // Clear line
-                        println!("Reverting...");
+                        print!("\r\x1b[K"); // Clear line
+                        let _ = stdout().execute(SetForegroundColor(Color::Yellow));
+                        print!("Reverting...");
+                        let _ = stdout().execute(ResetColor);
+                        println!();
                         match core::nft_json::restore_snapshot(snapshot).await {
                             Ok(()) => return ConfirmResult::Reverted,
-                            Err(e) => {
-                                return ConfirmResult::Error(format!("Revert failed: {e}"))
-                            }
+                            Err(e) => return ConfirmResult::Error(format!("Revert failed: {e}")),
                         }
                     }
                     _ => {
@@ -119,8 +152,11 @@ async fn countdown_confirmation(
         }
 
         // Timeout expired - auto-revert
-        print!("\r\x1b[K");  // Clear line
-        println!("Timeout - reverting...");
+        print!("\r\x1b[K"); // Clear line
+        let _ = stdout().execute(SetForegroundColor(Color::Yellow));
+        print!("Timeout - reverting...");
+        let _ = stdout().execute(ResetColor);
+        println!();
         match core::nft_json::restore_snapshot(snapshot).await {
             Ok(()) => ConfirmResult::Reverted,
             Err(e) => ConfirmResult::Error(format!("Auto-revert failed: {e}")),
@@ -146,12 +182,18 @@ enum Commands {
     /// List all available profiles
     List,
     /// Apply a firewall profile to the kernel
+    ///
+    /// SAFETY: By default, rules auto-revert after 15 seconds unless confirmed.
+    /// This prevents accidental lockouts. Use --no-confirm to disable.
     Apply {
         /// Name of the profile to apply
         name: String,
-        /// Enable auto-revert with confirmation timeout (seconds, default: 15, max: 300)
-        #[arg(short, long, value_name = "SECONDS")]
-        confirm: Option<u64>,
+        /// Auto-revert timeout in seconds (default: 15s, max: 120s)
+        #[arg(short, long, value_name = "SECONDS", default_value = "15")]
+        confirm: u64,
+        /// Skip auto-revert confirmation (apply immediately without safety net)
+        #[arg(long, conflicts_with = "confirm")]
+        no_confirm: bool,
     },
     /// Show current active profile and kernel status
     Status,
@@ -199,52 +241,68 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         }
-        Commands::Apply { name, confirm } => {
+        Commands::Apply {
+            name,
+            confirm,
+            no_confirm,
+        } => {
             let ruleset = core::profiles::load_profile(&name).await?;
             let nft_json = ruleset.to_nftables_json();
 
             // Verify first
-            println!("Verifying profile '{name}'...");
+            print_info(&format!("Verifying profile '{name}'..."));
             let verify_result = core::verify::verify_ruleset(nft_json.clone()).await?;
             if !verify_result.success {
-                return Err(
-                    format!("Verification failed:\n{}", verify_result.errors.join("\n")).into(),
-                );
+                print_error("✗ Verification failed:");
+                for error in &verify_result.errors {
+                    print_error(&format!("  {error}"));
+                }
+                return Err("Verification failed".into());
             }
 
             // Elevation check
             let is_root = nix::unistd::getuid().is_root();
             if !is_root {
-                println!("Note: Not running as root. Will use sudo/pkexec for apply.");
+                print_info("Note: Not running as root. Will use run0/sudo/pkexec for apply.");
             }
 
-            println!("Applying ruleset...");
+            print_info("Applying ruleset...");
             let snapshot = core::nft_json::apply_with_snapshot(nft_json).await?;
             let _ = core::nft_json::save_snapshot_to_disk(&snapshot);
 
-            if let Some(timeout_secs) = confirm {
-                // Clamp timeout to reasonable range (1-300 seconds / 5 minutes)
-                let timeout_secs = timeout_secs.clamp(1, 300);
+            if no_confirm {
+                // Skip auto-revert (power user mode)
+                print_success("✓ Rules applied permanently (no auto-revert).");
+            } else {
+                // Safe by default: use auto-revert
+                let timeout_secs = confirm.clamp(5, 120);
 
-                println!("✓ Firewall rules applied!");
+                print_success("✓ Firewall rules applied!");
                 println!();
+
+                // 3-second pre-apply safety window (CLI only)
+                for i in (1..=3).rev() {
+                    print!("\rApplying in {i}...   ");
+                    stdout().flush().ok();
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
+                print!("\r\x1b[K"); // Clear line
+                stdout().flush().ok();
 
                 match countdown_confirmation(timeout_secs, &snapshot).await {
                     ConfirmResult::Confirmed => {
-                        println!("\n✓ Changes confirmed and saved.");
+                        print_success("\n✓ Changes confirmed and saved.");
                     }
                     ConfirmResult::Reverted => {
-                        println!("\n✓ Reverted to previous state.");
+                        print_warning("\n✓ Reverted to previous state.");
                     }
                     ConfirmResult::Error(e) => {
-                        eprintln!("\n✗ Error during confirmation: {e}");
-                        eprintln!("Attempting emergency revert...");
+                        print_error(&format!("\n✗ Error during confirmation: {e}"));
+                        print_error("Attempting emergency revert...");
                         core::nft_json::restore_snapshot(&snapshot).await?;
-                        println!("✓ Emergency revert complete.");
+                        print_success("✓ Emergency revert complete.");
                     }
                 }
-            } else {
-                println!("✓ Rules applied to kernel.");
             }
         }
         Commands::Status => {
