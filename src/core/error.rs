@@ -25,6 +25,11 @@ pub enum Error {
     #[allow(dead_code)]
     Validation { field: String, message: String },
 
+    /// nft --check validation failed with specific errors
+    #[error("Rule validation failed: {}", .0.join(", "))]
+    #[allow(dead_code)]
+    ValidationFailed(Vec<String>),
+
     /// Snapshot operation failed
     #[error("Snapshot error: {0}")]
     Snapshot(#[from] SnapshotError),
@@ -116,6 +121,19 @@ impl ErrorTranslation {
             Error::Validation { field, message } => Self::new(format!("{field}: {message}"))
                 .with_suggestion(format!("Check the '{field}' field and correct the value"))
                 .with_help("https://nftables.org/manpage/nft.txt"),
+
+            Error::ValidationFailed(errors) => {
+                let message = if errors.len() == 1 {
+                    format!("Rule validation failed: {}", errors[0])
+                } else {
+                    format!("Rule validation failed with {} errors", errors.len())
+                };
+                let mut translation = Self::new(message);
+                for err in errors {
+                    translation = translation.with_suggestion(err.clone());
+                }
+                translation.with_help("https://wiki.nftables.org/wiki-nftables/index.php/Quick_reference-nftables_in_10_minutes")
+            }
 
             Error::Elevation(msg) => Self::new(format!("Permission error: {msg}"))
                 .with_suggestion(
