@@ -26,35 +26,51 @@ cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
 
 [dependencies]
+# ═══════════════════════════════════════════════════════════════════════════
 # GUI Framework
-iced = { version = "0.14", features = ["tokio"] }
-notify-rust = "4"
+# ═══════════════════════════════════════════════════════════════════════════
+iced = { version = "0.14", features = ["tokio"] }  # Core GUI framework with async support
+notify-rust = "4"  # Desktop notifications for rule apply success/failure
 
+# ═══════════════════════════════════════════════════════════════════════════
 # Async Runtime
+# ═══════════════════════════════════════════════════════════════════════════
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "process"] }
+# Required by iced, used for:
+# - Async file I/O (atomic config writes)
+# - Process spawning (nft/pkexec elevation)
+# - Task execution in GUI context
 
-# Core Logic
-ipnetwork = { version = "0.21", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tempfile = "3"
-directories = "6"
-chrono = { version = "0.4", features = ["serde"] }
+# ═══════════════════════════════════════════════════════════════════════════
+# Core Firewall Logic
+# ═══════════════════════════════════════════════════════════════════════════
+ipnetwork = { version = "0.21", features = ["serde"] }  # IP/CIDR parsing and validation for rules
+uuid = { version = "1", features = ["v4", "serde"] }  # Unique rule IDs for command tracking
+serde = { version = "1", features = ["derive"] }  # Serialization framework
+serde_json = "1"  # Config files, profiles, nftables JSON generation
+tempfile = "3"  # Atomic write pattern for security (temp → rename)
+directories = "6"  # XDG Base Directory spec compliance
+chrono = { version = "0.4", features = ["serde"] }  # Rule creation timestamps
 
+# ═══════════════════════════════════════════════════════════════════════════
 # UI Helpers
-similar = "2"
+# ═══════════════════════════════════════════════════════════════════════════
+similar = "2"  # Diff algorithm for ruleset comparison (show changes)
 
+# ═══════════════════════════════════════════════════════════════════════════
 # Error Handling & Logging
-thiserror = "2"
-tracing = "0.1"
-tracing-subscriber = "0.3"
+# ═══════════════════════════════════════════════════════════════════════════
+thiserror = "2"  # Structured error types with user-friendly messages
+tracing = "0.1"  # Structured logging framework
+tracing-subscriber = "0.3"  # Logging configuration and output formatting
 
-# Security
-sha2 = "0.10"
-fontdb = "0.21"
-clap = { version = "4.5.53", features = ["derive"] }
-nix = { version = "0.30.1", features = ["fs", "term", "user"] }
+# ═══════════════════════════════════════════════════════════════════════════
+# Security & System Integration
+# ═══════════════════════════════════════════════════════════════════════════
+sha2 = "0.10"  # Snapshot checksums for integrity verification
+fontdb = "0.21"  # System font enumeration for font picker
+clap = { version = "4.5.53", features = ["derive"] }  # CLI argument parsing
+nix = { version = "0.30.1", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
 
 [dev-dependencies]
 proptest = "1"
