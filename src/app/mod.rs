@@ -1112,7 +1112,7 @@ impl State {
             Message::RuleFormAddTag => {
                 if let Some(f) = &mut self.rule_form {
                     let tag = crate::validators::sanitize_label(f.tag_input.trim());
-                    if !tag.is_empty() && !f.tags.contains(&tag) && tag.len() <= 32 && f.tags.len() < 10 {
+                    if !tag.is_empty() && !f.tags.contains(&tag) && tag.len() <= 20 && f.tags.len() < 10 {
                         f.tags.push(tag);
                         f.tag_input.clear();
                     }
