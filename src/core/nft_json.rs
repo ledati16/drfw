@@ -135,6 +135,27 @@ pub fn compute_checksum(snapshot: &Value) -> String {
 
 /// Reverts to a previous snapshot.
 ///
+/// **CRITICAL:** Prepends flush operations to prevent rule duplication.
+/// Snapshots from `nft list` are in object format and would otherwise
+/// APPEND to existing rules instead of replacing them.
+///
+/// # Safety: Atomic Flush + Restore
+///
+/// The flush operation (`flush table inet drfw`) temporarily leaves chains with
+/// DROP policies but no rules, which **blocks all incoming traffic** including
+/// established connections. However, this is safe because:
+///
+/// 1. **Atomic application**: `nft --json -f -` applies the entire JSON as a single
+///    transaction. Flush and rule restoration happen atomically.
+/// 2. **All-or-nothing**: If ANY operation fails validation, nft rejects the ENTIRE
+///    batch without applying partial changes.
+/// 3. **No intermediate state**: There is no observable moment where the table is
+///    flushed but rules aren't restored - it's a single kernel operation.
+///
+/// If nft crashes mid-apply (kernel panic level event) or power is lost, the emergency
+/// default ruleset (`get_emergency_default_ruleset()`) can restore basic connectivity
+/// (loopback + established/related).
+///
 /// # Errors
 ///
 /// Returns `Err` if:
@@ -145,8 +166,24 @@ pub async fn restore_snapshot(snapshot: &Value) -> Result<()> {
     // Validate structure before attempting restore
     validate_snapshot(snapshot)?;
 
-    let json_string = serde_json::to_string(snapshot)?;
-    info!("Snapshot validation passed, proceeding with restore");
+    // CRITICAL FIX: Prepend flush operations to prevent duplicate rules
+    // Snapshots are in object format from "nft list", which APPENDs rules.
+    // We need to flush first, then restore.
+    let mut modified_snapshot = snapshot.clone();
+    if let Some(nftables) = modified_snapshot["nftables"].as_array_mut() {
+        // Insert flush and table creation at the beginning
+        nftables.insert(
+            0,
+            serde_json::json!({ "add": { "table": { "family": "inet", "name": "drfw" } } }),
+        );
+        nftables.insert(
+            1,
+            serde_json::json!({ "flush": { "table": { "family": "inet", "name": "drfw" } } }),
+        );
+    }
+
+    let json_string = serde_json::to_string(&modified_snapshot)?;
+    info!("Snapshot validation passed, proceeding with restore (with flush prepended)");
 
     let mut child = crate::elevation::create_elevated_nft_command(&["--json", "-f", "-"])
         .map_err(|e| {
