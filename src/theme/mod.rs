@@ -102,22 +102,22 @@ impl AppTheme {
             )
         };
 
-        // Calculate zebra stripe color (1.5% difference from bg_surface) once per theme
+        // Calculate zebra stripe color (2-3% difference from bg_surface) once per theme
         let bg_surface_color = hex_to_color(bg_surface);
         let zebra_stripe = if is_light {
-            // Light themes: slightly darker
+            // Light themes: slightly darker (2%)
             Color {
-                r: (bg_surface_color.r * 0.985).max(0.0),
-                g: (bg_surface_color.g * 0.985).max(0.0),
-                b: (bg_surface_color.b * 0.985).max(0.0),
+                r: (bg_surface_color.r * 0.98).max(0.0),
+                g: (bg_surface_color.g * 0.98).max(0.0),
+                b: (bg_surface_color.b * 0.98).max(0.0),
                 ..bg_surface_color
             }
         } else {
-            // Dark themes: slightly lighter
+            // Dark themes: slightly lighter (2% + 1% boost = 3%)
             Color {
-                r: (bg_surface_color.r * 1.015 + 0.005).min(1.0),
-                g: (bg_surface_color.g * 1.015 + 0.005).min(1.0),
-                b: (bg_surface_color.b * 1.015 + 0.005).min(1.0),
+                r: (bg_surface_color.r * 1.02 + 0.01).min(1.0),
+                g: (bg_surface_color.g * 1.02 + 0.01).min(1.0),
+                b: (bg_surface_color.b * 1.02 + 0.01).min(1.0),
                 ..bg_surface_color
             }
         };
