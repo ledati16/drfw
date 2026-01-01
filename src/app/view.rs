@@ -1594,35 +1594,28 @@ fn view_rule_form<'a>(
                 let accent_color = theme.accent;
                 let fg_on_accent = theme.fg_on_accent;
                 org_col = org_col.push(
-                    row![
-                        space().width(8), // Left padding to separate tags from scrollbar
-                        scrollable(
-                            row(form.tags.iter().map(|tag| -> Element<'_, Message> {
-                                container(
-                                    row![
-                                        text(tag).size(12).color(fg_on_accent),
-                                        button(text("×").size(14))
-                                            .on_press(Message::RuleFormRemoveTag(tag.clone()))
-                                            .padding([2, 6])
-                                            .style(button::text),
-                                    ]
-                                    .spacing(6)
-                                    .align_y(Alignment::Center),
-                                )
-                                .padding([4, 10])
-                                .style(move |t| {
-                                    let mut style = container::rounded_box(t);
-                                    style.background = Some(accent_color.into());
-                                    style
-                                }
-                                )
-                                .into()
-                            }))
+                    row(form.tags.iter().map(|tag| -> Element<'_, Message> {
+                        container(
+                            row![
+                                text(tag).size(12).color(fg_on_accent),
+                                button(text("×").size(14))
+                                    .on_press(Message::RuleFormRemoveTag(tag.clone()))
+                                    .padding([2, 6])
+                                    .style(button::text),
+                            ]
                             .spacing(6)
-                            .wrap(),
+                            .align_y(Alignment::Center),
                         )
-                        .height(60) // Max height ~2 rows of tags
-                    ]
+                        .padding([4, 10])
+                        .style(move |t| {
+                            let mut style = container::rounded_box(t);
+                            style.background = Some(accent_color.into());
+                            style
+                        })
+                        .into()
+                    }))
+                    .spacing(6)
+                    .wrap()
                 );
             }
             org_col
