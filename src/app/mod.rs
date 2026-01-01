@@ -361,12 +361,10 @@ impl RuleForm {
         // Validate rate limit if enabled
         if self.rate_limit_enabled {
             if let Ok(count) = self.rate_limit_count.parse::<u32>() {
-                match crate::validators::validate_rate_limit(count, self.rate_limit_unit) {
-                    Err(msg) => {
-                        errors.rate_limit = Some(msg);
-                        has_errors = true;
-                    }
-                    Ok(_) => {} // Ignore warnings
+                // Ignore warnings (Ok result), only handle errors
+                if let Err(msg) = crate::validators::validate_rate_limit(count, self.rate_limit_unit) {
+                    errors.rate_limit = Some(msg);
+                    has_errors = true;
                 }
             } else if !self.rate_limit_count.is_empty() {
                 errors.rate_limit = Some("Invalid rate limit number".to_string());
@@ -377,12 +375,10 @@ impl RuleForm {
         // Validate connection limit if present
         if !self.connection_limit.is_empty() {
             if let Ok(limit) = self.connection_limit.parse::<u32>() {
-                match crate::validators::validate_connection_limit(limit) {
-                    Err(msg) => {
-                        errors.connection_limit = Some(msg);
-                        has_errors = true;
-                    }
-                    Ok(_) => {} // Ignore warnings
+                // Ignore warnings (Ok result), only handle errors
+                if let Err(msg) = crate::validators::validate_connection_limit(limit) {
+                    errors.connection_limit = Some(msg);
+                    has_errors = true;
                 }
             } else {
                 errors.connection_limit = Some("Invalid connection limit number".to_string());
