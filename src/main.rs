@@ -35,6 +35,14 @@
 //! ```bash
 //! # Run the GUI application
 //! drfw
+//!
+//! # CLI commands
+//! drfw list                          # List available profiles
+//! drfw status                        # Show active profile
+//! drfw apply my-profile              # Apply profile (permanent)
+//! drfw apply my-profile --confirm    # Apply with 15s auto-revert
+//! drfw apply my-profile --confirm 60 # Apply with 60s auto-revert
+//! drfw export my-profile --format nft  # Export as nftables config
 //! ```
 
 mod app;
