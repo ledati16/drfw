@@ -143,13 +143,17 @@ impl fmt::Display for PortRange {
 ///
 /// Controls what happens when a packet matches this rule.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum Action {
     /// Accept the packet (allow it through)
     #[default]
+    #[strum(serialize = "accept")]
     Accept,
     /// Drop the packet silently (no response sent)
+    #[strum(serialize = "drop")]
     Drop,
     /// Reject the packet and send ICMP unreachable response
+    #[strum(serialize = "reject")]
     Reject,
 }
 
@@ -173,18 +177,17 @@ impl Action {
     }
 }
 
-impl fmt::Display for Action {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
 /// Time unit for rate limiting
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum TimeUnit {
+    #[strum(serialize = "second")]
     Second,
+    #[strum(serialize = "minute")]
     Minute,
+    #[strum(serialize = "hour")]
     Hour,
+    #[strum(serialize = "day")]
     Day,
 }
 
@@ -210,12 +213,6 @@ impl TimeUnit {
     }
 }
 
-impl fmt::Display for TimeUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
 /// Rate limiting configuration
 ///
 /// Limits the rate at which packets can match this rule.
@@ -234,21 +231,15 @@ impl fmt::Display for RateLimit {
 
 /// Firewall chain for rule direction (only relevant in Server Mode)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum Chain {
     /// Incoming traffic (default for desktop users)
     #[default]
+    #[strum(serialize = "input")]
     Input,
     /// Outgoing traffic (only useful in Server Mode with OUTPUT DROP policy)
+    #[strum(serialize = "output")]
     Output,
-}
-
-impl fmt::Display for Chain {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Chain::Input => write!(f, "input"),
-            Chain::Output => write!(f, "output"),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
