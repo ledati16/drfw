@@ -65,19 +65,30 @@ pub fn ensure_dirs() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Lists available network interfaces on the system
+///
+/// Uses the `network-interface` crate for robust cross-platform interface discovery.
+/// Filters out the loopback interface (`lo`) since base firewall rules already handle it.
+///
+/// # Returns
+///
+/// A sorted vector of interface names (e.g., `["eth0", "wlan0"]`)
 pub fn list_interfaces() -> Vec<String> {
-    let mut interfaces = Vec::new();
-    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
-        for entry in entries.flatten() {
-            if let Ok(name) = entry.file_name().into_string() {
-                // Ignore loopback usually, but maybe keep it as an option?
-                // Most users don't need to add rules for 'lo' since we have a base rule.
-                if name != "lo" {
-                    interfaces.push(name);
-                }
+    use network_interface::{NetworkInterface, NetworkInterfaceConfig};
+
+    let mut interfaces: Vec<String> = NetworkInterface::show()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|iface| {
+            // Filter out loopback (already handled by base rules)
+            if iface.name != "lo" {
+                Some(iface.name)
+            } else {
+                None
             }
-        }
-    }
+        })
+        .collect();
+
     interfaces.sort();
     interfaces
 }
