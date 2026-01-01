@@ -1417,8 +1417,8 @@ fn view_rule_form<'a>(
         ]
         .spacing(6),
         // Advanced Options Section
-        column![
-            row![
+        {
+            let mut adv_col = column![
                 checkbox(form.show_advanced)
                     .label("Show Advanced Options")
                     .on_toggle(Message::RuleFormToggleAdvanced)
@@ -1426,8 +1426,11 @@ fn view_rule_form<'a>(
                     .spacing(8)
                     .text_size(12)
                     .style(move |_, status| themed_checkbox(theme, status)),
-            ],
+            ]
+            .spacing(6);
+
             if form.show_advanced {
+                adv_col = adv_col.push(
                 column![
                     // Destination IP
                     {
@@ -1557,11 +1560,10 @@ fn view_rule_form<'a>(
                     },
                 ]
                 .spacing(6)
-            } else {
-                column![]
+                );
             }
-        ]
-        .spacing(6),
+            adv_col
+        },
         // Organization Section
         {
             let mut org_col = column![
@@ -1588,30 +1590,33 @@ fn view_rule_form<'a>(
                 // Issue #6: Capture only needed colors instead of cloning entire theme
                 let accent_color = theme.accent;
                 let fg_on_accent = theme.fg_on_accent;
-                org_col = org_col.push(Element::from(
-                    row(form.tags.iter().map(|tag| -> Element<'_, Message> {
-                        container(
-                            row![
-                                text(tag).size(12).color(fg_on_accent),
-                                button(text("×").size(14))
-                                    .on_press(Message::RuleFormRemoveTag(tag.clone()))
-                                    .padding([2, 6])
-                                    .style(button::text),
-                            ]
-                            .spacing(6)
-                            .align_y(Alignment::Center),
-                        )
-                        .padding([4, 10])
-                        .style(move |t| {
-                            let mut style = container::rounded_box(t);
-                            style.background = Some(accent_color.into());
-                            style
-                        })
-                        .into()
-                    }))
-                    .spacing(8)
-                    .wrap(),
-                ));
+                org_col = org_col.push(
+                    scrollable(
+                        row(form.tags.iter().map(|tag| -> Element<'_, Message> {
+                            container(
+                                row![
+                                    text(tag).size(12).color(fg_on_accent),
+                                    button(text("×").size(14))
+                                        .on_press(Message::RuleFormRemoveTag(tag.clone()))
+                                        .padding([2, 6])
+                                        .style(button::text),
+                                ]
+                                .spacing(6)
+                                .align_y(Alignment::Center),
+                            )
+                            .padding([4, 10])
+                            .style(move |t| {
+                                let mut style = container::rounded_box(t);
+                                style.background = Some(accent_color.into());
+                                style
+                            })
+                            .into()
+                        }))
+                        .spacing(8)
+                        .wrap(),
+                    )
+                    .height(80) // Max height ~3 rows of tags
+                );
             }
             org_col
         },
