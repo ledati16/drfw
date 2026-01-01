@@ -196,6 +196,14 @@ enum NftToken {
     RBrace,
     #[token(";")]
     Semicolon,
+    #[token("/")]
+    Slash,
+    #[token("-")]
+    Dash,
+    #[token(":")]
+    Colon,
+    #[token(",")]
+    Comma,
 
     // Identifiers (interface names, etc.)
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_\-\.]*")]
@@ -455,6 +463,30 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
             Semicolon => {
                 tokens.push(Token {
                     text: Cow::Borrowed(";"),
+                    color: TokenColor::Primary,
+                });
+            }
+            Slash => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("/"),
+                    color: TokenColor::Primary,
+                });
+            }
+            Dash => {
+                tokens.push(Token {
+                    text: Cow::Borrowed("-"),
+                    color: TokenColor::Primary,
+                });
+            }
+            Colon => {
+                tokens.push(Token {
+                    text: Cow::Borrowed(":"),
+                    color: TokenColor::Primary,
+                });
+            }
+            Comma => {
+                tokens.push(Token {
+                    text: Cow::Borrowed(","),
                     color: TokenColor::Primary,
                 });
             }
