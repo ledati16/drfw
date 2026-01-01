@@ -36,7 +36,6 @@ pub enum TokenColor {
 
 /// JSON lexer tokens (declarative DFA-based lexing via logos)
 #[derive(Logos, Debug, Clone, Copy, PartialEq)]
-#[logos(skip r"[ \t]+")] // Skip whitespace
 enum JsonToken {
     #[token("{")]
     LBrace,
@@ -63,70 +62,121 @@ enum JsonToken {
     False,
     #[token("null")]
     Null,
+
+    // Whitespace (must be preserved for display)
+    #[regex(r"[ \t]+")]
+    Whitespace,
 }
 
 /// Nftables lexer tokens (declarative DFA-based lexing via logos)
 #[derive(Logos, Debug, Clone, Copy, PartialEq)]
-#[logos(skip r"[ \t]+")]  // Skip whitespace
 enum NftToken {
     // Keywords (grouped logically for readability)
-    #[token("table")] Table,
-    #[token("chain")] Chain,
-    #[token("rule")] Rule,
-    #[token("add")] Add,
-    #[token("delete")] Delete,
-    #[token("flush")] Flush,
-    #[token("list")] List,
+    #[token("table")]
+    Table,
+    #[token("chain")]
+    Chain,
+    #[token("rule")]
+    Rule,
+    #[token("add")]
+    Add,
+    #[token("delete")]
+    Delete,
+    #[token("flush")]
+    Flush,
+    #[token("list")]
+    List,
 
-    #[token("inet")] Inet,
-    #[token("ip")] Ip,
-    #[token("ip6")] Ip6,
+    #[token("inet")]
+    Inet,
+    #[token("ip")]
+    Ip,
+    #[token("ip6")]
+    Ip6,
 
-    #[token("filter")] Filter,
-    #[token("nat")] Nat,
-    #[token("route")] Route,
+    #[token("filter")]
+    Filter,
+    #[token("nat")]
+    Nat,
+    #[token("route")]
+    Route,
 
-    #[token("input")] Input,
-    #[token("forward")] Forward,
-    #[token("output")] Output,
-    #[token("prerouting")] Prerouting,
-    #[token("postrouting")] Postrouting,
+    #[token("input")]
+    Input,
+    #[token("forward")]
+    Forward,
+    #[token("output")]
+    Output,
+    #[token("prerouting")]
+    Prerouting,
+    #[token("postrouting")]
+    Postrouting,
 
-    #[token("accept")] Accept,
-    #[token("drop")] Drop,
-    #[token("reject")] Reject,
-    #[token("queue")] Queue,
-    #[token("continue")] Continue,
-    #[token("return")] Return,
-    #[token("jump")] Jump,
-    #[token("goto")] Goto,
+    #[token("accept")]
+    Accept,
+    #[token("drop")]
+    Drop,
+    #[token("reject")]
+    Reject,
+    #[token("queue")]
+    Queue,
+    #[token("continue")]
+    Continue,
+    #[token("return")]
+    Return,
+    #[token("jump")]
+    Jump,
+    #[token("goto")]
+    Goto,
 
-    #[token("ct")] Ct,
-    #[token("state")] State,
-    #[token("established")] Established,
-    #[token("related")] Related,
-    #[token("invalid")] Invalid,
-    #[token("new")] New,
+    #[token("ct")]
+    Ct,
+    #[token("state")]
+    State,
+    #[token("established")]
+    Established,
+    #[token("related")]
+    Related,
+    #[token("invalid")]
+    Invalid,
+    #[token("new")]
+    New,
 
-    #[token("comment")] Comment,
-    #[token("iifname")] Iifname,
-    #[token("oifname")] Oifname,
-    #[token("meta")] Meta,
-    #[token("l4proto")] L4proto,
+    #[token("comment")]
+    Comment,
+    #[token("iifname")]
+    Iifname,
+    #[token("oifname")]
+    Oifname,
+    #[token("meta")]
+    Meta,
+    #[token("l4proto")]
+    L4proto,
 
-    #[token("tcp")] Tcp,
-    #[token("udp")] Udp,
-    #[token("icmp")] Icmp,
+    #[token("tcp")]
+    Tcp,
+    #[token("udp")]
+    Udp,
+    #[token("icmp")]
+    Icmp,
 
-    #[token("dport")] Dport,
-    #[token("sport")] Sport,
-    #[token("saddr")] Saddr,
-    #[token("daddr")] Daddr,
+    #[token("dport")]
+    Dport,
+    #[token("sport")]
+    Sport,
+    #[token("saddr")]
+    Saddr,
+    #[token("daddr")]
+    Daddr,
 
-    #[token("type")] Type,
-    #[token("hook")] Hook,
-    #[token("priority")] Priority,
-    #[token("policy")] Policy,
+    #[token("type")]
+    Type,
+    #[token("hook")]
+    Hook,
+    #[token("priority")]
+    Priority,
+    #[token("policy")]
+    Policy,
 
     // Strings and numbers
     #[regex(r#""([^"\\]|\\.)*""#)]
@@ -150,6 +200,10 @@ enum NftToken {
     // Identifiers (interface names, etc.)
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_\-\.]*")]
     Identifier,
+
+    // Whitespace (must be preserved for display)
+    #[regex(r"[ \t]+")]
+    Whitespace,
 }
 
 /// Diff line type (for background coloring in diff view)
@@ -283,6 +337,12 @@ fn parse_json_line(line: &str) -> Vec<Token> {
                     color: TokenColor::Primary,
                 });
             }
+            JsonToken::Whitespace => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Primary,
+                });
+            }
         }
     }
 
@@ -352,16 +412,11 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
         use NftToken::*;
         match token {
             // Keywords - use owned strings since text is a slice
-            Table | Chain | Rule | Add | Delete | Flush | List |
-            Inet | Ip | Ip6 |
-            Filter | Nat | Route |
-            Input | Forward | Output | Prerouting | Postrouting |
-            Accept | Drop | Reject | Queue | Continue | Return | Jump | Goto |
-            Ct | State | Established | Related | Invalid | New |
-            Comment | Iifname | Oifname | Meta | L4proto |
-            Tcp | Udp | Icmp |
-            Dport | Sport | Saddr | Daddr |
-            Type | Hook | Priority | Policy => {
+            Table | Chain | Rule | Add | Delete | Flush | List | Inet | Ip | Ip6 | Filter | Nat
+            | Route | Input | Forward | Output | Prerouting | Postrouting | Accept | Drop
+            | Reject | Queue | Continue | Return | Jump | Goto | Ct | State | Established
+            | Related | Invalid | New | Comment | Iifname | Oifname | Meta | L4proto | Tcp
+            | Udp | Icmp | Dport | Sport | Saddr | Daddr | Type | Hook | Priority | Policy => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Keyword,
@@ -404,6 +459,12 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
                 });
             }
             Identifier => {
+                tokens.push(Token {
+                    text: Cow::Owned(text.to_string()),
+                    color: TokenColor::Primary,
+                });
+            }
+            Whitespace => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Primary,
