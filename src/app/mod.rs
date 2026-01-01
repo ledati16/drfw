@@ -438,8 +438,10 @@ pub enum Message {
     RuleHoverEnd,
     // Profile messages
     ProfileSelected(String),
+    ProfileSwitched(String, FirewallRuleset),
     SaveProfileClicked,
     SaveProfileAs(String),
+    ProfileSaved(Result<(), String>),
     StartCreatingNewProfile,
     NewProfileNameChanged(String),
     CancelCreatingNewProfile,
@@ -447,14 +449,17 @@ pub enum Message {
     CloseProfileManager,
     DeleteProfileRequested(String),
     ConfirmDeleteProfile,
+    ProfileDeleted(Result<Vec<String>, String>),
     CancelDeleteProfile,
     RenameProfileRequested(String),
     ProfileNewNameChanged(String),
     ConfirmRenameProfile,
+    ProfileRenamed(Result<Vec<String>, String>),
     CancelRenameProfile,
     ConfirmProfileSwitch,
     DiscardProfileSwitch,
     CancelProfileSwitch,
+    ProfileListUpdated(Vec<String>),
     /// No-op message for async operations that don't need a result
     Noop,
 }
@@ -527,10 +532,10 @@ impl State {
         regular_font_choice.resolve(false);
         mono_font_choice.resolve(true);
 
-        let ruleset = crate::core::profiles::load_profile(&active_profile_name)
+        let ruleset = crate::core::profiles::load_profile_blocking(&active_profile_name)
             .unwrap_or_else(|_| FirewallRuleset::default());
 
-        let available_profiles = crate::core::profiles::list_profiles()
+        let available_profiles = crate::core::profiles::list_profiles_blocking()
             .unwrap_or_else(|_| vec![crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()]);
 
         let interfaces = crate::utils::list_interfaces();
@@ -702,7 +707,8 @@ impl State {
     }
 
     pub fn is_profile_dirty(&self) -> bool {
-        if let Ok(on_disk) = crate::core::profiles::load_profile(&self.active_profile_name) {
+        if let Ok(on_disk) = crate::core::profiles::load_profile_blocking(&self.active_profile_name)
+        {
             on_disk.rules != self.ruleset.rules
                 || on_disk.advanced_security != self.ruleset.advanced_security
         } else {
@@ -719,15 +725,20 @@ impl State {
     }
 
     fn perform_profile_switch(&mut self, name: String) -> Task<Message> {
-        if let Ok(ruleset) = crate::core::profiles::load_profile(&name) {
-            self.ruleset = ruleset;
-            self.active_profile_name = name;
-            self.pending_profile_switch = None;
-            self.command_history = crate::command::CommandHistory::default();
-            self.update_cached_text();
-            return self.save_config();
-        }
-        Task::none()
+        // Async load profile using Task::perform
+        let active_profile = name.clone();
+        self.pending_profile_switch = None;
+
+        Task::perform(
+            async move { crate::core::profiles::load_profile(&active_profile).await },
+            move |result| match result {
+                Ok(ruleset) => Message::ProfileSwitched(name, ruleset),
+                Err(e) => {
+                    eprintln!("Failed to load profile: {e}");
+                    Message::Noop
+                }
+            },
+        )
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -1130,30 +1141,59 @@ impl State {
             Message::ProfileSelected(name) => {
                 return self.handle_switch_profile(name);
             }
+            Message::ProfileSwitched(name, ruleset) => {
+                self.ruleset = ruleset;
+                self.active_profile_name = name;
+                self.command_history = crate::command::CommandHistory::default();
+                self.update_cached_text();
+                return self.save_config();
+            }
             Message::SaveProfileClicked => {
-                if let Err(e) =
-                    crate::core::profiles::save_profile(&self.active_profile_name, &self.ruleset)
-                {
+                let name = self.active_profile_name.clone();
+                let ruleset = self.ruleset.clone();
+                return Task::perform(
+                    async move {
+                        crate::core::profiles::save_profile(&name, &ruleset)
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    Message::ProfileSaved,
+                );
+            }
+            Message::ProfileSaved(result) => {
+                if let Err(e) = result {
                     self.last_error = Some(ErrorInfo::new(format!("Failed to save profile: {e}")));
                 } else {
                     tracing::info!("Profile '{}' saved to disk.", self.active_profile_name);
                 }
             }
             Message::SaveProfileAs(name) => {
-                if let Err(e) = crate::core::profiles::save_profile(&name, &self.ruleset) {
-                    self.last_error = Some(ErrorInfo::new(format!(
-                        "Failed to save profile as '{name}': {e}"
-                    )));
-                } else {
-                    self.active_profile_name = name;
-                    self.available_profiles =
-                        crate::core::profiles::list_profiles().unwrap_or_default();
-                    if let Some(mgr) = &mut self.profile_manager {
-                        mgr.creating_new = false;
-                        mgr.new_name_input.clear();
-                    }
-                    let _ = self.save_config();
+                let ruleset = self.ruleset.clone();
+                let name_clone = name.clone();
+                self.active_profile_name = name;
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.creating_new = false;
+                    mgr.new_name_input.clear();
                 }
+
+                return Task::perform(
+                    async move {
+                        // Save profile then refresh list
+                        crate::core::profiles::save_profile(&name_clone, &ruleset).await?;
+                        crate::core::profiles::list_profiles().await
+                    },
+                    |result| match result {
+                        Ok(profiles) => Message::ProfileListUpdated(profiles),
+                        Err(e) => {
+                            eprintln!("Failed to save/list profiles: {e}");
+                            Message::Noop
+                        }
+                    },
+                )
+                .chain(self.save_config());
+            }
+            Message::ProfileListUpdated(profiles) => {
+                self.available_profiles = profiles;
             }
             Message::StartCreatingNewProfile => {
                 if let Some(mgr) = &mut self.profile_manager {
@@ -1192,17 +1232,36 @@ impl State {
                 if let Some(mgr) = &mut self.profile_manager
                     && let Some(name) = mgr.deleting_name.take()
                 {
-                    let _ = crate::core::profiles::delete_profile(&name);
-                    self.available_profiles =
-                        crate::core::profiles::list_profiles().unwrap_or_default();
-                    if self.active_profile_name == name {
-                        let next = self.available_profiles.first().cloned().unwrap_or_else(|| {
+                    return Task::perform(
+                        async move {
+                            crate::core::profiles::delete_profile(&name).await?;
+                            crate::core::profiles::list_profiles().await
+                        },
+                        move |result| match result {
+                            Ok(profiles) => Message::ProfileDeleted(Ok(profiles)),
+                            Err(e) => Message::ProfileDeleted(Err(format!(
+                                "Failed to delete profile: {e}"
+                            ))),
+                        },
+                    );
+                }
+            }
+            Message::ProfileDeleted(result) => match result {
+                Ok(profiles) => {
+                    let old_active = self.active_profile_name.clone();
+                    self.available_profiles = profiles.clone();
+                    // If we deleted the active profile, switch to first available
+                    if !profiles.iter().any(|p| p == &old_active) {
+                        let next = profiles.first().cloned().unwrap_or_else(|| {
                             crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()
                         });
                         return self.perform_profile_switch(next);
                     }
                 }
-            }
+                Err(e) => {
+                    self.last_error = Some(ErrorInfo::new(e));
+                }
+            },
             Message::CancelDeleteProfile => {
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.deleting_name = None;
@@ -1224,18 +1283,36 @@ impl State {
                 if let Some(mgr) = &mut self.profile_manager
                     && let Some((old, new)) = mgr.renaming_name.take()
                 {
-                    if let Err(e) = crate::core::profiles::rename_profile(&old, &new) {
-                        self.last_error = Some(ErrorInfo::new(format!("Rename failed: {e}")));
-                    } else {
-                        if self.active_profile_name == old {
-                            self.active_profile_name = new;
-                            let _ = self.save_config();
-                        }
-                        self.available_profiles =
-                            crate::core::profiles::list_profiles().unwrap_or_default();
+                    let was_active = self.active_profile_name == old;
+                    if was_active {
+                        self.active_profile_name = new.clone();
                     }
+
+                    return Task::perform(
+                        async move {
+                            crate::core::profiles::rename_profile(&old, &new).await?;
+                            crate::core::profiles::list_profiles().await
+                        },
+                        move |result| match result {
+                            Ok(profiles) => Message::ProfileRenamed(Ok(profiles)),
+                            Err(e) => Message::ProfileRenamed(Err(format!("Rename failed: {e}"))),
+                        },
+                    )
+                    .chain(if was_active {
+                        self.save_config()
+                    } else {
+                        Task::none()
+                    });
                 }
             }
+            Message::ProfileRenamed(result) => match result {
+                Ok(profiles) => {
+                    self.available_profiles = profiles;
+                }
+                Err(e) => {
+                    self.last_error = Some(ErrorInfo::new(e));
+                }
+            },
             Message::CancelRenameProfile => {
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.renaming_name = None;
@@ -1243,11 +1320,15 @@ impl State {
             }
             Message::ConfirmProfileSwitch => {
                 if let Some(name) = self.pending_profile_switch.take() {
-                    let _ = crate::core::profiles::save_profile(
-                        &self.active_profile_name,
-                        &self.ruleset,
+                    let profile_name = self.active_profile_name.clone();
+                    let ruleset = self.ruleset.clone();
+
+                    return Task::perform(
+                        async move {
+                            crate::core::profiles::save_profile(&profile_name, &ruleset).await
+                        },
+                        move |_result| Message::ProfileSelected(name.clone()),
                     );
-                    return self.perform_profile_switch(name);
                 }
             }
             Message::DiscardProfileSwitch => {

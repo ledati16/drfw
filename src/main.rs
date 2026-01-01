@@ -107,7 +107,7 @@ fn main() -> ExitCode {
 async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Commands::List => {
-            let profiles = core::profiles::list_profiles()?;
+            let profiles = core::profiles::list_profiles().await?;
             let config = config::load_config().await;
             println!("Available profiles (* = active):");
             for p in profiles {
@@ -119,7 +119,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Commands::Apply { name, test } => {
-            let ruleset = core::profiles::load_profile(&name)?;
+            let ruleset = core::profiles::load_profile(&name).await?;
             let nft_json = ruleset.to_nftables_json();
 
             // Verify first
@@ -169,7 +169,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
         Commands::Status => {
             let config = config::load_config().await;
             println!("Active profile: {}", config.active_profile);
-            if let Ok(ruleset) = core::profiles::load_profile(&config.active_profile) {
+            if let Ok(ruleset) = core::profiles::load_profile(&config.active_profile).await {
                 println!("Rules: {}", ruleset.rules.len());
                 println!(
                     "Advanced Security: {}",
@@ -184,7 +184,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Commands::Export { name, format } => {
-            let ruleset = core::profiles::load_profile(&name)?;
+            let ruleset = core::profiles::load_profile(&name).await?;
             match format.as_str() {
                 "nft" => println!("{}", ruleset.to_nft_text()),
                 "json" => println!(
