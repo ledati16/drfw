@@ -197,6 +197,7 @@ fn color_luminance(color: &Color) -> f32 {
 
 /// All available built-in themes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // CUSTOM THEMES (Project Defaults)
@@ -242,38 +243,6 @@ pub enum ThemeChoice {
 }
 
 impl ThemeChoice {
-    /// Returns all available themes
-    pub fn all() -> &'static [Self] {
-        &[
-            // Custom themes
-            Self::Oxide,
-            Self::Aethel,
-            // Popular dark themes
-            Self::Dracula,
-            Self::OneDark,
-            Self::Monokai,
-            Self::NightOwl,
-            Self::SynthWave84,
-            // Modern dark themes
-            Self::TokyoNight,
-            Self::CatppuccinMocha,
-            Self::RosePine,
-            // Nature/atmospheric dark themes
-            Self::Nord,
-            Self::Gruvbox,
-            Self::Everforest,
-            Self::AyuDark,
-            // Light themes
-            Self::GruvboxLight,
-            Self::CatppuccinLatte,
-            Self::RosePineDawn,
-            Self::EverforestLight,
-            Self::OxideLight,
-            Self::OneLight,
-            Self::SolarizedLight,
-        ]
-    }
-
     pub fn name(self) -> &'static str {
         // Issue #8: Return static strings (no allocation)
         match self {

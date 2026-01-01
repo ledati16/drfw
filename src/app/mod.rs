@@ -66,8 +66,11 @@ pub struct FontPickerState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum FontPickerTarget {
+    #[strum(serialize = "regular")]
     Regular,
+    #[strum(serialize = "mono")]
     Mono,
 }
 
@@ -80,9 +83,13 @@ pub struct ThemePickerState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum ThemeFilter {
+    #[strum(serialize = "all")]
     All,
+    #[strum(serialize = "light")]
     Light,
+    #[strum(serialize = "dark")]
     Dark,
 }
 
@@ -101,10 +108,14 @@ pub enum PendingWarning {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum WorkspaceTab {
     #[default]
+    #[strum(serialize = "nftables")]
     Nftables,
+    #[strum(serialize = "json")]
     Json,
+    #[strum(serialize = "settings")]
     Settings,
 }
 

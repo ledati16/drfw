@@ -429,11 +429,14 @@ fn default_true() -> bool {
 // ServicePreset removed - presets dropdown removed from UI for simplicity
 /// Egress filtering profile
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(strum::Display, strum::EnumString, strum::EnumIter, strum::AsRefStr)]
 pub enum EgressProfile {
     /// Desktop mode: Allow all outbound connections (OUTPUT ACCEPT)
     #[default]
+    #[strum(serialize = "desktop")]
     Desktop,
     /// Server mode: Deny all outbound by default, require explicit rules (OUTPUT DROP)
+    #[strum(serialize = "server")]
     Server,
 }
 

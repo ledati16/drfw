@@ -17,6 +17,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow};
 use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
+use strum::IntoEnumIterator; // For ThemeChoice::iter()
 
 // Text input IDs for focus management
 pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
@@ -2478,8 +2479,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
 
     // Filter themes by search term and light/dark filter
     // Cache to_theme() results to avoid duplicate calls (performance optimization)
-    let filtered_themes: Vec<_> = crate::theme::ThemeChoice::all()
-        .iter()
+    let filtered_themes: Vec<_> = crate::theme::ThemeChoice::iter()
         .filter_map(|choice| {
             let theme_instance = choice.to_theme();
 
@@ -2495,7 +2495,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 search_term.is_empty() || choice.name().to_ascii_lowercase().contains(search_term);
 
             if matches_filter && matches_search {
-                Some((*choice, theme_instance))
+                Some((choice, theme_instance))
             } else {
                 None
             }
@@ -2844,7 +2844,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             preview_panel,
             row![
                 container(
-                    text(if filtered_count < crate::theme::ThemeChoice::all().len() {
+                    text(if filtered_count < crate::theme::ThemeChoice::iter().count() {
                         format!("{filtered_count} themes match")
                     } else {
                         format!("{filtered_count} themes available")
