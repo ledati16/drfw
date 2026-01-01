@@ -1342,7 +1342,7 @@ fn view_rule_form<'a>(
                     port_col
                 },
             ]
-            .spacing(16),
+            .spacing(8),
         ]
         .spacing(6),
         // Context Section
@@ -1550,12 +1550,12 @@ fn view_rule_form<'a>(
                     ]
                     .spacing(4),
                 ]
-                .spacing(8)
+                .spacing(6)
             } else {
                 column![]
             }
         ]
-        .spacing(8),
+        .spacing(6),
         // Organization Section
         {
             let mut org_col = column![
@@ -1624,7 +1624,7 @@ fn view_rule_form<'a>(
         .spacing(16)
         .align_y(Alignment::Center)
     ]
-    .spacing(8)
+    .spacing(6)
     .padding(20);
     container(form_box)
         .max_width(520)
