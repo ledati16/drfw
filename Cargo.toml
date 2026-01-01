@@ -31,15 +31,13 @@ iced = { version = "0.14", features = ["tokio"] }
 notify-rust = "4"
 
 # Async Runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "process"] }
 
-# Core Logic / nftables interaction
-nftables = { version = "0.6", features = ["tokio"] }
+# Core Logic
 ipnetwork = { version = "0.21", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
 tempfile = "3"
 directories = "6"
 chrono = { version = "0.4", features = ["serde"] }
@@ -48,7 +46,6 @@ chrono = { version = "0.4", features = ["serde"] }
 similar = "2"
 
 # Error Handling & Logging
-color-eyre = "0.6"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"

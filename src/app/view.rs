@@ -1218,9 +1218,7 @@ fn view_from_cached_diff_tokens<'a>(
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
     // Continue the zebra pattern: if last line_number is odd, next would be even
-    let last_line_number = diff_tokens
-        .last()
-        .map_or(0, |(_, hl)| hl.line_number);
+    let last_line_number = diff_tokens.last().map_or(0, |(_, hl)| hl.line_number);
     let spacer_bg = if show_zebra_striping {
         let is_even = (last_line_number + 1).is_multiple_of(2);
         if is_even { Some(even_stripe) } else { None }
