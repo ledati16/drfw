@@ -60,7 +60,7 @@ use clap::{Parser, Subcommand};
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use crossterm::ExecutableCommand;
 use iced::Size;
-use std::io::{stdout, Write};
+use std::io::stdout;
 use std::process::ExitCode;
 
 /// Result of the countdown confirmation process
@@ -71,13 +71,6 @@ enum ConfirmResult {
 }
 
 /// Helper functions for colored CLI output
-fn print_info(msg: &str) {
-    let _ = stdout().execute(SetForegroundColor(Color::Cyan));
-    print!("{msg}");
-    let _ = stdout().execute(ResetColor);
-    println!();
-}
-
 fn print_success(msg: &str) {
     let _ = stdout().execute(SetForegroundColor(Color::Green));
     print!("{msg}");
@@ -250,7 +243,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             let nft_json = ruleset.to_nftables_json();
 
             // Verify first
-            print_info(&format!("Verifying profile '{name}'..."));
+            println!("Verifying profile '{name}'...");
             let verify_result = core::verify::verify_ruleset(nft_json.clone()).await?;
             if !verify_result.success {
                 print_error("✗ Verification failed:");
@@ -263,10 +256,10 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             // Elevation check
             let is_root = nix::unistd::getuid().is_root();
             if !is_root {
-                print_info("Note: Not running as root. Will use run0/sudo/pkexec for apply.");
+                println!("Note: Not running as root. Will use run0/sudo/pkexec for apply.");
             }
 
-            print_info("Applying ruleset...");
+            println!("Applying ruleset...");
             let snapshot = core::nft_json::apply_with_snapshot(nft_json).await?;
             let _ = core::nft_json::save_snapshot_to_disk(&snapshot);
 
@@ -280,25 +273,19 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 print_success("✓ Firewall rules applied!");
                 println!();
 
-                // 3-second pre-apply safety window (CLI only)
-                for i in (1..=3).rev() {
-                    print!("\rApplying in {i}...   ");
-                    stdout().flush().ok();
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                }
-                print!("\r\x1b[K"); // Clear line
-                stdout().flush().ok();
-
                 match countdown_confirmation(timeout_secs, &snapshot).await {
                     ConfirmResult::Confirmed => {
-                        print_success("\n✓ Changes confirmed and saved.");
+                        println!(); // Clear line after countdown
+                        print_success("✓ Changes confirmed and saved.");
                     }
                     ConfirmResult::Reverted => {
-                        print_warning("\n✓ Reverted to previous state.");
+                        println!(); // Clear line after countdown
+                        print_warning("✓ Reverted to previous state.");
                     }
                     ConfirmResult::Error(e) => {
-                        print_error(&format!("\n✗ Error during confirmation: {e}"));
-                        print_error("Attempting emergency revert...");
+                        println!(); // Clear line after countdown
+                        print_error(&format!("✗ Error during confirmation: {e}"));
+                        println!("Attempting emergency revert...");
                         core::nft_json::restore_snapshot(&snapshot).await?;
                         print_success("✓ Emergency revert complete.");
                     }

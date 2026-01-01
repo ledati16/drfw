@@ -351,10 +351,10 @@ impl RuleForm {
         }
 
         // Validate destination IP (if provided in advanced settings)
-        if !self.destination.is_empty()
-            && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
+        if !self.destination.is_empty() && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
         {
-            errors.destination = Some("Invalid destination IP or CIDR (domains not supported)".to_string());
+            errors.destination =
+                Some("Invalid destination IP or CIDR (domains not supported)".to_string());
             has_errors = true;
         }
 
@@ -362,7 +362,9 @@ impl RuleForm {
         if self.rate_limit_enabled {
             if let Ok(count) = self.rate_limit_count.parse::<u32>() {
                 // Ignore warnings (Ok result), only handle errors
-                if let Err(msg) = crate::validators::validate_rate_limit(count, self.rate_limit_unit) {
+                if let Err(msg) =
+                    crate::validators::validate_rate_limit(count, self.rate_limit_unit)
+                {
                     errors.rate_limit = Some(msg);
                     has_errors = true;
                 }
@@ -673,7 +675,10 @@ impl State {
 
         // Reset tag filter if the currently selected tag no longer exists
         if let Some(ref current_filter) = self.filter_tag
-            && !self.cached_all_tags.iter().any(|t| t.as_ref() == current_filter.as_ref())
+            && !self
+                .cached_all_tags
+                .iter()
+                .any(|t| t.as_ref() == current_filter.as_ref())
         {
             self.filter_tag = None;
             self.rule_search.clear();
@@ -1121,7 +1126,11 @@ impl State {
             Message::RuleFormAddTag => {
                 if let Some(f) = &mut self.rule_form {
                     let tag = crate::validators::sanitize_label(f.tag_input.trim());
-                    if !tag.is_empty() && !f.tags.contains(&tag) && tag.len() <= 20 && f.tags.len() < 10 {
+                    if !tag.is_empty()
+                        && !f.tags.contains(&tag)
+                        && tag.len() <= 20
+                        && f.tags.len() < 10
+                    {
                         f.tags.push(tag);
                         f.tag_input.clear();
                     }
