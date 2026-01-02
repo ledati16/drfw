@@ -2,6 +2,12 @@
 //!
 //! Profiles are standalone JSON files containing a `FirewallRuleset`.
 //! They are stored in the application's data directory under `profiles/`.
+//!
+//! # Concurrent Access
+//!
+//! Profile functions are **not** safe for concurrent access from multiple processes.
+//! Running multiple DRFW instances simultaneously may cause data loss.
+//! Use file locking or a single daemon if concurrent access is required.
 
 use crate::core::firewall::FirewallRuleset;
 use crate::utils::get_data_dir;
