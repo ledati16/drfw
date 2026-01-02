@@ -124,19 +124,14 @@ pub enum BannerSeverity {
 pub struct NotificationBanner {
     pub message: String,
     pub severity: BannerSeverity,
-    pub created_at: std::time::SystemTime,
+    pub created_at: std::time::Instant, // Monotonic time, immune to clock changes
     pub duration_secs: u64,
 }
 
 impl NotificationBanner {
     /// Check if banner should be dismissed based on elapsed time
     pub fn is_expired(&self) -> bool {
-        if let Ok(elapsed) = self.created_at.elapsed() {
-            elapsed.as_secs() >= self.duration_secs
-        } else {
-            // If SystemTime went backwards (rare), keep banner visible
-            false
-        }
+        self.created_at.elapsed().as_secs() >= self.duration_secs
     }
 }
 
@@ -783,7 +778,7 @@ impl State {
         self.banners.push_back(NotificationBanner {
             message: message.into(),
             severity,
-            created_at: std::time::SystemTime::now(),
+            created_at: std::time::Instant::now(),
             duration_secs,
         });
     }
