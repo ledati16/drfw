@@ -126,6 +126,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 container(view_pending_confirmation(
                     state.countdown_remaining,
                     state.auto_revert_timeout_secs.min(120) as u32,
+                    state.progress_animation.interpolate_with(|v| v, iced::time::Instant::now()),
                     theme,
                     state.font_regular,
                 ))
@@ -1758,16 +1759,13 @@ fn view_awaiting_apply(
 
 fn view_pending_confirmation(
     remaining: u32,
-    total_timeout: u32,
+    _total_timeout: u32,
+    animated_progress: f32,
     app_theme: &crate::theme::AppTheme,
     regular_font: iced::Font,
 ) -> Element<'_, Message> {
-    // Calculate progress (inverted: starts at 100%, goes to 0%)
-    let progress = if total_timeout > 0 {
-        (remaining as f32) / (total_timeout as f32)
-    } else {
-        0.0
-    };
+    // Use animated progress value for smooth transitions
+    let progress = animated_progress;
 
     container(
         column![
@@ -1804,12 +1802,22 @@ fn view_pending_confirmation(
                         };
 
                         let bar_color = if app_theme.is_light() {
-                            // Light themes: gray (desaturated), darker than empty track for inset depth
-                            Color {
-                                r: app_theme.bg_surface.r * 0.70,  // 30% darker gray (darker than empty track)
-                                g: app_theme.bg_surface.g * 0.70,
-                                b: app_theme.bg_surface.b * 0.70,
-                                a: 1.0,
+                            if remaining <= 5 {
+                                // Light themes at 5s: subtly darker gray for urgency
+                                Color {
+                                    r: app_theme.bg_surface.r * 0.65,  // Subtle darkening at 5 seconds
+                                    g: app_theme.bg_surface.g * 0.65,
+                                    b: app_theme.bg_surface.b * 0.65,
+                                    a: 1.0,
+                                }
+                            } else {
+                                // Light themes: gray (desaturated), darker than empty track for inset depth
+                                Color {
+                                    r: app_theme.bg_surface.r * 0.70,  // 30% darker gray (darker than empty track)
+                                    g: app_theme.bg_surface.g * 0.70,
+                                    b: app_theme.bg_surface.b * 0.70,
+                                    a: 1.0,
+                                }
                             }
                         } else {
                             // Dark themes: 15% darker accent color (PERFECT)

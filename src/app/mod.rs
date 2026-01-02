@@ -7,7 +7,7 @@ use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
-use iced::{Element, Task};
+use iced::{animation, Animation, Element, Task};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use std::path::Path;
 use std::sync::Arc;
@@ -149,6 +149,7 @@ pub struct State {
     pub active_tab: WorkspaceTab,
     pub rule_form: Option<RuleForm>,
     pub countdown_remaining: u32,
+    pub progress_animation: Animation<f32>,
     pub form_errors: Option<FormErrors>,
     pub interfaces_with_any: Vec<String>,
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
@@ -666,6 +667,7 @@ impl State {
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
             countdown_remaining: 15,
+            progress_animation: Animation::new(1.0),
             form_errors: None,
             interfaces_with_any,
             cached_nft_tokens: Vec::new(),
@@ -1797,8 +1799,14 @@ impl State {
         if self.auto_revert_enabled {
             // Auto-revert enabled: show countdown modal
             self.countdown_remaining = self.auto_revert_timeout_secs.min(120) as u32;
+            // Animation transitions smoothly from 100% to 0% over the entire timeout duration
+            let timeout = self.auto_revert_timeout_secs.min(120);
+            self.progress_animation = Animation::new(1.0)
+                .easing(animation::Easing::Linear)  // Constant speed (no slow-down at start/end)
+                .duration(Duration::from_secs(timeout))
+                .go(0.0, iced::time::Instant::now());
             self.status = AppStatus::PendingConfirmation {
-                deadline: Utc::now() + Duration::from_secs(self.auto_revert_timeout_secs.min(120)),
+                deadline: Utc::now() + Duration::from_secs(timeout),
                 snapshot,
             };
             self.last_error = None;
@@ -1887,6 +1895,7 @@ impl State {
             let remaining = (*deadline - now).num_seconds().max(0) as u32;
             if self.countdown_remaining != remaining {
                 self.countdown_remaining = remaining;
+                // Animation runs continuously - no need to update it here
                 if remaining == 5 {
                     self.push_banner(
                         "Firewall will revert in 5 seconds! Click Confirm to keep changes.",
@@ -2090,7 +2099,8 @@ impl State {
             .map(Message::EventOccurred),
             match self.status {
                 AppStatus::PendingConfirmation { .. } => {
-                    iced::time::every(Duration::from_secs(1)).map(|_| Message::CountdownTick)
+                    // Update at 60 FPS for smooth animation
+                    iced::time::every(Duration::from_millis(17)).map(|_| Message::CountdownTick)
                 }
                 _ => iced::Subscription::none(),
             },

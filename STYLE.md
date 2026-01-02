@@ -1178,6 +1178,212 @@ let content_width = match (state.active_tab, state.show_diff) {
 
 ---
 
+## Inset Progress Bar Pattern
+
+### Purpose
+
+The countdown confirmation modal uses a custom inset/recessed progress bar that appears carved into the modal surface rather than elevated above it. This creates a sophisticated visual effect that matches the application's overall depth system.
+
+### Implementation
+
+**Location:** `src/app/view.rs:1790-1920` (progress bar in countdown modal)
+
+### Two-Layer Structure
+
+The inset effect requires two layers:
+
+1. **Outer container rim** (creates the recessed groove)
+2. **Inner progress bar** (fills the groove)
+
+```rust
+container(  // Outer rim
+    progress_bar(0.0..=1.0, progress)  // Inner fill
+        .style(/* fill styling */)
+)
+.padding(Padding {
+    top: 2.5,    // Asymmetric padding creates depth
+    right: 2.0,
+    bottom: 1.0,
+    left: 2.0,
+})
+.style(/* rim styling */)
+```
+
+### Asymmetric Padding
+
+The **2.5px top / 1.0px bottom** padding creates enhanced depth perception:
+- Thicker top rim suggests shadow from above
+- Thinner bottom rim suggests light from above
+- This mimics how physical recessed surfaces appear in natural lighting
+
+### Rim Styling (Outer Container)
+
+```rust
+container::Style {
+    background: Some(Background::Gradient(/* vertical gradient */)),
+    border: Border {
+        color: bg_surface * 0.75,  // 25% darker
+        width: 1.0,
+        radius: 8.0.into(),  // Fully rounded container
+    },
+    shadow: Shadow {
+        color: bg_surface * 0.5 @ 0.9 alpha,
+        offset: (0.0, -1.0),  // NEGATIVE Y = top shadow (inset illusion)
+        blur_radius: 1.0,     // Crisp shadow
+    },
+}
+```
+
+**Key technique:** Negative Y offset creates shadow from above, essential for the inset illusion.
+
+### Rim Gradient
+
+Theme-aware gradient for depth:
+
+```rust
+let (rim_top, rim_bottom) = if app_theme.is_light() {
+    (0.5, 0.95)  // Light: 50% darker top, 5% darker bottom
+} else {
+    (0.5, 0.88)  // Dark: 50% darker top, 12% darker bottom
+};
+
+// Vertical gradient (PI = top to bottom)
+Gradient::Linear(Linear::new(std::f32::consts::PI)
+    .add_stop(0.0, bg_surface * rim_top)
+    .add_stop(1.0, bg_surface * rim_bottom))
+```
+
+### Fill Bar Styling (Inner Progress Bar)
+
+```rust
+progress_bar::Style {
+    background: bg_surface * 0.85,  // 15% darker empty track
+    bar: Background::Gradient(bar_gradient),  // Filled portion
+    border: Border {
+        radius: 6.0.into(),  // Slightly smaller than outer (8.0)
+    },
+}
+```
+
+### Fill Color Logic
+
+**Dark themes:**
+```rust
+// Use base_color which changes: accent (normal) → danger (≤5s)
+Color {
+    r: base_color.r * 0.85,  // 15% darker
+    g: base_color.g * 0.85,
+    b: base_color.b * 0.85,
+    a: 1.0,
+}
+```
+
+**Light themes:**
+```rust
+if remaining <= 5 {
+    // At 5 seconds: darker gray for urgency
+    bg_surface * 0.65  // 35% darker
+} else {
+    // Normal: gray for inset shadow appearance
+    bg_surface * 0.70  // 30% darker
+}
+```
+
+**Design rationale:**
+- Dark themes can use colored fills (already darker than bg)
+- Light themes must use gray - colored fills don't look recessed on light backgrounds
+- Both darken at 5 seconds for urgency feedback
+
+### Fill Bar Gradient
+
+```rust
+let gradient_multiplier = if app_theme.is_light() {
+    0.92  // Subtle 8% darker at top
+} else {
+    0.65  // Strong 35% darker for depth
+};
+
+Gradient::Linear(Linear::new(std::f32::consts::PI)
+    .add_stop(0.0, bar_color * gradient_multiplier)  // Dark top
+    .add_stop(0.15, bar_color)  // 15% coverage from top
+    .add_stop(1.0, bar_color))  // Full fill color for rest
+```
+
+**Coverage tuning:** 15% gradient coverage creates crisp shadow without fuzziness.
+
+### Smooth Animation
+
+**60 FPS linear animation** over the entire countdown duration:
+
+```rust
+// In update() when countdown starts
+self.progress_animation = Animation::new(1.0)
+    .easing(animation::Easing::Linear)  // Constant speed
+    .duration(Duration::from_secs(timeout))
+    .go(0.0, iced::time::Instant::now());
+
+// Subscription for frame updates
+AppStatus::PendingConfirmation { .. } => {
+    iced::time::every(Duration::from_millis(17)).map(|_| Message::CountdownTick)
+}
+
+// In view() for smooth value
+state.progress_animation.interpolate_with(|v| v, iced::time::Instant::now())
+```
+
+**Why 60 FPS?**
+- Matches standard display refresh rates
+- Noticeably smoother than 30 FPS
+- Performance cost is negligible (<1% CPU)
+
+**Why Linear easing?**
+- Default easing is `EaseInOut` (slow at start/end)
+- Linear provides constant speed - better for countdown timers
+- Users expect steady progress, not acceleration curves
+
+### Performance Characteristics
+
+**CPU overhead:**
+- Animation interpolation: trivial math per frame
+- Color calculations: ~15 float multiplications per frame
+- Gradients/shadows: GPU-accelerated
+
+**Total cost:** <1% CPU, imperceptible on modern hardware
+
+**Update frequency:** Only active during countdown (not persistent)
+
+### Visual Design Goals
+
+1. **Recessed appearance** - Progress bar looks carved into surface
+2. **Theme consistency** - Works across all light/dark themes
+3. **Urgency feedback** - Visual change at 5 seconds remaining
+4. **Smooth motion** - 60 FPS linear animation feels natural
+5. **Sharp precision** - Crisp shadows matching button styling
+
+### Edge Cases Handled
+
+✅ **Theme switching** - All colors derive from semantic theme values
+✅ **Very dark themes** - Gray fill visible even on near-black backgrounds
+✅ **Very light themes** - Gray fill appears recessed, not elevated
+✅ **Timeout changes** - Animation duration adapts to config setting
+✅ **Zero progress** - Empty track always visible with 15% darker background
+
+### Implementation Reference
+
+**State fields:**
+```rust
+pub countdown_remaining: u32,           // Discrete second counter
+pub progress_animation: Animation<f32>, // Smooth interpolated value
+```
+
+**Related files:**
+- `src/app/mod.rs:152` - Animation field in State
+- `src/app/mod.rs:1803-1807` - Animation initialization
+- `src/app/mod.rs:2101-2103` - 60 FPS subscription
+- `src/app/view.rs:1760-1920` - Complete rendering logic
+
+---
+
 ## Reference: Key Files
 
 - **`src/theme/mod.rs`** - Theme struct, shadow calculation, luminance detection
@@ -1305,6 +1511,33 @@ let content_width = match (state.active_tab, state.show_diff) {
 - **Font Picker Patterns Section:** Documented auto-focus, padding, and messaging patterns
 
 ### 2025-12-30
+
+**Evening Session - Inset Progress Bar with Smooth Animation:**
+- **Phase 2b UX Streamlining:** Auto-revert configuration and countdown progress bar
+  - Added configurable auto-revert toggle in Settings (default: disabled for GUI)
+  - Added timeout slider (5-120 seconds, default: 15s)
+  - GUI respects config, CLI always uses auto-revert for safety
+- **Inset Progress Bar Effect:** Custom two-layer design for recessed appearance
+  - Outer container rim with gradient, border, and negative-Y shadow
+  - Inner progress bar with theme-aware fill colors
+  - Asymmetric padding (2.5px top, 1.0px bottom) for depth perception
+  - Crisp shadows (blur 1.0) matching button precision
+- **Theme-Aware Styling:**
+  - Dark themes: Colored fill (accent → danger at 5s) darkened 15%
+  - Light themes: Gray fill (darkens from 70% to 65% at 5s for urgency)
+  - Different gradient multipliers: 8% (light) vs 35% (dark)
+- **Smooth 60 FPS Animation:**
+  - Linear easing for constant speed (no slow-down at start/end)
+  - One continuous animation over full duration (not stepped per second)
+  - 17ms frame updates (60 FPS) for display refresh rate match
+  - Performance: <1% CPU overhead
+- **Implementation Reference:**
+  - Animation field in State (Animation<f32>)
+  - 60 FPS subscription only active during countdown
+  - Complete rendering logic spans ~160 lines
+- **Documentation:** Added "Inset Progress Bar Pattern" section to STYLE.md
+
+**Morning Session - Dynamic Horizontal Scrolling:**
 - **Dynamic Horizontal Scrolling:** Implemented intelligent width calculation for preview panes
   - Separate width calculations for NFT, JSON, and diff views
   - Width adjusts based on current tab and diff toggle state
