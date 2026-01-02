@@ -789,7 +789,7 @@ impl State {
     }
 
     fn update_cached_text(&mut self) {
-        use std::collections::HashSet;
+        use std::collections::BTreeSet;
 
         let nft_text = self.ruleset.to_nft_text();
         let json_text =
@@ -815,17 +815,16 @@ impl State {
             self.cached_nft_width_px
         };
 
-        let mut all_tags: Vec<String> = self
+        // Collect unique tags using BTreeSet for automatic sorting
+        let all_tags: BTreeSet<&String> = self
             .ruleset
             .rules
             .iter()
             .flat_map(|r| r.tags.iter())
-            .collect::<HashSet<&String>>()
-            .into_iter()
-            .cloned()
             .collect();
-        all_tags.sort_unstable();
-        self.cached_all_tags = all_tags.into_iter().map(Arc::new).collect();
+
+        // Clone once directly into Arc (no intermediate Vec allocation)
+        self.cached_all_tags = all_tags.into_iter().map(|s| Arc::new(s.clone())).collect();
 
         // Reset tag filter if the currently selected tag no longer exists
         if let Some(ref current_filter) = self.filter_tag
