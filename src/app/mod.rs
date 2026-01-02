@@ -63,9 +63,12 @@ pub fn fuzzy_filter_fonts<'a>(
     let mut needle_buf = Vec::new();
     let needle = Utf32Str::new(query, &mut needle_buf);
 
+    // Reuse buffer across all fonts to reduce allocations
+    let mut haystack_buf = Vec::new();
+
     let mut results: Vec<_> = fonts
         .filter_map(|font| {
-            let mut haystack_buf = Vec::new();
+            haystack_buf.clear(); // Reuse instead of reallocate
             let haystack = Utf32Str::new(font.name_lowercase(), &mut haystack_buf);
             matcher
                 .fuzzy_match(haystack, needle)
@@ -74,7 +77,7 @@ pub fn fuzzy_filter_fonts<'a>(
         .collect();
 
     // Sort by score descending (highest relevance first)
-    results.sort_by(|a, b| b.1.cmp(&a.1));
+    results.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     results
 }
 
@@ -95,10 +98,13 @@ pub fn fuzzy_filter_themes(
     let mut needle_buf = Vec::new();
     let needle = Utf32Str::new(&query_lowercase, &mut needle_buf);
 
+    // Reuse buffer across all themes to reduce allocations
+    let mut haystack_buf = Vec::new();
+
     let mut results: Vec<_> = themes
         .filter_map(|theme| {
             let theme_name_lowercase = theme.name().to_lowercase();
-            let mut haystack_buf = Vec::new();
+            haystack_buf.clear(); // Reuse instead of reallocate
             let haystack = Utf32Str::new(&theme_name_lowercase, &mut haystack_buf);
             matcher
                 .fuzzy_match(haystack, needle)
@@ -107,7 +113,7 @@ pub fn fuzzy_filter_themes(
         .collect();
 
     // Sort by score descending (highest relevance first)
-    results.sort_by(|a, b| b.1.cmp(&a.1));
+    results.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     results
 }
 
