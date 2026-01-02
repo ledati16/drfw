@@ -379,7 +379,8 @@ pub async fn log_profile_switched(enable_event_log: bool, from_profile: &str, to
 /// # Arguments
 ///
 /// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-pub async fn log_settings_saved(enable_event_log: bool) {
+/// * `description` - Description of what setting changed
+pub async fn log_settings_saved(enable_event_log: bool, description: &str) {
     if !enable_event_log {
         return;
     }
@@ -388,7 +389,9 @@ pub async fn log_settings_saved(enable_event_log: bool) {
         let event = AuditEvent::new(
             EventType::SettingsSaved,
             true,
-            serde_json::json!({}),
+            serde_json::json!({
+                "description": description,
+            }),
             None,
         );
 

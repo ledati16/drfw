@@ -2468,7 +2468,11 @@ fn format_audit_event<'a>(
                 event.details["from"], event.details["to"]
             ),
         ),
-        (EventType::SettingsSaved, _) => ("⚙", theme.accent, "Settings saved".to_string()),
+        (EventType::SettingsSaved, _) => (
+            "⚙",
+            theme.accent,
+            event.details["description"].as_str().unwrap_or("Settings saved").to_string(),
+        ),
         (EventType::AutoRevertConfirmed, _) => (
             "✓",
             theme.success,
@@ -2485,12 +2489,13 @@ fn format_audit_event<'a>(
     };
 
     row![
-        text(time).size(11).font(font).color(theme.fg_muted),
-        text(icon).size(13).color(icon_color),
-        text(description).size(12).font(font).color(theme.fg_primary),
+        text(time).size(13).font(font).color(theme.fg_muted),
+        text(icon).size(15).color(icon_color),
+        text(description).size(14).font(font).color(theme.fg_primary),
     ]
-    .spacing(8)
+    .spacing(12)
     .align_y(Alignment::Center)
+    .width(Length::Fill)
     .into()
 }
 
@@ -2544,15 +2549,6 @@ fn view_diagnostics_modal<'a>(
         })
         .collect();
 
-    // Get recovery commands as owned strings
-    let state_dir = crate::utils::get_data_dir().map_or_else(
-        || "~/.local/state/drfw".to_string(),
-        |p| p.to_string_lossy().to_string(),
-    );
-
-    let recovery_cmd = "sudo nft flush ruleset".to_string();
-    let snapshot_restore_cmd = format!("sudo nft --json -f {state_dir}/snapshot-*.json");
-
     container(
         column![
             row![
@@ -2582,7 +2578,9 @@ fn view_diagnostics_modal<'a>(
                     Message::DiagnosticsFilterChanged
                 )
                 .placeholder("Filter...")
-                .style(move |_, status| themed_pick_list(theme, status)),
+                .padding(8)
+                .style(move |_, status| themed_pick_list(theme, status))
+                .menu_style(move |_| themed_pick_list_menu(theme)),
             ]
             .spacing(12)
             .align_y(Alignment::Center),
@@ -2601,14 +2599,15 @@ fn view_diagnostics_modal<'a>(
                     } else {
                         filtered_events
                             .into_iter()
-                            .map(|event| format_audit_event(event, theme, regular_font))
+                            .map(|event| format_audit_event(event, theme, mono_font))
                             .collect()
                     })
-                    .spacing(4),
+                    .spacing(8),
                 )
                 .style(move |_, status| themed_scrollable(theme, status)),
             )
-            .height(250)
+            .width(Length::Fill)
+            .height(500)
             .style(move |_| container::Style {
                 background: Some(theme.bg_elevated.into()),
                 border: Border {
@@ -2618,41 +2617,6 @@ fn view_diagnostics_modal<'a>(
                 ..Default::default()
             })
             .padding(12),
-            // Recovery commands section
-            column![
-                text("Manual Recovery Commands:")
-                    .size(14)
-                    .color(theme.fg_primary),
-                container(
-                    column![
-                        text("Emergency flush (removes all rules):")
-                            .size(12)
-                            .color(theme.fg_muted),
-                        text(recovery_cmd)
-                            .size(12)
-                            .font(mono_font)
-                            .color(theme.warning),
-                        text("Restore from snapshot:")
-                            .size(12)
-                            .color(theme.fg_muted),
-                        text(snapshot_restore_cmd)
-                            .size(12)
-                            .font(mono_font)
-                            .color(theme.warning),
-                    ]
-                    .spacing(6)
-                )
-                .style(move |_| container::Style {
-                    background: Some(theme.bg_elevated.into()),
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .padding(12),
-            ]
-            .spacing(8),
             // Action buttons
             row![
                 button(text("Clear Log").size(14))
@@ -2674,7 +2638,7 @@ fn view_diagnostics_modal<'a>(
         .spacing(20)
         .padding(32),
     )
-    .max_width(700)
+    .max_width(1000)
     .style(move |_| card_container(theme))
     .into()
 }

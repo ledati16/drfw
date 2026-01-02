@@ -1087,36 +1087,68 @@ impl State {
             Message::EventOccurred(event) => return self.handle_event(event),
             Message::ToggleDiff(enabled) => {
                 self.show_diff = enabled;
+                let enable_event_log = self.enable_event_log;
+                let desc = if enabled { "Diff view enabled" } else { "Diff view disabled" };
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, desc).await;
+                });
                 return self.save_config();
             }
             Message::ToggleZebraStriping(enabled) => {
                 self.show_zebra_striping = enabled;
+                let enable_event_log = self.enable_event_log;
+                let desc = if enabled { "Zebra striping enabled" } else { "Zebra striping disabled" };
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, desc).await;
+                });
                 return self.save_config();
             }
             Message::ToggleAutoRevert(enabled) => {
                 self.auto_revert_enabled = enabled;
+                let enable_event_log = self.enable_event_log;
+                let desc = if enabled { "Auto-revert enabled" } else { "Auto-revert disabled" };
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, desc).await;
+                });
                 return self.save_config();
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 self.auto_revert_timeout_secs = timeout.clamp(5, 120);
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("Auto-revert timeout set to {}s", timeout);
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 return self.save_config();
             }
             Message::ToggleEventLog(enabled) => {
                 self.enable_event_log = enabled;
                 // Log settings change (meta: logging that logging was enabled/disabled!)
+                // Use the NEW value of enabled since we just set it
+                let desc = if enabled { "Event logging enabled" } else { "Event logging disabled" };
                 tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enabled).await;
+                    crate::audit::log_settings_saved(enabled, desc).await;
                 });
                 return self.save_config();
             }
             Message::ToggleStrictIcmp(enabled) => {
                 self.ruleset.advanced_security.strict_icmp = enabled;
                 self.update_cached_text();
+                let enable_event_log = self.enable_event_log;
+                let desc = if enabled { "Strict ICMP filtering enabled" } else { "Strict ICMP filtering disabled" };
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, desc).await;
+                });
                 return self.save_config();
             }
             Message::IcmpRateLimitChanged(rate) => {
                 self.ruleset.advanced_security.icmp_rate_limit = rate;
                 self.update_cached_text();
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("ICMP rate limit set to {}/min", rate);
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 return self.save_config();
             }
             Message::ToggleRpfRequested(enabled) => {
@@ -1125,6 +1157,10 @@ impl State {
                 } else {
                     self.ruleset.advanced_security.enable_rpf = false;
                     self.update_cached_text();
+                    let enable_event_log = self.enable_event_log;
+                    tokio::spawn(async move {
+                        crate::audit::log_settings_saved(enable_event_log, "RPF (reverse path filtering) disabled").await;
+                    });
                     return self.save_config();
                 }
             }
@@ -1132,6 +1168,10 @@ impl State {
                 self.pending_warning = None;
                 self.ruleset.advanced_security.enable_rpf = true;
                 self.update_cached_text();
+                let enable_event_log = self.enable_event_log;
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, "RPF (reverse path filtering) enabled").await;
+                });
                 return self.save_config();
             }
             Message::CancelWarning => {
@@ -1140,6 +1180,11 @@ impl State {
             Message::ToggleDroppedLogging(enabled) => {
                 self.ruleset.advanced_security.log_dropped = enabled;
                 self.update_cached_text();
+                let enable_event_log = self.enable_event_log;
+                let desc = if enabled { "Dropped packet logging enabled" } else { "Dropped packet logging disabled" };
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, desc).await;
+                });
                 return self.save_config();
             }
             Message::LogRateChanged(rate) => {
@@ -1160,14 +1205,24 @@ impl State {
                 }
                 self.ruleset.advanced_security.log_rate_per_minute = rate;
                 self.update_cached_text();
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("Log rate limit set to {}/min", rate);
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 return self.save_config();
             }
             Message::LogPrefixChanged(prefix) => {
                 // Validate and sanitize log prefix
                 match crate::validators::validate_log_prefix(&prefix) {
                     Ok(sanitized) => {
-                        self.ruleset.advanced_security.log_prefix = sanitized;
+                        self.ruleset.advanced_security.log_prefix = sanitized.clone();
                         self.update_cached_text();
+                        let enable_event_log = self.enable_event_log;
+                        let desc = format!("Log prefix changed to '{}'", sanitized);
+                        tokio::spawn(async move {
+                            crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                        });
                         return self.save_config();
                     }
                     Err(e) => {
@@ -1184,6 +1239,10 @@ impl State {
                     self.ruleset.advanced_security.egress_profile =
                         crate::core::firewall::EgressProfile::Desktop;
                     self.update_cached_text();
+                    let enable_event_log = self.enable_event_log;
+                    tokio::spawn(async move {
+                        crate::audit::log_settings_saved(enable_event_log, "Server mode disabled (desktop profile)").await;
+                    });
                     return self.save_config();
                 }
             }
@@ -1192,6 +1251,10 @@ impl State {
                 self.ruleset.advanced_security.egress_profile =
                     crate::core::firewall::EgressProfile::Server;
                 self.update_cached_text();
+                let enable_event_log = self.enable_event_log;
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, "Server mode enabled (server profile)").await;
+                });
                 return self.save_config();
             }
             Message::ToggleDiagnostics(show) => self.show_diagnostics = show,
@@ -1220,6 +1283,11 @@ impl State {
             Message::ThemeChanged(choice) => {
                 self.current_theme = choice;
                 self.theme = choice.to_theme();
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("Theme changed to {}", choice.name());
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 return self.save_config();
             }
             Message::OpenThemePicker => {
@@ -1260,12 +1328,22 @@ impl State {
             Message::RegularFontChanged(choice) => {
                 self.regular_font_choice = choice.clone();
                 self.font_regular = choice.to_font();
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("UI font changed to {}", choice.name());
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 return self.save_config();
             }
             Message::MonoFontChanged(choice) => {
                 self.mono_font_choice = choice.clone();
                 self.font_mono = choice.to_font();
                 self.font_picker = None;
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("Monospace font changed to {}", choice.name());
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 return self.save_config();
             }
             Message::OpenFontPicker(target) => {
