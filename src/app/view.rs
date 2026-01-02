@@ -13,8 +13,8 @@ use crate::app::{
 use crate::core::firewall::Protocol;
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, row, rule,
-    scrollable, space, stack, text, text_input, toggler, tooltip,
+    Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, progress_bar,
+    row, rule, scrollable, space, stack, text, text_input, toggler, tooltip,
 };
 use iced::{alignment, Alignment, Border, Color, Element, Length, Padding, Shadow};
 use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
@@ -115,7 +115,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
         match &state.status {
             AppStatus::AwaitingApply => Some(
-                container(view_awaiting_apply(theme, state.font_regular))
+                container(view_awaiting_apply(theme, state.font_regular, state.auto_revert_enabled, state.auto_revert_timeout_secs))
                     .style(move |_| modal_backdrop(theme))
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -125,6 +125,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             AppStatus::PendingConfirmation { .. } => Some(
                 container(view_pending_confirmation(
                     state.countdown_remaining,
+                    state.auto_revert_timeout_secs.min(120) as u32,
                     theme,
                     state.font_regular,
                 ))
@@ -1728,13 +1729,27 @@ fn view_port_inputs<'a>(
 fn view_awaiting_apply(
     app_theme: &crate::theme::AppTheme,
     regular_font: iced::Font,
+    auto_revert_enabled: bool,
+    auto_revert_timeout: u64,
 ) -> Element<'_, Message> {
+    let description = if auto_revert_enabled {
+        format!("Rules verified. Applying will activate a {}s safety rollback timer.", auto_revert_timeout.min(120))
+    } else {
+        "Rules verified. Changes will take effect immediately (no auto-revert).".to_string()
+    };
+
+    let button_text = if auto_revert_enabled {
+        "Apply & Start Timer"
+    } else {
+        "Apply Now"
+    };
+
     container(column![text("🛡️").size(36), container(text("Commit Changes?").size(24).font(regular_font).color(app_theme.fg_primary))
                           .padding([4, 8])
                           .style(move |_| section_header_container(app_theme)),
-                      text("Rules verified. Applying will take effect immediately with a 15s safety rollback window.").size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
+                      text(description).size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
                       row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(move |_, status| secondary_button(app_theme, status)),
-                           button(text("Apply & Start Timer").size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
+                           button(text(button_text).size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
     ].spacing(20).padding(32).align_x(Alignment::Center))
     .style(move |_| card_container(app_theme))
@@ -1743,9 +1758,17 @@ fn view_awaiting_apply(
 
 fn view_pending_confirmation(
     remaining: u32,
+    total_timeout: u32,
     app_theme: &crate::theme::AppTheme,
     regular_font: iced::Font,
 ) -> Element<'_, Message> {
+    // Calculate progress (inverted: starts at 100%, goes to 0%)
+    let progress = if total_timeout > 0 {
+        (remaining as f32) / (total_timeout as f32)
+    } else {
+        0.0
+    };
+
     container(
         column![
             text("⏳").size(36),
@@ -1764,6 +1787,87 @@ fn view_pending_confirmation(
             .color(app_theme.accent)
             .width(360)
             .align_x(Alignment::Center),
+            // Progress bar showing time remaining (inset/recessed style)
+            container(
+                progress_bar(0.0..=1.0, progress)
+                    .length(Length::Fill)
+                    .girth(18)
+                    .style(move |_| {
+                        use iced::widget::progress_bar;
+                        use iced::{Gradient, Background};
+
+                        // Use darkened accent for inset appearance (recessed elements are darker)
+                        let base_color = if remaining <= 5 {
+                            app_theme.danger
+                        } else {
+                            app_theme.accent
+                        };
+
+                        let bar_color = Color {
+                            r: base_color.r * 0.85,  // 15% darker than raised buttons
+                            g: base_color.g * 0.85,
+                            b: base_color.b * 0.85,
+                            a: base_color.a,
+                        };
+
+                        // Gradient: straight top shadow (light from above)
+                        let bar_gradient = Gradient::Linear(iced::gradient::Linear::new(std::f32::consts::PI)
+                            .add_stop(0.0, Color {
+                                r: bar_color.r * 0.5,  // 50% darker shadow at top edge
+                                g: bar_color.g * 0.5,
+                                b: bar_color.b * 0.5,
+                                a: bar_color.a,
+                            })
+                            .add_stop(0.08, bar_color)  // Quick transition at 8%
+                            .add_stop(1.0, bar_color));  // Full fill color for rest
+
+                        progress_bar::Style {
+                            background: Color {
+                                r: app_theme.bg_surface.r * 0.8,
+                                g: app_theme.bg_surface.g * 0.8,
+                                b: app_theme.bg_surface.b * 0.8,
+                                a: app_theme.bg_surface.a,
+                            }.into(),
+                            bar: Background::Gradient(bar_gradient),
+                            border: Border {
+                                radius: 6.0.into(),
+                                ..Default::default()
+                            },
+                        }
+                    })
+            )
+            .width(360)
+            .padding(2)  // Reduced from 3 for thinner edge
+            .style(move |_| container::Style {
+                background: Some(Color {
+                    r: app_theme.bg_surface.r * 0.7,  // 30% darker using RGB multiplication
+                    g: app_theme.bg_surface.g * 0.7,
+                    b: app_theme.bg_surface.b * 0.7,
+                    a: app_theme.bg_surface.a,
+                }.into()),
+                border: Border {
+                    color: Color {
+                        r: app_theme.bg_surface.r * 0.75,  // Lighter 25% darkening for border
+                        g: app_theme.bg_surface.g * 0.75,
+                        b: app_theme.bg_surface.b * 0.75,
+                        a: app_theme.bg_surface.a,
+                    }.into(),
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                shadow: Shadow {
+                    // Inner shadow effect (inverted offset for recess illusion)
+                    color: Color {
+                        r: app_theme.bg_surface.r * 0.5,  // Even darker for shadow depth
+                        g: app_theme.bg_surface.g * 0.5,
+                        b: app_theme.bg_surface.b * 0.5,
+                        a: 0.8,  // Slightly transparent for blend
+                    },
+                    offset: iced::Vector::new(0.0, -1.0),  // Negative Y = top shadow
+                    blur_radius: 3.0,
+                },
+                ..Default::default()
+            }),
             row![
                 button(text("Rollback").size(14))
                     .on_press(Message::RevertClicked)
@@ -1875,6 +1979,53 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                 theme,
                 state.font_regular,
             ),
+        ]
+        .spacing(16)
+        .padding(16)
+    ])
+    .style(move |_| card_container(theme));
+
+    let safety_card = container(column![
+        container(
+            row![
+                text("⏱️").size(18),
+                text("APPLY SAFETY").size(12).font(state.font_regular)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+        )
+        .padding([8, 12])
+        .width(Length::Fill)
+        .style(move |_| section_header_container(theme)),
+        column![
+            render_settings_row(
+                "Auto-revert confirmation",
+                "Require manual confirmation or automatically revert firewall changes after timeout",
+                toggler(state.auto_revert_enabled)
+                    .on_toggle(Message::ToggleAutoRevert)
+                    .width(Length::Shrink)
+                    .style(move |_, status| themed_toggler(theme, status))
+                    .into(),
+                theme,
+                state.font_regular,
+            ),
+            if state.auto_revert_enabled {
+                Element::from(render_settings_row(
+                    "   └ Timeout",
+                    "Seconds before automatic revert (5-120s)",
+                    row![
+                        slider(5.0..=120.0, state.auto_revert_timeout_secs as f64, |v| Message::AutoRevertTimeoutChanged(v as u64))
+                            .width(Length::Fill)
+                            .style(move |_, status| themed_slider(theme, status)),
+                        text(format!("{}s", state.auto_revert_timeout_secs))
+                            .size(12).font(state.font_mono).width(40).align_x(Alignment::End),
+                    ].spacing(12).align_y(Alignment::Center).into(),
+                    theme,
+                    state.font_regular,
+                ))
+            } else {
+                column![].into()
+            },
         ]
         .spacing(16)
         .padding(16)
@@ -2000,7 +2151,7 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     )
         .style(move |_| card_container(theme));
 
-    column![appearance_card, security_card,]
+    column![appearance_card, safety_card, security_card,]
         .spacing(24)
         .padding(8)
         .into()

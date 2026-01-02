@@ -17,6 +17,12 @@ pub struct AppConfig {
     pub show_diff: bool,
     #[serde(default = "default_true")]
     pub show_zebra_striping: bool,
+    /// Enable auto-revert countdown when applying rules (GUI only, CLI is always safe)
+    #[serde(default)]
+    pub auto_revert_enabled: bool,
+    /// Timeout in seconds for auto-revert countdown (default: 15s)
+    #[serde(default = "default_auto_revert_timeout")]
+    pub auto_revert_timeout_secs: u64,
 }
 
 impl Default for AppConfig {
@@ -28,6 +34,8 @@ impl Default for AppConfig {
             mono_font: crate::fonts::MonoFontChoice::default(),
             show_diff: true,
             show_zebra_striping: true,
+            auto_revert_enabled: false, // OFF by default for GUI (desktop context)
+            auto_revert_timeout_secs: 15,
         }
     }
 }
@@ -38,6 +46,10 @@ fn default_profile() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_auto_revert_timeout() -> u64 {
+    15
 }
 
 /// Saves the complete app config to disk using an atomic write pattern.

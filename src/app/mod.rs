@@ -165,6 +165,8 @@ pub struct State {
     pub pending_warning: Option<PendingWarning>,
     pub show_diff: bool,
     pub show_zebra_striping: bool,
+    pub auto_revert_enabled: bool,
+    pub auto_revert_timeout_secs: u64,
     pub show_diagnostics: bool,
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
@@ -502,6 +504,8 @@ pub enum Message {
     EventOccurred(iced::Event),
     ToggleDiff(bool),
     ToggleZebraStriping(bool),
+    ToggleAutoRevert(bool),
+    AutoRevertTimeoutChanged(u64),
     ToggleStrictIcmp(bool),
     IcmpRateLimitChanged(u32),
     ToggleRpfRequested(bool),
@@ -630,6 +634,8 @@ impl State {
         let mut mono_font_choice = config.mono_font;
         let show_diff = config.show_diff;
         let show_zebra_striping = config.show_zebra_striping;
+        let auto_revert_enabled = config.auto_revert_enabled;
+        let auto_revert_timeout_secs = config.auto_revert_timeout_secs;
         let active_profile_name = config.active_profile;
 
         regular_font_choice.resolve(false);
@@ -676,6 +682,8 @@ impl State {
             pending_warning: None,
             show_diff,
             show_zebra_striping,
+            auto_revert_enabled,
+            auto_revert_timeout_secs,
             show_diagnostics: false,
             show_export_modal: false,
             show_shortcuts_help: false,
@@ -822,6 +830,8 @@ impl State {
             mono_font: self.mono_font_choice.clone(),
             show_diff: self.show_diff,
             show_zebra_striping: self.show_zebra_striping,
+            auto_revert_enabled: self.auto_revert_enabled,
+            auto_revert_timeout_secs: self.auto_revert_timeout_secs,
         };
 
         // Async save using Task::perform
@@ -1036,6 +1046,14 @@ impl State {
             }
             Message::ToggleZebraStriping(enabled) => {
                 self.show_zebra_striping = enabled;
+                return self.save_config();
+            }
+            Message::ToggleAutoRevert(enabled) => {
+                self.auto_revert_enabled = enabled;
+                return self.save_config();
+            }
+            Message::AutoRevertTimeoutChanged(timeout) => {
+                self.auto_revert_timeout_secs = timeout.clamp(5, 120);
                 return self.save_config();
             }
             Message::ToggleStrictIcmp(enabled) => {
@@ -1768,7 +1786,7 @@ impl State {
 
     fn handle_apply_result(&mut self, snapshot: serde_json::Value) {
         self.last_applied_ruleset = Some(self.ruleset.clone());
-        self.countdown_remaining = 15;
+
         if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
             eprintln!("Failed to save snapshot to disk: {e}");
             self.last_error = Some(ErrorInfo::new(format!(
@@ -1776,16 +1794,32 @@ impl State {
             )));
         }
 
-        self.status = AppStatus::PendingConfirmation {
-            deadline: Utc::now() + Duration::from_secs(15),
-            snapshot,
-        };
-        self.last_error = None;
-        self.push_banner(
-            "Firewall rules applied! Changes will auto-revert in 15s if not confirmed.",
-            BannerSeverity::Info,
-            15,
-        );
+        if self.auto_revert_enabled {
+            // Auto-revert enabled: show countdown modal
+            self.countdown_remaining = self.auto_revert_timeout_secs.min(120) as u32;
+            self.status = AppStatus::PendingConfirmation {
+                deadline: Utc::now() + Duration::from_secs(self.auto_revert_timeout_secs.min(120)),
+                snapshot,
+            };
+            self.last_error = None;
+            self.push_banner(
+                format!(
+                    "Firewall rules applied! Changes will auto-revert in {}s if not confirmed.",
+                    self.auto_revert_timeout_secs.min(120)
+                ),
+                BannerSeverity::Info,
+                self.auto_revert_timeout_secs.min(120),
+            );
+        } else {
+            // Auto-revert disabled: show success banner and return to idle
+            self.status = AppStatus::Idle;
+            self.last_error = None;
+            self.push_banner(
+                "Firewall rules applied successfully!",
+                BannerSeverity::Success,
+                5,
+            );
+        }
     }
 
     fn handle_revert_clicked(&mut self) -> Task<Message> {
