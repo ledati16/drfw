@@ -96,10 +96,10 @@ pub fn validate_snapshot(snapshot: &Value) -> Result<()> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| Error::Internal("Invalid snapshot: missing nftables array".to_string()))?;
 
-    // Basic sanity checks
+    // Allow empty snapshots for emergency recovery scenarios
     if nftables.is_empty() {
         warn!("Snapshot contains empty ruleset, but allowing for recovery scenarios");
-        // Don't fail - might be intentional for emergency recovery
+        return Ok(()); // Explicitly allow empty
     }
 
     // Verify it contains table operations (command format: add/list/flush)
@@ -630,8 +630,8 @@ mod tests {
             "nftables": []
         });
 
-        // This should log a warning but not fail
-        assert!(validate_snapshot(&empty_snapshot).is_err());
+        // Should succeed with warning logged
+        assert!(validate_snapshot(&empty_snapshot).is_ok()); // ✅ Fixed
     }
 
     #[test]
