@@ -187,6 +187,9 @@ pub struct State {
     pub font_regular: iced::Font,
     pub font_mono: iced::Font,
     pub available_fonts: &'static [crate::fonts::FontChoice],
+    // Config save debouncing
+    pub config_dirty: bool,
+    pub last_config_change: Option<std::time::Instant>,
     // Profile management
     pub active_profile_name: String,
     pub available_profiles: Vec<String>,
@@ -608,6 +611,8 @@ pub enum Message {
     PruneBanners,
     /// Dismiss a specific banner (click to dismiss)
     DismissBanner(usize),
+    /// Check if config should be saved (debounced)
+    CheckConfigSave,
     /// No-op message for async operations that don't need a result
     Noop,
 }
@@ -739,6 +744,8 @@ impl State {
             font_regular,
             font_mono,
             available_fonts,
+            config_dirty: false,
+            last_config_change: None,
             active_profile_name,
             available_profiles,
             pending_profile_switch: None,
@@ -887,6 +894,29 @@ impl State {
             },
             |()| Message::Noop,
         )
+    }
+
+    fn mark_config_dirty(&mut self) {
+        self.config_dirty = true;
+        self.last_config_change = Some(std::time::Instant::now());
+    }
+
+    fn handle_check_config_save(&mut self) -> Task<Message> {
+        const DEBOUNCE_MS: u64 = 500;
+
+        if !self.config_dirty {
+            return Task::none();
+        }
+
+        // Check if enough time has passed since last change
+        if let Some(last_change) = self.last_config_change
+            && last_change.elapsed().as_millis() < DEBOUNCE_MS as u128
+        {
+            return Task::none();
+        }
+
+        self.config_dirty = false;
+        self.save_config()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -1102,7 +1132,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::ToggleZebraStriping(enabled) => {
                 self.show_zebra_striping = enabled;
@@ -1115,7 +1145,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::ToggleAutoRevert(enabled) => {
                 self.auto_revert_enabled = enabled;
@@ -1128,7 +1158,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 self.auto_revert_timeout_secs = timeout.clamp(5, 120);
@@ -1137,7 +1167,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::ToggleEventLog(enabled) => {
                 self.enable_event_log = enabled;
@@ -1151,7 +1181,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enabled, desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::ToggleStrictIcmp(enabled) => {
                 self.ruleset.advanced_security.strict_icmp = enabled;
@@ -1165,7 +1195,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::IcmpRateLimitChanged(rate) => {
                 self.ruleset.advanced_security.icmp_rate_limit = rate;
@@ -1175,7 +1205,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::ToggleRpfRequested(enabled) => {
                 if enabled {
@@ -1191,7 +1221,7 @@ impl State {
                         )
                         .await;
                     });
-                    return self.save_config();
+                    self.mark_config_dirty();
                 }
             }
             Message::ConfirmEnableRpf => {
@@ -1206,7 +1236,7 @@ impl State {
                     )
                     .await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::CancelWarning => {
                 self.pending_warning = None;
@@ -1223,7 +1253,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::LogRateChanged(rate) => {
                 // Validate log rate (slider ensures 1-100 range, but check for warnings)
@@ -1248,7 +1278,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::LogPrefixChanged(prefix) => {
                 // Validate and sanitize log prefix
@@ -1261,7 +1291,7 @@ impl State {
                         tokio::spawn(async move {
                             crate::audit::log_settings_saved(enable_event_log, &desc).await;
                         });
-                        return self.save_config();
+                        self.mark_config_dirty();
                     }
                     Err(e) => {
                         // Invalid prefix - don't save, just log the error
@@ -1285,7 +1315,7 @@ impl State {
                         )
                         .await;
                     });
-                    return self.save_config();
+                    self.mark_config_dirty();
                 }
             }
             Message::ConfirmServerMode => {
@@ -1301,7 +1331,7 @@ impl State {
                     )
                     .await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::ToggleDiagnostics(show) => self.show_diagnostics = show,
             Message::DiagnosticsFilterChanged(filter) => self.diagnostics_filter = filter,
@@ -1315,14 +1345,14 @@ impl State {
             Message::Undo => {
                 if let Some(description) = self.command_history.undo(&mut self.ruleset) {
                     self.update_cached_text();
-                    let _ = self.save_config();
+                    self.mark_config_dirty();
                     tracing::info!("Undid: {}", description);
                 }
             }
             Message::Redo => {
                 if let Some(description) = self.command_history.redo(&mut self.ruleset) {
                     self.update_cached_text();
-                    let _ = self.save_config();
+                    self.mark_config_dirty();
                     tracing::info!("Redid: {}", description);
                 }
             }
@@ -1334,7 +1364,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::OpenThemePicker => {
                 self.theme_picker = Some(ThemePickerState {
@@ -1361,7 +1391,7 @@ impl State {
             }
             Message::ApplyTheme => {
                 self.theme_picker = None;
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::CancelThemePicker => {
                 if let Some(picker) = &self.theme_picker {
@@ -1379,7 +1409,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::MonoFontChanged(choice) => {
                 self.mono_font_choice = choice.clone();
@@ -1390,7 +1420,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 });
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::OpenFontPicker(target) => {
                 self.font_picker = Some(FontPickerState {
@@ -1485,7 +1515,7 @@ impl State {
                     };
                     self.command_history
                         .execute(Box::new(command), &mut self.ruleset);
-                    let _ = self.save_config();
+                    self.mark_config_dirty();
                     self.update_cached_text();
                 }
                 self.dragged_rule_id = None;
@@ -1521,7 +1551,7 @@ impl State {
                     .await;
                 });
 
-                return self.save_config();
+                self.mark_config_dirty();
             }
             Message::SaveProfileClicked => {
                 let name = self.active_profile_name.clone();
@@ -1548,6 +1578,7 @@ impl State {
                 let name_for_log = name.clone();
                 let enable_event_log = self.enable_event_log;
                 self.active_profile_name = name;
+                self.mark_config_dirty();
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.creating_new = false;
                     mgr.new_name_input.clear();
@@ -1571,8 +1602,7 @@ impl State {
                     // Log profile creation
                     crate::audit::log_profile_created(enable_event_log, &name_for_log).await;
                     Message::Noop
-                }))
-                .chain(self.save_config());
+                }));
             }
             Message::ProfileListUpdated(profiles) => {
                 self.available_profiles = profiles;
@@ -1675,6 +1705,7 @@ impl State {
                     let was_active = self.active_profile_name == old;
                     if was_active {
                         self.active_profile_name = new.clone();
+                        self.mark_config_dirty();
                     }
 
                     let enable_event_log = self.enable_event_log;
@@ -1696,12 +1727,7 @@ impl State {
                         crate::audit::log_profile_renamed(enable_event_log, &old_name, &new_name)
                             .await;
                         Message::Noop
-                    }))
-                    .chain(if was_active {
-                        self.save_config()
-                    } else {
-                        Task::none()
-                    });
+                    }));
                 }
             }
             Message::ProfileRenamed(result) => match result {
@@ -1746,6 +1772,7 @@ impl State {
                     self.banners.remove(index);
                 }
             }
+            Message::CheckConfigSave => return self.handle_check_config_save(),
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
@@ -1884,7 +1911,7 @@ impl State {
                 self.command_history
                     .execute(Box::new(command), &mut self.ruleset);
             }
-            let _ = self.save_config();
+            self.mark_config_dirty();
             self.update_cached_text();
             self.form_errors = None;
         }
@@ -1899,7 +1926,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = self.save_config();
+            self.mark_config_dirty();
             self.update_cached_text();
         }
     }
@@ -1910,7 +1937,7 @@ impl State {
             let command = crate::command::DeleteRuleCommand { rule, index: pos };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            let _ = self.save_config();
+            self.mark_config_dirty();
             self.update_cached_text();
         }
         self.deleting_id = None;
@@ -2345,6 +2372,12 @@ impl State {
             // Prune expired banners every second
             if !self.banners.is_empty() {
                 iced::time::every(Duration::from_secs(1)).map(|_| Message::PruneBanners)
+            } else {
+                iced::Subscription::none()
+            },
+            // Config auto-save subscription
+            if self.config_dirty {
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckConfigSave)
             } else {
                 iced::Subscription::none()
             },
