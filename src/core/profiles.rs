@@ -133,7 +133,29 @@ pub async fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
         return Err(ProfileError::NotFound(name.to_string()));
     }
 
-    let json = tokio::fs::read_to_string(path).await?;
+    let json = tokio::fs::read_to_string(&path).await?;
+
+    // Verify checksum if present (warns but doesn't fail for manually edited profiles)
+    let mut checksum_path = path.clone();
+    checksum_path.set_extension("json.sha256");
+
+    if let Ok(expected_checksum) = tokio::fs::read_to_string(&checksum_path).await {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(json.as_bytes());
+        let actual_checksum = format!("{:x}", hasher.finalize());
+
+        if expected_checksum.trim() != actual_checksum {
+            tracing::warn!(
+                "Profile '{}' checksum mismatch (expected: {}, got: {})",
+                name,
+                expected_checksum.trim(),
+                actual_checksum
+            );
+            // Don't fail - just warn (profile might be manually edited)
+        }
+    }
+
     let mut ruleset: FirewallRuleset = serde_json::from_str(&json)?;
 
     // Rebuild caches for each rule to ensure performant UI rendering/filtering
@@ -180,7 +202,20 @@ pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), P
         tokio::fs::write(&temp_path, json).await?;
     }
 
-    tokio::fs::rename(temp_path, path).await?;
+    tokio::fs::rename(temp_path, &path).await?;
+
+    // Calculate and save checksum for integrity verification
+    let checksum = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(json.as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
+
+    let mut checksum_path = path.clone();
+    checksum_path.set_extension("json.sha256");
+    tokio::fs::write(checksum_path, checksum).await?;
+
     Ok(())
 }
 
