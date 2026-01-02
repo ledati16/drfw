@@ -1036,6 +1036,12 @@ impl State {
                         BannerSeverity::Success,
                         5,
                     );
+                    // Log auto-revert confirmation
+                    let enable_event_log = self.enable_event_log;
+                    let timeout_secs = self.auto_revert_timeout_secs;
+                    tokio::spawn(async move {
+                        crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs).await;
+                    });
                 }
             }
             Message::RevertClicked => return self.handle_revert_clicked(),
@@ -1097,6 +1103,10 @@ impl State {
             }
             Message::ToggleEventLog(enabled) => {
                 self.enable_event_log = enabled;
+                // Log settings change (meta: logging that logging was enabled/disabled!)
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enabled).await;
+                });
                 return self.save_config();
             }
             Message::ToggleStrictIcmp(enabled) => {
@@ -1369,10 +1379,19 @@ impl State {
                 return self.handle_switch_profile(name);
             }
             Message::ProfileSwitched(name, ruleset) => {
+                let from_profile = self.active_profile_name.clone();
                 self.ruleset = ruleset;
-                self.active_profile_name = name;
+                self.active_profile_name = name.clone();
                 self.command_history = crate::command::CommandHistory::default();
                 self.update_cached_text();
+
+                // Log profile switch
+                let enable_event_log = self.enable_event_log;
+                let to_profile = name;
+                tokio::spawn(async move {
+                    crate::audit::log_profile_switched(enable_event_log, &from_profile, &to_profile).await;
+                });
+
                 return self.save_config();
             }
             Message::SaveProfileClicked => {
@@ -1397,6 +1416,8 @@ impl State {
             Message::SaveProfileAs(name) => {
                 let ruleset = self.ruleset.clone();
                 let name_clone = name.clone();
+                let name_for_log = name.clone();
+                let enable_event_log = self.enable_event_log;
                 self.active_profile_name = name;
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.creating_new = false;
@@ -1417,6 +1438,11 @@ impl State {
                         }
                     },
                 )
+                .chain(Task::future(async move {
+                    // Log profile creation
+                    crate::audit::log_profile_created(enable_event_log, &name_for_log).await;
+                    Message::Noop
+                }))
                 .chain(self.save_config());
             }
             Message::ProfileListUpdated(profiles) => {
@@ -1459,6 +1485,8 @@ impl State {
                 if let Some(mgr) = &mut self.profile_manager
                     && let Some(name) = mgr.deleting_name.take()
                 {
+                    let enable_event_log = self.enable_event_log;
+                    let deleted_name = name.clone();
                     return Task::perform(
                         async move {
                             crate::core::profiles::delete_profile(&name).await?;
@@ -1470,7 +1498,12 @@ impl State {
                                 "Failed to delete profile: {e}"
                             ))),
                         },
-                    );
+                    )
+                    .chain(Task::future(async move {
+                        // Log profile deletion
+                        crate::audit::log_profile_deleted(enable_event_log, &deleted_name).await;
+                        Message::Noop
+                    }));
                 }
             }
             Message::ProfileDeleted(result) => match result {
@@ -1515,6 +1548,10 @@ impl State {
                         self.active_profile_name = new.clone();
                     }
 
+                    let enable_event_log = self.enable_event_log;
+                    let old_name = old.clone();
+                    let new_name = new.clone();
+
                     return Task::perform(
                         async move {
                             crate::core::profiles::rename_profile(&old, &new).await?;
@@ -1525,6 +1562,11 @@ impl State {
                             Err(e) => Message::ProfileRenamed(Err(format!("Rename failed: {e}"))),
                         },
                     )
+                    .chain(Task::future(async move {
+                        // Log profile rename
+                        crate::audit::log_profile_renamed(enable_event_log, &old_name, &new_name).await;
+                        Message::Noop
+                    }))
                     .chain(if was_active {
                         self.save_config()
                     } else {
@@ -1915,6 +1957,7 @@ impl State {
                 // Extract snapshot BEFORE changing status (fixes race condition)
                 let snapshot = snapshot.clone();
                 let enable_event_log = self.enable_event_log;
+                let timeout_secs = self.auto_revert_timeout_secs;
                 self.status = AppStatus::Reverting;
                 self.countdown_remaining = 0;
                 self.push_banner(
@@ -1922,6 +1965,11 @@ impl State {
                     BannerSeverity::Warning,
                     10,
                 );
+
+                // Log auto-revert timeout
+                tokio::spawn(async move {
+                    crate::audit::log_auto_revert_timed_out(enable_event_log, timeout_secs).await;
+                });
 
                 // Spawn revert task directly instead of going through RevertClicked message
                 return Task::perform(
