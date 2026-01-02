@@ -29,6 +29,47 @@
 - **Visibility:** Default to private; widen only when architecturally required
 - **Efficiency:** Prefer in-place operations (`clone_from`) over reallocations
 
+### DRY Principle Enforcement
+
+**Extract repeated patterns into utilities:**
+
+```rust
+// ❌ BAD: Same pattern in 4 functions
+pub fn blocking_wrapper_1() -> Type1 {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(async_fn_1())
+    } else {
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create runtime")
+            .block_on(async_fn_1())
+    }
+}
+
+// ✅ GOOD: Extract to utility (see src/utils.rs:block_on_async)
+pub fn blocking_wrapper_1() -> Type1 {
+    crate::utils::block_on_async(async_fn_1())
+}
+```
+
+**When to extract:**
+- Pattern used 3+ times
+- Pattern is complex (5+ lines)
+- Pattern could introduce bugs if inconsistently modified
+
+**When NOT to extract:**
+- Pattern is trivial (1-2 lines)
+- Extraction would obscure intent
+- Pattern has subtle differences between uses
+
+### File Size Guidelines
+
+- **Single file limit:** ~4000 lines (e.g., `app/view.rs` is at this threshold)
+- **When to split:** Consider submodules when a file exceeds 3000 lines with clear logical sections
+- **Module structure:** Group related functionality (`view/rules.rs`, `view/settings.rs`, `view/modals.rs`)
+- **Trade-off:** Balance between too many small files vs monolithic files
+
+**Note:** This is a soft guideline, not a hard rule. Prioritize logical cohesion over arbitrary line counts.
+
 ---
 
 ## 2. Error Handling
@@ -234,6 +275,13 @@ async fn test_elevated_operation() {
 - Tests must **skip** (not fail) when run without privileges
 - Check for "Operation not permitted" in stderr
 - Document privilege requirements in module-level docs
+
+### TODO Comment Hygiene
+
+- **Mark phase/completion:** `TODO (Phase 6): Wire up to diagnostics viewer`
+- **Update or remove:** Review all TODOs after completing phases
+- **Track separately:** Consider using GitHub Issues for long-term TODOs instead of code comments
+- **Outdated TODOs:** When features are implemented differently than planned, update comments to reflect actual implementation (see `audit.rs:138` for example of proper update)
 
 ---
 
@@ -509,6 +557,38 @@ fn validate_source(&self, errors: &mut FormErrors) -> Option<IpNetwork> {
 ### Premature Abstraction
 Wait for 3+ identical use cases before creating helpers. Inline code is often clearer than poorly-abstracted helpers.
 
+### The Unwrap Trap in UI Message Handlers (2026-01-02)
+
+**Pattern to Avoid:**
+```rust
+fn handle_message(&mut self) -> Task<Message> {
+    if let Some(data) = &self.optional_state {
+        // ... validation ...
+    }
+
+    // DANGER: State could theoretically desync between check and use
+    let data = self.optional_state.take().unwrap();  // ❌ Can panic
+}
+```
+
+**Safe Pattern:**
+```rust
+fn handle_message(&mut self) -> Task<Message> {
+    let Some(data) = self.optional_state.take() else {
+        tracing::error!("Message handler called with invalid state");
+        return Task::none();
+    };
+    // ... use data ...
+}
+```
+
+**Why:** UI frameworks can have subtle state desync bugs. Graceful degradation is better than panics.
+
+**When unwrap() is acceptable:**
+- In test code
+- After explicit checks where desync is impossible (e.g., `vec[0]` after checking `.len() > 0` in same scope)
+- Static initialization where failure is unrecoverable
+
 ---
 
 ## Appendix: File Permission Reference
@@ -527,6 +607,6 @@ Wait for 3+ identical use cases before creating helpers. Inline code is often cl
 
 ---
 
-**Last Updated:** 2026-01-02
+**Last Updated:** 2026-01-02 (Post-implementation review - added DRY, file size guidelines, unwrap safety, TODO hygiene)
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14
