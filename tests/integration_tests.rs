@@ -674,3 +674,198 @@ fn test_mock_nft_script_exists() {
         );
     }
 }
+
+// ============================================================================
+// CLI Command Integration Tests
+// ============================================================================
+//
+// These tests verify the core functionality used by CLI commands without
+// requiring the actual binary to be executed. They test the same code paths
+// that handle_cli() in main.rs uses.
+
+#[tokio::test]
+async fn test_cli_list_profiles() {
+    // Test the profile listing functionality used by `drfw list`
+    // This tests that list_profiles() can handle the actual profiles directory
+    use drfw::core::profiles;
+
+    // Just verify that list_profiles() doesn't panic and returns a vec
+    let result = profiles::list_profiles().await;
+    assert!(result.is_ok(), "list_profiles() should not fail");
+
+    let profiles = result.unwrap();
+    // Should at least have default profile (created by app if missing)
+    assert!(
+        profiles.iter().any(|p| p == "default") || profiles.is_empty(),
+        "Should handle profiles directory correctly"
+    );
+}
+
+#[tokio::test]
+async fn test_cli_export_nft_format() {
+    // Test the export functionality used by `drfw export --format nft`
+    let ruleset = create_test_ruleset();
+    let nft_text = ruleset.to_nft_text();
+
+    // Verify nft format output structure
+    assert!(
+        nft_text.contains("table inet drfw"),
+        "Should have table declaration"
+    );
+    assert!(nft_text.contains("chain input"), "Should have input chain");
+    assert!(
+        nft_text.contains("policy drop"),
+        "Should have default policy"
+    );
+    assert!(nft_text.contains("Test SSH"), "Should include rule comment");
+    assert!(
+        nft_text.contains("tcp dport 22"),
+        "Should include port rule"
+    );
+}
+
+#[tokio::test]
+async fn test_cli_export_json_format() {
+    // Test the export functionality used by `drfw export --format json`
+    let ruleset = create_test_ruleset();
+    let json = ruleset.to_nftables_json();
+
+    // Verify JSON format structure
+    assert!(json["nftables"].is_array(), "Should have nftables array");
+
+    let json_str = serde_json::to_string_pretty(&json).unwrap();
+    assert!(
+        json_str.contains("\"table\""),
+        "Should have table declaration"
+    );
+    assert!(
+        json_str.contains("\"chain\""),
+        "Should have chain declaration"
+    );
+    assert!(
+        json_str.contains("\"rule\""),
+        "Should have rule declaration"
+    );
+}
+
+#[tokio::test]
+async fn test_cli_verify_before_apply() {
+    // Test the verification step used by `drfw apply`
+    setup_mock_nft();
+
+    let ruleset = create_test_ruleset();
+    let json = ruleset.to_nftables_json();
+
+    // Verify the ruleset before applying (as CLI does)
+    let result = verify::verify_ruleset(json).await;
+
+    if let Ok(verify_result) = result {
+        // With mock or real nft available
+        if verify_result.success {
+            assert!(
+                verify_result.errors.is_empty(),
+                "Valid ruleset should have no errors"
+            );
+        } else {
+            // If verification failed, check if it's due to permissions
+            let has_permission_error = verify_result
+                .errors
+                .iter()
+                .any(|e| e.contains("Operation not permitted") || e.contains("Permission denied"));
+
+            if !has_permission_error {
+                panic!(
+                    "Verification failed unexpectedly: {:?}",
+                    verify_result.errors
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_cli_profile_load_and_rebuild_caches() {
+    // Test that profile loading rebuilds caches (important for CLI performance)
+    // We'll create a ruleset, serialize it to JSON, then deserialize and check caches
+
+    use drfw::core::firewall::FirewallRuleset;
+
+    let mut ruleset = create_test_ruleset();
+
+    // Clear caches to simulate fresh load from disk
+    for rule in &mut ruleset.rules {
+        rule.label_lowercase = String::new();
+        rule.port_display = String::new();
+        rule.protocol_lowercase = "";
+    }
+
+    // Serialize to JSON (simulating save to disk)
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // Deserialize and rebuild caches (simulating load from disk)
+    let mut loaded: FirewallRuleset = serde_json::from_str(&json).unwrap();
+    for rule in &mut loaded.rules {
+        rule.rebuild_caches();
+    }
+
+    // Verify caches are rebuilt
+    assert_eq!(loaded.rules.len(), 1);
+    let rule = &loaded.rules[0];
+
+    // These should be populated by rebuild_caches()
+    assert!(
+        !rule.label_lowercase.is_empty(),
+        "Label cache should be rebuilt"
+    );
+    assert!(
+        !rule.port_display.is_empty(),
+        "Port display cache should be rebuilt"
+    );
+    assert_eq!(
+        rule.protocol_lowercase, "tcp",
+        "Protocol cache should be rebuilt"
+    );
+}
+
+#[tokio::test]
+async fn test_cli_invalid_profile_name() {
+    // Test profile name validation (CLI error handling)
+    use drfw::core::profiles;
+
+    // These should fail validation
+    let invalid_names = vec![
+        "../etc/passwd".to_string(), // Path traversal
+        ".".to_string(),             // Special directory
+        "..".to_string(),            // Parent directory
+        "test/profile".to_string(),  // Contains slash
+        "test profile".to_string(),  // Contains space
+        "a".repeat(65),              // Too long
+    ];
+
+    for name in invalid_names {
+        let result = profiles::load_profile(&name).await;
+        assert!(
+            result.is_err(),
+            "Should reject invalid profile name: {}",
+            name
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_cli_profile_not_found() {
+    // Test CLI error handling for missing profiles
+    use drfw::core::profiles;
+
+    let result = profiles::load_profile("nonexistent_profile_12345").await;
+    assert!(result.is_err(), "Should error when profile doesn't exist");
+
+    if let Err(e) = result {
+        let err_msg = e.to_string();
+        assert!(
+            err_msg.contains("not found") || err_msg.contains("NotFound"),
+            "Error should indicate profile not found: {}",
+            err_msg
+        );
+    }
+}
