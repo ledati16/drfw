@@ -94,6 +94,12 @@ impl AuditLog {
     ///
     /// Events are written as JSON-lines format (one JSON object per line)
     ///
+    /// # Security
+    ///
+    /// On Unix systems, files are created with mode 0o600 (user read/write only).
+    /// On Windows, files inherit directory permissions. Users should ensure the
+    /// audit directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\data\state`
+    ///
     /// # Errors
     ///
     /// Returns `Err` if file cannot be opened or written

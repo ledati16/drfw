@@ -183,6 +183,12 @@ pub async fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
 /// Uses a temporary file + rename pattern to prevent data corruption if the
 /// process crashes or the disk fills up during write.
 ///
+/// # Security
+///
+/// On Unix systems, files are created with mode 0o600 (user read/write only).
+/// On Windows, files inherit directory permissions. Users should ensure the
+/// profiles directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\data\profiles`
+///
 /// # Async
 /// Uses `tokio::fs` for non-blocking file I/O.
 pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), ProfileError> {

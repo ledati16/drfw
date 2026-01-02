@@ -61,6 +61,12 @@ fn default_auto_revert_timeout() -> u64 {
 /// 2. Sets restrictive permissions (0o600).
 /// 3. Atomically renames to the target path.
 ///
+/// # Security
+///
+/// On Unix systems, files are created with mode 0o600 (user read/write only).
+/// On Windows, files inherit directory permissions. Users should ensure the
+/// config directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\config`
+///
 /// # Async
 /// Uses `tokio::fs` for non-blocking I/O to avoid blocking the event loop.
 pub async fn save_config(config: &AppConfig) -> std::io::Result<()> {
