@@ -135,14 +135,14 @@ impl AuditLog {
 
     /// Reads the most recent events from the log
     ///
-    /// **TODO**: Wire up to diagnostics viewer (Phase 6 or 7)
-    ///
-    /// This will enable a "View Audit Log" feature in the Settings/Diagnostics tab,
-    /// allowing users to review recent security-critical operations.
+    /// **Note**: The diagnostics viewer (implemented in `app/view.rs:2565`) reads
+    /// the audit log directly for performance reasons. This function is available
+    /// for programmatic access (e.g., CLI commands, future features) but is not
+    /// currently used by the GUI.
     ///
     /// # Arguments
     ///
-    /// * `count` - Maximum number of events to return
+    /// * `count` - Maximum number of events to return (most recent first)
     ///
     /// # Errors
     ///
