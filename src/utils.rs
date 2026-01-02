@@ -119,3 +119,52 @@ pub fn pick_save_path(default_name: &str, extension: &str) -> Option<std::path::
         .add_filter(extension, &[extension])
         .save_file()
 }
+
+/// Executes an async function in a blocking context.
+///
+/// This is a utility wrapper for running async code from synchronous contexts,
+/// typically during application startup before the main async runtime is available.
+///
+/// # Behavior
+///
+/// - **If called within a Tokio runtime context:** Uses the current runtime's handle
+/// - **Otherwise:** Creates a temporary runtime (shouldn't happen in practice)
+///
+/// # Panics
+///
+/// Panics if unable to create a Tokio runtime (extremely rare, indicates system
+/// resource exhaustion).
+///
+/// # Usage
+///
+/// This should **only** be used in synchronous wrapper functions like
+/// `load_config_blocking()`, `load_profile_blocking()`, etc. All other code
+/// should use async/await directly.
+///
+/// # Example
+///
+/// ```no_run
+/// use drfw::utils::block_on_async;
+///
+/// async fn fetch_data() -> String {
+///     // ... async operations ...
+///     String::from("data")
+/// }
+///
+/// pub fn fetch_data_blocking() -> String {
+///     block_on_async(fetch_data())
+/// }
+/// ```
+pub fn block_on_async<F, T>(future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(future)
+    } else {
+        // Fallback: create temporary runtime (shouldn't happen in practice)
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create Tokio runtime")
+            .block_on(future)
+    }
+}

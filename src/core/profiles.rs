@@ -310,13 +310,7 @@ pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), Profil
 /// This blocks the current thread and should only be used in `State::new()` where
 /// async initialization isn't possible. Everywhere else should use async `list_profiles()`.
 pub fn list_profiles_blocking() -> Result<Vec<String>, ProfileError> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.block_on(list_profiles())
-    } else {
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create runtime")
-            .block_on(list_profiles())
-    }
+    crate::utils::block_on_async(list_profiles())
 }
 
 /// Synchronous wrapper for `load_profile()` for use during startup initialization.
@@ -324,11 +318,5 @@ pub fn list_profiles_blocking() -> Result<Vec<String>, ProfileError> {
 /// This blocks the current thread and should only be used in `State::new()` where
 /// async initialization isn't possible. Everywhere else should use async `load_profile()`.
 pub fn load_profile_blocking(name: &str) -> Result<FirewallRuleset, ProfileError> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.block_on(load_profile(name))
-    } else {
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create runtime")
-            .block_on(load_profile(name))
-    }
+    crate::utils::block_on_async(load_profile(name))
 }

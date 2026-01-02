@@ -144,14 +144,5 @@ pub async fn load_config() -> AppConfig {
 /// This blocks the current thread and should only be used in `State::new()` where
 /// async initialization isn't possible. Everywhere else should use async `load_config()`.
 pub fn load_config_blocking() -> AppConfig {
-    // Use Handle::current() if available (we're in a Tokio context),
-    // otherwise create a temporary runtime
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.block_on(load_config())
-    } else {
-        // Fallback: create temporary runtime (shouldn't happen in practice)
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create runtime")
-            .block_on(load_config())
-    }
+    crate::utils::block_on_async(load_config())
 }
