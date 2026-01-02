@@ -190,6 +190,9 @@ pub struct State {
     // Config save debouncing
     pub config_dirty: bool,
     pub last_config_change: Option<std::time::Instant>,
+    // Profile save debouncing
+    pub profile_dirty: bool,
+    pub last_profile_change: Option<std::time::Instant>,
     // Profile management
     pub active_profile_name: String,
     pub available_profiles: Vec<String>,
@@ -613,6 +616,8 @@ pub enum Message {
     DismissBanner(usize),
     /// Check if config should be saved (debounced)
     CheckConfigSave,
+    /// Check if profile should be saved (debounced)
+    CheckProfileSave,
     /// No-op message for async operations that don't need a result
     Noop,
 }
@@ -746,6 +751,8 @@ impl State {
             available_fonts,
             config_dirty: false,
             last_config_change: None,
+            profile_dirty: false,
+            last_profile_change: None,
             active_profile_name,
             available_profiles,
             pending_profile_switch: None,
@@ -917,6 +924,44 @@ impl State {
 
         self.config_dirty = false;
         self.save_config()
+    }
+
+    fn mark_profile_dirty(&mut self) {
+        self.profile_dirty = true;
+        self.last_profile_change = Some(std::time::Instant::now());
+        self.update_cached_text(); // UI updates immediately
+    }
+
+    fn handle_check_profile_save(&mut self) -> Task<Message> {
+        const DEBOUNCE_MS: u64 = 1000; // 1 second for profiles
+
+        if !self.profile_dirty {
+            return Task::none();
+        }
+
+        // Check if enough time has passed since last change
+        if let Some(last_change) = self.last_profile_change
+            && last_change.elapsed().as_millis() < DEBOUNCE_MS as u128
+        {
+            return Task::none();
+        }
+
+        self.profile_dirty = false;
+        self.save_profile()
+    }
+
+    fn save_profile(&self) -> Task<Message> {
+        let profile_name = self.active_profile_name.clone();
+        let ruleset = self.ruleset.clone();
+
+        Task::perform(
+            async move {
+                if let Err(e) = crate::core::profiles::save_profile(&profile_name, &ruleset).await {
+                    eprintln!("Failed to save profile: {e}");
+                }
+            },
+            |()| Message::Noop,
+        )
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -1344,15 +1389,13 @@ impl State {
             Message::ToggleShortcutsHelp(show) => self.show_shortcuts_help = show,
             Message::Undo => {
                 if let Some(description) = self.command_history.undo(&mut self.ruleset) {
-                    self.update_cached_text();
-                    self.mark_config_dirty();
+                    self.mark_profile_dirty();
                     tracing::info!("Undid: {}", description);
                 }
             }
             Message::Redo => {
                 if let Some(description) = self.command_history.redo(&mut self.ruleset) {
-                    self.update_cached_text();
-                    self.mark_config_dirty();
+                    self.mark_profile_dirty();
                     tracing::info!("Redid: {}", description);
                 }
             }
@@ -1515,8 +1558,7 @@ impl State {
                     };
                     self.command_history
                         .execute(Box::new(command), &mut self.ruleset);
-                    self.mark_config_dirty();
-                    self.update_cached_text();
+                    self.mark_profile_dirty();
                 }
                 self.dragged_rule_id = None;
                 self.hovered_drop_target_id = None;
@@ -1773,6 +1815,7 @@ impl State {
                 }
             }
             Message::CheckConfigSave => return self.handle_check_config_save(),
+            Message::CheckProfileSave => return self.handle_check_profile_save(),
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
@@ -1911,8 +1954,7 @@ impl State {
                 self.command_history
                     .execute(Box::new(command), &mut self.ruleset);
             }
-            self.mark_config_dirty();
-            self.update_cached_text();
+            self.mark_profile_dirty();
             self.form_errors = None;
         }
         Task::none()
@@ -1926,8 +1968,7 @@ impl State {
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            self.mark_config_dirty();
-            self.update_cached_text();
+            self.mark_profile_dirty();
         }
     }
 
@@ -1937,8 +1978,7 @@ impl State {
             let command = crate::command::DeleteRuleCommand { rule, index: pos };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
-            self.mark_config_dirty();
-            self.update_cached_text();
+            self.mark_profile_dirty();
         }
         self.deleting_id = None;
     }
@@ -2378,6 +2418,12 @@ impl State {
             // Config auto-save subscription
             if self.config_dirty {
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckConfigSave)
+            } else {
+                iced::Subscription::none()
+            },
+            // Profile auto-save subscription
+            if self.profile_dirty {
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckProfileSave)
             } else {
                 iced::Subscription::none()
             },
