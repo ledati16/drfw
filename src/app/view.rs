@@ -2992,14 +2992,15 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
 
     // Use pre-cached themes (computed once on modal open)
     // Filter by light/dark first, then fuzzy match
-    let filter_passed = picker
-        .cached_themes
-        .iter()
-        .filter(|(_choice, theme_instance)| match picker.filter {
-            ThemeFilter::All => true,
-            ThemeFilter::Light => theme_instance.is_light(),
-            ThemeFilter::Dark => !theme_instance.is_light(),
-        });
+    let filter_passed =
+        picker
+            .cached_themes
+            .iter()
+            .filter(|(_choice, theme_instance)| match picker.filter {
+                ThemeFilter::All => true,
+                ThemeFilter::Light => theme_instance.is_light(),
+                ThemeFilter::Dark => !theme_instance.is_light(),
+            });
 
     // Apply fuzzy matching on filtered themes (sorted by relevance)
     let choices_only = filter_passed.clone().map(|(choice, _)| *choice);

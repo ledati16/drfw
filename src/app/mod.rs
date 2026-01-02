@@ -851,39 +851,44 @@ impl State {
     }
 
     fn update_filter_cache(&mut self) {
-        self.cached_filtered_rule_indices = self
-            .ruleset
-            .rules
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| {
-                if self.ruleset.advanced_security.egress_profile
-                    == crate::core::firewall::EgressProfile::Desktop
-                    && r.chain == crate::core::firewall::Chain::Output
-                {
-                    return false;
-                }
+        // Pre-allocate with worst-case capacity (all rules pass filter)
+        let mut indices = Vec::with_capacity(self.ruleset.rules.len());
 
-                if let Some(ref filter_tag) = self.filter_tag
-                    && !r.tags.contains(filter_tag)
-                {
-                    return false;
-                }
+        indices.extend(
+            self.ruleset
+                .rules
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    if self.ruleset.advanced_security.egress_profile
+                        == crate::core::firewall::EgressProfile::Desktop
+                        && r.chain == crate::core::firewall::Chain::Output
+                    {
+                        return false;
+                    }
 
-                if self.rule_search.is_empty() {
-                    return true;
-                }
+                    if let Some(ref filter_tag) = self.filter_tag
+                        && !r.tags.contains(filter_tag)
+                    {
+                        return false;
+                    }
 
-                let search_term = self.rule_search_lowercase.as_str();
-                r.label_lowercase.contains(search_term)
-                    || r.protocol_lowercase.contains(search_term)
-                    || r.interface_lowercase
-                        .as_ref()
-                        .is_some_and(|i| i.contains(search_term))
-                    || r.tags_lowercase.iter().any(|tag| tag.contains(search_term))
-            })
-            .map(|(idx, _)| idx)
-            .collect();
+                    if self.rule_search.is_empty() {
+                        return true;
+                    }
+
+                    let search_term = self.rule_search_lowercase.as_str();
+                    r.label_lowercase.contains(search_term)
+                        || r.protocol_lowercase.contains(search_term)
+                        || r.interface_lowercase
+                            .as_ref()
+                            .is_some_and(|i| i.contains(search_term))
+                        || r.tags_lowercase.iter().any(|tag| tag.contains(search_term))
+                })
+                .map(|(idx, _)| idx),
+        );
+
+        self.cached_filtered_rule_indices = indices;
     }
 
     fn save_config(&self) -> Task<Message> {
