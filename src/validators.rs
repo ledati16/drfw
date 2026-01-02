@@ -37,6 +37,9 @@ pub fn sanitize_label(input: &str) -> String {
 
 /// Validates and sanitizes a rule label.
 ///
+/// **Public API** - Provided for external validation of user input before creating rules.
+/// Has comprehensive test coverage and may be used by future features or external integrations.
+///
 /// # Errors
 ///
 /// Returns `Err` if:

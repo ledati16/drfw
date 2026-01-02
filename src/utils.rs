@@ -119,20 +119,3 @@ pub fn pick_save_path(default_name: &str, extension: &str) -> Option<std::path::
         .add_filter(extension, &[extension])
         .save_file()
 }
-
-/// Truncates a string to a maximum length and adds an ellipsis if needed
-#[allow(dead_code)]
-pub fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        // Find the nearest character boundary to avoid splitting multi-byte characters
-        let end = s
-            .char_indices()
-            .map(|(idx, _)| idx)
-            .take_while(|&idx| idx <= max_len.saturating_sub(3))
-            .last()
-            .unwrap_or(0);
-        format!("{}...", &s[..end])
-    }
-}

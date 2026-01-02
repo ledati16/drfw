@@ -129,6 +129,11 @@ impl AuditLog {
 
     /// Reads the most recent events from the log
     ///
+    /// **TODO**: Wire up to diagnostics viewer (Phase 6 or 7)
+    ///
+    /// This will enable a "View Audit Log" feature in the Settings/Diagnostics tab,
+    /// allowing users to review recent security-critical operations.
+    ///
     /// # Arguments
     ///
     /// * `count` - Maximum number of events to return

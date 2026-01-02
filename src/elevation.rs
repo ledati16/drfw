@@ -111,46 +111,6 @@ fn binary_exists(name: &str) -> bool {
         .is_some()
 }
 
-/// Checks if privilege elevation infrastructure is available
-///
-/// Verifies that both `pkexec` and `nft` binaries are present in PATH.
-/// This should be called at startup to provide early feedback if the
-/// system is not properly configured.
-///
-/// # Returns
-///
-/// - `Ok(())` if both binaries are available
-/// - `Err(ElevationError)` with specific missing binary
-///
-/// # Example
-///
-/// ```no_run
-/// use drfw::elevation::check_elevation_available;
-///
-/// match check_elevation_available() {
-///     Ok(()) => println!("Privilege elevation available"),
-///     Err(e) => eprintln!("Cannot elevate privileges: {e}"),
-/// }
-/// ```
-// Part of public API intended for startup checks, not yet integrated into GUI
-#[allow(dead_code)]
-pub fn check_elevation_available() -> Result<(), ElevationError> {
-    // Skip checks in test mode
-    if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
-        return Ok(());
-    }
-
-    if !binary_exists("pkexec") {
-        return Err(ElevationError::PkexecNotFound);
-    }
-
-    if !binary_exists("nft") {
-        return Err(ElevationError::NftNotFound);
-    }
-
-    Ok(())
-}
-
 /// Creates an elevated `nft` command with the specified arguments
 ///
 /// This function constructs a command that will execute `nft` with root privileges.
