@@ -710,7 +710,8 @@ impl State {
         let show_diff = config.show_diff;
         let show_zebra_striping = config.show_zebra_striping;
         let auto_revert_enabled = config.auto_revert_enabled;
-        let auto_revert_timeout_secs = config.auto_revert_timeout_secs;
+        // Clamp timeout to prevent integer overflow (max 1 hour = 3600 seconds)
+        let auto_revert_timeout_secs = config.auto_revert_timeout_secs.min(3600);
         let enable_event_log = config.enable_event_log;
         let active_profile_name = config.active_profile;
 

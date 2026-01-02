@@ -20,7 +20,9 @@ pub struct AppConfig {
     /// Enable auto-revert countdown when applying rules (GUI only, CLI is always safe)
     #[serde(default)]
     pub auto_revert_enabled: bool,
-    /// Timeout in seconds for auto-revert countdown (default: 15s)
+    /// Timeout in seconds for auto-revert countdown (default: 15s, max: 3600s)
+    ///
+    /// Clamped to 3600 seconds (1 hour) to prevent integer overflow in countdown calculations.
     #[serde(default = "default_auto_revert_timeout")]
     pub auto_revert_timeout_secs: u64,
     /// Enable event logging for Diagnostics tab (opt-in, disabled by default)
