@@ -405,7 +405,7 @@ impl RuleForm {
         ) {
             let port_start = self.port_start.parse::<u16>();
             let port_end = if self.port_end.is_empty() {
-                port_start.clone()
+                port_start.clone() // Clone is necessary: Result doesn't implement Copy
             } else {
                 self.port_end.parse::<u16>()
             };
