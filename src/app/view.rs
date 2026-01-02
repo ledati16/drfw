@@ -3,8 +3,8 @@ use crate::app::ui_components::{
     danger_button, dirty_button, inactive_tab_button, main_container, modal_backdrop,
     notification_banner, popup_container, primary_button, secondary_button,
     section_header_container, sidebar_container, themed_checkbox, themed_horizontal_rule,
-    themed_pick_list, themed_pick_list_menu, themed_scrollable, themed_slider,
-    themed_text_input, themed_toggler,
+    themed_pick_list, themed_pick_list_menu, themed_scrollable, themed_slider, themed_text_input,
+    themed_toggler,
 };
 use crate::app::{
     AppStatus, FontPickerTarget, Message, PendingWarning, ProfileManagerState, RuleForm, State,
@@ -16,7 +16,9 @@ use iced::widget::{
     Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, progress_bar,
     row, rule, scrollable, space, stack, text, text_input, toggler, tooltip,
 };
-use iced::{alignment, Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Shadow};
+use iced::{
+    Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Shadow, alignment,
+};
 use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
 use strum::IntoEnumIterator; // For ThemeChoice::iter()
 
@@ -115,18 +117,25 @@ pub fn view(state: &State) -> Element<'_, Message> {
     } else {
         match &state.status {
             AppStatus::AwaitingApply => Some(
-                container(view_awaiting_apply(theme, state.font_regular, state.auto_revert_enabled, state.auto_revert_timeout_secs))
-                    .style(move |_| modal_backdrop(theme))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill),
+                container(view_awaiting_apply(
+                    theme,
+                    state.font_regular,
+                    state.auto_revert_enabled,
+                    state.auto_revert_timeout_secs,
+                ))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
             ),
             AppStatus::PendingConfirmation { .. } => Some(
                 container(view_pending_confirmation(
                     state.countdown_remaining,
                     state.auto_revert_timeout_secs.min(120) as u32,
-                    state.progress_animation.interpolate_with(|v| v, iced::time::Instant::now()),
+                    state
+                        .progress_animation
+                        .interpolate_with(|v| v, iced::time::Instant::now()),
                     theme,
                     state.font_regular,
                 ))
@@ -1742,44 +1751,66 @@ fn view_awaiting_apply(
 
     let description_row = if auto_revert_enabled {
         let timeout_val = auto_revert_timeout.min(120);
-        container(
-            row![
-                text("Applying will activate a ")
-                    .size(14)
-                    .color(app_theme.fg_muted),
-                text(format!("{}", timeout_val))
-                    .size(14)
-                    .font(iced::Font {
-                        weight: iced::font::Weight::Bold,
-                        ..regular_font
-                    })
-                    .color(app_theme.fg_muted),
-                text(" second safety timer.")
-                    .size(14)
-                    .color(app_theme.fg_muted),
-            ]
-        )
+        container(row![
+            text("Applying will activate a ")
+                .size(14)
+                .color(app_theme.fg_muted),
+            text(format!("{}", timeout_val))
+                .size(14)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..regular_font
+                })
+                .color(app_theme.fg_muted),
+            text(" second safety timer.")
+                .size(14)
+                .color(app_theme.fg_muted),
+        ])
         .width(360)
         .align_x(Alignment::Center)
     } else {
         container(
             text("Changes will take effect immediately (no auto-revert).")
                 .size(14)
-                .color(app_theme.fg_muted)
+                .color(app_theme.fg_muted),
         )
         .width(360)
         .align_x(Alignment::Center)
     };
 
-    container(column![text("🛡️").size(36), container(text("Commit Changes?").size(24).font(regular_font).color(app_theme.fg_primary))
-                          .padding([4, 8])
-                          .style(move |_| section_header_container(app_theme)),
-                      text("✓ Rules verified.").size(14).color(app_theme.success).width(360).align_x(Alignment::Center),
-                      description_row,
-                      row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(move |_, status| secondary_button(app_theme, status)),
-                           button(text(button_text).size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
-                      ].spacing(16)
-    ].spacing(20).padding(32).align_x(Alignment::Center))
+    container(
+        column![
+            text("🛡️").size(36),
+            container(
+                text("Commit Changes?")
+                    .size(24)
+                    .font(regular_font)
+                    .color(app_theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(app_theme)),
+            text("✓ Rules verified.")
+                .size(14)
+                .color(app_theme.success)
+                .width(360)
+                .align_x(Alignment::Center),
+            description_row,
+            row![
+                button(text("Discard").size(14))
+                    .on_press(Message::CancelRuleForm)
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(app_theme, status)),
+                button(text(button_text).size(14))
+                    .on_press(Message::ProceedToApply)
+                    .padding([10, 24])
+                    .style(move |_, status| primary_button(app_theme, status)),
+            ]
+            .spacing(16)
+        ]
+        .spacing(20)
+        .padding(32)
+        .align_x(Alignment::Center),
+    )
     .style(move |_| card_container(app_theme))
     .into()
 }
@@ -1810,23 +1841,21 @@ fn view_pending_confirmation(
                 .color(app_theme.success)
                 .width(360)
                 .align_x(Alignment::Center),
-            container(
-                row![
-                    text("Automatic rollback in ")
-                        .size(14)
-                        .color(app_theme.accent),
-                    text(format!("{remaining}"))
-                        .size(14)
-                        .font(iced::Font {
-                            weight: iced::font::Weight::Bold,
-                            ..regular_font
-                        })
-                        .color(app_theme.accent),
-                    text(" seconds if not confirmed.")
-                        .size(14)
-                        .color(app_theme.accent),
-                ]
-            )
+            container(row![
+                text("Automatic rollback in ")
+                    .size(14)
+                    .color(app_theme.accent),
+                text(format!("{remaining}"))
+                    .size(14)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..regular_font
+                    })
+                    .color(app_theme.accent),
+                text(" seconds if not confirmed.")
+                    .size(14)
+                    .color(app_theme.accent),
+            ])
             .width(360)
             .align_x(Alignment::Center),
             // Progress bar showing time remaining (inset/recessed style)
@@ -1836,7 +1865,7 @@ fn view_pending_confirmation(
                     .girth(18)
                     .style(move |_| {
                         use iced::widget::progress_bar;
-                        use iced::{Gradient, Background};
+                        use iced::{Background, Gradient};
 
                         // Use darkened accent for inset appearance (recessed elements are darker)
                         let base_color = if remaining <= 5 {
@@ -1849,7 +1878,7 @@ fn view_pending_confirmation(
                             if remaining <= 5 {
                                 // Light themes at 5s: subtly darker gray for urgency
                                 Color {
-                                    r: app_theme.bg_surface.r * 0.65,  // Subtle darkening at 5 seconds
+                                    r: app_theme.bg_surface.r * 0.65, // Subtle darkening at 5 seconds
                                     g: app_theme.bg_surface.g * 0.65,
                                     b: app_theme.bg_surface.b * 0.65,
                                     a: 1.0,
@@ -1857,7 +1886,7 @@ fn view_pending_confirmation(
                             } else {
                                 // Light themes: gray (desaturated), darker than empty track for inset depth
                                 Color {
-                                    r: app_theme.bg_surface.r * 0.70,  // 30% darker gray (darker than empty track)
+                                    r: app_theme.bg_surface.r * 0.70, // 30% darker gray (darker than empty track)
                                     g: app_theme.bg_surface.g * 0.70,
                                     b: app_theme.bg_surface.b * 0.70,
                                     a: 1.0,
@@ -1875,28 +1904,34 @@ fn view_pending_confirmation(
 
                         // Gradient: straight top shadow with sharper transition (crisp like buttons)
                         let gradient_multiplier = if app_theme.is_light() {
-                            0.92  // Light themes: subtle 8% darker at top
+                            0.92 // Light themes: subtle 8% darker at top
                         } else {
-                            0.65  // Dark themes: strong 35% darker for depth
+                            0.65 // Dark themes: strong 35% darker for depth
                         };
 
-                        let bar_gradient = Gradient::Linear(iced::gradient::Linear::new(std::f32::consts::PI)
-                            .add_stop(0.0, Color {
-                                r: bar_color.r * gradient_multiplier,
-                                g: bar_color.g * gradient_multiplier,
-                                b: bar_color.b * gradient_multiplier,
-                                a: bar_color.a,
-                            })
-                            .add_stop(0.15, bar_color)  // Extended to 15% for slightly more coverage
-                            .add_stop(1.0, bar_color));  // Full fill color for rest
+                        let bar_gradient = Gradient::Linear(
+                            iced::gradient::Linear::new(std::f32::consts::PI)
+                                .add_stop(
+                                    0.0,
+                                    Color {
+                                        r: bar_color.r * gradient_multiplier,
+                                        g: bar_color.g * gradient_multiplier,
+                                        b: bar_color.b * gradient_multiplier,
+                                        a: bar_color.a,
+                                    },
+                                )
+                                .add_stop(0.15, bar_color) // Extended to 15% for slightly more coverage
+                                .add_stop(1.0, bar_color),
+                        ); // Full fill color for rest
 
                         progress_bar::Style {
                             background: Color {
-                                r: app_theme.bg_surface.r * 0.85,  // 15% darker empty track (same for both themes)
+                                r: app_theme.bg_surface.r * 0.85, // 15% darker empty track (same for both themes)
                                 g: app_theme.bg_surface.g * 0.85,
                                 b: app_theme.bg_surface.b * 0.85,
                                 a: app_theme.bg_surface.a,
-                            }.into(),
+                            }
+                            .into(),
                             bar: Background::Gradient(bar_gradient),
                             border: Border {
                                 radius: 6.0.into(),
@@ -1907,59 +1942,65 @@ fn view_pending_confirmation(
             )
             .width(360)
             .padding(Padding {
-                top: 2.5,      // Slightly thicker top rim (sweet spot)
+                top: 2.5, // Slightly thicker top rim (sweet spot)
                 right: 2.0,
-                bottom: 1.0,   // Thinner bottom rim
+                bottom: 1.0, // Thinner bottom rim
                 left: 2.0,
             })
             .style(move |_| {
                 let (rim_top, rim_bottom) = if app_theme.is_light() {
                     // Light themes: strong top shadow, very subtle bottom
-                    (0.5, 0.95)  // 50% darker top, 5% darker bottom
+                    (0.5, 0.95) // 50% darker top, 5% darker bottom
                 } else {
                     // Dark themes: strong inset shadow (PERFECT)
-                    (0.5, 0.88)  // 50% darker top, 12% darker bottom
+                    (0.5, 0.88) // 50% darker top, 12% darker bottom
                 };
 
                 container::Style {
                     background: Some(Background::Gradient(Gradient::Linear(
-                        iced::gradient::Linear::new(std::f32::consts::PI)  // Vertical gradient
-                            .add_stop(0.0, Color {
-                                r: app_theme.bg_surface.r * rim_top,
-                                g: app_theme.bg_surface.g * rim_top,
-                                b: app_theme.bg_surface.b * rim_top,
-                                a: app_theme.bg_surface.a,
-                            })
-                            .add_stop(1.0, Color {
-                                r: app_theme.bg_surface.r * rim_bottom,
-                                g: app_theme.bg_surface.g * rim_bottom,
-                                b: app_theme.bg_surface.b * rim_bottom,
-                                a: app_theme.bg_surface.a,
-                            })
+                        iced::gradient::Linear::new(std::f32::consts::PI) // Vertical gradient
+                            .add_stop(
+                                0.0,
+                                Color {
+                                    r: app_theme.bg_surface.r * rim_top,
+                                    g: app_theme.bg_surface.g * rim_top,
+                                    b: app_theme.bg_surface.b * rim_top,
+                                    a: app_theme.bg_surface.a,
+                                },
+                            )
+                            .add_stop(
+                                1.0,
+                                Color {
+                                    r: app_theme.bg_surface.r * rim_bottom,
+                                    g: app_theme.bg_surface.g * rim_bottom,
+                                    b: app_theme.bg_surface.b * rim_bottom,
+                                    a: app_theme.bg_surface.a,
+                                },
+                            ),
                     ))),
-                border: Border {
-                    color: Color {
-                        r: app_theme.bg_surface.r * 0.75,  // Lighter 25% darkening for border
-                        g: app_theme.bg_surface.g * 0.75,
-                        b: app_theme.bg_surface.b * 0.75,
-                        a: app_theme.bg_surface.a,
-                    }.into(),
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                shadow: Shadow {
-                    // Inner shadow effect (inverted offset for recess illusion)
-                    color: Color {
-                        r: app_theme.bg_surface.r * 0.5,  // Even darker for shadow depth
-                        g: app_theme.bg_surface.g * 0.5,
-                        b: app_theme.bg_surface.b * 0.5,
-                        a: 0.9,  // Less transparent for sharper definition
+                    border: Border {
+                        color: Color {
+                            r: app_theme.bg_surface.r * 0.75, // Lighter 25% darkening for border
+                            g: app_theme.bg_surface.g * 0.75,
+                            b: app_theme.bg_surface.b * 0.75,
+                            a: app_theme.bg_surface.a,
+                        },
+                        width: 1.0,
+                        radius: 8.0.into(),
                     },
-                    offset: iced::Vector::new(0.0, -1.0),  // Negative Y = top shadow
-                    blur_radius: 1.0,  // Crisp shadow matching button precision
-                },
-                ..Default::default()
-            }
+                    shadow: Shadow {
+                        // Inner shadow effect (inverted offset for recess illusion)
+                        color: Color {
+                            r: app_theme.bg_surface.r * 0.5, // Even darker for shadow depth
+                            g: app_theme.bg_surface.g * 0.5,
+                            b: app_theme.bg_surface.b * 0.5,
+                            a: 0.9, // Less transparent for sharper definition
+                        },
+                        offset: iced::Vector::new(0.0, -1.0), // Negative Y = top shadow
+                        blur_radius: 1.0, // Crisp shadow matching button precision
+                    },
+                    ..Default::default()
+                }
             }),
             row![
                 button(text("Rollback").size(14))
@@ -2125,33 +2166,32 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     ])
     .style(move |_| card_container(theme));
 
-    let diagnostics_card = container(
-        column![
-            container(
-                row![text("📊").size(18), text("DIAGNOSTICS").size(12).font(state.font_regular)]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-            )
-            .padding([8, 12])
-            .width(Length::Fill)
-            .style(move |_| section_header_container(theme)),
-            column![
-                render_settings_row(
-                    "Enable event logging",
-                    "Track firewall operations in the Diagnostics tab (opt-in for privacy)",
-                    toggler(state.enable_event_log)
-                        .on_toggle(Message::ToggleEventLog)
-                        .width(Length::Shrink)
-                        .style(move |_, status| themed_toggler(theme, status))
-                        .into(),
-                    theme,
-                    state.font_regular,
-                ),
+    let diagnostics_card = container(column![
+        container(
+            row![
+                text("📊").size(18),
+                text("DIAGNOSTICS").size(12).font(state.font_regular)
             ]
-            .spacing(16)
-            .padding(16)
-        ]
-    )
+            .spacing(8)
+            .align_y(Alignment::Center)
+        )
+        .padding([8, 12])
+        .width(Length::Fill)
+        .style(move |_| section_header_container(theme)),
+        column![render_settings_row(
+            "Enable event logging",
+            "Track firewall operations in the Diagnostics tab (opt-in for privacy)",
+            toggler(state.enable_event_log)
+                .on_toggle(Message::ToggleEventLog)
+                .width(Length::Shrink)
+                .style(move |_, status| themed_toggler(theme, status))
+                .into(),
+            theme,
+            state.font_regular,
+        ),]
+        .spacing(16)
+        .padding(16)
+    ])
     .style(move |_| card_container(theme));
 
     let security_card = container(
@@ -2273,10 +2313,15 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     )
         .style(move |_| card_container(theme));
 
-    column![appearance_card, safety_card, diagnostics_card, security_card,]
-        .spacing(24)
-        .padding(8)
-        .into()
+    column![
+        appearance_card,
+        safety_card,
+        diagnostics_card,
+        security_card,
+    ]
+    .spacing(24)
+    .padding(8)
+    .into()
 }
 fn render_settings_row<'a>(
     title: &'static str,
@@ -2424,7 +2469,11 @@ fn format_audit_event<'a>(
                 event.error.as_deref().unwrap_or("Unknown error")
             ),
         ),
-        (EventType::RevertRules, true) => ("⟲", theme.warning, "Reverted to previous ruleset".to_string()),
+        (EventType::RevertRules, true) => (
+            "⟲",
+            theme.warning,
+            "Reverted to previous ruleset".to_string(),
+        ),
         (EventType::RevertRules, false) => (
             "✗",
             theme.danger,
@@ -2433,7 +2482,11 @@ fn format_audit_event<'a>(
                 event.error.as_deref().unwrap_or("Unknown error")
             ),
         ),
-        (EventType::VerifyRules, true) => ("✓", theme.success, "Rules verified successfully".to_string()),
+        (EventType::VerifyRules, true) => (
+            "✓",
+            theme.success,
+            "Rules verified successfully".to_string(),
+        ),
         (EventType::VerifyRules, false) => (
             "✗",
             theme.danger,
@@ -2471,27 +2524,37 @@ fn format_audit_event<'a>(
         (EventType::SettingsSaved, _) => (
             "⚙",
             theme.accent,
-            event.details["description"].as_str().unwrap_or("Settings saved").to_string(),
+            event.details["description"]
+                .as_str()
+                .unwrap_or("Settings saved")
+                .to_string(),
         ),
         (EventType::AutoRevertConfirmed, _) => (
             "✓",
             theme.success,
-            format!("Auto-revert confirmed ({}s timeout)", event.details["timeout_secs"]),
+            format!(
+                "Auto-revert confirmed ({}s timeout)",
+                event.details["timeout_secs"]
+            ),
         ),
         (EventType::AutoRevertTimedOut, _) => (
             "⏱",
             theme.warning,
             format!("Auto-revert timed out ({}s)", event.details["timeout_secs"]),
         ),
-        (EventType::SaveSnapshot, _) | (EventType::RestoreSnapshot, _) | (EventType::EnablePersistence, _) | (EventType::SaveToSystem, _) => {
-            ("ℹ", theme.fg_muted, format!("{:?}", event.event_type))
-        }
+        (EventType::SaveSnapshot, _)
+        | (EventType::RestoreSnapshot, _)
+        | (EventType::EnablePersistence, _)
+        | (EventType::SaveToSystem, _) => ("ℹ", theme.fg_muted, format!("{:?}", event.event_type)),
     };
 
     row![
         text(time).size(13).font(font).color(theme.fg_muted),
         text(icon).size(15).color(icon_color),
-        text(description).size(14).font(font).color(theme.fg_primary),
+        text(description)
+            .size(14)
+            .font(font)
+            .color(theme.fg_primary),
     ]
     .spacing(12)
     .align_y(Alignment::Center)

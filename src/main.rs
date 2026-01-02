@@ -57,8 +57,8 @@ mod utils;
 mod validators;
 
 use clap::{Parser, Subcommand};
-use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use crossterm::ExecutableCommand;
+use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use iced::Size;
 use std::io::stdout;
 use std::process::ExitCode;

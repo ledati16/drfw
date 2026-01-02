@@ -1069,21 +1069,22 @@ pub fn notification_banner<'a>(
     .spacing(12)
     .padding([8, 16]);
 
-    let styled_container = container(content)
-        .max_width(450)
-        .style(move |_theme| container::Style {
-            background: Some(Background::Color(bg_color)),
-            border: Border {
-                radius: 6.0.into(),
+    let styled_container =
+        container(content)
+            .max_width(450)
+            .style(move |_theme| container::Style {
+                background: Some(Background::Color(bg_color)),
+                border: Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                shadow: Shadow {
+                    color: theme.shadow_color,
+                    offset: iced::Vector::new(0.0, 2.0),
+                    blur_radius: 8.0,
+                },
                 ..Default::default()
-            },
-            shadow: Shadow {
-                color: theme.shadow_color,
-                offset: iced::Vector::new(0.0, 2.0),
-                blur_radius: 8.0,
-            },
-            ..Default::default()
-        });
+            });
 
     // Wrap in mouse_area for click-to-dismiss
     mouse_area(styled_container)

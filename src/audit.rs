@@ -100,6 +100,20 @@ impl AuditLog {
     pub async fn log(&self, event: AuditEvent) -> std::io::Result<()> {
         let json = serde_json::to_string(&event)?;
 
+        #[cfg(unix)]
+        let mut file = {
+            #[allow(unused_imports)]  // Used implicitly by .mode()
+            use std::os::unix::fs::OpenOptionsExt;
+
+            tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600) // User read/write only
+                .open(&self.log_path)
+                .await?
+        };
+
+        #[cfg(not(unix))]
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -241,7 +255,12 @@ pub async fn log_save_to_system(enable_event_log: bool, success: bool, error: Op
 /// * `success` - Whether the operation succeeded
 /// * `error_count` - Number of validation errors
 /// * `error` - Error message if operation failed
-pub async fn log_verify(enable_event_log: bool, success: bool, error_count: usize, error: Option<String>) {
+pub async fn log_verify(
+    enable_event_log: bool,
+    success: bool,
+    error_count: usize,
+    error: Option<String>,
+) {
     if !enable_event_log {
         return;
     }

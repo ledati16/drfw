@@ -7,7 +7,7 @@ use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
-use iced::{animation, Animation, Element, Task};
+use iced::{Animation, Element, Task, animation};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use std::path::Path;
 use std::sync::Arc;
@@ -34,12 +34,12 @@ fn truncate_path_smart(path: &str, max_len: usize) -> String {
     // Try to keep parent directory for context
     let parent = path_obj.parent();
 
-    if let Some(parent) = parent {
-        if let Some(parent_name) = parent.file_name().and_then(|f| f.to_str()) {
-            let short = format!(".../{parent_name}/{filename}");
-            if short.len() <= max_len {
-                return short;
-            }
+    if let Some(parent) = parent
+        && let Some(parent_name) = parent.file_name().and_then(|f| f.to_str())
+    {
+        let short = format!(".../{parent_name}/{filename}");
+        if short.len() <= max_len {
+            return short;
         }
     }
 
@@ -751,7 +751,12 @@ impl State {
     }
 
     /// Add a banner to the notification queue (max 2 visible)
-    pub fn push_banner(&mut self, message: impl Into<String>, severity: BannerSeverity, duration_secs: u64) {
+    pub fn push_banner(
+        &mut self,
+        message: impl Into<String>,
+        severity: BannerSeverity,
+        duration_secs: u64,
+    ) {
         // Remove oldest if at capacity
         while self.banners.len() >= 2 {
             self.banners.pop_front();
@@ -1040,7 +1045,8 @@ impl State {
                     let enable_event_log = self.enable_event_log;
                     let timeout_secs = self.auto_revert_timeout_secs;
                     tokio::spawn(async move {
-                        crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs).await;
+                        crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs)
+                            .await;
                     });
                 }
             }
@@ -1088,7 +1094,11 @@ impl State {
             Message::ToggleDiff(enabled) => {
                 self.show_diff = enabled;
                 let enable_event_log = self.enable_event_log;
-                let desc = if enabled { "Diff view enabled" } else { "Diff view disabled" };
+                let desc = if enabled {
+                    "Diff view enabled"
+                } else {
+                    "Diff view disabled"
+                };
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
@@ -1097,7 +1107,11 @@ impl State {
             Message::ToggleZebraStriping(enabled) => {
                 self.show_zebra_striping = enabled;
                 let enable_event_log = self.enable_event_log;
-                let desc = if enabled { "Zebra striping enabled" } else { "Zebra striping disabled" };
+                let desc = if enabled {
+                    "Zebra striping enabled"
+                } else {
+                    "Zebra striping disabled"
+                };
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
@@ -1106,7 +1120,11 @@ impl State {
             Message::ToggleAutoRevert(enabled) => {
                 self.auto_revert_enabled = enabled;
                 let enable_event_log = self.enable_event_log;
-                let desc = if enabled { "Auto-revert enabled" } else { "Auto-revert disabled" };
+                let desc = if enabled {
+                    "Auto-revert enabled"
+                } else {
+                    "Auto-revert disabled"
+                };
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
@@ -1125,7 +1143,11 @@ impl State {
                 self.enable_event_log = enabled;
                 // Log settings change (meta: logging that logging was enabled/disabled!)
                 // Use the NEW value of enabled since we just set it
-                let desc = if enabled { "Event logging enabled" } else { "Event logging disabled" };
+                let desc = if enabled {
+                    "Event logging enabled"
+                } else {
+                    "Event logging disabled"
+                };
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enabled, desc).await;
                 });
@@ -1135,7 +1157,11 @@ impl State {
                 self.ruleset.advanced_security.strict_icmp = enabled;
                 self.update_cached_text();
                 let enable_event_log = self.enable_event_log;
-                let desc = if enabled { "Strict ICMP filtering enabled" } else { "Strict ICMP filtering disabled" };
+                let desc = if enabled {
+                    "Strict ICMP filtering enabled"
+                } else {
+                    "Strict ICMP filtering disabled"
+                };
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
@@ -1159,7 +1185,11 @@ impl State {
                     self.update_cached_text();
                     let enable_event_log = self.enable_event_log;
                     tokio::spawn(async move {
-                        crate::audit::log_settings_saved(enable_event_log, "RPF (reverse path filtering) disabled").await;
+                        crate::audit::log_settings_saved(
+                            enable_event_log,
+                            "RPF (reverse path filtering) disabled",
+                        )
+                        .await;
                     });
                     return self.save_config();
                 }
@@ -1170,7 +1200,11 @@ impl State {
                 self.update_cached_text();
                 let enable_event_log = self.enable_event_log;
                 tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, "RPF (reverse path filtering) enabled").await;
+                    crate::audit::log_settings_saved(
+                        enable_event_log,
+                        "RPF (reverse path filtering) enabled",
+                    )
+                    .await;
                 });
                 return self.save_config();
             }
@@ -1181,7 +1215,11 @@ impl State {
                 self.ruleset.advanced_security.log_dropped = enabled;
                 self.update_cached_text();
                 let enable_event_log = self.enable_event_log;
-                let desc = if enabled { "Dropped packet logging enabled" } else { "Dropped packet logging disabled" };
+                let desc = if enabled {
+                    "Dropped packet logging enabled"
+                } else {
+                    "Dropped packet logging disabled"
+                };
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
@@ -1241,7 +1279,11 @@ impl State {
                     self.update_cached_text();
                     let enable_event_log = self.enable_event_log;
                     tokio::spawn(async move {
-                        crate::audit::log_settings_saved(enable_event_log, "Server mode disabled (desktop profile)").await;
+                        crate::audit::log_settings_saved(
+                            enable_event_log,
+                            "Server mode disabled (desktop profile)",
+                        )
+                        .await;
                     });
                     return self.save_config();
                 }
@@ -1253,7 +1295,11 @@ impl State {
                 self.update_cached_text();
                 let enable_event_log = self.enable_event_log;
                 tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, "Server mode enabled (server profile)").await;
+                    crate::audit::log_settings_saved(
+                        enable_event_log,
+                        "Server mode enabled (server profile)",
+                    )
+                    .await;
                 });
                 return self.save_config();
             }
@@ -1467,7 +1513,12 @@ impl State {
                 let enable_event_log = self.enable_event_log;
                 let to_profile = name;
                 tokio::spawn(async move {
-                    crate::audit::log_profile_switched(enable_event_log, &from_profile, &to_profile).await;
+                    crate::audit::log_profile_switched(
+                        enable_event_log,
+                        &from_profile,
+                        &to_profile,
+                    )
+                    .await;
                 });
 
                 return self.save_config();
@@ -1642,7 +1693,8 @@ impl State {
                     )
                     .chain(Task::future(async move {
                         // Log profile rename
-                        crate::audit::log_profile_renamed(enable_event_log, &old_name, &new_name).await;
+                        crate::audit::log_profile_renamed(enable_event_log, &old_name, &new_name)
+                            .await;
                         Message::Noop
                     }))
                     .chain(if was_active {
@@ -1950,7 +2002,14 @@ impl State {
                 let result = crate::core::nft_json::apply_with_snapshot(nft_json).await;
                 let success = result.is_ok();
                 let error = result.as_ref().err().map(std::string::ToString::to_string);
-                crate::audit::log_apply(enable_event_log, rule_count, enabled_count, success, error.clone()).await;
+                crate::audit::log_apply(
+                    enable_event_log,
+                    rule_count,
+                    enabled_count,
+                    success,
+                    error.clone(),
+                )
+                .await;
                 result.map_err(|e| e.to_string())
             },
             Message::ApplyResult,
@@ -1973,7 +2032,7 @@ impl State {
             // Animation transitions smoothly from 100% to 0% over the entire timeout duration
             let timeout = self.auto_revert_timeout_secs.min(120);
             self.progress_animation = Animation::new(1.0)
-                .easing(animation::Easing::Linear)  // Constant speed (no slow-down at start/end)
+                .easing(animation::Easing::Linear) // Constant speed (no slow-down at start/end)
                 .duration(Duration::from_secs(timeout))
                 .go(0.0, iced::time::Instant::now());
             self.status = AppStatus::PendingConfirmation {
