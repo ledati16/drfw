@@ -3,6 +3,13 @@ pub mod presets;
 use iced::Color;
 use serde::{Deserialize, Serialize};
 
+// Shadow alpha values for depth perception
+// These constants define the opacity of drop shadows for different theme types
+const SHADOW_LIGHT_ALPHA: f32 = 0.35; // Light themes: crisp and visible
+const SHADOW_LIGHT_STRONG_ALPHA: f32 = 0.5; // Light themes: emphasized depth
+const SHADOW_DARK_ALPHA: f32 = 0.6; // Dark themes: visible against dark backgrounds
+const SHADOW_DARK_STRONG_ALPHA: f32 = 0.85; // Dark themes: maximum depth
+
 /// Complete theme definition with semantic color naming
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppTheme {
@@ -89,16 +96,14 @@ impl AppTheme {
 
         // Set shadow colors appropriate for theme type
         let (shadow_color, shadow_strong) = if is_light {
-            // Light themes: crisp and visible without muddiness (35%)
             (
-                Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-                Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_LIGHT_ALPHA),
+                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_LIGHT_STRONG_ALPHA),
             )
         } else {
-            // Dark themes: stronger for pixel-perfect depth (60%)
             (
-                Color::from_rgba(0.0, 0.0, 0.0, 0.6),
-                Color::from_rgba(0.0, 0.0, 0.0, 0.85),
+                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_DARK_ALPHA),
+                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_DARK_STRONG_ALPHA),
             )
         };
 
