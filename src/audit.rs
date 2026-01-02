@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventType {
+    // Firewall operations
     ApplyRules,
     RevertRules,
     SaveSnapshot,
@@ -17,6 +18,19 @@ pub enum EventType {
     EnablePersistence,
     SaveToSystem,
     VerifyRules,
+
+    // Profile management (user-facing)
+    ProfileCreated,
+    ProfileDeleted,
+    ProfileRenamed,
+    ProfileSwitched,
+
+    // Settings changes (user-facing)
+    SettingsSaved,
+
+    // Auto-revert events (user-facing)
+    AutoRevertConfirmed,
+    AutoRevertTimedOut,
 }
 
 /// A single audit log entry
@@ -133,16 +147,22 @@ impl AuditLog {
 ///
 /// # Arguments
 ///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
 /// * `rule_count` - Number of rules being applied
 /// * `enabled_count` - Number of enabled rules
 /// * `success` - Whether the operation succeeded
 /// * `error` - Error message if operation failed
 pub async fn log_apply(
+    enable_event_log: bool,
     rule_count: usize,
     enabled_count: usize,
     success: bool,
     error: Option<String>,
 ) {
+    if !enable_event_log {
+        return;
+    }
+
     if let Ok(audit) = AuditLog::new() {
         let event = AuditEvent::new(
             EventType::ApplyRules,
@@ -161,7 +181,17 @@ pub async fn log_apply(
 }
 
 /// Logs a revert operation
-pub async fn log_revert(success: bool, error: Option<String>) {
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `success` - Whether the operation succeeded
+/// * `error` - Error message if operation failed
+pub async fn log_revert(enable_event_log: bool, success: bool, error: Option<String>) {
+    if !enable_event_log {
+        return;
+    }
+
     if let Ok(audit) = AuditLog::new() {
         let event = AuditEvent::new(
             EventType::RevertRules,
@@ -177,8 +207,18 @@ pub async fn log_revert(success: bool, error: Option<String>) {
 }
 
 /// Logs a save-to-system operation
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `success` - Whether the operation succeeded
+/// * `error` - Error message if operation failed
 #[allow(dead_code)]
-pub async fn log_save_to_system(success: bool, error: Option<String>) {
+pub async fn log_save_to_system(enable_event_log: bool, success: bool, error: Option<String>) {
+    if !enable_event_log {
+        return;
+    }
+
     if let Ok(audit) = AuditLog::new() {
         let event = AuditEvent::new(
             EventType::SaveToSystem,
@@ -194,7 +234,18 @@ pub async fn log_save_to_system(success: bool, error: Option<String>) {
 }
 
 /// Logs a verification operation
-pub async fn log_verify(success: bool, error_count: usize, error: Option<String>) {
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `success` - Whether the operation succeeded
+/// * `error_count` - Number of validation errors
+/// * `error` - Error message if operation failed
+pub async fn log_verify(enable_event_log: bool, success: bool, error_count: usize, error: Option<String>) {
+    if !enable_event_log {
+        return;
+    }
+
     if let Ok(audit) = AuditLog::new() {
         let event = AuditEvent::new(
             EventType::VerifyRules,
@@ -203,6 +254,196 @@ pub async fn log_verify(success: bool, error_count: usize, error: Option<String>
                 "error_count": error_count,
             }),
             error,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a profile creation event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `profile_name` - Name of the profile that was created
+pub async fn log_profile_created(enable_event_log: bool, profile_name: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ProfileCreated,
+            true,
+            serde_json::json!({
+                "profile_name": profile_name,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a profile deletion event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `profile_name` - Name of the profile that was deleted
+pub async fn log_profile_deleted(enable_event_log: bool, profile_name: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ProfileDeleted,
+            true,
+            serde_json::json!({
+                "profile_name": profile_name,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a profile rename event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `old_name` - Original profile name
+/// * `new_name` - New profile name
+pub async fn log_profile_renamed(enable_event_log: bool, old_name: &str, new_name: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ProfileRenamed,
+            true,
+            serde_json::json!({
+                "old_name": old_name,
+                "new_name": new_name,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a profile switch event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `from_profile` - Profile being switched from
+/// * `to_profile` - Profile being switched to
+pub async fn log_profile_switched(enable_event_log: bool, from_profile: &str, to_profile: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ProfileSwitched,
+            true,
+            serde_json::json!({
+                "from": from_profile,
+                "to": to_profile,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a settings save event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+pub async fn log_settings_saved(enable_event_log: bool) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::SettingsSaved,
+            true,
+            serde_json::json!({}),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs an auto-revert confirmation event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `timeout_secs` - The configured timeout that was used
+pub async fn log_auto_revert_confirmed(enable_event_log: bool, timeout_secs: u64) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::AutoRevertConfirmed,
+            true,
+            serde_json::json!({
+                "timeout_secs": timeout_secs,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs an auto-revert timeout event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `timeout_secs` - The configured timeout that expired
+pub async fn log_auto_revert_timed_out(enable_event_log: bool, timeout_secs: u64) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::AutoRevertTimedOut,
+            true,
+            serde_json::json!({
+                "timeout_secs": timeout_secs,
+            }),
+            None,
         );
 
         if let Err(e) = audit.log(event).await {

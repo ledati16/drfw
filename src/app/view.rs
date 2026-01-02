@@ -185,6 +185,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_banners,
             container(view_diagnostics_modal(
+                state,
                 theme,
                 state.font_regular,
                 state.font_mono
@@ -2365,14 +2366,114 @@ fn view_error_display<'a>(
     column(elements).spacing(6).into()
 }
 
-fn view_diagnostics_modal(
+/// Formats an audit event for display in the Diagnostics modal
+fn format_audit_event<'a>(
+    event: &crate::audit::AuditEvent,
     theme: &crate::theme::AppTheme,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    use crate::audit::EventType;
+
+    // Format timestamp as HH:MM:SS
+    let time = event.timestamp.format("%H:%M:%S").to_string();
+
+    // Choose icon and color based on event type and success
+    let (icon, icon_color, description) = match (&event.event_type, event.success) {
+        (EventType::ApplyRules, true) => (
+            "✓",
+            theme.success,
+            format!(
+                "Applied {} rules ({} enabled)",
+                event.details["rule_count"], event.details["enabled_count"]
+            ),
+        ),
+        (EventType::ApplyRules, false) => (
+            "✗",
+            theme.danger,
+            format!(
+                "Failed to apply rules: {}",
+                event.error.as_deref().unwrap_or("Unknown error")
+            ),
+        ),
+        (EventType::RevertRules, true) => ("⟲", theme.warning, "Reverted to previous ruleset".to_string()),
+        (EventType::RevertRules, false) => (
+            "✗",
+            theme.danger,
+            format!(
+                "Revert failed: {}",
+                event.error.as_deref().unwrap_or("Unknown error")
+            ),
+        ),
+        (EventType::VerifyRules, true) => ("✓", theme.success, "Rules verified successfully".to_string()),
+        (EventType::VerifyRules, false) => (
+            "✗",
+            theme.danger,
+            format!(
+                "Verification failed: {} errors",
+                event.details["error_count"]
+            ),
+        ),
+        (EventType::ProfileCreated, _) => (
+            "➕",
+            theme.accent,
+            format!("Created profile '{}'", event.details["profile_name"]),
+        ),
+        (EventType::ProfileDeleted, _) => (
+            "➖",
+            theme.accent,
+            format!("Deleted profile '{}'", event.details["profile_name"]),
+        ),
+        (EventType::ProfileRenamed, _) => (
+            "✎",
+            theme.accent,
+            format!(
+                "Renamed profile '{}' → '{}'",
+                event.details["old_name"], event.details["new_name"]
+            ),
+        ),
+        (EventType::ProfileSwitched, _) => (
+            "↔",
+            theme.accent,
+            format!(
+                "Switched profile: '{}' → '{}'",
+                event.details["from"], event.details["to"]
+            ),
+        ),
+        (EventType::SettingsSaved, _) => ("⚙", theme.accent, "Settings saved".to_string()),
+        (EventType::AutoRevertConfirmed, _) => (
+            "✓",
+            theme.success,
+            format!("Auto-revert confirmed ({}s timeout)", event.details["timeout_secs"]),
+        ),
+        (EventType::AutoRevertTimedOut, _) => (
+            "⏱",
+            theme.warning,
+            format!("Auto-revert timed out ({}s)", event.details["timeout_secs"]),
+        ),
+        (EventType::SaveSnapshot, _) | (EventType::RestoreSnapshot, _) | (EventType::EnablePersistence, _) | (EventType::SaveToSystem, _) => {
+            ("ℹ", theme.fg_muted, format!("{:?}", event.event_type))
+        }
+    };
+
+    row![
+        text(time).size(11).font(font).color(theme.fg_muted),
+        text(icon).size(13).color(icon_color),
+        text(description).size(12).font(font).color(theme.fg_primary),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn view_diagnostics_modal<'a>(
+    state: &'a crate::app::State,
+    theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
     mono_font: iced::Font,
-) -> Element<'_, Message> {
-    // Read recent audit log entries
+) -> Element<'a, Message> {
+    // Read and parse audit log entries
     let audit_entries = std::fs::read_to_string(
-        crate::utils::get_data_dir()
+        crate::utils::get_state_dir()
             .map(|mut p| {
                 p.push("audit.log");
                 p
@@ -2381,12 +2482,37 @@ fn view_diagnostics_modal(
     )
     .unwrap_or_default();
 
-    // Collect entries as owned Strings
-    let recent_entries: Vec<String> = audit_entries
+    // Parse JSON Lines format and filter based on selection
+    let parsed_events: Vec<crate::audit::AuditEvent> = audit_entries
         .lines()
         .rev()
-        .take(10)
-        .map(std::string::ToString::to_string)
+        .take(100)
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    // Apply filter
+    let filtered_events: Vec<&crate::audit::AuditEvent> = parsed_events
+        .iter()
+        .filter(|event| {
+            use crate::app::DiagnosticsFilter;
+            use crate::audit::EventType;
+
+            match state.diagnostics_filter {
+                DiagnosticsFilter::All => true,
+                DiagnosticsFilter::Successes => event.success,
+                DiagnosticsFilter::Errors => !event.success,
+                DiagnosticsFilter::ProfileChanges => matches!(
+                    event.event_type,
+                    EventType::ProfileCreated
+                        | EventType::ProfileDeleted
+                        | EventType::ProfileRenamed
+                        | EventType::ProfileSwitched
+                ),
+                DiagnosticsFilter::Settings => {
+                    matches!(event.event_type, EventType::SettingsSaved)
+                }
+            }
+        })
         .collect();
 
     // Get recovery commands as owned strings
@@ -2410,48 +2536,59 @@ fn view_diagnostics_modal(
             .spacing(12)
             .align_y(Alignment::Center)
             .width(Length::Fill),
-            // Audit log section
-            column![
-                text("Recent Audit Log Entries:")
+            // Filter and count
+            row![
+                text(format!("Event Log ({} entries)", filtered_events.len()))
                     .size(14)
                     .color(theme.fg_primary),
-                container(
-                    scrollable(
-                        column(if recent_entries.is_empty() {
-                            vec![
-                                text("No audit entries found")
-                                    .size(12)
-                                    .color(theme.fg_muted)
-                                    .into(),
-                            ]
-                        } else {
-                            recent_entries
-                                .into_iter()
-                                .map(|entry| {
-                                    text(entry)
-                                        .size(11)
-                                        .font(mono_font)
-                                        .color(theme.fg_primary)
-                                        .into()
-                                })
-                                .collect()
-                        })
-                        .spacing(4)
-                    )
-                    .style(move |_, status| themed_scrollable(theme, status))
+                pick_list(
+                    vec![
+                        crate::app::DiagnosticsFilter::All,
+                        crate::app::DiagnosticsFilter::Successes,
+                        crate::app::DiagnosticsFilter::Errors,
+                        crate::app::DiagnosticsFilter::ProfileChanges,
+                        crate::app::DiagnosticsFilter::Settings,
+                    ],
+                    Some(state.diagnostics_filter),
+                    Message::DiagnosticsFilterChanged
                 )
-                .height(200)
-                .style(move |_| container::Style {
-                    background: Some(theme.bg_elevated.into()),
-                    border: Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .padding(12),
+                .placeholder("Filter...")
+                .style(move |_, status| themed_pick_list(theme, status)),
             ]
-            .spacing(8),
+            .spacing(12)
+            .align_y(Alignment::Center),
+            // Event log section
+            container(
+                scrollable(
+                    column(if filtered_events.is_empty() {
+                        vec![text(if state.enable_event_log {
+                            "No events match the current filter"
+                        } else {
+                            "Event logging is disabled. Enable it in Settings to track operations."
+                        })
+                        .size(12)
+                        .color(theme.fg_muted)
+                        .into()]
+                    } else {
+                        filtered_events
+                            .into_iter()
+                            .map(|event| format_audit_event(event, theme, regular_font))
+                            .collect()
+                    })
+                    .spacing(4),
+                )
+                .style(move |_, status| themed_scrollable(theme, status)),
+            )
+            .height(250)
+            .style(move |_| container::Style {
+                background: Some(theme.bg_elevated.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .padding(12),
             // Recovery commands section
             column![
                 text("Manual Recovery Commands:")
@@ -2489,6 +2626,10 @@ fn view_diagnostics_modal(
             .spacing(8),
             // Action buttons
             row![
+                button(text("Clear Log").size(14))
+                    .on_press(Message::ClearEventLog)
+                    .padding([10, 20])
+                    .style(move |_, status| danger_button(theme, status)),
                 button(text("Open Logs Folder").size(14))
                     .on_press(Message::OpenLogsFolder)
                     .padding([10, 20])

@@ -168,7 +168,9 @@ pub struct State {
     pub show_zebra_striping: bool,
     pub auto_revert_enabled: bool,
     pub auto_revert_timeout_secs: u64,
+    pub enable_event_log: bool,
     pub show_diagnostics: bool,
+    pub diagnostics_filter: DiagnosticsFilter,
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
     pub font_picker: Option<FontPickerState>,
@@ -256,6 +258,34 @@ pub struct ProfileManagerState {
 pub enum PendingWarning {
     EnableRpf,
     EnableServerMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiagnosticsFilter {
+    #[default]
+    All,
+    Successes,
+    Errors,
+    ProfileChanges,
+    Settings,
+}
+
+impl DiagnosticsFilter {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::All => "All Events",
+            Self::Successes => "Successes Only",
+            Self::Errors => "Errors Only",
+            Self::ProfileChanges => "Profile Changes",
+            Self::Settings => "Settings Changes",
+        }
+    }
+}
+
+impl std::fmt::Display for DiagnosticsFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
 }
 
 #[derive(
@@ -518,6 +548,8 @@ pub enum Message {
     ServerModeToggled(bool),
     ConfirmServerMode,
     ToggleDiagnostics(bool),
+    DiagnosticsFilterChanged(DiagnosticsFilter),
+    ClearEventLog,
     OpenLogsFolder,
     ExportAsJson,
     ExportAsNft,
@@ -637,6 +669,7 @@ impl State {
         let show_zebra_striping = config.show_zebra_striping;
         let auto_revert_enabled = config.auto_revert_enabled;
         let auto_revert_timeout_secs = config.auto_revert_timeout_secs;
+        let enable_event_log = config.enable_event_log;
         let active_profile_name = config.active_profile;
 
         regular_font_choice.resolve(false);
@@ -686,7 +719,9 @@ impl State {
             show_zebra_striping,
             auto_revert_enabled,
             auto_revert_timeout_secs,
+            enable_event_log,
             show_diagnostics: false,
+            diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
             show_shortcuts_help: false,
             font_picker: None,
@@ -834,6 +869,7 @@ impl State {
             show_zebra_striping: self.show_zebra_striping,
             auto_revert_enabled: self.auto_revert_enabled,
             auto_revert_timeout_secs: self.auto_revert_timeout_secs,
+            enable_event_log: self.enable_event_log,
         };
 
         // Async save using Task::perform
@@ -1144,6 +1180,13 @@ impl State {
                 return self.save_config();
             }
             Message::ToggleDiagnostics(show) => self.show_diagnostics = show,
+            Message::DiagnosticsFilterChanged(filter) => self.diagnostics_filter = filter,
+            Message::ClearEventLog => {
+                if let Some(mut path) = crate::utils::get_state_dir() {
+                    path.push("audit.log");
+                    let _ = std::fs::remove_file(path);
+                }
+            }
             Message::ToggleShortcutsHelp(show) => self.show_shortcuts_help = show,
             Message::Undo => {
                 if let Some(description) = self.command_history.undo(&mut self.ruleset) {
@@ -1731,14 +1774,16 @@ impl State {
                 } else {
                     Some(verify_result.errors.join("; "))
                 };
+                let enable_event_log = self.enable_event_log;
                 tokio::spawn(async move {
-                    crate::audit::log_verify(success, error_count, error).await;
+                    crate::audit::log_verify(enable_event_log, success, error_count, error).await;
                 });
             }
             Err(e) => {
                 let error = e.clone();
+                let enable_event_log = self.enable_event_log;
                 tokio::spawn(async move {
-                    crate::audit::log_verify(false, 0, Some(error)).await;
+                    crate::audit::log_verify(enable_event_log, false, 0, Some(error)).await;
                 });
             }
         }
@@ -1773,13 +1818,14 @@ impl State {
         let nft_json = self.ruleset.to_nftables_json();
         let rule_count = self.ruleset.rules.len();
         let enabled_count = self.ruleset.rules.iter().filter(|r| r.enabled).count();
+        let enable_event_log = self.enable_event_log;
 
         Task::perform(
             async move {
                 let result = crate::core::nft_json::apply_with_snapshot(nft_json).await;
                 let success = result.is_ok();
                 let error = result.as_ref().err().map(std::string::ToString::to_string);
-                crate::audit::log_apply(rule_count, enabled_count, success, error.clone()).await;
+                crate::audit::log_apply(enable_event_log, rule_count, enabled_count, success, error.clone()).await;
                 result.map_err(|e| e.to_string())
             },
             Message::ApplyResult,
@@ -1833,6 +1879,7 @@ impl State {
     fn handle_revert_clicked(&mut self) -> Task<Message> {
         if let AppStatus::PendingConfirmation { snapshot, .. } = &self.status {
             let snapshot = snapshot.clone();
+            let enable_event_log = self.enable_event_log;
             self.status = AppStatus::Reverting;
             return Task::perform(
                 async move {
@@ -1847,7 +1894,7 @@ impl State {
                         .as_ref()
                         .err()
                         .map(std::string::ToString::to_string);
-                    crate::audit::log_revert(success, error.clone()).await;
+                    crate::audit::log_revert(enable_event_log, success, error.clone()).await;
                     final_result.map_err(|e| e.to_string())
                 },
                 Message::RevertResult,
@@ -1862,6 +1909,7 @@ impl State {
             if now >= *deadline {
                 // Extract snapshot BEFORE changing status (fixes race condition)
                 let snapshot = snapshot.clone();
+                let enable_event_log = self.enable_event_log;
                 self.status = AppStatus::Reverting;
                 self.countdown_remaining = 0;
                 self.push_banner(
@@ -1884,7 +1932,7 @@ impl State {
                             .as_ref()
                             .err()
                             .map(std::string::ToString::to_string);
-                        crate::audit::log_revert(success, error.clone()).await;
+                        crate::audit::log_revert(enable_event_log, success, error.clone()).await;
                         final_result.map_err(|e| e.to_string())
                     },
                     Message::RevertResult,

@@ -399,10 +399,10 @@ async fn test_audit_logging_doesnt_panic() {
     // Test that audit logging functions don't panic
     // (we can't easily verify file contents without mocking filesystem)
 
-    drfw::audit::log_apply(5, 3, true, None).await;
-    drfw::audit::log_apply(5, 3, false, Some("Test error".to_string())).await;
-    drfw::audit::log_revert(true, None).await;
-    drfw::audit::log_revert(false, Some("Revert failed".to_string())).await;
+    drfw::audit::log_apply(true, 5, 3, true, None).await;
+    drfw::audit::log_apply(true, 5, 3, false, Some("Test error".to_string())).await;
+    drfw::audit::log_revert(true, true, None).await;
+    drfw::audit::log_revert(true, false, Some("Revert failed".to_string())).await;
 
     // If we reach here without panicking, test passes
 }

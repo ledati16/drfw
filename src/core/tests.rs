@@ -1003,8 +1003,9 @@ mod integration_tests {
         let enabled_count = ruleset.rules.iter().filter(|r| r.enabled).count();
 
         // This should not panic
-        crate::audit::log_apply(rule_count, enabled_count, true, None).await;
+        crate::audit::log_apply(true, rule_count, enabled_count, true, None).await;
         crate::audit::log_apply(
+            true,
             rule_count,
             enabled_count,
             false,
