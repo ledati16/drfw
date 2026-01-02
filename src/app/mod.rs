@@ -464,7 +464,7 @@ impl RuleForm {
             match crate::validators::validate_port_range(s, e) {
                 Ok((start, end)) => Some(crate::core::firewall::PortRange { start, end }),
                 Err(msg) => {
-                    errors.port = Some(msg);
+                    errors.port = Some(msg.to_string());
                     *has_errors = true;
                     None
                 }
@@ -509,7 +509,7 @@ impl RuleForm {
         if !self.interface.is_empty()
             && let Err(msg) = crate::validators::validate_interface(&self.interface)
         {
-            errors.interface = Some(msg);
+            errors.interface = Some(msg.to_string());
             *has_errors = true;
         }
     }

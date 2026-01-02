@@ -49,15 +49,15 @@ pub fn sanitize_label(input: &str) -> String {
 /// - Label exceeds 64 characters
 /// - Label becomes empty after sanitization (all invalid chars)
 #[allow(dead_code)]
-pub fn validate_label(input: &str) -> Result<String, String> {
+pub fn validate_label(input: &str) -> Result<String, &'static str> {
     if input.len() > 64 {
-        return Err("Label too long (max 64 characters)".to_string());
+        return Err("Label too long (max 64 characters)");
     }
 
     let sanitized = sanitize_label(input);
 
     if sanitized.is_empty() && !input.is_empty() {
-        return Err("Label contains only invalid characters".to_string());
+        return Err("Label contains only invalid characters");
     }
 
     Ok(sanitized)
@@ -68,9 +68,9 @@ pub fn validate_label(input: &str) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns `Err` if port is 0 (reserved).
-pub fn validate_port(port: u16) -> Result<u16, String> {
+pub fn validate_port(port: u16) -> Result<u16, &'static str> {
     if port == 0 {
-        Err("Port must be between 1 and 65535".to_string())
+        Err("Port must be between 1 and 65535")
     } else {
         Ok(port)
     }
@@ -83,12 +83,12 @@ pub fn validate_port(port: u16) -> Result<u16, String> {
 /// Returns `Err` if:
 /// - Either port is 0
 /// - Start port is greater than end port
-pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), String> {
+pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), &'static str> {
     validate_port(start)?;
     validate_port(end)?;
 
     if start > end {
-        Err("Start port must be less than or equal to end port".to_string())
+        Err("Start port must be less than or equal to end port")
     } else {
         Ok((start, end))
     }
@@ -108,17 +108,17 @@ pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), String> {
 /// # Errors
 ///
 /// Returns `Err` if interface name violates kernel constraints.
-pub fn validate_interface(name: &str) -> Result<String, String> {
+pub fn validate_interface(name: &str) -> Result<String, &'static str> {
     if name.is_empty() {
         return Ok(String::new());
     }
 
     if name.len() > 15 {
-        return Err("Interface name too long (max 15 characters)".to_string());
+        return Err("Interface name too long (max 15 characters)");
     }
 
     if name == "." || name == ".." {
-        return Err("Invalid interface name".to_string());
+        return Err("Invalid interface name");
     }
 
     // Check for valid characters (ASCII alphanumeric only, plus dot, dash, underscore)
@@ -126,7 +126,7 @@ pub fn validate_interface(name: &str) -> Result<String, String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
     {
-        return Err("Interface name contains invalid characters".to_string());
+        return Err("Interface name contains invalid characters");
     }
 
     Ok(name.to_string())
@@ -263,13 +263,13 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
 /// - Prefix exceeds 64 characters
 /// - All characters are invalid (becomes empty after sanitization)
 #[allow(dead_code)]
-pub fn validate_log_prefix(prefix: &str) -> Result<String, String> {
+pub fn validate_log_prefix(prefix: &str) -> Result<String, &'static str> {
     if prefix.is_empty() {
-        return Err("Log prefix cannot be empty".to_string());
+        return Err("Log prefix cannot be empty");
     }
 
     if prefix.len() > 64 {
-        return Err("Log prefix too long (max 64 chars)".to_string());
+        return Err("Log prefix too long (max 64 chars)");
     }
 
     let sanitized: String = prefix
@@ -278,7 +278,7 @@ pub fn validate_log_prefix(prefix: &str) -> Result<String, String> {
         .collect();
 
     if sanitized.is_empty() {
-        return Err("Log prefix contains only invalid characters".to_string());
+        return Err("Log prefix contains only invalid characters");
     }
 
     Ok(sanitized)
