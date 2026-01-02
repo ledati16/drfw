@@ -91,11 +91,15 @@ pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), String> {
     }
 }
 
-/// Validates a network interface name.
+/// Validates interface name format per Linux kernel constraints.
 ///
-/// Linux kernel interface name rules:
-/// - Max 15 characters (IFNAMSIZ - 1)
-/// - Alphanumeric, dot, dash, underscore only
+/// **NOTE:** This does NOT check if the interface exists on the system.
+/// Users may configure rules for interfaces not yet present (e.g., VPN, USB).
+///
+/// # Constraints
+///
+/// - Maximum 15 characters (IFNAMSIZ - 1)
+/// - ASCII alphanumeric, dot, dash, underscore only
 /// - Cannot be "." or ".."
 ///
 /// # Errors
