@@ -1837,7 +1837,12 @@ fn view_pending_confirmation(
                     })
             )
             .width(360)
-            .padding(2)  // Reduced from 3 for thinner edge
+            .padding(Padding {
+                top: 2.0,
+                right: 2.0,
+                bottom: 1.0,  // Thinner bottom rim
+                left: 2.0,
+            })
             .style(move |_| container::Style {
                 background: Some(Color {
                     r: app_theme.bg_surface.r * 0.7,  // 30% darker using RGB multiplication
