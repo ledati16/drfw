@@ -427,104 +427,133 @@ impl RuleForm {
         let mut errors = FormErrors::default();
         let mut has_errors = false;
 
-        let ports = if matches!(
-            self.protocol,
-            Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
-        ) {
-            let port_start = self.port_start.parse::<u16>();
-            let port_end = if self.port_end.is_empty() {
-                port_start.clone() // Clone is necessary: Result doesn't implement Copy
-            } else {
-                self.port_end.parse::<u16>()
-            };
-
-            if let (Ok(s), Ok(e)) = (port_start, port_end) {
-                match crate::validators::validate_port_range(s, e) {
-                    Ok((start, end)) => Some(crate::core::firewall::PortRange { start, end }),
-                    Err(msg) => {
-                        errors.port = Some(msg);
-                        has_errors = true;
-                        None
-                    }
-                }
-            } else {
-                errors.port = Some("Invalid port number".to_string());
-                has_errors = true;
-                None
-            }
-        } else {
-            None
-        };
-
-        let source = if self.source.is_empty() {
-            None
-        } else if let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() {
-            Some(ip)
-        } else {
-            errors.source = Some("Invalid IP address or CIDR (e.g. 192.168.1.0/24)".to_string());
-            has_errors = true;
-            None
-        };
-
-        if let Some(src) = source {
-            if self.protocol == Protocol::Icmp && src.is_ipv6() {
-                errors.source = Some("ICMP (v4) selected with IPv6 source".to_string());
-                has_errors = true;
-            } else if self.protocol == Protocol::Icmpv6 && src.is_ipv4() {
-                errors.source = Some("ICMPv6 selected with IPv4 source".to_string());
-                has_errors = true;
-            }
-        }
-
-        if !self.interface.is_empty()
-            && let Err(msg) = crate::validators::validate_interface(&self.interface)
-        {
-            errors.interface = Some(msg);
-            has_errors = true;
-        }
-
-        // Validate destination IP (if provided in advanced settings)
-        if !self.destination.is_empty() && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
-        {
-            errors.destination =
-                Some("Invalid destination IP or CIDR (domains not supported)".to_string());
-            has_errors = true;
-        }
-
-        // Validate rate limit if enabled
-        if self.rate_limit_enabled {
-            if let Ok(count) = self.rate_limit_count.parse::<u32>() {
-                // Ignore warnings (Ok result), only handle errors
-                if let Err(msg) =
-                    crate::validators::validate_rate_limit(count, self.rate_limit_unit)
-                {
-                    errors.rate_limit = Some(msg);
-                    has_errors = true;
-                }
-            } else if !self.rate_limit_count.is_empty() {
-                errors.rate_limit = Some("Invalid rate limit number".to_string());
-                has_errors = true;
-            }
-        }
-
-        // Validate connection limit if present
-        if !self.connection_limit.is_empty() {
-            if let Ok(limit) = self.connection_limit.parse::<u32>() {
-                // Ignore warnings (Ok result), only handle errors
-                if let Err(msg) = crate::validators::validate_connection_limit(limit) {
-                    errors.connection_limit = Some(msg);
-                    has_errors = true;
-                }
-            } else {
-                errors.connection_limit = Some("Invalid connection limit number".to_string());
-                has_errors = true;
-            }
-        }
+        let ports = self.validate_ports(&mut errors, &mut has_errors);
+        let source = self.validate_source(&mut errors, &mut has_errors);
+        self.validate_interface(&mut errors, &mut has_errors);
+        self.validate_destination(&mut errors, &mut has_errors);
+        self.validate_rate_limit(&mut errors, &mut has_errors);
+        self.validate_connection_limit(&mut errors, &mut has_errors);
 
         if has_errors {
             (None, None, Some(errors))
         } else {
             (ports, source, None)
+        }
+    }
+
+    fn validate_ports(
+        &self,
+        errors: &mut FormErrors,
+        has_errors: &mut bool,
+    ) -> Option<crate::core::firewall::PortRange> {
+        if !matches!(
+            self.protocol,
+            Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
+        ) {
+            return None;
+        }
+
+        let port_start = self.port_start.parse::<u16>();
+        let port_end = if self.port_end.is_empty() {
+            port_start.clone() // Clone is necessary: Result doesn't implement Copy
+        } else {
+            self.port_end.parse::<u16>()
+        };
+
+        if let (Ok(s), Ok(e)) = (port_start, port_end) {
+            match crate::validators::validate_port_range(s, e) {
+                Ok((start, end)) => Some(crate::core::firewall::PortRange { start, end }),
+                Err(msg) => {
+                    errors.port = Some(msg);
+                    *has_errors = true;
+                    None
+                }
+            }
+        } else {
+            errors.port = Some("Invalid port number".to_string());
+            *has_errors = true;
+            None
+        }
+    }
+
+    fn validate_source(
+        &self,
+        errors: &mut FormErrors,
+        has_errors: &mut bool,
+    ) -> Option<ipnetwork::IpNetwork> {
+        let source = if self.source.is_empty() {
+            return None;
+        } else if let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() {
+            Some(ip)
+        } else {
+            errors.source = Some("Invalid IP address or CIDR (e.g. 192.168.1.0/24)".to_string());
+            *has_errors = true;
+            return None;
+        };
+
+        // Check protocol/IP version compatibility
+        if let Some(src) = source {
+            if self.protocol == Protocol::Icmp && src.is_ipv6() {
+                errors.source = Some("ICMP (v4) selected with IPv6 source".to_string());
+                *has_errors = true;
+            } else if self.protocol == Protocol::Icmpv6 && src.is_ipv4() {
+                errors.source = Some("ICMPv6 selected with IPv4 source".to_string());
+                *has_errors = true;
+            }
+        }
+
+        source
+    }
+
+    fn validate_interface(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        if !self.interface.is_empty()
+            && let Err(msg) = crate::validators::validate_interface(&self.interface)
+        {
+            errors.interface = Some(msg);
+            *has_errors = true;
+        }
+    }
+
+    fn validate_destination(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        if !self.destination.is_empty() && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
+        {
+            errors.destination =
+                Some("Invalid destination IP or CIDR (domains not supported)".to_string());
+            *has_errors = true;
+        }
+    }
+
+    fn validate_rate_limit(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        if !self.rate_limit_enabled {
+            return;
+        }
+
+        if let Ok(count) = self.rate_limit_count.parse::<u32>() {
+            // Ignore warnings (Ok result), only handle errors
+            if let Err(msg) = crate::validators::validate_rate_limit(count, self.rate_limit_unit) {
+                errors.rate_limit = Some(msg);
+                *has_errors = true;
+            }
+        } else if !self.rate_limit_count.is_empty() {
+            errors.rate_limit = Some("Invalid rate limit number".to_string());
+            *has_errors = true;
+        }
+    }
+
+    fn validate_connection_limit(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        if self.connection_limit.is_empty() {
+            return;
+        }
+
+        if let Ok(limit) = self.connection_limit.parse::<u32>() {
+            // Ignore warnings (Ok result), only handle errors
+            if let Err(msg) = crate::validators::validate_connection_limit(limit) {
+                errors.connection_limit = Some(msg);
+                *has_errors = true;
+            }
+        } else {
+            errors.connection_limit = Some("Invalid connection limit number".to_string());
+            *has_errors = true;
         }
     }
 }
