@@ -226,14 +226,14 @@ pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), Profil
         return Err(ProfileError::NotFound(old_name.to_string()));
     }
 
-    if tokio::fs::try_exists(&new_path).await? {
-        return Err(ProfileError::InvalidName(
+    // Rename and handle collision atomically (removes TOCTOU race)
+    match tokio::fs::rename(old_path, new_path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(ProfileError::InvalidName(
             "Profile with new name already exists".into(),
-        ));
+        )),
+        Err(e) => Err(e.into()),
     }
-
-    tokio::fs::rename(old_path, new_path).await?;
-    Ok(())
 }
 
 /// Synchronous wrapper for `list_profiles()` for use during startup initialization.

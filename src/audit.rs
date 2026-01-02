@@ -102,7 +102,7 @@ impl AuditLog {
 
         #[cfg(unix)]
         let mut file = {
-            #[allow(unused_imports)]  // Used implicitly by .mode()
+            #[allow(unused_imports)] // Used implicitly by .mode()
             use std::os::unix::fs::OpenOptionsExt;
 
             tokio::fs::OpenOptions::new()
