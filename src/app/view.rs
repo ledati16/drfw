@@ -2125,6 +2125,35 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     ])
     .style(move |_| card_container(theme));
 
+    let diagnostics_card = container(
+        column![
+            container(
+                row![text("📊").size(18), text("DIAGNOSTICS").size(12).font(state.font_regular)]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+            )
+            .padding([8, 12])
+            .width(Length::Fill)
+            .style(move |_| section_header_container(theme)),
+            column![
+                render_settings_row(
+                    "Enable event logging",
+                    "Track firewall operations in the Diagnostics tab (opt-in for privacy)",
+                    toggler(state.enable_event_log)
+                        .on_toggle(Message::ToggleEventLog)
+                        .width(Length::Shrink)
+                        .style(move |_, status| themed_toggler(theme, status))
+                        .into(),
+                    theme,
+                    state.font_regular,
+                ),
+            ]
+            .spacing(16)
+            .padding(16)
+        ]
+    )
+    .style(move |_| card_container(theme));
+
     let security_card = container(
         column![
             container(
@@ -2244,7 +2273,7 @@ fn view_settings(state: &State) -> Element<'_, Message> {
     )
         .style(move |_| card_container(theme));
 
-    column![appearance_card, safety_card, security_card,]
+    column![appearance_card, safety_card, diagnostics_card, security_card,]
         .spacing(24)
         .padding(8)
         .into()

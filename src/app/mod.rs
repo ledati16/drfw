@@ -537,6 +537,7 @@ pub enum Message {
     ToggleZebraStriping(bool),
     ToggleAutoRevert(bool),
     AutoRevertTimeoutChanged(u64),
+    ToggleEventLog(bool),
     ToggleStrictIcmp(bool),
     IcmpRateLimitChanged(u32),
     ToggleRpfRequested(bool),
@@ -1092,6 +1093,10 @@ impl State {
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 self.auto_revert_timeout_secs = timeout.clamp(5, 120);
+                return self.save_config();
+            }
+            Message::ToggleEventLog(enabled) => {
+                self.enable_event_log = enabled;
                 return self.save_config();
             }
             Message::ToggleStrictIcmp(enabled) => {
