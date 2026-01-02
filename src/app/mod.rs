@@ -143,6 +143,7 @@ impl NotificationBanner {
 pub struct State {
     pub ruleset: FirewallRuleset,
     pub last_applied_ruleset: Option<FirewallRuleset>,
+    pub cached_disk_profile: Option<FirewallRuleset>,
     pub status: AppStatus,
     pub last_error: Option<ErrorInfo>,
     pub banners: std::collections::VecDeque<NotificationBanner>,
@@ -618,6 +619,8 @@ pub enum Message {
     CheckConfigSave,
     /// Check if profile should be saved (debounced)
     CheckProfileSave,
+    /// Disk profile loaded for cache refresh
+    DiskProfileLoaded(Option<FirewallRuleset>),
     /// No-op message for async operations that don't need a result
     Noop,
 }
@@ -704,6 +707,7 @@ impl State {
 
         let mut state = Self {
             last_applied_ruleset: Some(ruleset.clone()),
+            cached_disk_profile: Some(ruleset.clone()),
             ruleset,
             status: AppStatus::Idle,
             last_error: None,
@@ -947,7 +951,9 @@ impl State {
         }
 
         self.profile_dirty = false;
-        self.save_profile()
+        let save_task = self.save_profile();
+        let refresh_task = self.refresh_disk_profile_cache();
+        save_task.chain(refresh_task)
     }
 
     fn save_profile(&self) -> Task<Message> {
@@ -964,6 +970,23 @@ impl State {
         )
     }
 
+    fn refresh_disk_profile_cache(&mut self) -> Task<Message> {
+        let profile_name = self.active_profile_name.clone();
+
+        Task::perform(
+            async move {
+                crate::core::profiles::load_profile(&profile_name)
+                    .await
+                    .ok()
+            },
+            Message::DiskProfileLoaded,
+        )
+    }
+
+    fn handle_disk_profile_loaded(&mut self, profile: Option<FirewallRuleset>) {
+        self.cached_disk_profile = profile;
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.last_applied_ruleset.as_ref().is_none_or(|last| {
             last.rules != self.ruleset.rules
@@ -972,13 +995,10 @@ impl State {
     }
 
     pub fn is_profile_dirty(&self) -> bool {
-        if let Ok(on_disk) = crate::core::profiles::load_profile_blocking(&self.active_profile_name)
-        {
-            on_disk.rules != self.ruleset.rules
-                || on_disk.advanced_security != self.ruleset.advanced_security
-        } else {
-            true
-        }
+        self.cached_disk_profile.as_ref().is_some_and(|disk| {
+            disk.rules != self.ruleset.rules
+                || disk.advanced_security != self.ruleset.advanced_security
+        })
     }
 
     fn handle_switch_profile(&mut self, name: String) -> Task<Message> {
@@ -1816,6 +1836,7 @@ impl State {
             }
             Message::CheckConfigSave => return self.handle_check_config_save(),
             Message::CheckProfileSave => return self.handle_check_profile_save(),
+            Message::DiskProfileLoaded(profile) => self.handle_disk_profile_loaded(profile),
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
