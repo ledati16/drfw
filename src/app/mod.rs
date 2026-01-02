@@ -48,10 +48,22 @@ fn truncate_path_smart(path: &str, max_len: usize) -> String {
     format!(".../{filename}")
 }
 
-/// Fuzzy filter fonts with relevance scoring
+/// Fuzzy filters fonts by name using the nucleo matcher.
 ///
 /// Returns fonts sorted by match quality (best matches first).
-/// Empty query returns all fonts unsorted.
+/// Empty queries return all fonts with a score of 0.
+///
+/// Uses buffer reuse optimization to minimize allocations during filtering.
+///
+/// # Arguments
+///
+/// * `fonts` - Iterator of font choices to filter
+/// * `query` - Search string (case-insensitive matching)
+///
+/// # Returns
+///
+/// Vector of (font, score) tuples sorted by descending score (best matches first).
+/// Higher scores indicate better matches.
 pub fn fuzzy_filter_fonts<'a>(
     fonts: impl Iterator<Item = &'a crate::fonts::FontChoice>,
     query: &str,
@@ -82,10 +94,22 @@ pub fn fuzzy_filter_fonts<'a>(
     results
 }
 
-/// Fuzzy filter themes with relevance scoring
+/// Fuzzy filters themes by name using the nucleo matcher.
 ///
 /// Returns themes sorted by match quality (best matches first).
-/// Empty query returns all themes unsorted.
+/// Empty queries return all themes with a score of 0.
+///
+/// Uses buffer reuse optimization to minimize allocations during filtering.
+///
+/// # Arguments
+///
+/// * `themes` - Iterator of theme choices to filter
+/// * `query` - Search string (case-insensitive matching)
+///
+/// # Returns
+///
+/// Vector of (theme, score) tuples sorted by descending score (best matches first).
+/// Higher scores indicate better matches.
 pub fn fuzzy_filter_themes(
     themes: impl Iterator<Item = crate::theme::ThemeChoice>,
     query: &str,
