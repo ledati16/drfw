@@ -109,7 +109,16 @@ pub async fn save_config(config: &AppConfig) -> std::io::Result<()> {
         }
 
         // Atomic rename
-        tokio::fs::rename(temp_path, path).await?;
+        tokio::fs::rename(temp_path, path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::StorageFull {
+                std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "Disk full: cannot save configuration. Free up space and try again.",
+                )
+            } else {
+                e
+            }
+        })?;
     }
     Ok(())
 }

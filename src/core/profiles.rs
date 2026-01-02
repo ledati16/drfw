@@ -227,7 +227,16 @@ pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), P
         tokio::fs::write(&temp_path, json).await?;
     }
 
-    tokio::fs::rename(temp_path, &path).await?;
+    tokio::fs::rename(temp_path, &path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::StorageFull {
+            std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "Disk full: cannot save profile. Free up space and try again.",
+            )
+        } else {
+            e
+        }
+    })?;
 
     // Calculate and save checksum for integrity verification
     let checksum = {
