@@ -158,6 +158,19 @@ pub async fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
 
     let mut ruleset: FirewallRuleset = serde_json::from_str(&json)?;
 
+    // Validate rule count to prevent memory exhaustion
+    if ruleset.rules.len() > crate::core::firewall::MAX_RULES {
+        return Err(ProfileError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Profile '{}' contains {} rules (max: {})",
+                name,
+                ruleset.rules.len(),
+                crate::core::firewall::MAX_RULES
+            ),
+        )));
+    }
+
     // Rebuild caches for each rule to ensure performant UI rendering/filtering
     for rule in &mut ruleset.rules {
         rule.rebuild_caches();

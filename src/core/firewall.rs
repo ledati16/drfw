@@ -15,6 +15,10 @@
 //! - Tags for organization
 //! - Advanced options: destination IP, action (Accept/Drop/Reject), rate limiting, connection limiting
 //!
+//! # Limits
+//!
+//! Profiles are limited to [`MAX_RULES`] rules to prevent memory exhaustion.
+//!
 //! # Example
 //!
 //! ```
@@ -54,6 +58,12 @@ use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
+
+/// Maximum number of rules allowed in a single ruleset
+///
+/// Limit prevents memory exhaustion from malformed/malicious profiles.
+/// 1000 rules is well beyond typical use cases (most users have <50).
+pub const MAX_RULES: usize = 1000;
 
 /// Network protocol type for firewall rules
 ///
