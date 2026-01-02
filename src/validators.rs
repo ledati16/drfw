@@ -8,6 +8,9 @@
 /// Removes control characters, quotes, and shell metacharacters.
 /// Limits length to 64 bytes (ASCII characters only) as per specification.
 ///
+/// This correctly filters out zero-width characters (U+200B, U+200D, etc.)
+/// and combining characters since they are not ASCII.
+///
 /// SECURITY: Uses `is_ascii_alphanumeric()` to prevent Unicode-based bypasses
 /// and ensure labels stay within system limits (64 bytes max).
 ///
