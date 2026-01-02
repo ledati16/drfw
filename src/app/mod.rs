@@ -1972,7 +1972,10 @@ impl State {
                 return Task::none();
             }
 
-            let form = self.rule_form.take().unwrap();
+            let Some(form) = self.rule_form.take() else {
+                tracing::error!("SaveRuleForm clicked but no form present - UI state desync");
+                return Task::none();
+            };
             let sanitized_label = crate::validators::sanitize_label(&form.label);
             let interface = if form.interface.is_empty() {
                 None
