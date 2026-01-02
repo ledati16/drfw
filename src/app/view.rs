@@ -1733,22 +1733,48 @@ fn view_awaiting_apply(
     auto_revert_enabled: bool,
     auto_revert_timeout: u64,
 ) -> Element<'_, Message> {
-    let description = if auto_revert_enabled {
-        format!("Rules verified. Applying will activate a {}s safety rollback timer.", auto_revert_timeout.min(120))
-    } else {
-        "Rules verified. Changes will take effect immediately (no auto-revert).".to_string()
-    };
-
     let button_text = if auto_revert_enabled {
         "Apply & Start Timer"
     } else {
         "Apply Now"
     };
 
+    let description_row = if auto_revert_enabled {
+        let timeout_val = auto_revert_timeout.min(120);
+        container(
+            row![
+                text("Applying will activate a ")
+                    .size(14)
+                    .color(app_theme.fg_muted),
+                text(format!("{}", timeout_val))
+                    .size(14)
+                    .font(iced::Font {
+                        weight: iced::font::Weight::Bold,
+                        ..regular_font
+                    })
+                    .color(app_theme.fg_muted),
+                text(" second safety timer.")
+                    .size(14)
+                    .color(app_theme.fg_muted),
+            ]
+        )
+        .width(360)
+        .align_x(Alignment::Center)
+    } else {
+        container(
+            text("Changes will take effect immediately (no auto-revert).")
+                .size(14)
+                .color(app_theme.fg_muted)
+        )
+        .width(360)
+        .align_x(Alignment::Center)
+    };
+
     container(column![text("🛡️").size(36), container(text("Commit Changes?").size(24).font(regular_font).color(app_theme.fg_primary))
                           .padding([4, 8])
                           .style(move |_| section_header_container(app_theme)),
-                      text(description).size(14).color(app_theme.fg_muted).width(360).align_x(Alignment::Center),
+                      text("✓ Rules verified.").size(14).color(app_theme.success).width(360).align_x(Alignment::Center),
+                      description_row,
                       row![button(text("Discard").size(14)).on_press(Message::CancelRuleForm).padding([10, 20]).style(move |_, status| secondary_button(app_theme, status)),
                            button(text(button_text).size(14)).on_press(Message::ProceedToApply).padding([10, 24]).style(move |_, status| primary_button(app_theme, status)),
                       ].spacing(16)
@@ -1778,11 +1804,28 @@ fn view_pending_confirmation(
             )
             .padding([4, 8])
             .style(move |_| section_header_container(app_theme)),
-            text(format!(
-                "Firewall updated. Automatic rollback in {remaining} seconds if not confirmed."
-            ))
-            .size(14)
-            .color(app_theme.accent)
+            text("✓ Firewall updated.")
+                .size(14)
+                .color(app_theme.success)
+                .width(360)
+                .align_x(Alignment::Center),
+            container(
+                row![
+                    text("Automatic rollback in ")
+                        .size(14)
+                        .color(app_theme.accent),
+                    text(format!("{remaining}"))
+                        .size(14)
+                        .font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..regular_font
+                        })
+                        .color(app_theme.accent),
+                    text(" seconds if not confirmed.")
+                        .size(14)
+                        .color(app_theme.accent),
+                ]
+            )
             .width(360)
             .align_x(Alignment::Center),
             // Progress bar showing time remaining (inset/recessed style)
