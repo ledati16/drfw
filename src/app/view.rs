@@ -2990,23 +2990,33 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
     let theme = &state.theme;
     let search_term = &picker.search_lowercase;
 
-    // Phase 4: Filter by light/dark THEN fuzzy match
-    let filter_passed = crate::theme::ThemeChoice::iter().filter(|choice| {
-        let theme_instance = choice.to_theme();
-        match picker.filter {
+    // Use pre-cached themes (computed once on modal open)
+    // Filter by light/dark first, then fuzzy match
+    let filter_passed = picker
+        .cached_themes
+        .iter()
+        .filter(|(_choice, theme_instance)| match picker.filter {
             ThemeFilter::All => true,
             ThemeFilter::Light => theme_instance.is_light(),
             ThemeFilter::Dark => !theme_instance.is_light(),
-        }
-    });
+        });
 
-    // Phase 4: Apply fuzzy matching (returns themes sorted by relevance)
-    // Cache to_theme() results to avoid duplicate calls (performance optimization)
-    let filtered_themes: Vec<_> = crate::app::fuzzy_filter_themes(filter_passed, search_term)
+    // Apply fuzzy matching on filtered themes (sorted by relevance)
+    let choices_only = filter_passed.clone().map(|(choice, _)| *choice);
+    let filtered_with_scores = crate::app::fuzzy_filter_themes(choices_only, search_term);
+
+    // Reconstruct with cached theme instances (no duplicate to_theme() calls)
+    let filtered_themes: Vec<_> = filtered_with_scores
         .into_iter()
         .map(|(choice, _score)| {
-            // Cache theme instance to avoid duplicate to_theme() calls
-            (choice, choice.to_theme())
+            // Find pre-cached theme instance
+            let theme_instance = picker
+                .cached_themes
+                .iter()
+                .find(|(c, _)| *c == choice)
+                .map(|(_, t)| t.clone())
+                .unwrap(); // Safe: we just filtered from cached_themes
+            (choice, theme_instance)
         })
         .collect();
 

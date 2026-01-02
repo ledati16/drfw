@@ -12,6 +12,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use strum::IntoEnumIterator;
 
 /// Smart truncate a file path to fit in notifications
 ///
@@ -232,6 +233,8 @@ pub struct ThemePickerState {
     pub search_lowercase: String,
     pub filter: ThemeFilter,
     pub original_theme: crate::theme::ThemeChoice,
+    /// Pre-computed theme conversions to avoid repeated to_theme() calls
+    pub cached_themes: Vec<(crate::theme::ThemeChoice, crate::theme::AppTheme)>,
 }
 
 #[derive(
@@ -1430,11 +1433,17 @@ impl State {
                 self.mark_config_dirty();
             }
             Message::OpenThemePicker => {
+                // Pre-compute all theme conversions once on modal open
+                let cached_themes: Vec<_> = crate::theme::ThemeChoice::iter()
+                    .map(|choice| (choice, choice.to_theme()))
+                    .collect();
+
                 self.theme_picker = Some(ThemePickerState {
                     search: String::new(),
                     search_lowercase: String::new(),
                     filter: ThemeFilter::All,
                     original_theme: self.current_theme,
+                    cached_themes,
                 });
             }
             Message::ThemePickerSearchChanged(search) => {
