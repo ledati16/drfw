@@ -622,5 +622,155 @@ mod property_tests {
             let result = validate_interface(&invalid_name);
             prop_assert!(result.is_err());
         }
+
+        /// Property test: validate_interface must reject Unicode characters.
+        ///
+        /// This is a critical security test - Unicode characters in interface names
+        /// could bypass validation or cause command injection issues.
+        #[test]
+        fn test_validate_interface_rejects_unicode(
+            valid_prefix in "[a-zA-Z0-9]{1,10}",
+            unicode_char in "[\\p{L}&&[^a-zA-Z]]"  // Unicode letters that aren't ASCII
+        ) {
+            let name_with_unicode = format!("{valid_prefix}{unicode_char}");
+            let result = validate_interface(&name_with_unicode);
+            prop_assert!(result.is_err(), "Should reject Unicode character: {}", unicode_char);
+        }
+
+        /// Property test: validate_interface must reject zero-width characters.
+        ///
+        /// Zero-width characters are invisible and could be used to bypass
+        /// length checks or create misleading interface names.
+        #[test]
+        fn test_validate_interface_rejects_zero_width(
+            valid_prefix in "[a-zA-Z0-9]{1,10}",
+            zero_width in prop::sample::select(vec![
+                '\u{200B}',  // Zero-width space
+                '\u{200C}',  // Zero-width non-joiner
+                '\u{200D}',  // Zero-width joiner
+                '\u{FEFF}',  // Zero-width no-break space (BOM)
+            ])
+        ) {
+            let name_with_zw = format!("{valid_prefix}{zero_width}");
+            let result = validate_interface(&name_with_zw);
+            prop_assert!(result.is_err(), "Should reject zero-width character U+{:04X}", zero_width as u32);
+        }
+
+        /// Property test: validate_interface must reject RTL markers.
+        ///
+        /// RTL (right-to-left) markers can be used to disguise malicious input
+        /// by reversing the visual display order.
+        #[test]
+        fn test_validate_interface_rejects_rtl(
+            valid_prefix in "[a-zA-Z0-9]{1,10}",
+            rtl_marker in prop::sample::select(vec![
+                '\u{202E}',  // Right-to-left override
+                '\u{200F}',  // Right-to-left mark
+                '\u{202B}',  // Right-to-left embedding
+            ])
+        ) {
+            let name_with_rtl = format!("{valid_prefix}{rtl_marker}");
+            let result = validate_interface(&name_with_rtl);
+            prop_assert!(result.is_err(), "Should reject RTL marker U+{:04X}", rtl_marker as u32);
+        }
+
+        /// Property test: sanitize_label must remove all Unicode characters.
+        ///
+        /// Labels are used in nftables comments and UI display. Unicode could
+        /// cause rendering issues or bypass length checks.
+        #[test]
+        fn test_sanitize_label_removes_unicode(
+            ascii_part in "[a-zA-Z0-9 _-]{1,20}",
+            unicode_char in "[\\p{L}&&[^a-zA-Z]]"
+        ) {
+            let label_with_unicode = format!("{ascii_part}{unicode_char}test");
+            let sanitized = sanitize_label(&label_with_unicode);
+            // Unicode should be removed, leaving only ASCII parts
+            prop_assert!(!sanitized.contains(&unicode_char as &str));
+            prop_assert!(sanitized.is_ascii());
+        }
+
+        /// Property test: sanitize_label must remove emoji.
+        ///
+        /// Emoji are multi-byte Unicode characters that could bypass length
+        /// checks or cause display issues in terminals and logs.
+        #[test]
+        fn test_sanitize_label_removes_emoji(
+            ascii_part in "[a-zA-Z0-9 ]{1,20}",
+            emoji in prop::sample::select(vec![
+                "😀", "🔥", "🚀", "⚠️", "✅", "❌", "🎉", "💀",
+                "🐍", "🦀", "🔒", "🔓", "📁", "📂", "🌐", "💻"
+            ])
+        ) {
+            let label_with_emoji = format!("{ascii_part}{emoji}");
+            let sanitized = sanitize_label(&label_with_emoji);
+            prop_assert!(!sanitized.contains(emoji), "Should remove emoji: {}", emoji);
+            prop_assert!(sanitized.is_ascii());
+        }
+
+        /// Property test: sanitize_label must handle homoglyphs.
+        ///
+        /// Homoglyphs are characters from different scripts that look identical
+        /// (e.g., Cyrillic 'а' vs Latin 'a'). They should be removed.
+        #[test]
+        fn test_sanitize_label_removes_homoglyphs(
+            prefix in "[a-zA-Z]{1,10}",
+            homoglyph in prop::sample::select(vec![
+                'а',  // Cyrillic 'a' (U+0430)
+                'е',  // Cyrillic 'e' (U+0435)
+                'о',  // Cyrillic 'o' (U+043E)
+                'р',  // Cyrillic 'p' (U+0440)
+                'с',  // Cyrillic 'c' (U+0441)
+                'х',  // Cyrillic 'x' (U+0445)
+            ])
+        ) {
+            let label_with_homoglyph = format!("{prefix}{homoglyph}");
+            let sanitized = sanitize_label(&label_with_homoglyph);
+            // Homoglyph should be removed (not ASCII alphanumeric)
+            prop_assert!(!sanitized.contains(homoglyph));
+            prop_assert!(sanitized.is_ascii());
+        }
+
+        /// Property test: validate_log_prefix must reject Unicode.
+        ///
+        /// Log prefixes appear in kernel logs (syslog) which should be ASCII-safe.
+        #[test]
+        fn test_validate_log_prefix_rejects_unicode(
+            ascii_part in "[a-zA-Z0-9:._-]{1,20}",
+            unicode_char in "[\\p{L}&&[^a-zA-Z]]"
+        ) {
+            let prefix_with_unicode = format!("{ascii_part}{unicode_char}");
+            let result = validate_log_prefix(&prefix_with_unicode);
+            // Should sanitize out the Unicode
+            if let Ok(sanitized) = result {
+                prop_assert!(!sanitized.contains(&unicode_char as &str));
+                prop_assert!(sanitized.is_ascii(),
+                    "Sanitized log prefix should be ASCII-only");
+            }
+        }
+
+        /// Property test: validate_log_prefix must handle combining characters.
+        ///
+        /// Combining characters (accents, diacritics) modify the previous character
+        /// and can cause display issues or bypass length checks.
+        #[test]
+        fn test_validate_log_prefix_rejects_combining(
+            ascii_part in "[a-zA-Z0-9]{1,20}",
+            combining in prop::sample::select(vec![
+                '\u{0301}',  // Combining acute accent
+                '\u{0300}',  // Combining grave accent
+                '\u{0302}',  // Combining circumflex
+                '\u{0303}',  // Combining tilde
+                '\u{0308}',  // Combining diaeresis (umlaut)
+            ])
+        ) {
+            let prefix_with_combining = format!("{ascii_part}{combining}");
+            let result = validate_log_prefix(&prefix_with_combining);
+            if let Ok(sanitized) = result {
+                prop_assert!(!sanitized.contains(combining),
+                    "Should remove combining character U+{:04X}", combining as u32);
+                prop_assert!(sanitized.is_ascii());
+            }
+        }
     }
 }
