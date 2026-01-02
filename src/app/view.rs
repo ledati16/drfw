@@ -16,7 +16,7 @@ use iced::widget::{
     Id, button, checkbox, column, container, keyed_column, mouse_area, pick_list, progress_bar,
     row, rule, scrollable, space, stack, text, text_input, toggler, tooltip,
 };
-use iced::{alignment, Alignment, Border, Color, Element, Length, Padding, Shadow};
+use iced::{alignment, Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Shadow};
 use std::sync::Arc; // Issue #2: Arc for cheap pointer cloning
 use strum::IntoEnumIterator; // For ThemeChoice::iter()
 
@@ -1803,29 +1803,46 @@ fn view_pending_confirmation(
                             app_theme.accent
                         };
 
-                        let bar_color = Color {
-                            r: base_color.r * 0.85,  // 15% darker than raised buttons
-                            g: base_color.g * 0.85,
-                            b: base_color.b * 0.85,
-                            a: base_color.a,
+                        let bar_color = if app_theme.is_light() {
+                            // Light themes: gray (desaturated), darker than empty track for inset depth
+                            Color {
+                                r: app_theme.bg_surface.r * 0.70,  // 30% darker gray (darker than empty track)
+                                g: app_theme.bg_surface.g * 0.70,
+                                b: app_theme.bg_surface.b * 0.70,
+                                a: 1.0,
+                            }
+                        } else {
+                            // Dark themes: 15% darker accent color (PERFECT)
+                            Color {
+                                r: base_color.r * 0.85,
+                                g: base_color.g * 0.85,
+                                b: base_color.b * 0.85,
+                                a: 1.0,
+                            }
                         };
 
-                        // Gradient: straight top shadow (light from above)
+                        // Gradient: straight top shadow with sharper transition (crisp like buttons)
+                        let gradient_multiplier = if app_theme.is_light() {
+                            0.92  // Light themes: subtle 8% darker at top
+                        } else {
+                            0.65  // Dark themes: strong 35% darker for depth
+                        };
+
                         let bar_gradient = Gradient::Linear(iced::gradient::Linear::new(std::f32::consts::PI)
                             .add_stop(0.0, Color {
-                                r: bar_color.r * 0.5,  // 50% darker shadow at top edge
-                                g: bar_color.g * 0.5,
-                                b: bar_color.b * 0.5,
+                                r: bar_color.r * gradient_multiplier,
+                                g: bar_color.g * gradient_multiplier,
+                                b: bar_color.b * gradient_multiplier,
                                 a: bar_color.a,
                             })
-                            .add_stop(0.08, bar_color)  // Quick transition at 8%
+                            .add_stop(0.15, bar_color)  // Extended to 15% for slightly more coverage
                             .add_stop(1.0, bar_color));  // Full fill color for rest
 
                         progress_bar::Style {
                             background: Color {
-                                r: app_theme.bg_surface.r * 0.8,
-                                g: app_theme.bg_surface.g * 0.8,
-                                b: app_theme.bg_surface.b * 0.8,
+                                r: app_theme.bg_surface.r * 0.85,  // 15% darker empty track (same for both themes)
+                                g: app_theme.bg_surface.g * 0.85,
+                                b: app_theme.bg_surface.b * 0.85,
                                 a: app_theme.bg_surface.a,
                             }.into(),
                             bar: Background::Gradient(bar_gradient),
@@ -1838,18 +1855,36 @@ fn view_pending_confirmation(
             )
             .width(360)
             .padding(Padding {
-                top: 2.0,
+                top: 2.5,      // Slightly thicker top rim (sweet spot)
                 right: 2.0,
-                bottom: 1.0,  // Thinner bottom rim
+                bottom: 1.0,   // Thinner bottom rim
                 left: 2.0,
             })
-            .style(move |_| container::Style {
-                background: Some(Color {
-                    r: app_theme.bg_surface.r * 0.7,  // 30% darker using RGB multiplication
-                    g: app_theme.bg_surface.g * 0.7,
-                    b: app_theme.bg_surface.b * 0.7,
-                    a: app_theme.bg_surface.a,
-                }.into()),
+            .style(move |_| {
+                let (rim_top, rim_bottom) = if app_theme.is_light() {
+                    // Light themes: strong top shadow, very subtle bottom
+                    (0.5, 0.95)  // 50% darker top, 5% darker bottom
+                } else {
+                    // Dark themes: strong inset shadow (PERFECT)
+                    (0.5, 0.88)  // 50% darker top, 12% darker bottom
+                };
+
+                container::Style {
+                    background: Some(Background::Gradient(Gradient::Linear(
+                        iced::gradient::Linear::new(std::f32::consts::PI)  // Vertical gradient
+                            .add_stop(0.0, Color {
+                                r: app_theme.bg_surface.r * rim_top,
+                                g: app_theme.bg_surface.g * rim_top,
+                                b: app_theme.bg_surface.b * rim_top,
+                                a: app_theme.bg_surface.a,
+                            })
+                            .add_stop(1.0, Color {
+                                r: app_theme.bg_surface.r * rim_bottom,
+                                g: app_theme.bg_surface.g * rim_bottom,
+                                b: app_theme.bg_surface.b * rim_bottom,
+                                a: app_theme.bg_surface.a,
+                            })
+                    ))),
                 border: Border {
                     color: Color {
                         r: app_theme.bg_surface.r * 0.75,  // Lighter 25% darkening for border
@@ -1866,12 +1901,13 @@ fn view_pending_confirmation(
                         r: app_theme.bg_surface.r * 0.5,  // Even darker for shadow depth
                         g: app_theme.bg_surface.g * 0.5,
                         b: app_theme.bg_surface.b * 0.5,
-                        a: 0.8,  // Slightly transparent for blend
+                        a: 0.9,  // Less transparent for sharper definition
                     },
                     offset: iced::Vector::new(0.0, -1.0),  // Negative Y = top shadow
-                    blur_radius: 3.0,
+                    blur_radius: 1.0,  // Crisp shadow matching button precision
                 },
                 ..Default::default()
+            }
             }),
             row![
                 button(text("Rollback").size(14))
