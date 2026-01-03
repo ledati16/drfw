@@ -17,10 +17,10 @@ use std::sync::Arc;
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
 
-    // 1. Branding & Profile Header
+    // 1. Profile Header (replaces branding for cleaner layout)
     let is_dirty = state.is_profile_dirty() || state.config_dirty;
 
-    let profile_selector = column![
+    let profile_header = column![
         row![
             container(
                 text("PROFILE")
@@ -60,45 +60,20 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .padding([8, 12])
                 .style(move |_, status| secondary_button(theme, status)),
         ]
-        .spacing(8)
-    ]
-    .spacing(4);
-
-    let branding = container(
-        column![
-            row![
-                container(text("🛡️").size(28).color(theme.accent)).padding(4),
-                column![
-                    text("DRFW")
-                        .size(24)
-                        .font(state.font_regular)
-                        .color(theme.accent),
-                    container(
-                        text("DUMB RUST FIREWALL")
-                            .size(9)
-                            .color(theme.fg_muted)
-                            .font(state.font_mono)
-                    )
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
-                ]
-                .spacing(0)
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center),
-            // Branding Separator
+        .spacing(8),
+        // Separator line after profile section
+        container(
             container(row![])
                 .height(Length::Fixed(1.0))
                 .width(Length::Fill)
                 .style(move |_| container::Style {
                     background: Some(theme.border.into()),
                     ..Default::default()
-                }),
-            profile_selector
-        ]
-        .spacing(16),
-    )
-    .padding(iced::Padding::new(0.0).bottom(10.0));
+                })
+        )
+        .padding(iced::Padding::new(0.0).top(8.0)),
+    ]
+    .spacing(8);
 
     // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags, Phase 1: Use cached filtered indices)
     let all_tags = &state.cached_all_tags;
@@ -615,7 +590,6 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     };
 
     // 6. Sidebar Footer (Pinned Action)
-    // 6. Sidebar Footer (Pinned Action)
     let footer = column![
         container(row![])
             .height(Length::Fixed(1.0))
@@ -643,7 +617,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
     container(
         column![
-            branding,
+            profile_header,
             search_area,
             column![
                 list_header,
