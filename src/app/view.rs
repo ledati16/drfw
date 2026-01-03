@@ -349,6 +349,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             )
             .width(Length::Fill)
             .padding(8)
+            .font(state.font_regular)
             .style(move |_, status| themed_pick_list(theme, status))
             .menu_style(move |_| themed_pick_list_menu(theme)),
             button(text("⚙").size(16))
@@ -411,7 +412,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         column![].into()
     } else {
         let mut tag_elements: Vec<Element<'_, Message>> = vec![
-            button(text("All").size(10))
+            button(text("All").size(10).font(state.font_regular))
                 .on_press(Message::FilterByTag(None))
                 .padding([4, 8])
                 .style(move |_, status| {
@@ -427,7 +428,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
         for tag in all_tags {
             let is_selected = state.filter_tag.as_ref() == Some(tag);
             tag_elements.push(
-                button(text(tag.as_str()).size(10))
+                button(text(tag.as_str()).size(10).font(state.font_regular))
                     // Issue #2: Arc::clone just copies pointer (cheap!), not string data
                     .on_press(Message::FilterByTag(Some(Arc::clone(tag))))
                     .padding([4, 8])
@@ -464,6 +465,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             .on_input(Message::RuleSearchChanged)
             .padding(10)
             .size(13)
+            .font(state.font_regular)
             .style(move |_, status| themed_text_input(theme, status)),
         tag_cloud,
     ]
@@ -522,13 +524,14 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                 row![
                     text("Delete this rule?")
                         .size(11)
+                        .font(state.font_regular)
                         .color(theme.danger)
                         .width(Length::Fill),
-                    button(text("Cancel").size(11))
+                    button(text("Cancel").size(11).font(state.font_regular))
                         .on_press(Message::CancelDelete)
                         .padding([4, 10])
                         .style(move |_, status| secondary_button(theme, status)),
-                    button(text("Delete").size(11))
+                    button(text("Delete").size(11).font(state.font_regular))
                         .on_press(Message::DeleteRule(rule.id))
                         .padding([4, 10])
                         .style(move |_, status| danger_button(theme, status)),
@@ -661,6 +664,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                         container(
                             text(tag)
                                 .size(8)
+                                .font(state.font_regular)
                                 .color(tag_text_color)
                                 .wrapping(Wrapping::None),
                         )
@@ -759,10 +763,15 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
                             .spacing(0)
                             .style(move |_, status| themed_checkbox(theme, status)),
                         // Delete
-                        button(text("×").size(14).color(theme.fg_muted))
-                            .on_press(Message::DeleteRuleRequested(rule.id))
-                            .padding(6)
-                            .style(button::text),
+                        button(
+                            text("×")
+                                .size(14)
+                                .font(state.font_regular)
+                                .color(theme.fg_muted)
+                        )
+                        .on_press(Message::DeleteRuleRequested(rule.id))
+                        .padding(6)
+                        .style(button::text),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
@@ -914,9 +923,12 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
             }),
         container(
             button(
-                row![text("+").size(18), text("Add Access Rule").size(14)]
-                    .spacing(10)
-                    .align_y(Alignment::Center),
+                row![
+                    text("+").size(18).font(state.font_regular),
+                    text("Add Access Rule").size(14).font(state.font_regular)
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
             )
             .width(Length::Fill)
             .padding(14)
@@ -963,14 +975,26 @@ fn view_workspace<'a>(
         view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
         container(row![]).width(Length::Fill),
         // Global Utility Tools
-        button(row![text("📤").size(14), text("Export").size(13)].spacing(8))
-            .on_press(Message::ToggleExportModal(true))
-            .padding([8, 16])
-            .style(move |_, status| secondary_button(theme, status)),
-        button(row![text("📊").size(14), text("Diagnostics").size(13)].spacing(8))
-            .on_press(Message::ToggleDiagnostics(true))
-            .padding([8, 16])
-            .style(move |_, status| secondary_button(theme, status)),
+        button(
+            row![
+                text("📤").size(14),
+                text("Export").size(13).font(state.font_regular)
+            ]
+            .spacing(8)
+        )
+        .on_press(Message::ToggleExportModal(true))
+        .padding([8, 16])
+        .style(move |_, status| secondary_button(theme, status)),
+        button(
+            row![
+                text("📊").size(14),
+                text("Diagnostics").size(13).font(state.font_regular)
+            ]
+            .spacing(8)
+        )
+        .on_press(Message::ToggleDiagnostics(true))
+        .padding([8, 16])
+        .style(move |_, status| secondary_button(theme, status)),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -994,6 +1018,7 @@ fn view_workspace<'a>(
                     "Configure application appearance and advanced firewall security hardening.",
             })
             .size(12)
+            .font(state.font_regular)
             .color(theme.fg_muted),
         ]
         .spacing(2)
@@ -1012,6 +1037,7 @@ fn view_workspace<'a>(
                     .on_toggle(Message::ToggleDiff)
                     .size(16)
                     .text_size(12)
+                    .font(state.font_regular)
                     .spacing(6)
                     .style(move |_, status| themed_checkbox(theme, status)),
             );
@@ -1024,6 +1050,7 @@ fn view_workspace<'a>(
                 .on_toggle(Message::ToggleZebraStriping)
                 .size(16)
                 .text_size(12)
+                .font(state.font_regular)
                 .spacing(6)
                 .style(move |_, status| themed_checkbox(theme, status)),
         );
@@ -1322,15 +1349,20 @@ fn view_rule_form<'a>(
                 .color(theme.info),
             text("Define allowed traffic patterns.")
                 .size(12)
+                .font(regular_font)
                 .color(theme.fg_muted)
         ]
         .spacing(4),
         // Basic Info Section
         column![
-            text("DESCRIPTION").size(10).color(theme.fg_muted),
+            text("DESCRIPTION")
+                .size(10)
+                .font(regular_font)
+                .color(theme.fg_muted),
             text_input("e.g. Local Web Server", &form.label)
                 .on_input(Message::RuleFormLabelChanged)
                 .padding(8)
+                .font(regular_font)
                 .style(move |_, status| themed_text_input(theme, status))
         ]
         .spacing(4),
@@ -1338,9 +1370,14 @@ fn view_rule_form<'a>(
         column![
             row![
                 column![
-                    container(text("PROTOCOL").size(10).color(theme.fg_muted))
-                        .padding([2, 6])
-                        .style(move |_| section_header_container(theme)),
+                    container(
+                        text("PROTOCOL")
+                            .size(10)
+                            .font(regular_font)
+                            .color(theme.fg_muted)
+                    )
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
                     pick_list(
                         {
                             let mut protocols = vec![
@@ -1362,6 +1399,7 @@ fn view_rule_form<'a>(
                     )
                     .width(Length::Fill)
                     .padding(8)
+                    .font(regular_font)
                     .style(move |_, status| themed_pick_list(theme, status))
                     .menu_style(move |_| themed_pick_list_menu(theme))
                 ]
@@ -1369,16 +1407,22 @@ fn view_rule_form<'a>(
                 .width(Length::Fill),
                 {
                     let mut port_col = column![
-                        container(text("PORT RANGE").size(10).color(theme.fg_muted))
-                            .padding([2, 6])
-                            .style(move |_| section_header_container(theme)),
-                        view_port_inputs(form, port_error, theme, mono_font),
+                        container(
+                            text("PORT RANGE")
+                                .size(10)
+                                .font(regular_font)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
+                        view_port_inputs(form, port_error, theme, regular_font, mono_font),
                     ]
                     .spacing(4)
                     .width(Length::Fill);
 
                     if let Some(err) = port_error {
-                        port_col = port_col.push(text(err).size(11).color(theme.danger));
+                        port_col = port_col
+                            .push(text(err).size(11).font(regular_font).color(theme.danger));
                     }
                     port_col
                 },
@@ -1394,6 +1438,7 @@ fn view_rule_form<'a>(
                         container(
                             text("SOURCE ADDRESS (OPTIONAL)")
                                 .size(10)
+                                .font(regular_font)
                                 .color(theme.fg_muted)
                         )
                         .padding([2, 6])
@@ -1401,19 +1446,26 @@ fn view_rule_form<'a>(
                         text_input("e.g. 192.168.1.0/24 or specific IP", &form.source)
                             .on_input(Message::RuleFormSourceChanged)
                             .padding(8)
+                            .font(regular_font)
                             .style(move |_, status| themed_text_input(theme, status)),
                     ]
                     .spacing(4);
 
                     if let Some(err) = source_error {
-                        source_col = source_col.push(text(err).size(11).color(theme.danger));
+                        source_col = source_col
+                            .push(text(err).size(11).font(regular_font).color(theme.danger));
                     }
                     source_col
                 },
                 column![
-                    container(text("INTERFACE (OPTIONAL)").size(10).color(theme.fg_muted))
-                        .padding([2, 6])
-                        .style(move |_| section_header_container(theme)),
+                    container(
+                        text("INTERFACE (OPTIONAL)")
+                            .size(10)
+                            .font(regular_font)
+                            .color(theme.fg_muted)
+                    )
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
                     pick_list(
                         iface_options,
                         Some(if form.interface.is_empty() {
@@ -1429,6 +1481,7 @@ fn view_rule_form<'a>(
                     )
                     .width(Length::Fill)
                     .padding(8)
+                    .font(regular_font)
                     .style(move |_, status| themed_pick_list(theme, status))
                     .menu_style(move |_| themed_pick_list_menu(theme))
                 ]
@@ -1440,9 +1493,14 @@ fn view_rule_form<'a>(
             if server_mode {
                 context_col = context_col.push(
                     column![
-                        container(text("CHAIN DIRECTION").size(10).color(theme.fg_muted))
-                            .padding([2, 6])
-                            .style(move |_| section_header_container(theme)),
+                        container(
+                            text("CHAIN DIRECTION")
+                                .size(10)
+                                .font(regular_font)
+                                .color(theme.fg_muted)
+                        )
+                        .padding([2, 6])
+                        .style(move |_| section_header_container(theme)),
                         pick_list(
                             vec![
                                 crate::core::firewall::Chain::Input,
@@ -1453,6 +1511,7 @@ fn view_rule_form<'a>(
                         )
                         .width(Length::Fill)
                         .padding(8)
+                        .font(regular_font)
                         .style(move |_, status| themed_pick_list(theme, status))
                         .menu_style(move |_| themed_pick_list_menu(theme))
                     ]
@@ -1470,6 +1529,7 @@ fn view_rule_form<'a>(
                     .size(16)
                     .spacing(8)
                     .text_size(12)
+                    .font(regular_font)
                     .style(move |_, status| themed_checkbox(theme, status)),
             ]
             .spacing(6);
@@ -1483,6 +1543,7 @@ fn view_rule_form<'a>(
                                 container(
                                     text("DESTINATION ADDRESS (OPTIONAL)")
                                         .size(10)
+                                        .font(regular_font)
                                         .color(theme.fg_muted)
                                 )
                                 .padding([2, 6])
@@ -1490,20 +1551,28 @@ fn view_rule_form<'a>(
                                 text_input("e.g. 192.168.1.0/24 or specific IP", &form.destination)
                                     .on_input(Message::RuleFormDestinationChanged)
                                     .padding(8)
+                                    .font(regular_font)
                                     .style(move |_, status| themed_text_input(theme, status)),
                             ]
                             .spacing(4);
 
                             if let Some(err) = destination_error {
-                                dest_col = dest_col.push(text(err).size(11).color(theme.danger));
+                                dest_col = dest_col.push(
+                                    text(err).size(11).font(regular_font).color(theme.danger),
+                                );
                             }
                             dest_col
                         },
                         // Action
                         column![
-                            container(text("ACTION").size(10).color(theme.fg_muted))
-                                .padding([2, 6])
-                                .style(move |_| section_header_container(theme)),
+                            container(
+                                text("ACTION")
+                                    .size(10)
+                                    .font(regular_font)
+                                    .color(theme.fg_muted)
+                            )
+                            .padding([2, 6])
+                            .style(move |_| section_header_container(theme)),
                             pick_list(
                                 vec![
                                     crate::core::firewall::Action::Accept,
@@ -1515,6 +1584,7 @@ fn view_rule_form<'a>(
                             )
                             .width(Length::Fill)
                             .padding(8)
+                            .font(regular_font)
                             .style(move |_, status| themed_pick_list(theme, status))
                             .menu_style(move |_| themed_pick_list_menu(theme))
                         ]
@@ -1528,6 +1598,7 @@ fn view_rule_form<'a>(
                                     .size(16)
                                     .spacing(8)
                                     .text_size(12)
+                                    .font(regular_font)
                                     .style(move |_, status| themed_checkbox(theme, status)),
                             ]
                             .spacing(4);
@@ -1536,12 +1607,18 @@ fn view_rule_form<'a>(
                                 rate_limit_col = rate_limit_col.push(
                                     row![
                                         column![
-                                            container(text("COUNT").size(10).color(theme.fg_muted))
-                                                .padding([2, 6])
-                                                .style(move |_| section_header_container(theme)),
+                                            container(
+                                                text("COUNT")
+                                                    .size(10)
+                                                    .font(regular_font)
+                                                    .color(theme.fg_muted)
+                                            )
+                                            .padding([2, 6])
+                                            .style(move |_| section_header_container(theme)),
                                             text_input("e.g. 5", &form.rate_limit_count)
                                                 .on_input(Message::RuleFormRateLimitCountChanged)
                                                 .padding(8)
+                                                .font(regular_font)
                                                 .style(move |_, status| themed_text_input(
                                                     theme, status
                                                 )),
@@ -1549,9 +1626,14 @@ fn view_rule_form<'a>(
                                         .spacing(4)
                                         .width(Length::Fill),
                                         column![
-                                            container(text("PER").size(10).color(theme.fg_muted))
-                                                .padding([2, 6])
-                                                .style(move |_| section_header_container(theme)),
+                                            container(
+                                                text("PER")
+                                                    .size(10)
+                                                    .font(regular_font)
+                                                    .color(theme.fg_muted)
+                                            )
+                                            .padding([2, 6])
+                                            .style(move |_| section_header_container(theme)),
                                             pick_list(
                                                 vec![
                                                     crate::core::firewall::TimeUnit::Second,
@@ -1564,6 +1646,7 @@ fn view_rule_form<'a>(
                                             )
                                             .width(Length::Fill)
                                             .padding(8)
+                                            .font(regular_font)
                                             .style(move |_, status| themed_pick_list(theme, status))
                                             .menu_style(move |_| themed_pick_list_menu(theme))
                                         ]
@@ -1575,8 +1658,9 @@ fn view_rule_form<'a>(
                             }
 
                             if let Some(err) = rate_limit_error {
-                                rate_limit_col =
-                                    rate_limit_col.push(text(err).size(11).color(theme.danger));
+                                rate_limit_col = rate_limit_col.push(
+                                    text(err).size(11).font(regular_font).color(theme.danger),
+                                );
                             }
                             rate_limit_col
                         },
@@ -1586,6 +1670,7 @@ fn view_rule_form<'a>(
                                 container(
                                     text("CONNECTION LIMIT (OPTIONAL)")
                                         .size(10)
+                                        .font(regular_font)
                                         .color(theme.fg_muted)
                                 )
                                 .padding([2, 6])
@@ -1596,12 +1681,15 @@ fn view_rule_form<'a>(
                                 )
                                 .on_input(Message::RuleFormConnectionLimitChanged)
                                 .padding(8)
+                                .font(regular_font)
                                 .style(move |_, status| themed_text_input(theme, status)),
                             ]
                             .spacing(4);
 
                             if let Some(err) = connection_limit_error {
-                                conn_col = conn_col.push(text(err).size(11).color(theme.danger));
+                                conn_col = conn_col.push(
+                                    text(err).size(11).font(regular_font).color(theme.danger),
+                                );
                             }
                             conn_col
                         },
@@ -1614,16 +1702,22 @@ fn view_rule_form<'a>(
         // Organization Section
         {
             let mut org_col = column![
-                container(text("TAGS").size(10).color(theme.fg_muted))
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
+                container(
+                    text("TAGS")
+                        .size(10)
+                        .font(regular_font)
+                        .color(theme.fg_muted)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
                 row![
                     text_input("Add a tag...", &form.tag_input)
                         .on_input(Message::RuleFormTagInputChanged)
                         .on_submit(Message::RuleFormAddTag)
                         .padding(8)
+                        .font(regular_font)
                         .style(move |_, status| themed_text_input(theme, status)),
-                    button(text("+").size(16))
+                    button(text("+").size(16).font(regular_font))
                         .on_press(Message::RuleFormAddTag)
                         .padding([8, 16])
                         .style(move |_, status| primary_button(theme, status)),
@@ -1641,8 +1735,8 @@ fn view_rule_form<'a>(
                     row(form.tags.iter().map(|tag| -> Element<'_, Message> {
                         container(
                             row![
-                                text(tag).size(12).color(fg_on_accent),
-                                button(text("×").size(14))
+                                text(tag).size(12).font(regular_font).color(fg_on_accent),
+                                button(text("×").size(14).font(regular_font))
                                     .on_press(Message::RuleFormRemoveTag(tag.clone()))
                                     .padding([2, 6])
                                     .style(button::text),
@@ -1666,12 +1760,12 @@ fn view_rule_form<'a>(
         },
         // Footer Actions
         row![
-            button(text("Cancel").size(14))
+            button(text("Cancel").size(14).font(regular_font))
                 .on_press(Message::CancelRuleForm)
                 .padding([10, 20])
                 .style(move |_, status| secondary_button(theme, status)),
             container(row![]).width(Length::Fill),
-            button(text(button_text).size(14))
+            button(text(button_text).size(14).font(regular_font))
                 .on_press(Message::SaveRuleForm)
                 .padding([10, 24])
                 .style(move |_, status| primary_button(theme, status)),
@@ -1691,6 +1785,7 @@ fn view_port_inputs<'a>(
     form: &RuleForm,
     _has_error: Option<&String>,
     theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
     mono_font: iced::Font,
 ) -> Element<'a, Message> {
     if matches!(
@@ -1702,12 +1797,14 @@ fn view_port_inputs<'a>(
                 .on_input(Message::RuleFormPortStartChanged)
                 .padding(8)
                 .width(Length::Fill)
+                .font(mono_font)
                 .style(move |_, status| themed_text_input(theme, status)),
-            text("-").size(16).color(theme.fg_muted),
+            text("-").size(16).font(mono_font).color(theme.fg_muted),
             text_input("80", &form.port_end)
                 .on_input(Message::RuleFormPortEndChanged)
                 .padding(8)
                 .width(Length::Fill)
+                .font(mono_font)
                 .style(move |_, status| themed_text_input(theme, status)),
         ]
         .spacing(6)
@@ -1718,7 +1815,7 @@ fn view_port_inputs<'a>(
             text("Not applicable")
                 .size(12)
                 .color(theme.fg_muted)
-                .font(mono_font),
+                .font(regular_font),
         )
         .padding(8)
         .width(Length::Fill)
@@ -1745,6 +1842,7 @@ fn view_awaiting_apply(
         container(row![
             text("Applying will activate a ")
                 .size(14)
+                .font(regular_font)
                 .color(app_theme.fg_muted),
             text(format!("{}", timeout_val))
                 .size(14)
@@ -1755,6 +1853,7 @@ fn view_awaiting_apply(
                 .color(app_theme.fg_muted),
             text(" second safety timer.")
                 .size(14)
+                .font(regular_font)
                 .color(app_theme.fg_muted),
         ])
         .width(360)
@@ -1763,6 +1862,7 @@ fn view_awaiting_apply(
         container(
             text("Changes will take effect immediately (no auto-revert).")
                 .size(14)
+                .font(regular_font)
                 .color(app_theme.fg_muted),
         )
         .width(360)
@@ -1782,16 +1882,17 @@ fn view_awaiting_apply(
             .style(move |_| section_header_container(app_theme)),
             text("✓ Rules verified.")
                 .size(14)
+                .font(regular_font)
                 .color(app_theme.success)
                 .width(360)
                 .align_x(Alignment::Center),
             description_row,
             row![
-                button(text("Discard").size(14))
+                button(text("Discard").size(14).font(regular_font))
                     .on_press(Message::CancelRuleForm)
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(app_theme, status)),
-                button(text(button_text).size(14))
+                button(text(button_text).size(14).font(regular_font))
                     .on_press(Message::ProceedToApply)
                     .padding([10, 24])
                     .style(move |_, status| primary_button(app_theme, status)),
@@ -1829,12 +1930,14 @@ fn view_pending_confirmation(
             .style(move |_| section_header_container(app_theme)),
             text("✓ Firewall updated.")
                 .size(14)
+                .font(regular_font)
                 .color(app_theme.success)
                 .width(360)
                 .align_x(Alignment::Center),
             container(row![
                 text("Automatic rollback in ")
                     .size(14)
+                    .font(regular_font)
                     .color(app_theme.accent),
                 text(format!("{remaining}"))
                     .size(14)
@@ -1845,6 +1948,7 @@ fn view_pending_confirmation(
                     .color(app_theme.accent),
                 text(" seconds if not confirmed.")
                     .size(14)
+                    .font(regular_font)
                     .color(app_theme.accent),
             ])
             .width(360)
@@ -1994,11 +2098,11 @@ fn view_pending_confirmation(
                 }
             }),
             row![
-                button(text("Rollback").size(14))
+                button(text("Rollback").size(14).font(regular_font))
                     .on_press(Message::RevertClicked)
                     .padding([10, 20])
                     .style(move |_, status| danger_button(app_theme, status)),
-                button(text("Confirm & Stay").size(14))
+                button(text("Confirm & Stay").size(14).font(regular_font))
                     .on_press(Message::ConfirmClicked)
                     .padding([10, 24])
                     .style(move |_, status| primary_button(app_theme, status)),
@@ -2040,11 +2144,15 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                         container(
                             text(state.current_theme.name())
                                 .size(13)
+                                .font(state.font_regular)
                                 .wrapping(Wrapping::None)
                         )
                         .width(Length::Fill)
                         .clip(true),
-                        text(" ▾").size(10).color(theme.fg_muted)
+                        text(" ▾")
+                            .size(10)
+                            .font(state.font_regular)
+                            .color(theme.fg_muted)
                     ]
                     .align_y(Alignment::Center)
                 )
@@ -2064,11 +2172,15 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                         container(
                             text(state.regular_font_choice.name())
                                 .size(13)
+                                .font(state.font_regular)
                                 .wrapping(Wrapping::None)
                         )
                         .width(Length::Fill)
                         .clip(true),
-                        text(" ▾").size(10).color(theme.fg_muted)
+                        text(" ▾")
+                            .size(10)
+                            .font(state.font_regular)
+                            .color(theme.fg_muted)
                     ]
                     .align_y(Alignment::Center)
                 )
@@ -2088,11 +2200,15 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                         container(
                             text(state.mono_font_choice.name())
                                 .size(13)
+                                .font(state.font_regular)
                                 .wrapping(Wrapping::None)
                         )
                         .width(Length::Fill)
                         .clip(true),
-                        text(" ▾").size(10).color(theme.fg_muted)
+                        text(" ▾")
+                            .size(10)
+                            .font(state.font_regular)
+                            .color(theme.fg_muted)
                     ]
                     .align_y(Alignment::Center)
                 )
@@ -2199,6 +2315,7 @@ fn view_settings(state: &State) -> Element<'_, Message> {
             column![
                 text("⚠️ These settings may break common applications. Defaults are suitable for most users.")
                     .size(13)
+                    .font(state.font_regular)
                     .color(theme.syntax_string),
 
                 render_settings_row(
@@ -2273,6 +2390,7 @@ fn view_settings(state: &State) -> Element<'_, Message> {
                                 .on_input(Message::LogPrefixChanged)
                                 .padding(8)
                                 .size(13)
+                                .font(state.font_mono)
                                 .style(move |_, status| themed_text_input(theme, status))
                                 .into(),
                             theme,
@@ -2324,7 +2442,7 @@ fn render_settings_row<'a>(
     row![
         column![
             text(title).size(15).font(font).color(theme.fg_primary),
-            text(desc).size(12).color(theme.fg_muted),
+            text(desc).size(12).font(font).color(theme.fg_muted),
         ]
         .width(Length::Fill)
         .spacing(2),
@@ -2650,6 +2768,7 @@ fn view_diagnostics_modal<'a>(
             row![
                 text(format!("Event Log ({} entries)", filtered_events.len()))
                     .size(14)
+                    .font(regular_font)
                     .color(theme.fg_primary),
                 pick_list(
                     vec![
@@ -2664,6 +2783,7 @@ fn view_diagnostics_modal<'a>(
                 )
                 .placeholder("Filter...")
                 .padding(8)
+                .font(regular_font)
                 .style(move |_, status| themed_pick_list(theme, status))
                 .menu_style(move |_| themed_pick_list_menu(theme)),
             ]
@@ -2679,6 +2799,7 @@ fn view_diagnostics_modal<'a>(
                             "Event logging is disabled. Enable it in Settings to track operations."
                         })
                         .size(12)
+                        .font(regular_font)
                         .color(theme.fg_muted)
                         .into()]
                     } else {
@@ -2704,15 +2825,15 @@ fn view_diagnostics_modal<'a>(
             .padding(12),
             // Action buttons
             row![
-                button(text("Clear Log").size(14))
+                button(text("Clear Log").size(14).font(regular_font))
                     .on_press(Message::ClearEventLog)
                     .padding([10, 20])
                     .style(move |_, status| danger_button(theme, status)),
-                button(text("Open Logs Folder").size(14))
+                button(text("Open Logs Folder").size(14).font(regular_font))
                     .on_press(Message::OpenLogsFolder)
                     .padding([10, 20])
                     .style(move |_, status| primary_button(theme, status)),
-                button(text("Close").size(14))
+                button(text("Close").size(14).font(regular_font))
                     .on_press(Message::ToggleDiagnostics(false))
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
@@ -2740,6 +2861,7 @@ fn view_export_modal(
                 .color(theme.warning),
             text("Choose the export format:")
                 .size(14)
+                .font(regular_font)
                 .color(theme.fg_muted),
             column![
                 button(
@@ -2752,6 +2874,7 @@ fn view_export_modal(
                                 .color(theme.fg_primary),
                             text("Structured data format for automation and backup")
                                 .size(12)
+                                .font(regular_font)
                                 .color(theme.fg_muted),
                         ]
                         .spacing(4),
@@ -2773,6 +2896,7 @@ fn view_export_modal(
                                 .color(theme.fg_primary),
                             text("Human-readable .nft format for manual editing")
                                 .size(12)
+                                .font(regular_font)
                                 .color(theme.fg_muted),
                         ]
                         .spacing(4),
@@ -2788,8 +2912,9 @@ fn view_export_modal(
             .spacing(12),
             text("Files will be saved to ~/Downloads/ or your data directory")
                 .size(11)
+                .font(regular_font)
                 .color(theme.fg_muted),
-            button(text("Cancel").size(14))
+            button(text("Cancel").size(14).font(regular_font))
                 .on_press(Message::ToggleExportModal(false)) // Toggle to close
                 .padding([10, 20])
                 .style(move |_, status| secondary_button(theme, status)),
@@ -2847,7 +2972,10 @@ fn view_font_picker<'a>(
         button(
             row![
                 column![
-                    text(name).size(13).color(theme.fg_primary),
+                    text(name)
+                        .size(13)
+                        .font(state.font_regular)
+                        .color(theme.fg_primary),
                     // Contextual preview text: code sample for mono fonts, readable text for UI fonts
                     text(if is_mono_picker {
                         "fn main() { 0x123 }"
@@ -2915,6 +3043,7 @@ fn view_font_picker<'a>(
                 .on_input(Message::FontPickerSearchChanged)
                 .padding(10)
                 .size(13)
+                .font(state.font_regular)
                 .id(Id::new(FONT_SEARCH_INPUT_ID))
                 .style(move |_, status| themed_text_input(theme, status)),
             container(
@@ -2930,6 +3059,7 @@ fn view_font_picker<'a>(
                             container(
                                 text("No fonts found — try a different search")
                                     .size(11)
+                                    .font(state.font_regular)
                                     .color(theme.fg_muted),
                             )
                             .padding(Padding {
@@ -2944,6 +3074,7 @@ fn view_font_picker<'a>(
                                     "Showing {displayed_count} of {filtered_count} fonts — search to find more"
                                 ))
                                 .size(11)
+                                .font(state.font_regular)
                                 .color(theme.fg_muted),
                             )
                             .padding(Padding {
@@ -2984,7 +3115,7 @@ fn view_font_picker<'a>(
                 .padding([2, 6])
                 .style(move |_| section_header_container(theme)),
                 space::Space::new().width(Length::Fill),
-                button(text("Close").size(14))
+                button(text("Close").size(14).font(state.font_regular))
                     .on_press(Message::CloseFontPicker)
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
@@ -3076,7 +3207,10 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
             button(
                 column![
                     // Header: name only (no checkmark)
-                    text(choice.name()).size(13).color(theme.fg_primary),
+                    text(choice.name())
+                        .size(13)
+                        .font(state.font_regular)
+                        .color(theme.fg_primary),
                     // Split visual preview: 70% bg gradient + 30% accent color (square)
                     row![
                         // Left: background gradient
@@ -3136,7 +3270,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
 
     // Filter buttons (identical to tag filtering pattern)
     let filter_buttons = row![
-        button(text("All").size(10))
+        button(text("All").size(10).font(state.font_regular))
             .padding([4, 8])
             .style(move |_, status| {
                 if matches!(picker.filter, ThemeFilter::All) {
@@ -3146,7 +3280,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 }
             })
             .on_press(Message::ThemePickerFilterChanged(ThemeFilter::All)),
-        button(text("Light").size(10))
+        button(text("Light").size(10).font(state.font_regular))
             .padding([4, 8])
             .style(move |_, status| {
                 if matches!(picker.filter, ThemeFilter::Light) {
@@ -3156,7 +3290,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 }
             })
             .on_press(Message::ThemePickerFilterChanged(ThemeFilter::Light)),
-        button(text("Dark").size(10))
+        button(text("Dark").size(10).font(state.font_regular))
             .padding([4, 8])
             .style(move |_, status| {
                 if matches!(picker.filter, ThemeFilter::Dark) {
@@ -3203,22 +3337,22 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 column![
                     // Buttons in 2x2 grid (standard secondary style)
                     row![
-                        button(text("Apply").size(12))
+                        button(text("Apply").size(12).font(state.font_regular))
                             .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| primary_button(theme, status)),
-                        button(text("Cancel").size(12))
+                        button(text("Cancel").size(12).font(state.font_regular))
                             .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| secondary_button(theme, status)),
                     ]
                     .spacing(6),
                     row![
-                        button(text("Delete").size(12))
+                        button(text("Delete").size(12).font(state.font_regular))
                             .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| danger_button(theme, status)),
-                        button(text("Save").size(12))
+                        button(text("Save").size(12).font(state.font_regular))
                             .padding([6, 12])
                             .on_press(Message::ThemePreviewButtonClick)
                             .style(move |_, status| dirty_button(theme, status)),
@@ -3235,11 +3369,26 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                         row![
-                            text("Primary").size(11).color(theme.fg_primary),
-                            text("•").size(11).color(theme.fg_muted),
-                            text("Secondary").size(11).color(theme.fg_secondary),
-                            text("•").size(11).color(theme.fg_muted),
-                            text("Muted").size(11).color(theme.fg_muted),
+                            text("Primary")
+                                .size(11)
+                                .font(state.font_regular)
+                                .color(theme.fg_primary),
+                            text("•")
+                                .size(11)
+                                .font(state.font_regular)
+                                .color(theme.fg_muted),
+                            text("Secondary")
+                                .size(11)
+                                .font(state.font_regular)
+                                .color(theme.fg_secondary),
+                            text("•")
+                                .size(11)
+                                .font(state.font_regular)
+                                .color(theme.fg_muted),
+                            text("Muted")
+                                .size(11)
+                                .font(state.font_regular)
+                                .color(theme.fg_muted),
                         ]
                         .spacing(6),
                     ]
@@ -3356,6 +3505,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 .on_input(Message::ThemePickerSearchChanged)
                 .padding(10)
                 .size(13)
+                .font(state.font_regular)
                 .style(move |_, status| themed_text_input(theme, status)),
             filter_buttons,
             container(
@@ -3363,6 +3513,7 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                     container(
                         text("No themes found — try a different search")
                             .size(11)
+                            .font(state.font_regular)
                             .color(theme.fg_muted),
                     )
                     .padding(GRID_PADDING) // Symmetric - simple and maintainable
@@ -3399,11 +3550,11 @@ fn view_theme_picker<'a>(state: &'a State, picker: &'a ThemePickerState) -> Elem
                 .padding([2, 6])
                 .style(move |_| section_header_container(theme)),
                 space::Space::new().width(Length::Fill),
-                button(text("Cancel").size(14))
+                button(text("Cancel").size(14).font(state.font_regular))
                     .on_press(Message::CancelThemePicker)
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
-                button(text("Apply").size(14))
+                button(text("Apply").size(14).font(state.font_regular))
                     .on_press(Message::ApplyTheme)
                     .padding([10, 24])
                     .style(move |_, status| primary_button(theme, status)),
@@ -3435,7 +3586,10 @@ fn view_shortcuts_help(
             .padding([4, 8])
             .style(move |_| section_header_container(theme)),
             column![
-                text("General").size(16).color(theme.fg_primary),
+                text("General")
+                    .size(16)
+                    .font(regular_font)
+                    .color(theme.fg_primary),
                 row![
                     container(text("F1").size(13).font(mono_font).color(theme.warning))
                         .width(150)
@@ -3448,7 +3602,10 @@ fn view_shortcuts_help(
                             },
                             ..Default::default()
                         }),
-                    text("Show this help").size(13).color(theme.fg_primary)
+                    text("Show this help")
+                        .size(13)
+                        .font(regular_font)
+                        .color(theme.fg_primary)
                 ]
                 .spacing(16),
                 row![
@@ -3465,13 +3622,17 @@ fn view_shortcuts_help(
                         }),
                     text("Close any modal or form")
                         .size(13)
+                        .font(regular_font)
                         .color(theme.fg_primary)
                 ]
                 .spacing(16),
             ]
             .spacing(12),
             column![
-                text("Rules").size(16).color(theme.fg_primary),
+                text("Rules")
+                    .size(16)
+                    .font(regular_font)
+                    .color(theme.fg_primary),
                 row![
                     container(
                         text("Ctrl + N")
@@ -3489,7 +3650,10 @@ fn view_shortcuts_help(
                         },
                         ..Default::default()
                     }),
-                    text("Add new rule").size(13).color(theme.fg_primary)
+                    text("Add new rule")
+                        .size(13)
+                        .font(regular_font)
+                        .color(theme.fg_primary)
                 ]
                 .spacing(16),
                 row![
@@ -3509,7 +3673,10 @@ fn view_shortcuts_help(
                         },
                         ..Default::default()
                     }),
-                    text("Apply changes").size(13).color(theme.fg_primary)
+                    text("Apply changes")
+                        .size(13)
+                        .font(regular_font)
+                        .color(theme.fg_primary)
                 ]
                 .spacing(16),
                 row![
@@ -3531,6 +3698,7 @@ fn view_shortcuts_help(
                     }),
                     text("Undo last modification")
                         .size(13)
+                        .font(regular_font)
                         .color(theme.fg_primary)
                 ]
                 .spacing(16),
@@ -3553,13 +3721,17 @@ fn view_shortcuts_help(
                     }),
                     text("Redo last undone modification")
                         .size(13)
+                        .font(regular_font)
                         .color(theme.fg_primary)
                 ]
                 .spacing(16),
             ]
             .spacing(12),
             column![
-                text("Workspace").size(16).color(theme.fg_primary),
+                text("Workspace")
+                    .size(16)
+                    .font(regular_font)
+                    .color(theme.fg_primary),
                 row![
                     container(
                         text("Ctrl + E")
@@ -3577,12 +3749,15 @@ fn view_shortcuts_help(
                         },
                         ..Default::default()
                     }),
-                    text("Export rules").size(13).color(theme.fg_primary)
+                    text("Export rules")
+                        .size(13)
+                        .font(regular_font)
+                        .color(theme.fg_primary)
                 ]
                 .spacing(16),
             ]
             .spacing(12),
-            button(text("Close").size(14))
+            button(text("Close").size(14).font(regular_font))
                 .on_press(Message::ToggleShortcutsHelp(false))
                 .padding([10, 20])
                 .style(move |_, status| secondary_button(theme, status)),
@@ -3820,17 +3995,18 @@ fn view_profile_switch_confirm(
                 .color(theme.warning),
             text("You have unsaved changes in your current profile. What would you like to do?")
                 .size(14)
+                .font(font)
                 .color(theme.fg_primary),
             row![
-                button(text("Cancel").size(14))
+                button(text("Cancel").size(14).font(font))
                     .on_press(Message::CancelProfileSwitch)
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
-                button(text("Discard").size(14))
+                button(text("Discard").size(14).font(font))
                     .on_press(Message::DiscardProfileSwitch)
                     .padding([10, 20])
                     .style(move |_, status| danger_button(theme, status)),
-                button(text("Save & Switch").size(14))
+                button(text("Save & Switch").size(14).font(font))
                     .on_press(Message::ConfirmProfileSwitch)
                     .padding([10, 24])
                     .style(move |_, status| primary_button(theme, status)),
@@ -3860,7 +4036,10 @@ fn view_profile_manager<'a>(
     let theme = &state.theme;
 
     let profiles_list: Element<'_, Message> = if state.available_profiles.is_empty() {
-        text("No profiles found.").color(theme.fg_muted).into()
+        text("No profiles found.")
+            .font(state.font_regular)
+            .color(theme.fg_muted)
+            .into()
     } else {
         let mut list = column![].spacing(8);
         for name in &state.available_profiles {
@@ -3869,6 +4048,7 @@ fn view_profile_manager<'a>(
             let mut row_content = row![
                 text(name)
                     .size(14)
+                    .font(state.font_regular)
                     .color(if is_active {
                         theme.accent
                     } else {
@@ -3887,12 +4067,13 @@ fn view_profile_manager<'a>(
                         .on_input(Message::ProfileNewNameChanged)
                         .on_submit(Message::ConfirmRenameProfile)
                         .padding(8)
+                        .font(state.font_regular)
                         .style(move |_, status| themed_text_input(theme, status))
                         .width(Length::Fill),
-                    button(text("OK").size(12))
+                    button(text("OK").size(12).font(state.font_regular))
                         .on_press(Message::ConfirmRenameProfile)
                         .style(move |_, status| primary_button(theme, status)),
-                    button(text("Cancel").size(12))
+                    button(text("Cancel").size(12).font(state.font_regular))
                         .on_press(Message::CancelRenameProfile)
                         .style(move |_, status| secondary_button(theme, status)),
                 ]
@@ -3904,12 +4085,13 @@ fn view_profile_manager<'a>(
                 row_content = row![
                     text("Delete profile?")
                         .size(12)
+                        .font(state.font_regular)
                         .color(theme.danger)
                         .width(Length::Fill),
-                    button(text("No").size(12))
+                    button(text("No").size(12).font(state.font_regular))
                         .on_press(Message::CancelDeleteProfile)
                         .style(move |_, status| secondary_button(theme, status)),
-                    button(text("Yes, Delete").size(12))
+                    button(text("Yes, Delete").size(12).font(state.font_regular))
                         .on_press(Message::ConfirmDeleteProfile)
                         .style(move |_, status| danger_button(theme, status)),
                 ]
@@ -3928,7 +4110,12 @@ fn view_profile_manager<'a>(
                             .style(button::text),
                     );
             } else {
-                row_content = row_content.push(text("(Active)").size(11).color(theme.fg_muted));
+                row_content = row_content.push(
+                    text("(Active)")
+                        .size(11)
+                        .font(state.font_regular)
+                        .color(theme.fg_muted),
+                );
             }
 
             list = list.push(
@@ -3948,7 +4135,7 @@ fn view_profile_manager<'a>(
                     .font(state.font_regular)
                     .color(theme.accent),
                 container(row![]).width(Length::Fill),
-                button(text("×").size(20))
+                button(text("×").size(20).font(state.font_regular))
                     .on_press(Message::CloseProfileManager)
                     .style(button::text),
             ]
@@ -3961,12 +4148,13 @@ fn view_profile_manager<'a>(
                             .on_input(Message::NewProfileNameChanged)
                             .on_submit(Message::SaveProfileAs(mgr.new_name_input.clone()))
                             .padding(8)
+                            .font(state.font_regular)
                             .style(move |_, status| themed_text_input(theme, status))
                             .width(Length::Fill),
-                        button(text("Save").size(12))
+                        button(text("Save").size(12).font(state.font_regular))
                             .on_press(Message::SaveProfileAs(mgr.new_name_input.clone()))
                             .style(move |_, status| primary_button(theme, status)),
-                        button(text("Cancel").size(12))
+                        button(text("Cancel").size(12).font(state.font_regular))
                             .on_press(Message::CancelCreatingNewProfile)
                             .style(move |_, status| secondary_button(theme, status)),
                     ]
@@ -3977,17 +4165,21 @@ fn view_profile_manager<'a>(
                 .style(move |_| card_container(theme))
             } else {
                 container(
-                    button(text("+ Add Profile from Current Rules").size(13))
-                        .on_press(Message::StartCreatingNewProfile)
-                        .width(Length::Fill)
-                        .padding(12)
-                        .style(move |_, status| secondary_button(theme, status)),
+                    button(
+                        text("+ Add Profile from Current Rules")
+                            .size(13)
+                            .font(state.font_regular),
+                    )
+                    .on_press(Message::StartCreatingNewProfile)
+                    .width(Length::Fill)
+                    .padding(12)
+                    .style(move |_, status| secondary_button(theme, status)),
                 )
                 .width(Length::Fill)
             },
             row![
                 container(row![]).width(Length::Fill),
-                button(text("Close").size(13))
+                button(text("Close").size(13).font(state.font_regular))
                     .on_press(Message::CloseProfileManager)
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
