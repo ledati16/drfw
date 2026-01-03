@@ -86,17 +86,29 @@ pub fn view_profile_manager<'a>(
             if let Some((old, current)) = &mgr.renaming_name
                 && old == name
             {
+                let is_valid_rename = crate::core::profiles::validate_profile_name(current).is_ok();
+                let ok_button = if is_valid_rename {
+                    button(text("OK").size(12).font(state.font_regular))
+                        .on_press(Message::ConfirmRenameProfile)
+                        .style(move |_, status| primary_button(theme, status))
+                } else {
+                    button(text("OK").size(12).font(state.font_regular))
+                        .style(move |_, status| secondary_button(theme, status))
+                };
+
                 row_content = row![
                     text_input("New name...", current)
                         .on_input(Message::ProfileNewNameChanged)
-                        .on_submit(Message::ConfirmRenameProfile)
+                        .on_submit(if is_valid_rename {
+                            Message::ConfirmRenameProfile
+                        } else {
+                            Message::Noop
+                        })
                         .padding(8)
                         .font(state.font_regular)
                         .style(move |_, status| themed_text_input(theme, status))
                         .width(Length::Fill),
-                    button(text("OK").size(12).font(state.font_regular))
-                        .on_press(Message::ConfirmRenameProfile)
-                        .style(move |_, status| primary_button(theme, status)),
+                    ok_button,
                     button(text("Cancel").size(12).font(state.font_regular))
                         .on_press(Message::CancelRenameProfile)
                         .style(move |_, status| secondary_button(theme, status)),
@@ -123,6 +135,12 @@ pub fn view_profile_manager<'a>(
                 .align_y(Alignment::Center);
             } else if !is_active {
                 row_content = row_content
+                    .push(
+                        button(text("Select").size(12).font(state.font_regular))
+                            .on_press(Message::ProfileSelected(name.clone()))
+                            .padding([4, 8])
+                            .style(move |_, status| primary_button(theme, status)),
+                    )
                     .push(
                         button(text("✎").size(14))
                             .on_press(Message::RenameProfileRequested(name.clone()))
@@ -166,18 +184,30 @@ pub fn view_profile_manager<'a>(
             .align_y(Alignment::Center),
             profiles_list,
             if mgr.creating_new {
+                let is_valid_name = crate::core::profiles::validate_profile_name(&mgr.new_name_input).is_ok();
+                let save_button = if is_valid_name {
+                    button(text("Save").size(12).font(state.font_regular))
+                        .on_press(Message::SaveProfileAs(mgr.new_name_input.clone()))
+                        .style(move |_, status| primary_button(theme, status))
+                } else {
+                    button(text("Save").size(12).font(state.font_regular))
+                        .style(move |_, status| secondary_button(theme, status))
+                };
+
                 container(
                     row![
                         text_input("New profile name...", &mgr.new_name_input)
                             .on_input(Message::NewProfileNameChanged)
-                            .on_submit(Message::SaveProfileAs(mgr.new_name_input.clone()))
+                            .on_submit(if is_valid_name {
+                                Message::SaveProfileAs(mgr.new_name_input.clone())
+                            } else {
+                                Message::Noop
+                            })
                             .padding(8)
                             .font(state.font_regular)
                             .style(move |_, status| themed_text_input(theme, status))
                             .width(Length::Fill),
-                        button(text("Save").size(12).font(state.font_regular))
-                            .on_press(Message::SaveProfileAs(mgr.new_name_input.clone()))
-                            .style(move |_, status| primary_button(theme, status)),
+                        save_button,
                         button(text("Cancel").size(12).font(state.font_regular))
                             .on_press(Message::CancelCreatingNewProfile)
                             .style(move |_, status| secondary_button(theme, status)),
@@ -206,7 +236,7 @@ pub fn view_profile_manager<'a>(
                 button(text("Close").size(13).font(state.font_regular))
                     .on_press(Message::CloseProfileManager)
                     .padding([10, 20])
-                    .style(move |_, status| secondary_button(theme, status)),
+                    .style(move |_, status| primary_button(theme, status)),
             ]
             .spacing(12)
         ]

@@ -3,13 +3,13 @@
 use crate::app::ui_components::{
     active_card_container, active_tab_button, card_container, danger_button, popup_container,
     primary_button, secondary_button, section_header_container, sidebar_container, themed_checkbox,
-    themed_pick_list, themed_pick_list_menu, themed_scrollable, themed_text_input,
+    themed_scrollable, themed_text_input,
 };
 use crate::app::{Message, State};
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, row, rule, scrollable, text,
-    text_input, tooltip,
+    button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
+    tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use std::sync::Arc;
@@ -44,23 +44,27 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             }
         ]
         .align_y(Alignment::Center),
-        row![
-            pick_list(
-                &state.available_profiles[..],
-                Some(state.active_profile_name.clone()),
-                Message::ProfileSelected
-            )
-            .width(Length::Fill)
-            .padding(8)
-            .font(state.font_regular)
-            .style(move |_, status| themed_pick_list(theme, status))
-            .menu_style(move |_| themed_pick_list_menu(theme)),
-            button(text("⚙").size(16))
-                .on_press(Message::OpenProfileManager)
-                .padding([8, 12])
-                .style(move |_, status| secondary_button(theme, status)),
-        ]
-        .spacing(8),
+        button(
+            row![
+                container(
+                    text(&state.active_profile_name)
+                        .size(14)
+                        .font(state.font_regular)
+                        .wrapping(Wrapping::None)
+                )
+                .width(Length::Fill)
+                .clip(true),
+                text(" ⚙")
+                    .size(14)
+                    .font(state.font_regular)
+                    .color(theme.fg_muted)
+            ]
+            .align_y(Alignment::Center)
+        )
+        .on_press(Message::OpenProfileManager)
+        .width(Length::Fill)
+        .padding(8)
+        .style(move |_, status| secondary_button(theme, status)),
         // Separator line after profile section
         container(
             container(row![])

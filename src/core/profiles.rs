@@ -42,17 +42,16 @@ pub enum ProfileError {
 /// Constraints:
 /// - Alphanumeric, underscores, and hyphens only: Prevents shell injection and
 ///   cross-platform filename issues.
-/// - Max 64 chars: Ensures filenames stay within system limits (typically 255)
-///   while allowing descriptive names.
+/// - Max 20 chars: Allows descriptive names while staying reasonable for UI display.
 /// - Rejects "." and "..": Critical path traversal protection.
 pub fn validate_profile_name(name: &str) -> Result<(), ProfileError> {
     if name.is_empty() {
         return Err(ProfileError::InvalidName("Name cannot be empty".into()));
     }
 
-    if name.len() > 64 {
+    if name.len() > 20 {
         return Err(ProfileError::InvalidName(
-            "Name too long (max 64 chars)".into(),
+            "Name too long (max 20 chars)".into(),
         ));
     }
 
