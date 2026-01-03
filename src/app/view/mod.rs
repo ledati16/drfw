@@ -123,23 +123,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
         )
     } else {
         match &state.status {
-            AppStatus::AwaitingApply => Some(
-                container(confirmation::view_awaiting_apply(
-                    theme,
-                    state.font_regular,
+            AppStatus::AwaitingApply
+            | AppStatus::Applying
+            | AppStatus::PendingConfirmation { .. } => Some(
+                container(confirmation::view_apply_flow_modal(
+                    &state.status,
                     state.auto_revert_enabled,
                     state.auto_revert_timeout_secs,
-                ))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-            ),
-            AppStatus::PendingConfirmation { .. } => Some(
-                container(confirmation::view_pending_confirmation(
                     state.countdown_remaining,
-                    state.auto_revert_timeout_secs.min(120) as u32,
                     state
                         .progress_animation
                         .interpolate_with(|v| v, iced::time::Instant::now()),
