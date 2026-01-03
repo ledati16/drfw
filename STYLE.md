@@ -150,7 +150,136 @@ container(text("FILTERS").size(9).font(mono).color(fg_muted))
 
 ---
 
-## 5. Modal Windows
+## 5. Font Usage
+
+**Location:** Font values stored in `State` struct, accessed via `state.font_regular` / `state.font_mono`
+
+### Font Types
+
+**Regular Font (`font_regular`)** - User's chosen UI font for readable content:
+- Button labels and UI controls
+- Form field labels and descriptions
+- User input text (search boxes, text inputs for labels/descriptions)
+- Modal body text and explanations
+- Help text and error messages
+- Profile names and user-created tags
+- Dropdowns showing user-created content
+
+**Monospace Font (`font_mono`)** - User's chosen monospace font for technical/structural elements:
+- Section headers (PROFILE, FILTERS, RULES, etc.)
+- Status badges (Unsaved Changes*, Saved)
+- Numeric counters (5/10 rules shown)
+- Code/configuration previews (nftables, JSON)
+- Technical identifiers (port numbers, IP addresses, interface names like @eth0)
+- Protocol badges (TCP, UDP, ICMP)
+- Line numbers in code views
+
+### Accessing Fonts
+
+**Pattern 1: Functions with `state: &State` parameter**
+```rust
+fn view_sidebar(state: &State) -> Element<'_, Message> {
+    text("PROFILE").font(state.font_mono)      // Section header
+    text_input("Search...", &state.rule_search).font(state.font_regular)  // User input
+}
+```
+
+**Pattern 2: Functions with font parameters**
+```rust
+fn view_rule_form(
+    form: &RuleForm,
+    theme: &AppTheme,
+    regular_font: iced::Font,
+    mono_font: iced::Font,
+) -> Element<Message> {
+    text("DESCRIPTION").font(regular_font)     // Label
+    text_input("80", &form.port_start).font(mono_font)  // Port number
+}
+```
+
+### Widget Font Methods
+
+**All text widgets support `.font()`:**
+```rust
+text("Label").font(font)
+text_input("placeholder", &value).font(font)
+button(text("Save").font(font))
+checkbox(enabled).label("Enable").font(font)
+pick_list(items, selected, handler).font(font)
+```
+
+### Design Philosophy
+
+**Use Regular Font When:**
+- The element is meant to be read by users (natural language)
+- It's an interactive control label
+- It's user-generated content (descriptions, tags, profile names)
+- It's explanatory or help text
+
+**Use Monospace Font When:**
+- The element provides structure or hierarchy (headers)
+- It displays technical data (ports, IPs, protocols)
+- It shows status or metadata (badges, counters)
+- It's code or configuration syntax
+- You want to emphasize technical nature or precision
+
+### Common Patterns
+
+**Sidebar elements:**
+```rust
+// Section header - MONO
+text("PROFILE").size(9).font(state.font_mono).color(theme.fg_muted)
+
+// Status badge - MONO
+text("Unsaved Changes*").size(9).font(state.font_mono).color(theme.warning)
+
+// User input - REGULAR
+text_input("Search rules...", &state.rule_search).font(state.font_regular)
+
+// User-created tags - REGULAR
+button(text(tag.as_str()).size(10).font(state.font_regular))
+```
+
+**Form elements:**
+```rust
+// Form field label - REGULAR
+text("DESCRIPTION").size(10).font(regular_font).color(theme.fg_muted)
+
+// Text input for description - REGULAR
+text_input("e.g. Local Web Server", &form.label).font(regular_font)
+
+// Technical input - MONO
+text_input("80", &form.port_start).font(mono_font)
+
+// Port range separator - MONO
+text("-").size(16).font(mono_font)
+
+// Not applicable placeholder - REGULAR (it's a message, not data)
+text("Not applicable").font(regular_font).color(theme.fg_muted)
+```
+
+**Buttons:**
+```rust
+// Action button - REGULAR
+button(text("Save").size(14).font(regular_font))
+
+// UI button - REGULAR
+button(text("Cancel").size(14).font(regular_font))
+
+// Delete button - REGULAR
+button(text("×").size(14).font(regular_font))
+```
+
+### Implementation Notes
+
+- **200+ font assignments:** Nearly all UI text elements explicitly set fonts
+- **No default font inheritance:** Iced's `Settings.default_font` only applies at startup and cannot change dynamically
+- **Performance impact:** Negligible - fonts are lightweight references, not copies
+- **Visual hierarchy:** Monospace headers create clear structural separation from regular UI text
+
+---
+
+## 6. Modal Windows
 
 **All modals use `card_container(theme)`:**
 
@@ -179,7 +308,7 @@ style.border = Border {
 
 ---
 
-## 6. Dropdown Menus (Pick Lists)
+## 7. Dropdown Menus (Pick Lists)
 
 **Location:** `src/app/ui_components.rs:themed_pick_list()`
 
@@ -217,7 +346,7 @@ shadow: Shadow { offset: (0.0, 2.0), blur: 3.0 }
 
 ---
 
-## 7. Floating Tooltips
+## 8. Floating Tooltips
 
 **Location:** `src/app/ui_components.rs:popup_container()`
 
@@ -234,7 +363,7 @@ container(tooltip_content)
 
 ---
 
-## 8. Performance Requirements
+## 9. Performance Requirements
 
 ### Cache in update(), Reference in view()
 ```rust
@@ -263,7 +392,7 @@ pub fn view(&self) -> Element {
 
 ---
 
-## 9. Gradients & Hybrid Calculations
+## 10. Gradients & Hybrid Calculations
 
 ### Vertical Gradients
 ```rust
@@ -288,7 +417,7 @@ if theme.is_light() {
 
 ---
 
-## 10. Dynamic Horizontal Scrolling
+## 11. Dynamic Horizontal Scrolling
 
 **Location:** `src/app/mod.rs:353-399`
 
@@ -329,7 +458,7 @@ let width = (LINE_NUMBER_WIDTH_PX + (max_chars as f32 * CHAR_WIDTH_PX) + TRAILIN
 
 ---
 
-## 11. Inset Progress Bar
+## 12. Inset Progress Bar
 
 **Location:** `src/app/view.rs:1790-1920`
 
@@ -383,7 +512,7 @@ iced::time::every(Duration::from_millis(17))  // ~60 FPS
 
 ---
 
-## 12. Theme Picker Patterns
+## 13. Theme Picker Patterns
 
 ### Modal Width
 **Use comfortable width with slack, not exact calculations:**
@@ -412,7 +541,7 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 
 ---
 
-## 13. Border Radius Guidelines
+## 14. Border Radius Guidelines
 
 - **8.0px:** Modals, cards, primary buttons (soft, interactive)
 - **6.0px:** Tooltips, inner progress bars (nested elements)
@@ -422,7 +551,7 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 
 ---
 
-## 14. Key Files Reference
+## 15. Key Files Reference
 
 - **`src/theme/mod.rs`** - Theme struct, shadow/gradient calculations
 - **`src/theme/presets.rs`** - Built-in theme definitions
@@ -431,7 +560,7 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 
 ---
 
-## 15. Common Mistakes
+## 16. Common Mistakes
 
 ### ❌ Don't
 - Implement `Catalog` traits for `AppTheme`
@@ -441,6 +570,8 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 - Apply fixed `menu_height()` to short dropdowns
 - Compute expensive operations in `view()`
 - Use hardcoded RGB colors
+- Forget to set `.font()` on text widgets (won't respect user font choice)
+- Use monospace for user-facing explanatory text
 
 ### ✅ Do
 - Use centralized style functions
@@ -449,6 +580,8 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 - Preserve rounded corners on warning modals
 - Test across multiple themes (light and dark)
 - Pre-allocate collections when size is known
+- Set `.font()` explicitly on all text, inputs, buttons, checkboxes, and dropdowns
+- Use `font_regular` for UI controls, `font_mono` for technical/structural elements
 
 ---
 
