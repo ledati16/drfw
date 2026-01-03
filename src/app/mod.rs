@@ -287,6 +287,7 @@ pub struct ProfileManagerState {
     pub renaming_name: Option<(String, String)>, // (old, current_new)
     pub deleting_name: Option<String>,
     pub creating_new: bool,
+    pub creating_empty: bool, // true = empty profile, false = from current rules
     pub new_name_input: String,
 }
 
@@ -649,6 +650,7 @@ pub enum Message {
     ProfileSwitched(String, FirewallRuleset),
     SaveProfileAs(String),
     StartCreatingNewProfile,
+    CreateEmptyProfile,
     NewProfileNameChanged(String),
     CancelCreatingNewProfile,
     OpenProfileManager,
@@ -1811,7 +1813,18 @@ impl State {
                 self.mark_config_dirty();
             }
             Message::SaveProfileAs(name) => {
-                let ruleset = self.ruleset.clone();
+                let creating_empty = self
+                    .profile_manager
+                    .as_ref()
+                    .map(|mgr| mgr.creating_empty)
+                    .unwrap_or(false);
+
+                let ruleset = if creating_empty {
+                    FirewallRuleset::default()
+                } else {
+                    self.ruleset.clone()
+                };
+
                 let name_clone = name.clone();
                 let name_for_log = name.clone();
                 let enable_event_log = self.enable_event_log;
@@ -1819,6 +1832,7 @@ impl State {
                 self.mark_config_dirty();
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.creating_new = false;
+                    mgr.creating_empty = false;
                     mgr.new_name_input.clear();
                 }
 
@@ -1848,6 +1862,14 @@ impl State {
             Message::StartCreatingNewProfile => {
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.creating_new = true;
+                    mgr.creating_empty = false;
+                    mgr.new_name_input = String::new();
+                }
+            }
+            Message::CreateEmptyProfile => {
+                if let Some(mgr) = &mut self.profile_manager {
+                    mgr.creating_new = true;
+                    mgr.creating_empty = true;
                     mgr.new_name_input = String::new();
                 }
             }
@@ -1859,6 +1881,7 @@ impl State {
             Message::CancelCreatingNewProfile => {
                 if let Some(mgr) = &mut self.profile_manager {
                     mgr.creating_new = false;
+                    mgr.creating_empty = false;
                     mgr.new_name_input.clear();
                 }
             }
@@ -1867,6 +1890,7 @@ impl State {
                     renaming_name: None,
                     deleting_name: None,
                     creating_new: false,
+                    creating_empty: false,
                     new_name_input: String::new(),
                 });
             }

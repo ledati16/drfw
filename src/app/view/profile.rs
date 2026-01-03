@@ -1,10 +1,11 @@
 //! Profile management UI components
 
 use crate::app::ui_components::{
-    card_container, danger_button, primary_button, secondary_button, themed_text_input,
+    active_card_button, card_button, card_container, danger_button, primary_button,
+    secondary_button, section_header_container, themed_text_input,
 };
 use crate::app::{Message, ProfileManagerState, State};
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
 use iced::{Alignment, Border, Element, Length};
 
 pub fn view_profile_switch_confirm(
@@ -65,27 +66,14 @@ pub fn view_profile_manager<'a>(
             .color(theme.fg_muted)
             .into()
     } else {
-        let mut list = column![].spacing(8);
+        let mut list = column![].spacing(4);
         for name in &state.available_profiles {
             let is_active = name == &state.active_profile_name;
 
-            let mut row_content = row![
-                text(name)
-                    .size(14)
-                    .font(state.font_regular)
-                    .color(if is_active {
-                        theme.accent
-                    } else {
-                        theme.fg_primary
-                    })
-                    .width(Length::Fill),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center);
-
-            if let Some((old, current)) = &mgr.renaming_name
+            let item: Element<'_, Message> = if let Some((old, current)) = &mgr.renaming_name
                 && old == name
             {
+                // Renaming mode: inline text input
                 let is_valid_rename = crate::core::profiles::validate_profile_name(current).is_ok();
                 let ok_button = if is_valid_rename {
                     button(text("OK").size(12).font(state.font_regular))
@@ -96,92 +84,131 @@ pub fn view_profile_manager<'a>(
                         .style(move |_, status| secondary_button(theme, status))
                 };
 
-                row_content = row![
-                    text_input("New name...", current)
-                        .on_input(Message::ProfileNewNameChanged)
-                        .on_submit(if is_valid_rename {
-                            Message::ConfirmRenameProfile
-                        } else {
-                            Message::Noop
-                        })
-                        .padding(8)
-                        .font(state.font_regular)
-                        .style(move |_, status| themed_text_input(theme, status))
-                        .width(Length::Fill),
-                    ok_button,
-                    button(text("Cancel").size(12).font(state.font_regular))
-                        .on_press(Message::CancelRenameProfile)
-                        .style(move |_, status| secondary_button(theme, status)),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center);
+                container(
+                    row![
+                        text_input("New name...", current)
+                            .on_input(Message::ProfileNewNameChanged)
+                            .on_submit(if is_valid_rename {
+                                Message::ConfirmRenameProfile
+                            } else {
+                                Message::Noop
+                            })
+                            .padding(8)
+                            .font(state.font_regular)
+                            .style(move |_, status| themed_text_input(theme, status))
+                            .width(Length::Fill),
+                        ok_button,
+                        button(text("Cancel").size(12).font(state.font_regular))
+                            .on_press(Message::CancelRenameProfile)
+                            .style(move |_, status| secondary_button(theme, status)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .padding([6, 10]),
+                )
+                .style(move |_| card_container(theme))
+                .into()
             } else if let Some(del_name) = &mgr.deleting_name
                 && del_name == name
             {
-                row_content = row![
-                    text("Delete profile?")
-                        .size(12)
-                        .font(state.font_regular)
-                        .color(theme.danger)
-                        .width(Length::Fill),
-                    button(text("No").size(12).font(state.font_regular))
-                        .on_press(Message::CancelDeleteProfile)
-                        .style(move |_, status| secondary_button(theme, status)),
-                    button(text("Yes, Delete").size(12).font(state.font_regular))
-                        .on_press(Message::ConfirmDeleteProfile)
-                        .style(move |_, status| danger_button(theme, status)),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center);
-            } else if !is_active {
-                row_content = row_content
-                    .push(
-                        button(text("Select").size(12).font(state.font_regular))
-                            .on_press(Message::ProfileSelected(name.clone()))
-                            .padding([4, 8])
-                            .style(move |_, status| primary_button(theme, status)),
-                    )
-                    .push(
-                        button(text("✎").size(14))
+                // Delete confirmation mode
+                container(
+                    row![
+                        text("Delete this profile?")
+                            .size(12)
+                            .font(state.font_regular)
+                            .color(theme.danger)
+                            .width(Length::Fill),
+                        button(text("No").size(12).font(state.font_regular))
+                            .on_press(Message::CancelDeleteProfile)
+                            .padding([4, 10])
+                            .style(move |_, status| secondary_button(theme, status)),
+                        button(text("Yes, Delete").size(12).font(state.font_regular))
+                            .on_press(Message::ConfirmDeleteProfile)
+                            .padding([4, 10])
+                            .style(move |_, status| danger_button(theme, status)),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .padding([6, 10]),
+                )
+                .style(move |_| card_container(theme))
+                .into()
+            } else {
+                // Normal mode: clickable row
+                button(
+                    row![
+                        text(name)
+                            .size(13)
+                            .font(state.font_regular)
+                            .color(if is_active {
+                                theme.accent
+                            } else {
+                                theme.fg_primary
+                            })
+                            .width(Length::Fill),
+                        if is_active {
+                            text("✓").size(14).color(theme.success)
+                        } else {
+                            text("").size(14)
+                        },
+                        button(text("✎").size(14).color(theme.fg_muted))
                             .on_press(Message::RenameProfileRequested(name.clone()))
                             .style(button::text),
-                    )
-                    .push(
-                        button(text("🗑").size(14))
-                            .on_press(Message::DeleteProfileRequested(name.clone()))
-                            .style(button::text),
-                    );
-            } else {
-                row_content = row_content.push(
-                    text("(Active)")
-                        .size(11)
-                        .font(state.font_regular)
-                        .color(theme.fg_muted),
-                );
-            }
+                        if name != crate::core::profiles::DEFAULT_PROFILE_NAME {
+                            button(text("×").size(14).color(theme.fg_muted))
+                                .on_press(Message::DeleteProfileRequested(name.clone()))
+                                .padding(6)
+                                .style(button::text)
+                        } else {
+                            button(text("").size(14))  // Placeholder for alignment
+                                .style(button::text)
+                        },
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .padding([6, 10]),
+                )
+                .width(Length::Fill)
+                .on_press(Message::ProfileSelected(name.clone()))
+                .style(move |_, status| {
+                    let mut style = if is_active {
+                        active_card_button(theme, status)
+                    } else {
+                        card_button(theme, status)
+                    };
 
-            list = list.push(
-                container(row_content)
-                    .padding(12)
-                    .style(move |_| card_container(theme)),
-            );
+                    // Clean list item look: no background/border unless hovered or active
+                    let is_hovered = matches!(status, iced::widget::button::Status::Hovered);
+                    if !is_hovered && !is_active {
+                        style.background = None;
+                        style.border.width = 0.0;
+                        style.shadow.color = iced::Color::TRANSPARENT;
+                    } else if is_hovered && !is_active {
+                        style.background = Some(theme.bg_hover.into());
+                        style.border.width = 0.0;
+                        style.shadow.color = iced::Color::TRANSPARENT;
+                    }
+                    style
+                })
+                .into()
+            };
+
+            list = list.push(item);
         }
         scrollable(list).height(Length::Fixed(300.0)).into()
     };
 
     container(
         column![
-            row![
-                text("🗂 Profile Manager")
-                    .size(24)
+            container(
+                text("Profiles")
+                    .size(18)
                     .font(state.font_regular)
-                    .color(theme.accent),
-                container(row![]).width(Length::Fill),
-                button(text("×").size(20).font(state.font_regular))
-                    .on_press(Message::CloseProfileManager)
-                    .style(button::text),
-            ]
-            .align_y(Alignment::Center),
+                    .color(theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
             profiles_list,
             if mgr.creating_new {
                 let is_valid_name = crate::core::profiles::validate_profile_name(&mgr.new_name_input).is_ok();
@@ -219,29 +246,46 @@ pub fn view_profile_manager<'a>(
                 .style(move |_| card_container(theme))
             } else {
                 container(
-                    button(
-                        text("+ Add Profile from Current Rules")
-                            .size(13)
-                            .font(state.font_regular),
-                    )
-                    .on_press(Message::StartCreatingNewProfile)
-                    .width(Length::Fill)
-                    .padding(12)
-                    .style(move |_, status| secondary_button(theme, status)),
+                    row![
+                        button(
+                            text("+ New from Current")
+                                .size(12)
+                                .font(state.font_regular),
+                        )
+                        .on_press(Message::StartCreatingNewProfile)
+                        .padding([8, 12])
+                        .style(move |_, status| secondary_button(theme, status)),
+                        button(
+                            text("+ New Empty")
+                                .size(12)
+                                .font(state.font_regular),
+                        )
+                        .on_press(Message::CreateEmptyProfile)
+                        .padding([8, 12])
+                        .style(move |_, status| secondary_button(theme, status)),
+                    ]
+                    .spacing(8),
                 )
-                .width(Length::Fill)
             },
             row![
-                container(row![]).width(Length::Fill),
-                button(text("Close").size(13).font(state.font_regular))
+                container(
+                    text(format!("{} profiles", state.available_profiles.len()))
+                        .size(10)
+                        .font(state.font_mono)
+                        .color(theme.fg_muted)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
+                space::Space::new().width(Length::Fill),
+                button(text("Close").size(14).font(state.font_regular))
                     .on_press(Message::CloseProfileManager)
                     .padding([10, 20])
-                    .style(move |_, status| primary_button(theme, status)),
+                    .style(move |_, status| secondary_button(theme, status)),
             ]
-            .spacing(12)
+            .align_y(Alignment::Center)
         ]
-        .spacing(20)
-        .padding(32)
+        .spacing(16)
+        .padding(24)
         .width(Length::Fixed(600.0)),
     )
     .style(move |_| card_container(theme))
