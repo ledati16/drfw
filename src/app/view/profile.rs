@@ -1,8 +1,8 @@
 //! Profile management UI components
 
 use crate::app::ui_components::{
-    active_card_button, card_button, card_container, danger_button, primary_button,
-    secondary_button, section_header_container, themed_text_input,
+    card_button, card_container, danger_button, primary_button, secondary_button,
+    section_header_container, themed_text_input,
 };
 use crate::app::{Message, ProfileManagerState, State};
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
@@ -172,23 +172,22 @@ pub fn view_profile_manager<'a>(
                 .width(Length::Fill)
                 .on_press(Message::ProfileSelected(name.clone()))
                 .style(move |_, status| {
-                    let mut style = if is_active {
-                        active_card_button(theme, status)
-                    } else {
-                        card_button(theme, status)
-                    };
+                    let mut style = card_button(theme, status);
 
-                    // Clean list item look: no background/border unless hovered or active
-                    let is_hovered = matches!(status, iced::widget::button::Status::Hovered);
-                    if !is_hovered && !is_active {
-                        style.background = None;
-                        style.border.width = 0.0;
-                        style.shadow.color = iced::Color::TRANSPARENT;
-                    } else if is_hovered && !is_active {
-                        style.background = Some(theme.bg_hover.into());
-                        style.border.width = 0.0;
-                        style.shadow.color = iced::Color::TRANSPARENT;
+                    // Clean list look: no background/border/shadow unless active
+                    style.background = None;
+                    style.border.width = 0.0;
+                    style.shadow.color = iced::Color::TRANSPARENT;
+
+                    // Active profile: accent border only (like theme picker)
+                    if is_active {
+                        style.border = iced::Border {
+                            color: theme.accent,
+                            width: 2.0,
+                            radius: 8.0.into(),
+                        };
                     }
+
                     style
                 })
                 .into()

@@ -1828,6 +1828,14 @@ impl State {
                 let name_clone = name.clone();
                 let name_for_log = name.clone();
                 let enable_event_log = self.enable_event_log;
+
+                // Update current ruleset if creating empty profile
+                if creating_empty {
+                    self.ruleset = ruleset.clone();
+                    // Rebuild UI caches for new empty ruleset
+                    self.update_cached_text();
+                }
+
                 self.active_profile_name = name;
                 self.mark_config_dirty();
                 if let Some(mgr) = &mut self.profile_manager {
