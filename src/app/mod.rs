@@ -2,7 +2,6 @@ pub mod syntax_cache;
 pub mod ui_components;
 pub mod view;
 
-use crate::core::error::ErrorInfo;
 use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
 use iced::widget::Id;
@@ -148,6 +147,7 @@ pub enum BannerSeverity {
     Success, // Green - positive outcomes (confirmed, exported)
     Info,    // Blue/Cyan - neutral information (applied)
     Warning, // Yellow/Orange - attention needed (auto-revert, warnings)
+    Error,   // Red - failures, errors requiring attention
 }
 
 /// In-app notification banner
@@ -171,7 +171,6 @@ pub struct State {
     pub last_applied_ruleset: Option<FirewallRuleset>,
     pub cached_disk_profile: Option<FirewallRuleset>,
     pub status: AppStatus,
-    pub last_error: Option<ErrorInfo>,
     pub banners: std::collections::VecDeque<NotificationBanner>,
     pub active_tab: WorkspaceTab,
     pub rule_form: Option<RuleForm>,
@@ -220,6 +219,8 @@ pub struct State {
     // Profile save debouncing
     pub profile_dirty: bool,
     pub last_profile_change: Option<std::time::Instant>,
+    // Slider logging debouncing (description, last_change_time)
+    pub pending_slider_log: Option<(String, std::time::Instant)>,
     // Profile management
     pub active_profile_name: String,
     pub available_profiles: Vec<String>,
@@ -358,7 +359,6 @@ pub enum AppStatus {
     },
     Confirmed,
     Reverting,
-    Error(String),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -593,7 +593,6 @@ pub enum Message {
     CountdownTick,
     TabChanged(WorkspaceTab),
     ToggleExportModal(bool),
-    CopyErrorClicked,
     SaveToSystemClicked,
     SaveToSystemResult(Result<(), String>),
     EventOccurred(iced::Event),
@@ -609,6 +608,7 @@ pub enum Message {
     CancelWarning,
     ToggleDroppedLogging(bool),
     LogRateChanged(u32),
+    CheckSliderLog,
     LogPrefixChanged(String),
     ServerModeToggled(bool),
     ConfirmServerMode,
@@ -647,9 +647,7 @@ pub enum Message {
     // Profile messages
     ProfileSelected(String),
     ProfileSwitched(String, FirewallRuleset),
-    SaveProfileClicked,
     SaveProfileAs(String),
-    ProfileSaved(Result<(), String>),
     StartCreatingNewProfile,
     NewProfileNameChanged(String),
     CancelCreatingNewProfile,
@@ -768,7 +766,6 @@ impl State {
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
             status: AppStatus::Idle,
-            last_error: None,
             banners: std::collections::VecDeque::new(),
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
@@ -815,6 +812,7 @@ impl State {
             last_config_change: None,
             profile_dirty: false,
             last_profile_change: None,
+            pending_slider_log: None,
             active_profile_name,
             available_profiles,
             pending_profile_switch: None,
@@ -1018,6 +1016,29 @@ impl State {
         save_task.chain(refresh_task)
     }
 
+    fn schedule_slider_log(&mut self, description: String) {
+        self.pending_slider_log = Some((description, std::time::Instant::now()));
+    }
+
+    fn handle_check_slider_log(&mut self) -> Task<Message> {
+        const DEBOUNCE_MS: u64 = 2000; // 2 seconds for slider changes
+
+        if let Some((description, last_change)) = &self.pending_slider_log
+            && last_change.elapsed().as_millis() >= DEBOUNCE_MS as u128
+        {
+            let desc = description.clone();
+            self.pending_slider_log = None;
+            let enable_event_log = self.enable_event_log;
+            return Task::perform(
+                async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                },
+                |_| Message::Noop,
+            );
+        }
+        Task::none()
+    }
+
     fn save_profile(&self) -> Task<Message> {
         let profile_name = self.active_profile_name.clone();
         let ruleset = self.ruleset.clone();
@@ -1178,16 +1199,83 @@ impl State {
                 self.rule_search = s;
                 self.update_filter_cache();
             }
-            Message::ToggleRuleEnabled(id) => self.handle_toggle_rule(id),
+            Message::ToggleRuleEnabled(id) => return self.handle_toggle_rule(id),
             Message::DeleteRuleRequested(id) => self.deleting_id = Some(id),
             Message::CancelDelete => self.deleting_id = None,
-            Message::DeleteRule(id) => self.handle_delete_rule(id),
+            Message::DeleteRule(id) => return self.handle_delete_rule(id),
             Message::ApplyClicked => return self.handle_apply_clicked(),
             Message::VerifyCompleted(result) => return self.handle_verify_completed(result),
             Message::ProceedToApply => return self.handle_proceed_to_apply(),
             Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
-                self.status = AppStatus::Error(e.clone());
-                self.last_error = Some(ErrorInfo::new(e));
+                self.status = AppStatus::Idle;
+
+                // Detect elevation-specific errors and handle accordingly
+                if e.contains("Authentication cancelled") {
+                    self.push_banner("Authentication was cancelled", BannerSeverity::Warning, 5);
+                    let enable_event_log = self.enable_event_log;
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_elevation_cancelled(
+                                enable_event_log,
+                                "User cancelled authentication".to_string(),
+                            )
+                            .await;
+                        },
+                        |_| Message::Noop,
+                    );
+                } else if e.contains("Authentication failed") {
+                    self.push_banner("Authentication failed", BannerSeverity::Error, 5);
+                    let enable_event_log = self.enable_event_log;
+                    let error_msg = e.clone();
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+                        },
+                        |_| Message::Noop,
+                    );
+                } else if e.contains("timed out") || e.contains("Operation timed out") {
+                    self.push_banner("Authentication timed out", BannerSeverity::Error, 5);
+                    let enable_event_log = self.enable_event_log;
+                    let error_msg = e.clone();
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+                        },
+                        |_| Message::Noop,
+                    );
+                } else if e.contains("No authentication agent") || e.contains("No polkit") {
+                    self.push_banner(
+                        "No authentication agent available. Install polkit.",
+                        BannerSeverity::Error,
+                        8,
+                    );
+                    let enable_event_log = self.enable_event_log;
+                    let error_msg = e.clone();
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+                        },
+                        |_| Message::Noop,
+                    );
+                } else if e.contains("nft binary not found") || e.contains("nftables") {
+                    self.push_banner("nftables not installed", BannerSeverity::Error, 5);
+                    let enable_event_log = self.enable_event_log;
+                    let error_msg = e.clone();
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+                        },
+                        |_| Message::Noop,
+                    );
+                } else {
+                    // Generic error - show error message
+                    let msg = if e.len() > 80 {
+                        format!("{}...", &e[..77])
+                    } else {
+                        e.clone()
+                    };
+                    self.push_banner(&msg, BannerSeverity::Error, 8);
+                }
             }
             Message::ApplyResult(Ok(snapshot)) => self.handle_apply_result(snapshot),
             Message::ConfirmClicked => {
@@ -1210,7 +1298,6 @@ impl State {
             Message::RevertClicked => return self.handle_revert_clicked(),
             Message::RevertResult(Ok(())) => {
                 self.status = AppStatus::Idle;
-                self.last_error = None;
                 self.push_banner(
                     "Firewall rules have been restored to previous state.",
                     BannerSeverity::Warning,
@@ -1232,21 +1319,48 @@ impl State {
                     BannerSeverity::Success,
                     5,
                 );
+
+                // Log export completion
+                let enable_event_log = self.enable_event_log;
+                let path_clone = path.clone();
+                let format = if path.ends_with(".json") {
+                    "json"
+                } else {
+                    "nft"
+                };
+                return Task::perform(
+                    async move {
+                        crate::audit::log_export_completed(enable_event_log, format, &path_clone)
+                            .await;
+                    },
+                    |_| Message::Noop,
+                );
             }
             Message::ExportResult(Err(e)) => {
                 self.show_export_modal = false;
-                self.last_error = Some(ErrorInfo::new(e));
-            }
-            Message::CopyErrorClicked => {
-                if let Some(ref err) = self.last_error {
-                    return iced::clipboard::write(err.message.clone());
-                }
+                let msg = if e.len() > 70 {
+                    format!("Export failed: {}...", &e[..67])
+                } else {
+                    format!("Export failed: {}", e)
+                };
+                self.push_banner(&msg, BannerSeverity::Error, 8);
             }
             Message::SaveToSystemClicked => return self.handle_save_to_system(),
             Message::SaveToSystemResult(Ok(())) => {
-                self.last_error = None;
+                self.push_banner(
+                    "Successfully saved to /etc/nftables.conf",
+                    BannerSeverity::Success,
+                    5,
+                );
             }
-            Message::SaveToSystemResult(Err(e)) => self.last_error = Some(ErrorInfo::new(e)),
+            Message::SaveToSystemResult(Err(e)) => {
+                let msg = if e.len() > 60 {
+                    format!("Save to system failed: {}...", &e[..52])
+                } else {
+                    format!("Save to system failed: {}", e)
+                };
+                self.push_banner(&msg, BannerSeverity::Error, 8);
+            }
             Message::EventOccurred(event) => return self.handle_event(event),
             Message::ToggleDiff(enabled) => {
                 self.show_diff = enabled;
@@ -1289,12 +1403,10 @@ impl State {
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 self.auto_revert_timeout_secs = timeout.clamp(5, 120);
-                let enable_event_log = self.enable_event_log;
-                let desc = format!("Auto-revert timeout set to {}s", timeout);
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
                 self.mark_config_dirty();
+                // Schedule debounced logging - log after 2s of no changes
+                let desc = format!("Auto-revert timeout set to {}s", timeout);
+                self.schedule_slider_log(desc);
             }
             Message::ToggleEventLog(enabled) => {
                 self.enable_event_log = enabled;
@@ -1322,17 +1434,15 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                self.mark_config_dirty();
+                self.mark_profile_dirty();
             }
             Message::IcmpRateLimitChanged(rate) => {
                 self.ruleset.advanced_security.icmp_rate_limit = rate;
                 self.update_cached_text();
-                let enable_event_log = self.enable_event_log;
-                let desc = format!("ICMP rate limit set to {}/min", rate);
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
-                self.mark_config_dirty();
+                self.mark_profile_dirty();
+                // Schedule debounced logging - log after 2s of no changes
+                let desc = format!("ICMP rate limit set to {}/s", rate);
+                self.schedule_slider_log(desc);
             }
             Message::ToggleRpfRequested(enabled) => {
                 if enabled {
@@ -1348,7 +1458,7 @@ impl State {
                         )
                         .await;
                     });
-                    self.mark_config_dirty();
+                    self.mark_profile_dirty();
                 }
             }
             Message::ConfirmEnableRpf => {
@@ -1363,7 +1473,7 @@ impl State {
                     )
                     .await;
                 });
-                self.mark_config_dirty();
+                self.mark_profile_dirty();
             }
             Message::CancelWarning => {
                 self.pending_warning = None;
@@ -1380,7 +1490,7 @@ impl State {
                 tokio::spawn(async move {
                     crate::audit::log_settings_saved(enable_event_log, desc).await;
                 });
-                self.mark_config_dirty();
+                self.mark_profile_dirty();
             }
             Message::LogRateChanged(rate) => {
                 // Validate log rate (slider ensures 1-100 range, but check for warnings)
@@ -1400,12 +1510,13 @@ impl State {
                 }
                 self.ruleset.advanced_security.log_rate_per_minute = rate;
                 self.update_cached_text();
-                let enable_event_log = self.enable_event_log;
+                self.mark_profile_dirty();
+                // Schedule debounced logging - log after 2s of no changes
                 let desc = format!("Log rate limit set to {}/min", rate);
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
-                self.mark_config_dirty();
+                self.schedule_slider_log(desc);
+            }
+            Message::CheckSliderLog => {
+                return self.handle_check_slider_log();
             }
             Message::LogPrefixChanged(prefix) => {
                 // Validate and sanitize log prefix
@@ -1418,7 +1529,7 @@ impl State {
                         tokio::spawn(async move {
                             crate::audit::log_settings_saved(enable_event_log, &desc).await;
                         });
-                        self.mark_config_dirty();
+                        self.mark_profile_dirty();
                     }
                     Err(e) => {
                         // Invalid prefix - don't save, just log the error
@@ -1442,7 +1553,7 @@ impl State {
                         )
                         .await;
                     });
-                    self.mark_config_dirty();
+                    self.mark_profile_dirty();
                 }
             }
             Message::ConfirmServerMode => {
@@ -1458,7 +1569,7 @@ impl State {
                     )
                     .await;
                 });
-                self.mark_config_dirty();
+                self.mark_profile_dirty();
             }
             Message::ToggleDiagnostics(show) => self.show_diagnostics = show,
             Message::DiagnosticsFilterChanged(filter) => self.diagnostics_filter = filter,
@@ -1522,6 +1633,11 @@ impl State {
             }
             Message::ApplyTheme => {
                 self.theme_picker = None;
+                let enable_event_log = self.enable_event_log;
+                let desc = format!("Theme changed to {}", self.current_theme.name());
+                tokio::spawn(async move {
+                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                });
                 self.mark_config_dirty();
             }
             Message::CancelThemePicker => {
@@ -1639,6 +1755,10 @@ impl State {
                     && let Some(new_index) =
                         self.ruleset.rules.iter().position(|r| r.id == target_id)
                 {
+                    let label = self.ruleset.rules[old_index].label.clone();
+                    let direction = if new_index < old_index { "up" } else { "down" };
+                    let enable_event_log = self.enable_event_log;
+
                     let command = crate::command::ReorderRuleCommand {
                         rule_id: dragged_id,
                         old_index,
@@ -1647,6 +1767,12 @@ impl State {
                     self.command_history
                         .execute(Box::new(command), &mut self.ruleset);
                     self.mark_profile_dirty();
+
+                    // Log reorder event
+                    tokio::spawn(async move {
+                        crate::audit::log_rules_reordered(enable_event_log, &label, direction)
+                            .await;
+                    });
                 }
                 self.dragged_rule_id = None;
                 self.hovered_drop_target_id = None;
@@ -1664,7 +1790,8 @@ impl State {
             }
             Message::ProfileSwitched(name, ruleset) => {
                 let from_profile = self.active_profile_name.clone();
-                self.ruleset = ruleset;
+                self.ruleset = ruleset.clone();
+                self.cached_disk_profile = Some(ruleset);
                 self.active_profile_name = name.clone();
                 self.command_history = crate::command::CommandHistory::default();
                 self.update_cached_text();
@@ -1682,25 +1809,6 @@ impl State {
                 });
 
                 self.mark_config_dirty();
-            }
-            Message::SaveProfileClicked => {
-                let name = self.active_profile_name.clone();
-                let ruleset = self.ruleset.clone();
-                return Task::perform(
-                    async move {
-                        crate::core::profiles::save_profile(&name, &ruleset)
-                            .await
-                            .map_err(|e| e.to_string())
-                    },
-                    Message::ProfileSaved,
-                );
-            }
-            Message::ProfileSaved(result) => {
-                if let Err(e) = result {
-                    self.last_error = Some(ErrorInfo::new(format!("Failed to save profile: {e}")));
-                } else {
-                    tracing::info!("Profile '{}' saved to disk.", self.active_profile_name);
-                }
             }
             Message::SaveProfileAs(name) => {
                 let ruleset = self.ruleset.clone();
@@ -1808,7 +1916,12 @@ impl State {
                     }
                 }
                 Err(e) => {
-                    self.last_error = Some(ErrorInfo::new(e));
+                    let msg = if e.len() > 55 {
+                        format!("Failed to delete profile: {}...", &e[..46])
+                    } else {
+                        format!("Failed to delete profile: {}", e)
+                    };
+                    self.push_banner(&msg, BannerSeverity::Error, 8);
                 }
             },
             Message::CancelDeleteProfile => {
@@ -1865,7 +1978,12 @@ impl State {
                     self.available_profiles = profiles;
                 }
                 Err(e) => {
-                    self.last_error = Some(ErrorInfo::new(e));
+                    let msg = if e.len() > 55 {
+                        format!("Failed to rename profile: {}...", &e[..46])
+                    } else {
+                        format!("Failed to rename profile: {}", e)
+                    };
+                    self.push_banner(&msg, BannerSeverity::Error, 8);
                 }
             },
             Message::CancelRenameProfile => {
@@ -2033,8 +2151,20 @@ impl State {
             };
             rule.rebuild_caches();
 
-            if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == rule.id) {
-                let old_rule = self.ruleset.rules[pos].clone();
+            let is_edit = self.ruleset.rules.iter().any(|r| r.id == rule.id);
+            let enable_event_log = self.enable_event_log;
+            let label = rule.label.clone();
+            let protocol = rule.protocol.to_string();
+            let ports = rule.port_display.clone();
+
+            if is_edit {
+                let old_rule = self
+                    .ruleset
+                    .rules
+                    .iter()
+                    .find(|r| r.id == rule.id)
+                    .unwrap()
+                    .clone();
                 let command = crate::command::EditRuleCommand {
                     old_rule,
                     new_rule: rule,
@@ -2046,33 +2176,86 @@ impl State {
                 self.command_history
                     .execute(Box::new(command), &mut self.ruleset);
             }
+
             self.mark_profile_dirty();
             self.form_errors = None;
+
+            // Log rule change
+            return Task::perform(
+                async move {
+                    let port_str = if ports.is_empty() { None } else { Some(ports) };
+                    if is_edit {
+                        crate::audit::log_rule_modified(
+                            enable_event_log,
+                            &label,
+                            &protocol,
+                            port_str,
+                        )
+                        .await;
+                    } else {
+                        crate::audit::log_rule_created(
+                            enable_event_log,
+                            &label,
+                            &protocol,
+                            port_str,
+                        )
+                        .await;
+                    }
+                },
+                |_| Message::Noop,
+            );
         }
         Task::none()
     }
 
-    fn handle_toggle_rule(&mut self, id: uuid::Uuid) {
+    fn handle_toggle_rule(&mut self, id: uuid::Uuid) -> Task<Message> {
         if let Some(rule) = self.ruleset.rules.iter().find(|r| r.id == id) {
+            let was_enabled = rule.enabled;
+            let label = rule.label.clone();
+            let enable_event_log = self.enable_event_log;
+
             let command = crate::command::ToggleRuleCommand {
                 rule_id: id,
-                was_enabled: rule.enabled,
+                was_enabled,
             };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
             self.mark_profile_dirty();
+
+            // Log toggle event
+            return Task::perform(
+                async move {
+                    crate::audit::log_rule_toggled(enable_event_log, &label, !was_enabled).await;
+                },
+                |_| Message::Noop,
+            );
         }
+        Task::none()
     }
 
-    fn handle_delete_rule(&mut self, id: uuid::Uuid) {
+    fn handle_delete_rule(&mut self, id: uuid::Uuid) -> Task<Message> {
         if let Some(pos) = self.ruleset.rules.iter().position(|r| r.id == id) {
             let rule = self.ruleset.rules[pos].clone();
+            let label = rule.label.clone();
+            let enable_event_log = self.enable_event_log;
+
             let command = crate::command::DeleteRuleCommand { rule, index: pos };
             self.command_history
                 .execute(Box::new(command), &mut self.ruleset);
             self.mark_profile_dirty();
+
+            self.deleting_id = None;
+
+            // Log delete event
+            return Task::perform(
+                async move {
+                    crate::audit::log_rule_deleted(enable_event_log, &label).await;
+                },
+                |_| Message::Noop,
+            );
         }
         self.deleting_id = None;
+        Task::none()
     }
 
     fn handle_apply_clicked(&mut self) -> Task<Message> {
@@ -2084,7 +2267,6 @@ impl State {
         }
 
         self.status = AppStatus::Verifying;
-        self.last_error = None;
         let nft_json = self.ruleset.to_nftables_json();
 
         Task::perform(
@@ -2127,22 +2309,29 @@ impl State {
         match result {
             Ok(verify_result) if verify_result.success => {
                 self.status = AppStatus::AwaitingApply;
-                self.last_error = None;
                 Task::none()
             }
             Ok(verify_result) => {
-                let error_msg = if verify_result.errors.is_empty() {
+                self.status = AppStatus::Idle;
+                let error_summary = if verify_result.errors.is_empty() {
                     "Ruleset verification failed".to_string()
                 } else {
-                    verify_result.errors.join("\n")
+                    format!(
+                        "Ruleset verification failed: {} errors",
+                        verify_result.errors.len()
+                    )
                 };
-                self.status = AppStatus::Error(error_msg.clone());
-                self.last_error = Some(ErrorInfo::new(error_msg));
+                self.push_banner(&error_summary, BannerSeverity::Error, 8);
                 Task::none()
             }
             Err(e) => {
-                self.status = AppStatus::Error(e.clone());
-                self.last_error = Some(ErrorInfo::new(e));
+                self.status = AppStatus::Idle;
+                let msg = if e.len() > 60 {
+                    format!("Verification error: {}...", &e[..57])
+                } else {
+                    format!("Verification error: {}", e)
+                };
+                self.push_banner(&msg, BannerSeverity::Error, 8);
                 Task::none()
             }
         }
@@ -2150,7 +2339,6 @@ impl State {
 
     fn handle_proceed_to_apply(&mut self) -> Task<Message> {
         self.status = AppStatus::Applying;
-        self.last_error = None;
         let nft_json = self.ruleset.to_nftables_json();
         let rule_count = self.ruleset.rules.len();
         let enabled_count = self.ruleset.rules.iter().filter(|r| r.enabled).count();
@@ -2180,9 +2368,12 @@ impl State {
 
         if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
             eprintln!("Failed to save snapshot to disk: {e}");
-            self.last_error = Some(ErrorInfo::new(format!(
-                "Warning: Failed to save snapshot to disk. Rollback may be unavailable after restart: {e}"
-            )));
+            let msg = if e.to_string().len() > 45 {
+                "Warning: Failed to save snapshot. Rollback may be unavailable.".to_string()
+            } else {
+                format!("Warning: Failed to save snapshot: {}", e)
+            };
+            self.push_banner(&msg, BannerSeverity::Warning, 10);
         }
 
         if self.auto_revert_enabled {
@@ -2198,7 +2389,6 @@ impl State {
                 deadline: Utc::now() + Duration::from_secs(timeout),
                 snapshot,
             };
-            self.last_error = None;
             self.push_banner(
                 format!(
                     "Firewall rules applied! Changes will auto-revert in {}s if not confirmed.",
@@ -2210,7 +2400,6 @@ impl State {
         } else {
             // Auto-revert disabled: show success banner and return to idle
             self.status = AppStatus::Idle;
-            self.last_error = None;
             self.push_banner(
                 "Firewall rules applied successfully!",
                 BannerSeverity::Success,
@@ -2516,6 +2705,12 @@ impl State {
             // Profile auto-save subscription
             if self.profile_dirty {
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckProfileSave)
+            } else {
+                iced::Subscription::none()
+            },
+            // Slider logging debounce subscription
+            if self.pending_slider_log.is_some() {
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckSliderLog)
             } else {
                 iced::Subscription::none()
             },

@@ -13,11 +13,11 @@ pub enum EventType {
     // Firewall operations
     ApplyRules,
     RevertRules,
-    SaveSnapshot,
-    RestoreSnapshot,
-    EnablePersistence,
-    SaveToSystem,
     VerifyRules,
+
+    // Elevation/authentication events
+    ElevationCancelled,
+    ElevationFailed,
 
     // Profile management (user-facing)
     ProfileCreated,
@@ -31,6 +31,16 @@ pub enum EventType {
     // Auto-revert events (user-facing)
     AutoRevertConfirmed,
     AutoRevertTimedOut,
+
+    // Rule CRUD operations
+    RuleCreated,
+    RuleDeleted,
+    RuleModified,
+    RuleToggled,
+    RulesReordered,
+
+    // Data export
+    ExportCompleted,
 }
 
 /// A single audit log entry
@@ -220,33 +230,6 @@ pub async fn log_revert(enable_event_log: bool, success: bool, error: Option<Str
     if let Ok(audit) = AuditLog::new() {
         let event = AuditEvent::new(
             EventType::RevertRules,
-            success,
-            serde_json::json!({}),
-            error,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
-}
-
-/// Logs a save-to-system operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `success` - Whether the operation succeeded
-/// * `error` - Error message if operation failed
-#[allow(dead_code)]
-pub async fn log_save_to_system(enable_event_log: bool, success: bool, error: Option<String>) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::SaveToSystem,
             success,
             serde_json::json!({}),
             error,
@@ -475,6 +458,246 @@ pub async fn log_auto_revert_timed_out(enable_event_log: bool, timeout_secs: u64
             true,
             serde_json::json!({
                 "timeout_secs": timeout_secs,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs an elevation cancellation event (user cancelled auth dialog)
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `error` - The error message from the elevation failure
+pub async fn log_elevation_cancelled(enable_event_log: bool, error: String) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ElevationCancelled,
+            false,
+            serde_json::json!({
+                "error": error,
+            }),
+            Some(error),
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs an elevation failure event (auth failed, timeout, no agent, etc.)
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `error` - The error message from the elevation failure
+pub async fn log_elevation_failed(enable_event_log: bool, error: String) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ElevationFailed,
+            false,
+            serde_json::json!({
+                "error": error,
+            }),
+            Some(error),
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a rule creation event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `label` - Rule label/name
+/// * `protocol` - Rule protocol
+/// * `ports` - Optional port range
+pub async fn log_rule_created(
+    enable_event_log: bool,
+    label: &str,
+    protocol: &str,
+    ports: Option<String>,
+) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::RuleCreated,
+            true,
+            serde_json::json!({
+                "label": label,
+                "protocol": protocol,
+                "ports": ports,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a rule deletion event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `label` - Rule label/name that was deleted
+pub async fn log_rule_deleted(enable_event_log: bool, label: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::RuleDeleted,
+            true,
+            serde_json::json!({
+                "label": label,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a rule modification event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `label` - Rule label/name
+/// * `protocol` - Rule protocol
+/// * `ports` - Optional port range
+pub async fn log_rule_modified(
+    enable_event_log: bool,
+    label: &str,
+    protocol: &str,
+    ports: Option<String>,
+) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::RuleModified,
+            true,
+            serde_json::json!({
+                "label": label,
+                "protocol": protocol,
+                "ports": ports,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a rule toggle event (enabled/disabled)
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `label` - Rule label/name
+/// * `enabled` - New enabled state
+pub async fn log_rule_toggled(enable_event_log: bool, label: &str, enabled: bool) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::RuleToggled,
+            true,
+            serde_json::json!({
+                "label": label,
+                "enabled": enabled,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a rule reordering event (moved up/down)
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `label` - Rule label/name
+/// * `direction` - "up" or "down"
+pub async fn log_rules_reordered(enable_event_log: bool, label: &str, direction: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::RulesReordered,
+            true,
+            serde_json::json!({
+                "label": label,
+                "direction": direction,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs an export completion event
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `format` - Export format ("nft" or "json")
+/// * `path` - Path where the file was exported
+pub async fn log_export_completed(enable_event_log: bool, format: &str, path: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::ExportCompleted,
+            true,
+            serde_json::json!({
+                "format": format,
+                "path": path,
             }),
             None,
         );

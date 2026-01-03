@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Core error types for DRFW
@@ -397,61 +396,6 @@ impl NftablesErrorPattern {
             .with_suggestion("Check the detailed error message for more information")
             .with_suggestion("Verify nftables is working: sudo nft list ruleset")
             .with_help("https://wiki.nftables.org/wiki-nftables/index.php/Troubleshooting")
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorInfo {
-    pub message: String,
-    pub details: Option<String>,
-    pub suggestions: Vec<String>,
-    pub help_url: Option<String>,
-}
-
-impl ErrorInfo {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            details: None,
-            suggestions: Vec::new(),
-            help_url: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn with_details(mut self, details: impl Into<String>) -> Self {
-        self.details = Some(details.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
-        self.suggestions.push(suggestion.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_suggestions(mut self, suggestions: Vec<String>) -> Self {
-        self.suggestions = suggestions;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_help_url(mut self, url: impl Into<String>) -> Self {
-        self.help_url = Some(url.into());
-        self
-    }
-
-    /// Create from an Error with user-friendly message and suggestions
-    #[allow(dead_code)]
-    pub fn from_error(err: &Error) -> Self {
-        let translated = ErrorTranslation::translate(err);
-        Self {
-            message: translated.user_message,
-            details: Some(err.to_string()),
-            suggestions: translated.suggestions,
-            help_url: translated.help_url,
-        }
     }
 }
 

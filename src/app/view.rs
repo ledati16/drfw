@@ -315,7 +315,7 @@ fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
 
     // 1. Branding & Profile Header
-    let is_dirty = state.is_profile_dirty();
+    let is_dirty = state.is_profile_dirty() || state.config_dirty;
 
     let profile_selector = column![
         row![
@@ -1085,15 +1085,6 @@ fn view_workspace<'a>(
     ]
     .spacing(12);
 
-    // Zone: Status (Center)
-    let status_area = container(if let Some(ref err) = state.last_error {
-        view_error_display(err, theme, state.font_regular, state.font_mono)
-    } else {
-        row![].into()
-    })
-    .width(Length::Fill)
-    .center_x(Length::Fill);
-
     // Zone: Commitment (Right)
     let save_to_system = if state.status == AppStatus::Confirmed {
         button(
@@ -1144,7 +1135,7 @@ fn view_workspace<'a>(
 
     let footer = row![
         history_actions,
-        status_area,
+        container(row![]).width(Length::Fill), // Spacer
         row![save_to_system, apply_button].spacing(12)
     ]
     .spacing(16)
@@ -2399,47 +2390,6 @@ fn view_warning_modal<'a>(
     .into()
 }
 
-fn view_error_display<'a>(
-    err: &'a crate::core::error::ErrorInfo,
-    theme: &'a crate::theme::AppTheme,
-    regular_font: iced::Font,
-    mono_font: iced::Font,
-) -> Element<'a, Message> {
-    let mut elements: Vec<Element<'_, Message>> = vec![
-        row![
-            text("⚠️").size(16),
-            text(&err.message)
-                .size(13)
-                .color(theme.danger)
-                .font(regular_font),
-            button("Copy Details")
-                .on_press(Message::CopyErrorClicked)
-                .padding([4, 10])
-                .style(move |_, status| danger_button(theme, status))
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center)
-        .into(),
-    ];
-
-    // Add suggestions if available
-    for suggestion in &err.suggestions {
-        elements.push(
-            row![
-                text("→").size(12).color(theme.info),
-                text(suggestion)
-                    .size(12)
-                    .color(theme.fg_primary)
-                    .font(mono_font),
-            ]
-            .spacing(6)
-            .into(),
-        );
-    }
-
-    column(elements).spacing(6).into()
-}
-
 /// Formats an audit event for display in the Diagnostics modal
 fn format_audit_event<'a>(
     event: &crate::audit::AuditEvent,
@@ -2542,10 +2492,82 @@ fn format_audit_event<'a>(
             theme.warning,
             format!("Auto-revert timed out ({}s)", event.details["timeout_secs"]),
         ),
-        (EventType::SaveSnapshot, _)
-        | (EventType::RestoreSnapshot, _)
-        | (EventType::EnablePersistence, _)
-        | (EventType::SaveToSystem, _) => ("ℹ", theme.fg_muted, format!("{:?}", event.event_type)),
+        (EventType::ElevationCancelled, _) => (
+            "⚠",
+            theme.warning,
+            "Authentication cancelled by user".to_string(),
+        ),
+        (EventType::ElevationFailed, _) => (
+            "✗",
+            theme.danger,
+            format!(
+                "Authentication failed: {}",
+                event.error.as_deref().unwrap_or("Unknown error")
+            ),
+        ),
+        (EventType::RuleCreated, _) => (
+            "➕",
+            theme.success,
+            format!(
+                "Created rule '{}'{}",
+                event.details["label"].as_str().unwrap_or(""),
+                event.details["ports"]
+                    .as_str()
+                    .map(|p| format!(" ({})", p))
+                    .unwrap_or_default()
+            ),
+        ),
+        (EventType::RuleDeleted, _) => (
+            "➖",
+            theme.danger,
+            format!(
+                "Deleted rule '{}'",
+                event.details["label"].as_str().unwrap_or("")
+            ),
+        ),
+        (EventType::RuleModified, _) => (
+            "✎",
+            theme.accent,
+            format!(
+                "Modified rule '{}'{}",
+                event.details["label"].as_str().unwrap_or(""),
+                event.details["ports"]
+                    .as_str()
+                    .map(|p| format!(" ({})", p))
+                    .unwrap_or_default()
+            ),
+        ),
+        (EventType::RuleToggled, _) => (
+            "⏻",
+            theme.accent,
+            format!(
+                "Rule '{}' {}",
+                event.details["label"].as_str().unwrap_or(""),
+                if event.details["enabled"].as_bool().unwrap_or(false) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+        ),
+        (EventType::RulesReordered, _) => (
+            "↕",
+            theme.accent,
+            format!(
+                "Moved rule '{}' {}",
+                event.details["label"].as_str().unwrap_or(""),
+                event.details["direction"].as_str().unwrap_or("")
+            ),
+        ),
+        (EventType::ExportCompleted, _) => (
+            "📤",
+            theme.success,
+            format!(
+                "Exported {} to {}",
+                event.details["format"].as_str().unwrap_or("rules"),
+                event.details["path"].as_str().unwrap_or("")
+            ),
+        ),
     };
 
     row![
@@ -3964,10 +3986,6 @@ fn view_profile_manager<'a>(
                 .width(Length::Fill)
             },
             row![
-                button(text("Save Current Profile").size(13))
-                    .on_press(Message::SaveProfileClicked)
-                    .padding([10, 20])
-                    .style(move |_, status| primary_button(theme, status)),
                 container(row![]).width(Length::Fill),
                 button(text("Close").size(13))
                     .on_press(Message::CloseProfileManager)

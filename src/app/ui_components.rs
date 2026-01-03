@@ -1060,6 +1060,7 @@ pub fn notification_banner<'a>(
         crate::app::BannerSeverity::Success => (theme.success, theme.fg_on_accent, "✓"),
         crate::app::BannerSeverity::Info => (theme.info, theme.fg_on_accent, "ℹ"),
         crate::app::BannerSeverity::Warning => (theme.warning, theme.fg_on_accent, "⚠"),
+        crate::app::BannerSeverity::Error => (theme.danger, theme.fg_on_accent, "✖"),
     };
 
     let content = row![
