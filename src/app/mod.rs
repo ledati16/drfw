@@ -1,6 +1,6 @@
 pub mod syntax_cache;
 pub mod ui_components;
-pub mod view;
+mod view;
 
 use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
