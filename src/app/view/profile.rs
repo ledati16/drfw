@@ -174,12 +174,7 @@ pub fn view_profile_manager<'a>(
                 .style(move |_, status| {
                     let mut style = card_button(theme, status);
 
-                    // Clean list look: no background/border/shadow unless active
-                    style.background = None;
-                    style.border.width = 0.0;
-                    style.shadow.color = iced::Color::TRANSPARENT;
-
-                    // Active profile: accent border only (like theme picker)
+                    // Active profile: accent border (like theme picker cards)
                     if is_active {
                         style.border = iced::Border {
                             color: theme.accent,

@@ -275,8 +275,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
         with_theme_picker
     };
 
-    // Profile manager modal overlay
-    let with_profile_manager = if let Some(ref mgr_state) = state.profile_manager {
+    // Profile manager modal overlay (hide when profile switch confirmation is active)
+    let with_profile_manager = if let Some(ref mgr_state) = state.profile_manager
+        && state.pending_profile_switch.is_none()
+    {
         stack![
             with_profile_confirm,
             container(profile::view_profile_manager(state, mgr_state))
