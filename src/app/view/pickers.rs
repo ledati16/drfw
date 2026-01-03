@@ -133,10 +133,10 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                 scrollable(
                     column![
                         container(font_list).padding(Padding {
-                            top: 2.0,
-                            right: 12.0,
-                            bottom: 2.0,
-                            left: 2.0,
+                            top: 8.0,
+                            right: 8.0,
+                            bottom: 8.0,
+                            left: 8.0,
                         }),
                         if filtered_count == 0 {
                             container(
@@ -147,9 +147,9 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                             )
                             .padding(Padding {
                                 top: 8.0,
-                                right: 12.0,
+                                right: 8.0,
                                 bottom: 4.0,
-                                left: 12.0,
+                                left: 8.0,
                             })
                         } else if filtered_count > display_limit {
                             container(
@@ -162,9 +162,9 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                             )
                             .padding(Padding {
                                 top: 8.0,
-                                right: 12.0,
+                                right: 8.0,
                                 bottom: 4.0,
-                                left: 12.0,
+                                left: 8.0,
                             })
                         } else {
                             container(text(""))
@@ -172,6 +172,7 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                     ]
                     .spacing(0)
                 )
+                .spacing(0)  // Embedded mode prevents overlap
                 .style(move |_, status| themed_scrollable(theme, status))
             )
             .height(Length::Fixed(400.0))

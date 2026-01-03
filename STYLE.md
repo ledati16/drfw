@@ -585,6 +585,37 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 
 ---
 
-**Last Updated:** 2026-01-02
+## 17. Scrollbar Embedded Mode
+
+**Problem:** By default, scrollbars overlay content, potentially obscuring cards/list items.
+
+### Universal Pattern
+```rust
+scrollable(
+    container(content).padding(Padding {
+        top: 8.0,
+        right: 8.0,
+        bottom: 8.0,
+        left: 8.0,
+    })
+)
+.spacing(0)  // Embedded mode prevents overlap
+.style(move |_, status| themed_scrollable(theme, status))
+```
+
+### Key Details
+- **`.spacing(0)` is critical:** Switches from overlay to embedded mode
+- **Symmetric padding:** Use 8px on all sides for visual balance with/without scrollbar
+- **Intrinsic space:** Embedded mode adds tiny imperceptible width for scrollbar rail (framework limitation)
+- **Result:** Content never overlaps, consistent appearance across scroll states
+
+### Applied Locations
+- Profile Manager modal (profile.rs:196-208)
+- Font Picker modal (pickers.rs:133-177)
+- ❌ Theme Picker: Intentionally excluded (scrollbar always visible, custom optimized layout)
+
+---
+
+**Last Updated:** 2026-01-03
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14

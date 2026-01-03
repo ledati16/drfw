@@ -6,7 +6,7 @@ use crate::app::ui_components::{
 };
 use crate::app::{Message, ProfileManagerState, State};
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
-use iced::{Alignment, Border, Element, Length};
+use iced::{Alignment, Border, Element, Length, Padding};
 
 pub fn view_profile_switch_confirm(
     theme: &crate::theme::AppTheme,
@@ -66,7 +66,7 @@ pub fn view_profile_manager<'a>(
             .color(theme.fg_muted)
             .into()
     } else {
-        let mut list = column![].spacing(4);
+        let mut list = column![].spacing(6);
         for name in &state.available_profiles {
             let is_active = name == &state.active_profile_name;
 
@@ -190,7 +190,34 @@ pub fn view_profile_manager<'a>(
 
             list = list.push(item);
         }
-        scrollable(list).height(Length::Fixed(300.0)).into()
+
+        // Wrap scrollable in bordered container
+        container(
+            scrollable(
+                container(list).padding(Padding {
+                    top: 8.0,
+                    right: 8.0,
+                    bottom: 8.0,
+                    left: 8.0,
+                })
+            )
+            .spacing(0)  // Embedded mode prevents overlap, but adds tiny intrinsic space
+            .style(move |_, status| {
+                use crate::app::ui_components::themed_scrollable;
+                themed_scrollable(theme, status)
+            })
+        )
+        .height(Length::Fixed(300.0))
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            border: Border {
+                radius: 8.0.into(),
+                color: theme.border,
+                width: 1.0,
+            },
+            ..Default::default()
+        })
+        .into()
     };
 
     container(
@@ -248,7 +275,7 @@ pub fn view_profile_manager<'a>(
                         )
                         .on_press(Message::StartCreatingNewProfile)
                         .padding([8, 12])
-                        .style(move |_, status| secondary_button(theme, status)),
+                        .style(move |_, status| primary_button(theme, status)),
                         button(
                             text("+ New Empty")
                                 .size(12)
@@ -256,7 +283,7 @@ pub fn view_profile_manager<'a>(
                         )
                         .on_press(Message::CreateEmptyProfile)
                         .padding([8, 12])
-                        .style(move |_, status| secondary_button(theme, status)),
+                        .style(move |_, status| primary_button(theme, status)),
                     ]
                     .spacing(8),
                 )
@@ -280,7 +307,7 @@ pub fn view_profile_manager<'a>(
         ]
         .spacing(16)
         .padding(24)
-        .width(Length::Fixed(600.0)),
+        .width(Length::Fixed(550.0)),  // Balanced width: spacious for 20-char names + scrollbar clearance
     )
     .style(move |_| card_container(theme))
     .into()
