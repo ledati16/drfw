@@ -30,7 +30,6 @@ cast_precision_loss = "allow"
 # GUI Framework
 # ═══════════════════════════════════════════════════════════════════════════
 iced = { version = "0.14", features = ["tokio"] }  # Core GUI framework with async support
-notify-rust = "4"  # Desktop notifications for rule apply success/failure
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Async Runtime
