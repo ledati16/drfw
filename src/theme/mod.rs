@@ -225,11 +225,14 @@ pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // POPULAR DARK THEMES (by downloads/rating)
     // ═══════════════════════════════════════════════════
-    Dracula,     // 7.5M - Iconic purple/pink
-    OneDark,     // 7.2M - VSCode favorite
-    Monokai,     // 2M+ - Classic warm
-    NightOwl,    // 1.9M
-    SynthWave84, // 1.3M - Retro cyberpunk
+    GitHubDark,       // 17.9M - #1 most popular globally
+    Dracula,          // 7.5M - Iconic purple/pink
+    OneDark,          // 7.2M - VSCode favorite
+    Monokai,          // 2M+ - Classic warm
+    MaterialPalenight, // 2.46M - Purple-blue professional
+    NightOwl,         // 1.9M - Accessible dark navy
+    SynthWave84,      // 1.3M - Retro cyberpunk
+    MinDark,          // 551K - Minimal aesthetic
 
     // ═══════════════════════════════════════════════════
     // MODERN DARK THEMES
@@ -237,6 +240,7 @@ pub enum ThemeChoice {
     TokyoNight,
     CatppuccinMocha,
     RosePine,
+    Poimandres, // 141K - Semantic minimalist
 
     // ═══════════════════════════════════════════════════
     // NATURE/ATMOSPHERIC DARK THEMES
@@ -249,6 +253,7 @@ pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // LIGHT THEMES
     // ═══════════════════════════════════════════════════
+    GitHubLight,
     GruvboxLight,
     CatppuccinLatte,
     RosePineDawn,
@@ -266,21 +271,26 @@ impl ThemeChoice {
             Self::Oxide => "Oxide",
             Self::Aethel => "Aethel",
             // Popular dark themes
+            Self::GitHubDark => "GitHub Dark",
             Self::Dracula => "Dracula",
             Self::OneDark => "One Dark",
             Self::Monokai => "Monokai",
+            Self::MaterialPalenight => "Material Palenight",
             Self::NightOwl => "Night Owl",
             Self::SynthWave84 => "SynthWave '84",
+            Self::MinDark => "Min Dark",
             // Modern dark themes
             Self::TokyoNight => "Tokyo Night",
             Self::CatppuccinMocha => "Catppuccin Mocha",
             Self::RosePine => "Rosé Pine",
+            Self::Poimandres => "Poimandres",
             // Nature/atmospheric dark themes
             Self::Nord => "Nord",
             Self::Gruvbox => "Gruvbox Dark",
             Self::Everforest => "Everforest Dark",
             Self::AyuDark => "Ayu Dark",
             // Light themes
+            Self::GitHubLight => "GitHub Light",
             Self::GruvboxLight => "Gruvbox Light",
             Self::CatppuccinLatte => "Catppuccin Latte",
             Self::RosePineDawn => "Rosé Pine Dawn",
@@ -298,21 +308,26 @@ impl ThemeChoice {
             Self::Oxide => presets::oxide(),
             Self::Aethel => presets::aethel(),
             // Popular dark themes
+            Self::GitHubDark => presets::github_dark(),
             Self::Dracula => presets::dracula(),
             Self::OneDark => presets::one_dark(),
             Self::Monokai => presets::monokai(),
+            Self::MaterialPalenight => presets::material_palenight(),
             Self::NightOwl => presets::night_owl(),
             Self::SynthWave84 => presets::synthwave_84(),
+            Self::MinDark => presets::min_dark(),
             // Modern dark themes
             Self::TokyoNight => presets::tokyo_night(),
             Self::CatppuccinMocha => presets::catppuccin_mocha(),
             Self::RosePine => presets::rose_pine(),
+            Self::Poimandres => presets::poimandres(),
             // Nature/atmospheric dark themes
             Self::Nord => presets::nord(),
             Self::Gruvbox => presets::gruvbox(),
             Self::Everforest => presets::everforest(),
             Self::AyuDark => presets::ayu_dark(),
             // Light themes
+            Self::GitHubLight => presets::github_light(),
             Self::GruvboxLight => presets::gruvbox_light(),
             Self::CatppuccinLatte => presets::catppuccin_latte(),
             Self::RosePineDawn => presets::rose_pine_dawn(),

@@ -499,6 +499,138 @@ pub fn gruvbox_light() -> AppTheme {
 // POPULAR DARK THEMES
 // ═══════════════════════════════════════════════════
 
+/// GitHub Dark Default - Official GitHub dark theme
+/// Professional navy-black theme from GitHub's Primer design system (17.9M installs)
+pub fn github_dark() -> AppTheme {
+    AppTheme::from_hex(
+        "GitHub Dark",
+        0x000D_1117, // bg_base - Canvas default (official)
+        0x0001_0409, // bg_sidebar - Darker canvas
+        0x0016_1B22, // bg_surface - Canvas subtle (official)
+        0x0021_262D, // bg_elevated - Elevated surface
+        0x002D_333B, // bg_hover - Hover state
+        0x0038_3E47, // bg_active - Active state
+        0x00C9_D1D9, // fg_primary - Foreground default (official)
+        0x008B_949E, // fg_secondary - Foreground muted (official)
+        0x006E_7681, // fg_muted - Foreground subtle
+        0x000D_1117, // fg_on_accent - Dark on light
+        0x0058_A6FF, // accent - Accent emphasis (official blue)
+        0x0079_C0FF, // accent_hover - Lighter blue
+        0x003F_B950, // success - Success emphasis (official green)
+        0x00D2_9922, // warning - Attention emphasis (official gold)
+        0x00F8_5149, // danger - Danger emphasis (official red)
+        0x0058_A6FF, // info - Accent blue
+        0x0021_262D, // border - Border default
+        0x0058_A6FF, // border_strong - Accent border
+        0x0016_1B22, // divider - Canvas subtle
+        0x00FF_7B72, // syntax_keyword - Red (official)
+        0x00D2_A8FF, // syntax_type - Purple (official)
+        0x00A5_D6FF, // syntax_string - Blue string (official)
+        0x0079_C0FF, // syntax_number - Blue number (official)
+        0x008B_949E, // syntax_comment - Foreground muted (official)
+        0x00FF_A657, // syntax_operator - Orange (official)
+    )
+}
+
+/// Material Theme Palenight - Popular purple-blue professional theme
+/// Deep purple background with vibrant syntax colors (2.46M installs)
+pub fn material_palenight() -> AppTheme {
+    AppTheme::from_hex(
+        "Material Palenight",
+        0x0029_2D3E, // bg_base - Editor background (official)
+        0x0021_2532, // bg_sidebar - Darker sidebar
+        0x0032_3644, // bg_surface - Lighter surface
+        0x003B_3F4F, // bg_elevated - Elevated elements
+        0x0046_4B5D, // bg_hover - Hover state
+        0x004C_5374, // bg_active - Line number color (official)
+        0x00BF_C7D5, // fg_primary - Editor foreground (official)
+        0x00A9_B0BE, // fg_secondary - Muted foreground
+        0x0069_7098, // fg_muted - Comment color (official)
+        0x0029_2D3E, // fg_on_accent - Dark on light
+        0x0082_AAFF, // accent - Function blue (official)
+        0x0092_BAFF, // accent_hover - Lighter blue
+        0x00C3_E88D, // success - String green (official)
+        0x00FF_CB6B, // warning - Type/variable yellow (official)
+        0x00FF_5572, // danger - Tag red (official)
+        0x0089_DDFF, // info - Operator cyan (official)
+        0x003B_3F4F, // border - Elevated match
+        0x0082_AAFF, // border_strong - Accent blue
+        0x0032_3644, // divider - Surface match
+        0x00C7_92EA, // syntax_keyword - Keyword purple (official)
+        0x00FF_CB6B, // syntax_type - Type yellow (official)
+        0x00C3_E88D, // syntax_string - String green (official)
+        0x00F7_8C6C, // syntax_number - Number orange (official)
+        0x0069_7098, // syntax_comment - Comment gray (official)
+        0x0089_DDFF, // syntax_operator - Operator cyan (official)
+    )
+}
+
+/// Min Dark - Minimal distraction-free theme by VS Code designer
+/// True minimalist aesthetic with muted grays (551K installs)
+pub fn min_dark() -> AppTheme {
+    AppTheme::from_hex(
+        "Min Dark",
+        0x001F_1F1E, // bg_base - Editor background (official)
+        0x0019_1A19, // bg_sidebar - Activity bar background (official)
+        0x0025_2524, // bg_surface - Slightly lighter
+        0x002B_2B2A, // bg_elevated - Elevated elements
+        0x0032_3231, // bg_hover - Hover state
+        0x003A_3A39, // bg_active - Active state
+        0x00BB_BBBB, // fg_primary - Editor foreground (official)
+        0x009E_9E9E, // fg_secondary - Muted foreground
+        0x007D_7D7D, // fg_muted - Activity bar foreground (official)
+        0x001F_1F1E, // fg_on_accent - Dark on light
+        0x009E_7296, // accent - Purple accent (from design)
+        0x00AE_82A6, // accent_hover - Lighter purple
+        0x006C_9B65, // success - Green (from design)
+        0x00AF_B36F, // warning - Yellow-green (from design)
+        0x00BB_6565, // danger - Muted red
+        0x0065_9BA8, // info - Muted cyan
+        0x002B_2B2A, // border - Subtle border
+        0x009E_7296, // border_strong - Purple accent
+        0x0025_2524, // divider - Surface match
+        0x009E_7296, // syntax_keyword - Purple
+        0x0065_9BA8, // syntax_type - Cyan
+        0x006C_9B65, // syntax_string - Green
+        0x00AF_B36F, // syntax_number - Yellow-green
+        0x0065_6565, // syntax_comment - Dark gray
+        0x00BB_BBBB, // syntax_operator - Foreground
+    )
+}
+
+/// Poimandres - Minimal semantic dark theme from React community
+/// Blueberry-inspired with semantic meaning focus (141K devoted users)
+pub fn poimandres() -> AppTheme {
+    AppTheme::from_hex(
+        "Poimandres",
+        0x001B_1E28, // bg_base - Editor background (official)
+        0x0015_171F, // bg_sidebar - Darker sidebar
+        0x0021_242E, // bg_surface - Lighter surface
+        0x0027_2A36, // bg_elevated - Elevated elements
+        0x002D_303D, // bg_hover - Hover state
+        0x0035_3945, // bg_active - Active state
+        0x00A6_ACCD, // fg_primary - Editor foreground (official)
+        0x008B_91B0, // fg_secondary - Muted foreground
+        0x0076_7C9D, // fg_muted - Comment (official)
+        0x001B_1E28, // fg_on_accent - Dark on light
+        0x00AD_D7FF, // accent - Function blue (official)
+        0x00BD_E7FF, // accent_hover - Lighter blue
+        0x005D_E4C7, // success - String/constant cyan (official)
+        0x00FF_D580, // warning - Gold/yellow
+        0x00D0_679D, // danger - Error pink (official)
+        0x0091_B4D5, // info - Keyword operator blue (official)
+        0x0027_2A36, // border - Elevated match
+        0x00AD_D7FF, // border_strong - Function blue
+        0x0021_242E, // divider - Surface match
+        0x00A6_ACCD, // syntax_keyword - Keyword lavender (official)
+        0x00E4_F0FB, // syntax_type - Variable white (official)
+        0x005D_E4C7, // syntax_string - String cyan (official)
+        0x005D_E4C7, // syntax_number - Number cyan (official)
+        0x0076_7C9D, // syntax_comment - Comment gray (official)
+        0x0091_B4D5, // syntax_operator - Operator blue (official)
+    )
+}
+
 /// Night Owl - Professional dark blue theme optimized for night coding
 /// Dark navy with vibrant syntax colors for excellent readability
 pub fn night_owl() -> AppTheme {
@@ -568,6 +700,39 @@ pub fn synthwave_84() -> AppTheme {
 // ═══════════════════════════════════════════════════
 // LIGHT THEMES
 // ═══════════════════════════════════════════════════
+
+/// GitHub Light Default - Official GitHub light theme
+/// Clean professional light theme from GitHub's Primer design system (17.9M installs)
+pub fn github_light() -> AppTheme {
+    AppTheme::from_hex(
+        "GitHub Light",
+        0x00FF_FFFF, // bg_base - Canvas default white (official)
+        0x00F6_F8FA, // bg_sidebar - Canvas subtle (official)
+        0x00FF_FFFF, // bg_surface - White surface
+        0x00F6_F8FA, // bg_elevated - Subtle gray
+        0x00EB_EEF2, // bg_hover - Hover state
+        0x00D8_DEE4, // bg_active - Active state
+        0x0024_292F, // fg_primary - Foreground default (official)
+        0x0057_606A, // fg_secondary - Foreground muted (official)
+        0x0068_7178, // fg_muted - Foreground subtle
+        0x00FF_FFFF, // fg_on_accent - Light on dark
+        0x0009_69DA, // accent - Accent emphasis blue (official)
+        0x0000_59C7, // accent_hover - Darker blue
+        0x001A_7F37, // success - Success emphasis green (official)
+        0x009A_6700, // warning - Attention emphasis orange (official)
+        0x00CF_222E, // danger - Danger emphasis red (official)
+        0x0009_69DA, // info - Accent blue
+        0x00D8_DEE4, // border - Border default
+        0x0009_69DA, // border_strong - Accent border
+        0x00F6_F8FA, // divider - Canvas subtle
+        0x00CF_222E, // syntax_keyword - Red (official)
+        0x0082_50DF, // syntax_type - Purple (official)
+        0x000A_3069, // syntax_string - Blue string (official)
+        0x0009_69DA, // syntax_number - Blue number (official)
+        0x0057_606A, // syntax_comment - Foreground muted (official)
+        0x00BF_3989, // syntax_operator - Pink (official)
+    )
+}
 
 /// One Light - Clean minimal light theme (pairs with One Dark)
 /// Soft white backgrounds with subtle blue and green accents
@@ -712,21 +877,26 @@ mod tests {
             oxide(),
             aethel(),
             // Popular dark themes
+            github_dark(),
             dracula(),
             one_dark(),
             monokai(),
             night_owl(),
             synthwave_84(),
+            material_palenight(),
+            min_dark(),
             // Modern dark themes
             tokyo_night(),
             catppuccin_mocha(),
             rose_pine(),
+            poimandres(),
             // Nature/atmospheric dark themes
             nord(),
             gruvbox(),
             everforest(),
             ayu_dark(),
             // Light themes
+            github_light(),
             gruvbox_light(),
             catppuccin_latte(),
             rose_pine_dawn(),
@@ -748,21 +918,26 @@ mod tests {
         let _ = oxide();
         let _ = aethel();
         // Popular dark themes
+        let _ = github_dark();
         let _ = dracula();
         let _ = one_dark();
         let _ = monokai();
         let _ = night_owl();
         let _ = synthwave_84();
+        let _ = material_palenight();
+        let _ = min_dark();
         // Modern dark themes
         let _ = tokyo_night();
         let _ = catppuccin_mocha();
         let _ = rose_pine();
+        let _ = poimandres();
         // Nature/atmospheric dark themes
         let _ = nord();
         let _ = gruvbox();
         let _ = everforest();
         let _ = ayu_dark();
         // Light themes
+        let _ = github_light();
         let _ = gruvbox_light();
         let _ = catppuccin_latte();
         let _ = rose_pine_dawn();
