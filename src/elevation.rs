@@ -87,6 +87,44 @@ pub enum ElevationError {
     Io(#[from] io::Error),
 }
 
+/// Checks if a polkit authentication agent is running
+///
+/// This function detects GUI authentication agents by searching for processes
+/// with "polkit" in their name, excluding the daemon and terminal-only agents.
+///
+/// # Returns
+///
+/// `true` if a GUI polkit agent is running, `false` otherwise
+///
+/// # Detected Agents
+///
+/// - polkit-gnome-authentication-agent-1
+/// - polkit-kde-authentication-agent-1
+/// - lxqt-policykit-agent
+/// - And all other standard GUI agents
+pub fn is_polkit_agent_running() -> bool {
+    std::process::Command::new("pgrep")
+        .arg("-a") // Show full command line
+        .arg("polkit")
+        .output()
+        .map(|output| {
+            if !output.status.success() {
+                return false;
+            }
+
+            let output_str = String::from_utf8_lossy(&output.stdout);
+
+            for line in output_str.lines() {
+                // Skip daemon and terminal-only agent
+                if !line.contains("polkitd") && !line.contains("pkttyagent") {
+                    return true;
+                }
+            }
+            false
+        })
+        .unwrap_or(false)
+}
+
 /// Checks if a binary exists in PATH
 ///
 /// # Arguments

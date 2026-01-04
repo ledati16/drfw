@@ -2340,6 +2340,16 @@ impl State {
             return Task::none();
         }
 
+        // Check if polkit authentication agent is running
+        if !crate::elevation::is_polkit_agent_running() {
+            self.push_banner(
+                "No polkit agent running. Install and start an authentication agent.",
+                BannerSeverity::Error,
+                10,
+            );
+            return Task::none();
+        }
+
         self.status = AppStatus::Verifying;
         let nft_json = self.ruleset.to_nftables_json();
 
