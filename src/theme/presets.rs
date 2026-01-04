@@ -208,10 +208,10 @@ pub fn monokai() -> AppTheme {
         0x0036_3731, // bg_surface - Lighter
         0x003E_3D32, // bg_elevated - Even lighter
         0x0049_483E, // bg_hover - Selection
-        0x0075_715E, // bg_active - Comment
+        0x0088_846F, // bg_active - Comment (official)
         0x00F8_F8F2, // fg_primary - Foreground
         0x00E6_E6E0, // fg_secondary - Slightly muted
-        0x0075_715E, // fg_muted - Comment
+        0x0088_846F, // fg_muted - Comment (official)
         0x0027_2822, // fg_on_accent - Dark on light
         0x0066_D9EF, // accent - Blue
         0x0076_E9FF, // accent_hover - Lighter blue
@@ -226,7 +226,7 @@ pub fn monokai() -> AppTheme {
         0x0066_D9EF, // syntax_type - Blue
         0x00E6_DB74, // syntax_string - Yellow
         0x00AE_81FF, // syntax_number - Purple
-        0x0075_715E, // syntax_comment - Comment
+        0x0088_846F, // syntax_comment - Comment (official)
         0x00FD_971F, // syntax_operator - Orange
     )
 }
@@ -236,10 +236,10 @@ pub fn monokai() -> AppTheme {
 pub fn everforest() -> AppTheme {
     AppTheme::from_hex(
         "Everforest",
-        0x002B_3339, // bg_base - bg0
+        0x002D_353B, // bg_base - bg0 (official)
         0x0023_2A2E, // bg_sidebar - bg_dim
-        0x0032_3C41, // bg_surface - bg1
-        0x003A_454A, // bg_elevated - bg2
+        0x0034_3F44, // bg_surface - bg1 (official)
+        0x003D_484D, // bg_elevated - bg2 (official)
         0x0040_4C51, // bg_hover - bg3
         0x004F_585E, // bg_active - bg4
         0x00D3_C6AA, // fg_primary - fg
@@ -275,7 +275,7 @@ pub fn tokyo_night() -> AppTheme {
         0x002F_3549, // bg_elevated - bg_highlight
         0x003B_4261, // bg_hover - Lighter
         0x0056_5F89, // bg_active - fg_dark
-        0x00C0_CAF5, // fg_primary - Foreground
+        0x00A9_B1D6, // fg_primary - Foreground (official)
         0x00A9_B1D6, // fg_secondary - fg_dark
         0x0056_5F89, // fg_muted - Very muted
         0x001A_1B26, // fg_on_accent - Dark on light
@@ -283,7 +283,7 @@ pub fn tokyo_night() -> AppTheme {
         0x008A_B4F8, // accent_hover - Lighter blue
         0x009E_CE6A, // success - Green
         0x00E0_AF68, // warning - Yellow
-        0x00F7_768E, // danger - Red
+        0x00DB_4B4B, // danger - Red (official, was pink)
         0x007D_CFFF, // info - Cyan
         0x003B_4261, // border - Lighter bg
         0x007A_A2F7, // border_strong - Blue
@@ -368,8 +368,8 @@ pub fn one_dark() -> AppTheme {
 pub fn ayu_dark() -> AppTheme {
     AppTheme::from_hex(
         "Ayu Dark",
-        0x000A_0E14, // bg_base - Deep space background
-        0x0001_060E, // bg_sidebar - Darker sidebar
+        0x000F_1419, // bg_base - Deep space background (official)
+        0x0001_0B10, // bg_sidebar - Darker sidebar (recalculated)
         0x000D_1016, // bg_surface - Card background
         0x0012_151C, // bg_elevated - Elevated elements
         0x0018_1D24, // bg_hover - Hover state
@@ -387,7 +387,7 @@ pub fn ayu_dark() -> AppTheme {
         0x0015_1A1F, // border - Subtle border
         0x00FF_B454, // border_strong - Orange border
         0x0012_151C, // divider - Match surface
-        0x00FF_AA33, // syntax_keyword - Bright orange
+        0x00FF_8F40, // syntax_keyword - Bright orange (official)
         0x0073_D0FF, // syntax_type - Sky blue
         0x00AA_D94C, // syntax_string - Fresh green
         0x00FF_AA33, // syntax_number - Orange
@@ -408,24 +408,24 @@ pub fn rose_pine() -> AppTheme {
         0x002A_273F, // bg_hover - Hover state
         0x0035_3244, // bg_active - Active highlight
         0x00E0_DEF4, // fg_primary - Soft white text
-        0x009C_CED7, // fg_secondary - Muted cyan
+        0x009C_CFD8, // fg_secondary - Foam cyan (official)
         0x006E_6A86, // fg_muted - Pine gray
         0x0019_1724, // fg_on_accent - Dark on accent
-        0x00EB_BED3, // accent - Rose pink
+        0x00EB_BCBA, // accent - Rose pink (official)
         0x00F6_C177, // accent_hover - Golden rose
-        0x009C_CED7, // success - Soft cyan
+        0x009C_CFD8, // success - Foam cyan (official)
         0x00F6_C177, // warning - Gold
         0x00EB_6F92, // danger - Rose red
-        0x009C_CED7, // info - Cyan
+        0x009C_CFD8, // info - Foam cyan (official)
         0x002A_273F, // border - Subtle border
-        0x00EB_BED3, // border_strong - Rose border
+        0x00EB_BCBA, // border_strong - Rose border (official)
         0x001F_1D2E, // divider - Match surface
         0x00C4_A7E7, // syntax_keyword - Soft purple
-        0x009C_CED7, // syntax_type - Cyan
+        0x009C_CFD8, // syntax_type - Foam cyan (official)
         0x00F6_C177, // syntax_string - Gold
         0x00EA_9A97, // syntax_number - Coral
         0x006E_6A86, // syntax_comment - Muted gray
-        0x003E_8FB0, // syntax_operator - Teal
+        0x0031_748F, // syntax_operator - Pine teal (official)
     )
 }
 
@@ -436,7 +436,7 @@ pub fn catppuccin_latte() -> AppTheme {
         "Catppuccin Latte",
         0x00EF_F1F5, // bg_base - Soft latte background
         0x00E6_E9EF, // bg_sidebar - Darker latte
-        0x00DC_E0E8, // bg_surface - Card surface
+        0x00CC_D0DA, // bg_surface - Surface0 (official)
         0x00CC_D0DA, // bg_elevated - Elevated elements
         0x00BA_BDC4, // bg_hover - Hover state
         0x00AC_B0BE, // bg_active - Active selection
@@ -447,12 +447,12 @@ pub fn catppuccin_latte() -> AppTheme {
         0x001E_66F5, // accent - Sapphire blue
         0x0040_79F7, // accent_hover - Lighter blue
         0x0040_A02B, // success - Green
-        0x00DF_8E1D, // warning - Peach
+        0x00FE_640B, // warning - Peach (official)
         0x00D2_0F39, // danger - Red
         0x0020_9FB5, // info - Teal
         0x00CC_D0DA, // border - Subtle border
         0x001E_66F5, // border_strong - Blue border
-        0x00DC_E0E8, // divider - Match surface
+        0x00CC_D0DA, // divider - Match surface (official)
         0x0088_39EF, // syntax_keyword - Mauve
         0x001E_66F5, // syntax_type - Sapphire
         0x0040_A02B, // syntax_string - Green
@@ -514,14 +514,14 @@ pub fn night_owl() -> AppTheme {
         0x0089_A4BB, // fg_secondary - Medium gray-blue
         0x005F_7E97, // fg_muted - Muted blue
         0x0001_1627, // fg_on_accent - Dark on accent
-        0x007E_57C2, // accent - Purple
+        0x00C7_92EA, // accent - Magenta (official)
         0x006A_4CAA, // accent_hover - Darker purple
         0x00C5_E478, // success - Green-yellow
         0x00F7_8C6C, // warning - Orange
-        0x00FF_5874, // danger - Pink-red
+        0x00EF_5350, // danger - Red (official, was pink)
         0x0082_AAFF, // info - Light blue
         0x0011_2A42, // border - Match surface
-        0x007E_57C2, // border_strong - Purple border
+        0x00C7_92EA, // border_strong - Magenta border (official)
         0x0011_2A42, // divider - Match surface
         0x00C7_92EA, // syntax_keyword - Magenta
         0x0082_AAFF, // syntax_type - Light blue
@@ -543,23 +543,23 @@ pub fn synthwave_84() -> AppTheme {
         0x0041_3356, // bg_elevated - Lighter purple
         0x004E_4061, // bg_hover - Hover purple
         0x005B_4D6C, // bg_active - Active purple
-        0x00F9_F9F9, // fg_primary - Almost white
+        0x00FF_FFFF, // fg_primary - White (official)
         0x00C4_C0D0, // fg_secondary - Light purple-gray
         0x008A_85A0, // fg_muted - Muted purple
         0x0026_2335, // fg_on_accent - Dark on accent
-        0x00FF_007C, // accent - Neon pink
+        0x00FF_7EDB, // accent - Neon pink/magenta (official)
         0x00E0_0066, // accent_hover - Darker pink
-        0x0072_F1B8, // success - Neon cyan
-        0x00FF_E261, // warning - Neon yellow
+        0x0003_EDF9, // success - Neon cyan (official)
+        0x00FE_DE5D, // warning - Neon yellow (official)
         0x00FE_4450, // danger - Neon red
-        0x0036_F9F6, // info - Bright cyan
+        0x0003_EDF9, // info - Bright cyan (official)
         0x0034_294A, // border - Match surface
-        0x00FF_007C, // border_strong - Neon pink
+        0x00FF_7EDB, // border_strong - Neon pink (official)
         0x0034_294A, // divider - Match surface
         0x00FF_7EDB, // syntax_keyword - Pink
-        0x0036_F9F6, // syntax_type - Cyan
-        0x00FF_E261, // syntax_string - Yellow
-        0x00F9_7E72, // syntax_number - Orange-pink
+        0x0003_EDF9, // syntax_type - Cyan (official)
+        0x00FE_DE5D, // syntax_string - Yellow (official)
+        0x00FF_8B39, // syntax_number - Orange (official)
         0x006D_6D6D, // syntax_comment - Gray
         0x00FF_7EDB, // syntax_operator - Pink
     )
@@ -582,7 +582,7 @@ pub fn one_light() -> AppTheme {
         0x00CA_CACA, // bg_active - Active gray
         0x0038_3A42, // fg_primary - Dark gray
         0x006A_6C75, // fg_secondary - Medium gray
-        0x009C_9EA6, // fg_muted - Light gray
+        0x00A0_A1A7, // fg_muted - Comment gray (official)
         0x00FA_FAFA, // fg_on_accent - Light on accent
         0x0040_78F2, // accent - Blue
         0x0030_68E0, // accent_hover - Darker blue
@@ -642,11 +642,11 @@ pub fn rose_pine_dawn() -> AppTheme {
         "Rosé Pine Dawn",
         0x00FA_F4ED, // bg_base - Warm cream
         0x00F2_E9E1, // bg_sidebar - Slightly darker cream
-        0x00FF_F9F3, // bg_surface - Lighter cream
-        0x00EC_DFCE, // bg_elevated - Warm tan
+        0x00FF_FAF3, // bg_surface - Lighter cream (official)
+        0x00F2_E9E1, // bg_elevated - Overlay (official)
         0x00E0_D3C2, // bg_hover - Darker tan
         0x00D4_C7B6, // bg_active - Active tan
-        0x005F_5695, // fg_primary - Deep purple-gray
+        0x0057_5279, // fg_primary - Text (official)
         0x0079_7593, // fg_secondary - Medium purple-gray
         0x009B_9099, // fg_muted - Light purple-gray
         0x00FA_F4ED, // fg_on_accent - Light on accent
@@ -656,9 +656,9 @@ pub fn rose_pine_dawn() -> AppTheme {
         0x00EA_9D34, // warning - Gold
         0x00B4_637A, // danger - Muted red
         0x0090_7AA9, // info - Purple
-        0x00EC_DFCE, // border - Warm border
+        0x00F2_E9E1, // border - Overlay (official)
         0x00D7_827E, // border_strong - Rose border
-        0x00EC_DFCE, // divider - Match elevated
+        0x00F2_E9E1, // divider - Match elevated (official)
         0x00B4_637A, // syntax_keyword - Muted red
         0x0056_949F, // syntax_type - Pine
         0x00EA_9D34, // syntax_string - Gold
@@ -673,7 +673,7 @@ pub fn rose_pine_dawn() -> AppTheme {
 pub fn everforest_light() -> AppTheme {
     AppTheme::from_hex(
         "Everforest Light",
-        0x00FF_F9E8, // bg_base - Warm cream
+        0x00FD_F6E3, // bg_base - Warm cream (official)
         0x00F8_F0DC, // bg_sidebar - Light tan
         0x00FF_FFEF, // bg_surface - Lighter cream
         0x00F0_E5D1, // bg_elevated - Warm beige
