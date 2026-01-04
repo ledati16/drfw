@@ -107,11 +107,21 @@ state.mark_profile_dirty();
 **Refactoring Checklist:**
 1. Read original file completely before splitting
 2. Verify all methods accounted for (count functions before/after)
-3. Check for internal method calls that might be duplicated
-4. Run `cargo test` and `cargo clippy` after each phase
-5. Add unit tests for extracted handlers
+3. **Line-by-line verification of inline handlers:**
+   ```bash
+   # For EVERY inline handler in update():
+   git show COMMIT:path/to/file.rs | grep "Message::HandlerName" -A 10 > /tmp/original
+   # Compare with extracted handler:
+   diff -u /tmp/original new/handlers/file.rs
+   ```
+4. Check for internal method calls that might be duplicated
+5. Run `cargo test` and `cargo clippy` after each phase
+6. **Functional testing:** Test affected UI features (search, filters, modals)
+7. Add unit tests for extracted handlers
 
-**Example:** `app/mod.rs` refactor (2026-01-04) split 2,940 lines into 8 handler modules with zero bugs by following this pattern.
+**Critical:** Counting functions ≠ verifying logic. Must diff multi-statement inline handlers line-by-line.
+
+**Example:** `app/mod.rs` refactor (2026-01-04) split 2,940 lines into 8 handler modules. Initial review found all 38 methods but missed 4 logic bugs in inline handlers (font search, tag filter, form cancel, drag state) due to pattern-matching instead of line-by-line verification. Bugs caught by functional testing, fixed in commit 945ba6d.
 
 ---
 
