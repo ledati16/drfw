@@ -667,6 +667,7 @@ pub enum Message {
     ConfirmProfileSwitch,
     DiscardProfileSwitch,
     CancelProfileSwitch,
+    ProfileSwitchAfterSave(String),
     ProfileListUpdated(Vec<String>),
     /// Periodic tick to prune expired banners
     PruneBanners,
@@ -1836,6 +1837,10 @@ impl State {
                     self.update_cached_text();
                 }
 
+                // Update cached disk profile to reflect what we're about to save
+                // This prevents false "dirty" detection when switching profiles
+                self.cached_disk_profile = Some(ruleset.clone());
+
                 self.active_profile_name = name;
                 self.mark_config_dirty();
                 if let Some(mgr) = &mut self.profile_manager {
@@ -2028,11 +2033,14 @@ impl State {
                     let profile_name = self.active_profile_name.clone();
                     let ruleset = self.ruleset.clone();
 
+                    // Update cached disk profile before saving to avoid false dirty detection
+                    self.cached_disk_profile = Some(ruleset.clone());
+
                     return Task::perform(
                         async move {
                             crate::core::profiles::save_profile(&profile_name, &ruleset).await
                         },
-                        move |_result| Message::ProfileSelected(name.clone()),
+                        move |_result| Message::ProfileSwitchAfterSave(name.clone()),
                     );
                 }
             }
@@ -2043,6 +2051,11 @@ impl State {
             }
             Message::CancelProfileSwitch => {
                 self.pending_profile_switch = None;
+            }
+            Message::ProfileSwitchAfterSave(name) => {
+                // Directly perform switch without checking dirty flag
+                // (we just saved, so cached_disk_profile is already updated)
+                return self.perform_profile_switch(name);
             }
             Message::PruneBanners => {
                 self.prune_expired_banners();
