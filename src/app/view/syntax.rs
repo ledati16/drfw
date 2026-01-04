@@ -124,7 +124,6 @@ pub fn view_from_cached_diff_tokens<'a>(
     lines
 }
 
-
 /// Phase 1 Optimization: Build widgets from pre-tokenized NFT (cached in State)
 /// Uses `keyed_column` for efficient widget reconciliation during resize
 pub fn view_from_cached_nft_tokens<'a>(

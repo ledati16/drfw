@@ -162,7 +162,7 @@ pub fn view_profile_manager<'a>(
                                 .padding(6)
                                 .style(button::text)
                         } else {
-                            button(text("").size(14))  // Placeholder for alignment
+                            button(text("").size(14)) // Placeholder for alignment
                                 .style(button::text)
                         },
                     ]
@@ -194,19 +194,17 @@ pub fn view_profile_manager<'a>(
 
         // Wrap scrollable in bordered container
         container(
-            scrollable(
-                container(list).padding(Padding {
-                    top: 8.0,
-                    right: 8.0,
-                    bottom: 8.0,
-                    left: 8.0,
-                })
-            )
-            .spacing(0)  // Embedded mode prevents overlap, but adds tiny intrinsic space
+            scrollable(container(list).padding(Padding {
+                top: 8.0,
+                right: 8.0,
+                bottom: 8.0,
+                left: 8.0,
+            }))
+            .spacing(0) // Embedded mode prevents overlap, but adds tiny intrinsic space
             .style(move |_, status| {
                 use crate::app::ui_components::themed_scrollable;
                 themed_scrollable(theme, status)
-            })
+            }),
         )
         .height(Length::Fixed(300.0))
         .width(Length::Fill)
@@ -233,7 +231,8 @@ pub fn view_profile_manager<'a>(
             .style(move |_| section_header_container(theme)),
             profiles_list,
             if mgr.creating_new {
-                let is_valid_name = crate::core::profiles::validate_profile_name(&mgr.new_name_input).is_ok();
+                let is_valid_name =
+                    crate::core::profiles::validate_profile_name(&mgr.new_name_input).is_ok();
                 let save_button = if is_valid_name {
                     button(text("Save").size(12).font(state.font_regular))
                         .on_press(Message::SaveProfileAs(mgr.new_name_input.clone()))
@@ -269,22 +268,14 @@ pub fn view_profile_manager<'a>(
             } else {
                 container(
                     row![
-                        button(
-                            text("+ New from Current")
-                                .size(12)
-                                .font(state.font_regular),
-                        )
-                        .on_press(Message::StartCreatingNewProfile)
-                        .padding([8, 12])
-                        .style(move |_, status| primary_button(theme, status)),
-                        button(
-                            text("+ New Empty")
-                                .size(12)
-                                .font(state.font_regular),
-                        )
-                        .on_press(Message::CreateEmptyProfile)
-                        .padding([8, 12])
-                        .style(move |_, status| primary_button(theme, status)),
+                        button(text("+ New from Current").size(12).font(state.font_regular),)
+                            .on_press(Message::StartCreatingNewProfile)
+                            .padding([8, 12])
+                            .style(move |_, status| primary_button(theme, status)),
+                        button(text("+ New Empty").size(12).font(state.font_regular),)
+                            .on_press(Message::CreateEmptyProfile)
+                            .padding([8, 12])
+                            .style(move |_, status| primary_button(theme, status)),
                     ]
                     .spacing(8),
                 )
@@ -308,7 +299,7 @@ pub fn view_profile_manager<'a>(
         ]
         .spacing(16)
         .padding(24)
-        .width(Length::Fixed(550.0)),  // Balanced width: spacious for 20-char names + scrollbar clearance
+        .width(Length::Fixed(550.0)), // Balanced width: spacious for 20-char names + scrollbar clearance
     )
     .style(move |_| card_container(theme))
     .into()

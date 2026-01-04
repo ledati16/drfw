@@ -6,7 +6,6 @@ use crate::app::ui_components::{
 };
 use crate::app::{DiagnosticsFilter, Message, State};
 use crate::audit::{AuditEvent, EventType};
-use crate::utils::get_state_dir;
 use iced::widget::{button, column, container, pick_list, row, scrollable, space, text};
 use iced::{Alignment, Border, Element, Length, Padding};
 
@@ -35,10 +34,9 @@ pub fn format_audit_event<'a>(
                 event.error.as_deref().unwrap_or("Unknown error")
             ),
         ),
-        (EventType::RevertRules, true) => (
-            theme.warning,
-            "Reverted to previous ruleset".to_string(),
-        ),
+        (EventType::RevertRules, true) => {
+            (theme.warning, "Reverted to previous ruleset".to_string())
+        }
         (EventType::RevertRules, false) => (
             theme.danger,
             format!(
@@ -46,10 +44,9 @@ pub fn format_audit_event<'a>(
                 event.error.as_deref().unwrap_or("Unknown error")
             ),
         ),
-        (EventType::VerifyRules, true) => (
-            theme.success,
-            "Rules verified successfully".to_string(),
-        ),
+        (EventType::VerifyRules, true) => {
+            (theme.success, "Rules verified successfully".to_string())
+        }
         (EventType::VerifyRules, false) => (
             theme.danger,
             format!(
@@ -161,14 +158,18 @@ pub fn format_audit_event<'a>(
             theme.warning,
             format!(
                 "Undid: {}",
-                event.details["description"].as_str().unwrap_or("unknown operation")
+                event.details["description"]
+                    .as_str()
+                    .unwrap_or("unknown operation")
             ),
         ),
         (EventType::Redone, _) => (
             theme.accent,
             format!(
                 "Redid: {}",
-                event.details["description"].as_str().unwrap_or("unknown operation")
+                event.details["description"]
+                    .as_str()
+                    .unwrap_or("unknown operation")
             ),
         ),
         (EventType::ExportCompleted, _) => (
@@ -182,10 +183,7 @@ pub fn format_audit_event<'a>(
     };
 
     row![
-        text(time)
-            .size(12)
-            .font(mono_font)
-            .color(theme.fg_muted),
+        text(time).size(12).font(mono_font).color(theme.fg_muted),
         container(text(""))
             .width(Length::Fixed(8.0))
             .height(Length::Fixed(8.0))
@@ -214,24 +212,9 @@ pub fn view_diagnostics_modal<'a>(
     regular_font: iced::Font,
     mono_font: iced::Font,
 ) -> Element<'a, Message> {
-    // Read and parse audit log entries
-    let audit_entries = std::fs::read_to_string(
-        get_state_dir()
-            .map(|mut p| {
-                p.push("audit.log");
-                p
-            })
-            .unwrap_or_default(),
-    )
-    .unwrap_or_default();
-
-    // Parse JSON Lines format and filter based on selection
-    let parsed_events: Vec<AuditEvent> = audit_entries
-        .lines()
-        .rev()
-        .take(100)
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
+    // Use cached audit entries (loaded asynchronously)
+    // Events are already parsed and in reverse order (most recent first)
+    let parsed_events: &[AuditEvent] = &state.cached_audit_entries;
 
     // Apply filter
     let filtered_events: Vec<&AuditEvent> = parsed_events

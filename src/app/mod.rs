@@ -223,6 +223,12 @@ pub struct State {
     pub active_profile_name: String,
     pub available_profiles: Vec<String>,
     pub pending_profile_switch: Option<String>,
+    // Audit log caching (Phase 1.1: Async diagnostics)
+    /// Cached audit log entries for diagnostics modal
+    /// Loaded asynchronously when modal opens, refreshed on demand
+    pub cached_audit_entries: Vec<crate::audit::AuditEvent>,
+    /// Tracks if audit log needs refresh (dirty flag)
+    pub audit_log_dirty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -611,6 +617,10 @@ pub enum Message {
     ConfirmServerMode,
     ToggleDiagnostics(bool),
     DiagnosticsFilterChanged(DiagnosticsFilter),
+    /// Audit log entries loaded asynchronously (Phase 1.1)
+    AuditEntriesLoaded(Vec<crate::audit::AuditEvent>),
+    /// Check if audit log needs refresh (auto-refresh subscription)
+    CheckAuditLogRefresh,
     ClearEventLog,
     OpenLogsFolder,
     ExportAsJson,
@@ -819,12 +829,43 @@ impl State {
             active_profile_name,
             available_profiles,
             pending_profile_switch: None,
+            cached_audit_entries: Vec::new(),
+            audit_log_dirty: true, // Load on first open
         };
 
         // Initialize all caches properly via centralized logic
         state.update_cached_text();
 
         (state, Task::none())
+    }
+
+    /// Loads audit log entries asynchronously
+    /// Returns parsed events, most recent first (reversed order)
+    async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
+        use tokio::io::AsyncBufReadExt;
+
+        let Some(mut path) = crate::utils::get_state_dir() else {
+            return Vec::new();
+        };
+        path.push("audit.log");
+
+        let Ok(file) = tokio::fs::File::open(&path).await else {
+            return Vec::new();
+        };
+
+        let reader = tokio::io::BufReader::new(file);
+        let mut lines = reader.lines();
+        let mut events = Vec::new();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Ok(event) = serde_json::from_str::<crate::audit::AuditEvent>(&line) {
+                events.push(event);
+            }
+        }
+
+        // Most recent first
+        events.reverse();
+        events
     }
 
     /// Add a banner to the notification queue (max 2 visible)
@@ -1292,6 +1333,7 @@ impl State {
                         crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs)
                             .await;
                     });
+                    self.audit_log_dirty = true;
                 }
             }
             Message::RevertClicked => return self.handle_revert_clicked(),
@@ -1302,6 +1344,7 @@ impl State {
                     BannerSeverity::Warning,
                     5,
                 );
+                self.audit_log_dirty = true;
             }
             Message::CountdownTick => return self.handle_countdown_tick(),
             Message::TabChanged(tab) => self.active_tab = tab,
@@ -1573,12 +1616,30 @@ impl State {
                 });
                 self.mark_profile_dirty();
             }
-            Message::ToggleDiagnostics(show) => self.show_diagnostics = show,
+            Message::ToggleDiagnostics(show) => {
+                self.show_diagnostics = show;
+
+                // Load audit log asynchronously if opening modal and cache is dirty
+                if show && self.audit_log_dirty {
+                    return Task::perform(Self::load_audit_entries(), Message::AuditEntriesLoaded);
+                }
+            }
             Message::DiagnosticsFilterChanged(filter) => self.diagnostics_filter = filter,
+            Message::AuditEntriesLoaded(entries) => {
+                self.cached_audit_entries = entries;
+                self.audit_log_dirty = false;
+            }
+            Message::CheckAuditLogRefresh => {
+                // Auto-refresh: only load if dirty (subscription fires every 100ms while modal open)
+                if self.audit_log_dirty {
+                    return Task::perform(Self::load_audit_entries(), Message::AuditEntriesLoaded);
+                }
+            }
             Message::ClearEventLog => {
                 if let Some(mut path) = crate::utils::get_state_dir() {
                     path.push("audit.log");
                     let _ = std::fs::remove_file(path);
+                    self.audit_log_dirty = true; // Refresh after clearing
                 }
             }
             Message::ToggleShortcutsHelp(show) => self.show_shortcuts_help = show,
@@ -1930,11 +1991,7 @@ impl State {
                 {
                     // Business logic validation: ensure at least one profile remains
                     if self.available_profiles.len() <= 1 {
-                        self.push_banner(
-                            "Cannot delete last profile",
-                            BannerSeverity::Error,
-                            6,
-                        );
+                        self.push_banner("Cannot delete last profile", BannerSeverity::Error, 6);
                         return Task::none();
                     }
 
@@ -2232,13 +2289,17 @@ impl State {
             let ports = rule.port_display.clone();
 
             if is_edit {
-                let old_rule = self
-                    .ruleset
-                    .rules
-                    .iter()
-                    .find(|r| r.id == rule.id)
-                    .unwrap()
-                    .clone();
+                // Safe pattern from CLAUDE.md Section 13
+                let Some(old_rule) = self.ruleset.rules.iter().find(|r| r.id == rule.id).cloned()
+                else {
+                    tracing::error!(
+                        "SaveRuleForm for non-existent rule ID: {}. This indicates a UI state desync bug.",
+                        rule.id
+                    );
+                    self.rule_form = None;
+                    self.form_errors = None;
+                    return Task::none();
+                };
                 let command = crate::command::EditRuleCommand {
                     old_rule,
                     new_rule: rule,
@@ -2490,6 +2551,9 @@ impl State {
                 5,
             );
         }
+
+        // Mark audit log dirty since apply operation logged to it
+        self.audit_log_dirty = true;
     }
 
     fn handle_revert_clicked(&mut self) -> Task<Message> {
@@ -2795,6 +2859,12 @@ impl State {
             // Slider logging debounce subscription
             if self.pending_slider_log.is_some() {
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckSliderLog)
+            } else {
+                iced::Subscription::none()
+            },
+            // Audit log auto-refresh when diagnostics modal is open
+            if self.show_diagnostics {
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckAuditLogRefresh)
             } else {
                 iced::Subscription::none()
             },
