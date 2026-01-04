@@ -157,6 +157,20 @@ pub fn format_audit_event<'a>(
                 event.details["direction"].as_str().unwrap_or("")
             ),
         ),
+        (EventType::Undone, _) => (
+            theme.warning,
+            format!(
+                "Undid: {}",
+                event.details["description"].as_str().unwrap_or("unknown operation")
+            ),
+        ),
+        (EventType::Redone, _) => (
+            theme.accent,
+            format!(
+                "Redid: {}",
+                event.details["description"].as_str().unwrap_or("unknown operation")
+            ),
+        ),
         (EventType::ExportCompleted, _) => (
             theme.success,
             format!(

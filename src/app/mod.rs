@@ -1412,17 +1412,20 @@ impl State {
                 self.schedule_slider_log(desc);
             }
             Message::ToggleEventLog(enabled) => {
-                self.enable_event_log = enabled;
-                // Log settings change (meta: logging that logging was enabled/disabled!)
-                // Use the NEW value of enabled since we just set it
+                // Log settings change BEFORE changing the value
+                // When disabling, we need to log with the OLD value (true) so it actually logs
+                let old_value = self.enable_event_log;
                 let desc = if enabled {
                     "Event logging enabled"
                 } else {
                     "Event logging disabled"
                 };
                 tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enabled, desc).await;
+                    // Use old_value when disabling (true), new value when enabling (true)
+                    // This ensures "disabled" message gets logged before turning off
+                    crate::audit::log_settings_saved(old_value || enabled, desc).await;
                 });
+                self.enable_event_log = enabled;
                 self.mark_config_dirty();
             }
             Message::ToggleStrictIcmp(enabled) => {
@@ -1587,12 +1590,22 @@ impl State {
                 if let Some(description) = self.command_history.undo(&mut self.ruleset) {
                     self.mark_profile_dirty();
                     tracing::info!("Undid: {}", description);
+                    let enable_event_log = self.enable_event_log;
+                    let desc = description.clone();
+                    tokio::spawn(async move {
+                        crate::audit::log_undone(enable_event_log, &desc).await;
+                    });
                 }
             }
             Message::Redo => {
                 if let Some(description) = self.command_history.redo(&mut self.ruleset) {
                     self.mark_profile_dirty();
                     tracing::info!("Redid: {}", description);
+                    let enable_event_log = self.enable_event_log;
+                    let desc = description.clone();
+                    tokio::spawn(async move {
+                        crate::audit::log_redone(enable_event_log, &desc).await;
+                    });
                 }
             }
             Message::ThemeChanged(choice) => {

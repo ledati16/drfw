@@ -38,6 +38,8 @@ pub enum EventType {
     RuleModified,
     RuleToggled,
     RulesReordered,
+    Undone,
+    Redone,
 
     // Data export
     ExportCompleted,
@@ -698,6 +700,60 @@ pub async fn log_export_completed(enable_event_log: bool, format: &str, path: &s
             serde_json::json!({
                 "format": format,
                 "path": path,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs an undo operation
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `description` - Description of what was undone
+pub async fn log_undone(enable_event_log: bool, description: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::Undone,
+            true,
+            serde_json::json!({
+                "description": description,
+            }),
+            None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a redo operation
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled
+/// * `description` - Description of what was redone
+pub async fn log_redone(enable_event_log: bool, description: &str) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::Redone,
+            true,
+            serde_json::json!({
+                "description": description,
             }),
             None,
         );
