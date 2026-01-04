@@ -1,7 +1,7 @@
 //! Modal dialogs (warnings and export)
 
 use crate::app::ui_components::{
-    card_button, card_container, danger_button, secondary_button, section_header_container,
+    card_container, danger_button, primary_button, secondary_button, section_header_container,
 };
 use crate::app::{Message, PendingWarning};
 use iced::widget::{button, column, container, row, space, text};
@@ -84,34 +84,34 @@ pub fn view_export_modal(
                         text("Export as JSON")
                             .size(14)
                             .font(regular_font)
-                            .color(theme.fg_primary),
+                            .color(theme.fg_on_accent),
                         text("Structured data format for automation and backup")
                             .size(11)
                             .font(regular_font)
-                            .color(theme.fg_muted),
+                            .color(theme.fg_on_accent),
                     ]
                     .spacing(4)
                     .padding(16)
                 )
                 .on_press(Message::ExportAsJson)
-                .style(move |_, status| card_button(theme, status))
+                .style(move |_, status| primary_button(theme, status))
                 .width(Length::Fill),
                 button(
                     column![
                         text("Export as nftables text")
                             .size(14)
                             .font(regular_font)
-                            .color(theme.fg_primary),
+                            .color(theme.fg_on_accent),
                         text("Human-readable .nft format for manual editing")
                             .size(11)
                             .font(regular_font)
-                            .color(theme.fg_muted),
+                            .color(theme.fg_on_accent),
                     ]
                     .spacing(4)
                     .padding(16)
                 )
                 .on_press(Message::ExportAsNft)
-                .style(move |_, status| card_button(theme, status))
+                .style(move |_, status| primary_button(theme, status))
                 .width(Length::Fill),
             ]
             .spacing(12),
@@ -129,8 +129,7 @@ pub fn view_export_modal(
             .align_y(Alignment::Center),
         ]
         .spacing(16)
-        .padding(24)
-        .align_x(Alignment::Center),
+        .padding(24),
     )
     .max_width(500)
     .style(move |_| card_container(theme))
