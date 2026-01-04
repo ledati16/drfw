@@ -253,18 +253,17 @@ pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), P
 }
 
 /// Deletes a profile.
-/// Protects the default profile from deletion to prevent the app from
-/// entering an invalid "no-profile" state.
+///
+/// # Business Logic Validation
+///
+/// This function only performs the file deletion. The caller is responsible for:
+/// - Ensuring this isn't the last profile (system must have ≥1 profile)
+/// - Ensuring this isn't the currently active profile (must switch first)
+/// - Updating application state after deletion
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking file I/O.
 pub async fn delete_profile(name: &str) -> Result<(), ProfileError> {
-    if name == DEFAULT_PROFILE_NAME {
-        return Err(ProfileError::InvalidName(
-            "Cannot delete default profile".into(),
-        ));
-    }
-
     let path = get_profile_path(name).await?;
     if tokio::fs::try_exists(&path).await? {
         tokio::fs::remove_file(path).await?;
@@ -274,18 +273,17 @@ pub async fn delete_profile(name: &str) -> Result<(), ProfileError> {
 
 /// Renames a profile.
 /// Ensures the new name is valid and doesn't conflict with existing profiles.
-/// Protects the default profile from being renamed to maintain system consistency.
+///
+/// # Business Logic Validation
+///
+/// The caller is responsible for:
+/// - Updating config if renaming the active profile
+/// - Updating UI state after rename
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking file I/O.
 pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), ProfileError> {
     validate_profile_name(new_name)?;
-
-    if old_name == DEFAULT_PROFILE_NAME {
-        return Err(ProfileError::InvalidName(
-            "Cannot rename default profile".into(),
-        ));
-    }
 
     let old_path = get_profile_path(old_name).await?;
     let new_path = get_profile_path(new_name).await?;
@@ -302,6 +300,36 @@ pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), Profil
         )),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Ensures at least one profile exists, creating a default if none found.
+///
+/// This is a defensive measure for:
+/// - First run (no profiles directory yet)
+/// - Manual deletion of all profiles
+/// - Filesystem corruption
+///
+/// If no profiles exist, creates "default" profile with default FirewallRuleset.
+///
+/// # Async
+/// Uses `tokio::fs` for non-blocking file I/O.
+pub async fn ensure_profile_exists() -> Result<(), ProfileError> {
+    let profiles = list_profiles().await?;
+
+    if profiles.is_empty() {
+        tracing::warn!("No profiles found, creating default profile");
+        save_profile(DEFAULT_PROFILE_NAME, &FirewallRuleset::default()).await?;
+    }
+
+    Ok(())
+}
+
+/// Synchronous wrapper for `ensure_profile_exists()` for use during startup initialization.
+///
+/// This blocks the current thread and should only be used in `State::new()` where
+/// async initialization isn't possible.
+pub fn ensure_profile_exists_blocking() -> Result<(), ProfileError> {
+    crate::utils::block_on_async(ensure_profile_exists())
 }
 
 /// Synchronous wrapper for `list_profiles()` for use during startup initialization.

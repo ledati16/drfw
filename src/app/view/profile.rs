@@ -155,7 +155,8 @@ pub fn view_profile_manager<'a>(
                         button(text("✎").size(14).color(theme.fg_muted))
                             .on_press(Message::RenameProfileRequested(name.clone()))
                             .style(button::text),
-                        if name != crate::core::profiles::DEFAULT_PROFILE_NAME {
+                        // Hide delete button for active profile or last remaining profile
+                        if !is_active && state.available_profiles.len() > 1 {
                             button(text("×").size(14).color(theme.fg_muted))
                                 .on_press(Message::DeleteProfileRequested(name.clone()))
                                 .padding(6)

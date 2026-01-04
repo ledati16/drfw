@@ -748,6 +748,12 @@ impl State {
         regular_font_choice.resolve(false);
         mono_font_choice.resolve(true);
 
+        // Startup guarantee: Ensure at least one profile exists
+        // Handles first run, manual deletion, or filesystem corruption
+        if let Err(e) = crate::core::profiles::ensure_profile_exists_blocking() {
+            tracing::error!("Failed to ensure profile exists: {}", e);
+        }
+
         let ruleset = crate::core::profiles::load_profile_blocking(&active_profile_name)
             .unwrap_or_else(|_| FirewallRuleset::default());
 
@@ -1932,6 +1938,26 @@ impl State {
                 if let Some(mgr) = &mut self.profile_manager
                     && let Some(name) = mgr.deleting_name.take()
                 {
+                    // Business logic validation: ensure at least one profile remains
+                    if self.available_profiles.len() <= 1 {
+                        self.push_banner(
+                            "Cannot delete last profile",
+                            BannerSeverity::Error,
+                            6,
+                        );
+                        return Task::none();
+                    }
+
+                    // Business logic validation: cannot delete active profile
+                    if name == self.active_profile_name {
+                        self.push_banner(
+                            "Cannot delete active profile - switch to another profile first",
+                            BannerSeverity::Error,
+                            8,
+                        );
+                        return Task::none();
+                    }
+
                     let enable_event_log = self.enable_event_log;
                     let deleted_name = name.clone();
                     return Task::perform(
