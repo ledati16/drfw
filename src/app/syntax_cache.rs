@@ -7,8 +7,6 @@ use iced::Color;
 use logos::Logos;
 use std::borrow::Cow;
 
-/// Average number of syntax tokens per line in JSON output (pre-allocation optimization)
-const AVG_JSON_TOKENS_PER_LINE: usize = 20;
 /// Average number of syntax tokens per line in nftables text output (pre-allocation optimization)
 const AVG_NFT_TOKENS_PER_LINE: usize = 15;
 
@@ -27,49 +25,12 @@ pub struct Token {
 pub enum TokenColor {
     Primary,       // Default text
     Keyword,       // Keywords
-    Type,          // Types, JSON keys
     String,        // String literals
     Number,        // Numbers
     Comment,       // Comments
-    Bracket,       // Brackets (theme.info)
-    LineNumber,    // Line numbers (gray) for JSON
-    LineNumberNft, // Line numbers (darker gray) for NFT
+    LineNumberNft, // Line numbers for NFT
     ActionAccept,  // Accept action (green, rendered bold)
     ActionDeny,    // Drop/Reject actions (red, rendered bold)
-}
-
-/// JSON lexer tokens (declarative DFA-based lexing via logos)
-#[derive(Logos, Debug, Clone, Copy, PartialEq)]
-enum JsonToken {
-    #[token("{")]
-    LBrace,
-    #[token("}")]
-    RBrace,
-    #[token("[")]
-    LBracket,
-    #[token("]")]
-    RBracket,
-    #[token(":")]
-    Colon,
-    #[token(",")]
-    Comma,
-
-    #[regex(r#""([^"\\]|\\.)*""#)]
-    String,
-
-    #[regex(r"-?\d+(\.\d+)?([eE][+-]?\d+)?")]
-    Number,
-
-    #[token("true")]
-    True,
-    #[token("false")]
-    False,
-    #[token("null")]
-    Null,
-
-    // Whitespace (must be preserved for display)
-    #[regex(r"[ \t]+")]
-    Whitespace,
 }
 
 /// Nftables lexer tokens (declarative DFA-based lexing via logos)
@@ -314,153 +275,6 @@ pub struct HighlightedLine {
     pub formatted_line_number_json: String,
     /// Pre-formatted line number for NFT view ("{:4}" format) - computed once, not every frame
     pub formatted_line_number_nft: String,
-}
-
-/// Cached syntax highlighting for JSON
-pub fn tokenize_json(content: &str) -> Vec<HighlightedLine> {
-    content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| {
-            let trimmed = line.trim_start();
-            let indent = line.len().saturating_sub(trimmed.len()).min(32);
-            let tokens = parse_json_line(trimmed);
-            let line_number = i + 1;
-
-            HighlightedLine {
-                line_number,
-                indent,
-                tokens,
-                formatted_line_number_json: format!("{line_number:3} "),
-                formatted_line_number_nft: format!("{line_number:4}"),
-            }
-        })
-        .collect()
-}
-
-fn parse_json_line(line: &str) -> Vec<Token> {
-    let mut tokens = Vec::with_capacity(AVG_JSON_TOKENS_PER_LINE);
-    let mut lex = JsonToken::lexer(line);
-
-    while let Some(token_result) = lex.next() {
-        let Ok(token) = token_result else {
-            // Skip invalid tokens
-            continue;
-        };
-
-        let span = lex.span();
-        let span_end = span.end; // Store end before span is moved
-        let text = &line[span];
-
-        match token {
-            JsonToken::String => {
-                // Look ahead to see if next non-whitespace token is a colon
-                let remainder = &line[span_end..];
-                let is_key = remainder.trim_start().starts_with(':');
-
-                tokens.push(Token {
-                    text: Cow::Owned(text.to_string()),
-                    color: if is_key {
-                        TokenColor::Type // JSON key
-                    } else {
-                        TokenColor::String // JSON value
-                    },
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::Number => {
-                tokens.push(Token {
-                    text: Cow::Owned(text.to_string()),
-                    color: TokenColor::Number,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::True => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("true"),
-                    color: TokenColor::Keyword,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::False => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("false"),
-                    color: TokenColor::Keyword,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::Null => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("null"),
-                    color: TokenColor::Keyword,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::LBrace => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("{"),
-                    color: TokenColor::Bracket,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::RBrace => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("}"),
-                    color: TokenColor::Bracket,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::LBracket => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("["),
-                    color: TokenColor::Bracket,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::RBracket => {
-                tokens.push(Token {
-                    text: Cow::Borrowed("]"),
-                    color: TokenColor::Bracket,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::Colon => {
-                tokens.push(Token {
-                    text: Cow::Borrowed(":"),
-                    color: TokenColor::Primary,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::Comma => {
-                tokens.push(Token {
-                    text: Cow::Borrowed(","),
-                    color: TokenColor::Primary,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            JsonToken::Whitespace => {
-                tokens.push(Token {
-                    text: Cow::Owned(text.to_string()),
-                    color: TokenColor::Primary,
-                    bold: false,
-                    italic: false,
-                });
-            }
-        }
-    }
-
-    tokens
 }
 
 /// Cached syntax highlighting for nftables
@@ -774,12 +588,10 @@ impl TokenColor {
         match self {
             TokenColor::Primary => theme.fg_primary,
             TokenColor::Keyword => theme.syntax_keyword,
-            TokenColor::Type => theme.syntax_type,
             TokenColor::String => theme.syntax_string,
             TokenColor::Number => theme.syntax_number,
             TokenColor::Comment => theme.syntax_comment,
-            TokenColor::Bracket => theme.info, // Brackets use info color (matches old code)
-            TokenColor::LineNumber | TokenColor::LineNumberNft => theme.fg_muted,
+            TokenColor::LineNumberNft => theme.fg_muted,
             TokenColor::ActionAccept => theme.success, // Green for accept (rendered bold)
             TokenColor::ActionDeny => theme.danger,    // Red for drop/reject (rendered bold)
         }

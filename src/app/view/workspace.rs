@@ -18,7 +18,6 @@ pub fn view_workspace<'a>(
     let nav_row = row![
         // Tab buttons - simple rounded buttons like Export/Diagnostics
         view_tab_button("Ruleset", WorkspaceTab::Nftables, state.active_tab, theme),
-        view_tab_button("JSON", WorkspaceTab::Json, state.active_tab, theme),
         view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
         container(row![]).width(Length::Fill),
         // Global Utility Tools
@@ -51,7 +50,6 @@ pub fn view_workspace<'a>(
         column![
             text(match state.active_tab {
                 WorkspaceTab::Nftables => "Firewall Ruleset",
-                WorkspaceTab::Json => "JSON Export",
                 WorkspaceTab::Settings => "Settings",
             })
             .size(20)
@@ -60,7 +58,6 @@ pub fn view_workspace<'a>(
             text(match state.active_tab {
                 WorkspaceTab::Nftables =>
                     "Current nftables configuration generated from your rules.",
-                WorkspaceTab::Json => "Low-level JSON representation for debugging or automation.",
                 WorkspaceTab::Settings =>
                     "Configure application appearance and advanced firewall security hardening.",
             })

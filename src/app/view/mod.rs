@@ -69,18 +69,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 .into()
             }
         }
-        WorkspaceTab::Json => {
-            // Phase 1: Use pre-tokenized cache (60-80% CPU savings)
-            container(syntax::view_from_cached_json_tokens(
-                &state.cached_json_tokens,
-                theme,
-                state.font_mono,
-                state.show_zebra_striping,
-                state.cached_json_width_px, // Dynamic width for JSON view
-            ))
-            .width(Length::Fill)
-            .into()
-        }
         WorkspaceTab::Settings => container(settings::view_settings(state))
             .width(Length::Fill)
             .into(),

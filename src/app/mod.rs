@@ -179,10 +179,8 @@ pub struct State {
     pub form_errors: Option<FormErrors>,
     pub interfaces_with_any: Vec<String>,
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
-    pub cached_json_tokens: Vec<syntax_cache::HighlightedLine>,
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>,
     pub cached_nft_width_px: f32,
-    pub cached_json_width_px: f32,
     pub cached_diff_width_px: f32,
     pub rule_search: String,
     pub rule_search_lowercase: String,
@@ -341,8 +339,6 @@ pub enum WorkspaceTab {
     #[default]
     #[strum(serialize = "nftables")]
     Nftables,
-    #[strum(serialize = "json")]
-    Json,
     #[strum(serialize = "settings")]
     Settings,
 }
@@ -783,10 +779,8 @@ impl State {
             form_errors: None,
             interfaces_with_any,
             cached_nft_tokens: Vec::new(),
-            cached_json_tokens: Vec::new(),
             cached_diff_tokens: None,
             cached_nft_width_px: 800.0,
-            cached_json_width_px: 800.0,
             cached_diff_width_px: 800.0,
             rule_search: String::new(),
             rule_search_lowercase: String::new(),
@@ -862,11 +856,8 @@ impl State {
         use std::collections::BTreeSet;
 
         let nft_text = self.ruleset.to_nft_text();
-        let json_text =
-            serde_json::to_string_pretty(&self.ruleset.to_nftables_json()).unwrap_or_default();
 
         self.cached_nft_tokens = syntax_cache::tokenize_nft(&nft_text);
-        self.cached_json_tokens = syntax_cache::tokenize_json(&json_text);
 
         self.cached_diff_tokens = if let Some(ref last) = self.last_applied_ruleset {
             let old_text = last.to_nft_text();
@@ -876,7 +867,6 @@ impl State {
         };
 
         self.cached_nft_width_px = Self::calculate_max_content_width(&self.cached_nft_tokens);
-        self.cached_json_width_px = Self::calculate_max_content_width(&self.cached_json_tokens);
         self.cached_diff_width_px = if let Some(ref diff_tokens) = self.cached_diff_tokens {
             let diff_lines: Vec<&syntax_cache::HighlightedLine> =
                 diff_tokens.iter().map(|(_, line)| line).collect();
