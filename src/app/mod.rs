@@ -1,9 +1,13 @@
 pub mod syntax_cache;
 pub mod ui_components;
+mod handlers;
 mod helpers;
 mod view;
 
-use helpers::{calculate_max_content_width, calculate_max_content_width_from_refs, fuzzy_filter_fonts, fuzzy_filter_themes, truncate_path_smart};
+use helpers::{
+    calculate_max_content_width, calculate_max_content_width_from_refs, fuzzy_filter_fonts,
+    fuzzy_filter_themes,
+};
 
 use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
@@ -12,7 +16,6 @@ use iced::widget::operation::focus;
 use iced::{Animation, Element, Task, animation};
 use std::sync::Arc;
 use std::time::Duration;
-use strum::IntoEnumIterator;
 
 /// In-app notification banner severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -564,6 +567,7 @@ pub enum Message {
     Noop,
 }
 
+#[allow(dead_code)]
 impl State {
     pub fn view(&self) -> Element<'_, Message> {
         view::view(self)
@@ -982,101 +986,35 @@ impl State {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::AddRuleClicked => {
-                self.rule_form = Some(RuleForm::default());
-                self.form_errors = None;
-            }
-            Message::EditRuleClicked(id) => self.handle_edit_clicked(id),
-            Message::CancelRuleForm => {
-                self.rule_form = None;
-                self.form_errors = None;
-                if self.status == AppStatus::AwaitingApply {
-                    self.status = AppStatus::Idle;
-                }
-            }
-            Message::SaveRuleForm => return self.handle_save_rule_form(),
-            Message::RuleFormLabelChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.label = s;
-                }
-            }
-            Message::RuleFormProtocolChanged(p) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.protocol = p;
-                }
-            }
-            Message::RuleFormPortStartChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.port_start = s;
-                }
-            }
-            Message::RuleFormPortEndChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.port_end = s;
-                }
-            }
-            Message::RuleFormSourceChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.source = s;
-                }
-            }
-            Message::RuleFormInterfaceChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.interface = s;
-                }
-            }
-            Message::RuleFormChainChanged(chain) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.chain = chain;
-                }
-            }
-            Message::RuleFormToggleAdvanced(show) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.show_advanced = show;
-                }
-            }
-            Message::RuleFormDestinationChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.destination = s;
-                }
-            }
-            Message::RuleFormActionChanged(action) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.action = action;
-                }
-            }
-            Message::RuleFormToggleRateLimit(enabled) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.rate_limit_enabled = enabled;
-                }
-            }
-            Message::RuleFormRateLimitCountChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.rate_limit_count = s;
-                }
-            }
-            Message::RuleFormRateLimitUnitChanged(unit) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.rate_limit_unit = unit;
-                }
-            }
-            Message::RuleFormConnectionLimitChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.connection_limit = s;
-                }
-            }
-            Message::RuleSearchChanged(s) => {
-                self.rule_search_lowercase = s.to_lowercase();
-                self.rule_search = s;
-                self.update_filter_cache();
-            }
-            Message::ToggleRuleEnabled(id) => return self.handle_toggle_rule(id),
-            Message::DeleteRuleRequested(id) => self.deleting_id = Some(id),
-            Message::CancelDelete => self.deleting_id = None,
-            Message::DeleteRule(id) => return self.handle_delete_rule(id),
-            Message::ApplyClicked => return self.handle_apply_clicked(),
-            Message::VerifyCompleted(result) => return self.handle_verify_completed(result),
-            Message::ProceedToApply => return self.handle_proceed_to_apply(),
+            // Rules domain
+            Message::AddRuleClicked => handlers::handle_add_rule_clicked(self),
+            Message::EditRuleClicked(id) => handlers::handle_edit_rule_clicked(self, id),
+            Message::CancelRuleForm => handlers::handle_cancel_rule_form(self),
+            Message::SaveRuleForm => return handlers::handle_save_rule_form(self),
+            Message::RuleFormLabelChanged(s) => handlers::handle_rule_form_label_changed(self, s),
+            Message::RuleFormProtocolChanged(p) => handlers::handle_rule_form_protocol_changed(self, p),
+            Message::RuleFormPortStartChanged(s) => handlers::handle_rule_form_port_start_changed(self, s),
+            Message::RuleFormPortEndChanged(s) => handlers::handle_rule_form_port_end_changed(self, s),
+            Message::RuleFormSourceChanged(s) => handlers::handle_rule_form_source_changed(self, s),
+            Message::RuleFormInterfaceChanged(s) => handlers::handle_rule_form_interface_changed(self, s),
+            Message::RuleFormChainChanged(chain) => handlers::handle_rule_form_chain_changed(self, chain),
+            Message::RuleFormToggleAdvanced(show) => handlers::handle_rule_form_toggle_advanced(self, show),
+            Message::RuleFormDestinationChanged(s) => handlers::handle_rule_form_destination_changed(self, s),
+            Message::RuleFormActionChanged(action) => handlers::handle_rule_form_action_changed(self, action),
+            Message::RuleFormToggleRateLimit(enabled) => handlers::handle_rule_form_toggle_rate_limit(self, enabled),
+            Message::RuleFormRateLimitCountChanged(s) => handlers::handle_rule_form_rate_limit_count_changed(self, s),
+            Message::RuleFormRateLimitUnitChanged(unit) => handlers::handle_rule_form_rate_limit_unit_changed(self, unit),
+            Message::RuleFormConnectionLimitChanged(s) => handlers::handle_rule_form_connection_limit_changed(self, s),
+            Message::RuleSearchChanged(s) => handlers::handle_rule_search_changed(self, s),
+            Message::ToggleRuleEnabled(id) => return handlers::handle_toggle_rule(self, id),
+            Message::DeleteRuleRequested(id) => handlers::handle_delete_rule_requested(self, id),
+            Message::CancelDelete => handlers::handle_cancel_delete(self),
+            Message::DeleteRule(id) => return handlers::handle_delete_rule(self, id),
+
+            // Apply domain
+            Message::ApplyClicked => return handlers::handle_apply_clicked(self),
+            Message::VerifyCompleted(result) => return handlers::handle_verify_completed(self, result),
+            Message::ProceedToApply => return handlers::handle_proceed_to_apply(self),
             Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
                 self.status = AppStatus::Idle;
 
@@ -1148,351 +1086,69 @@ impl State {
                     self.push_banner(&msg, BannerSeverity::Error, 8);
                 }
             }
-            Message::ApplyResult(Ok(snapshot)) => self.handle_apply_result(snapshot),
-            Message::ConfirmClicked => {
-                if matches!(self.status, AppStatus::PendingConfirmation { .. }) {
-                    self.status = AppStatus::Confirmed;
-                    self.push_banner(
-                        "Firewall rules have been saved and will persist.",
-                        BannerSeverity::Success,
-                        5,
-                    );
-                    // Log auto-revert confirmation
-                    let enable_event_log = self.enable_event_log;
-                    let timeout_secs = self.auto_revert_timeout_secs;
-                    return Task::perform(
-                        async move {
-                            crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs)
-                                .await;
-                        },
-                        |_| Message::AuditLogWritten,
-                    );
-                }
-            }
-            Message::RevertClicked => return self.handle_revert_clicked(),
-            Message::RevertResult(Ok(())) => {
-                self.status = AppStatus::Idle;
-                self.push_banner(
-                    "Firewall rules have been restored to previous state.",
-                    BannerSeverity::Warning,
-                    5,
-                );
-            }
-            Message::CountdownTick => return self.handle_countdown_tick(),
-            Message::TabChanged(tab) => self.active_tab = tab,
-            Message::ToggleExportModal(show) => {
-                self.show_export_modal = show;
-            }
-            Message::ExportAsJson => return self.handle_export_json(),
-            Message::ExportAsNft => return self.handle_export_nft(),
-            Message::ExportResult(Ok(path)) => {
-                self.show_export_modal = false;
-                let display_path = truncate_path_smart(&path, 50);
-                self.push_banner(
-                    format!("Rules exported to: {display_path}"),
-                    BannerSeverity::Success,
-                    5,
-                );
+            Message::ApplyResult(Ok(snapshot)) => handlers::handle_apply_result(self, snapshot),
+            Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),
+            Message::RevertClicked => return handlers::handle_revert_clicked(self),
+            Message::RevertResult(result) => handlers::handle_revert_result(self, result),
+            Message::CountdownTick => return handlers::handle_countdown_tick(self),
+            Message::SaveToSystemClicked => return handlers::handle_save_to_system(self),
+            Message::SaveToSystemResult(result) => handlers::handle_save_to_system_result(self, result),
 
-                // Log export completion
-                let enable_event_log = self.enable_event_log;
-                let path_clone = path.clone();
-                let format = if path.ends_with(".json") {
-                    "json"
-                } else {
-                    "nft"
-                };
-                return Task::perform(
-                    async move {
-                        crate::audit::log_export_completed(enable_event_log, format, &path_clone)
-                            .await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
-            }
-            Message::ExportResult(Err(e)) => {
-                self.show_export_modal = false;
-                let msg = if e.len() > 70 {
-                    format!("Export failed: {}...", &e[..67])
-                } else {
-                    format!("Export failed: {}", e)
-                };
-                self.push_banner(&msg, BannerSeverity::Error, 8);
-            }
-            Message::SaveToSystemClicked => return self.handle_save_to_system(),
-            Message::SaveToSystemResult(Ok(())) => {
-                self.push_banner(
-                    "Successfully saved to /etc/nftables.conf",
-                    BannerSeverity::Success,
-                    5,
-                );
-            }
-            Message::SaveToSystemResult(Err(e)) => {
-                let msg = if e.len() > 60 {
-                    format!("Save to system failed: {}...", &e[..52])
-                } else {
-                    format!("Save to system failed: {}", e)
-                };
-                self.push_banner(&msg, BannerSeverity::Error, 8);
-            }
+            // Export domain
+            Message::ToggleExportModal(show) => handlers::handle_toggle_export_modal(self, show),
+            Message::ExportAsJson => return handlers::handle_export_as_json(self),
+            Message::ExportAsNft => return handlers::handle_export_as_nft(self),
+            Message::ExportResult(result) => handlers::handle_export_result(self, result),
+
+            // UI state domain
+            Message::TabChanged(tab) => handlers::handle_tab_changed(self, tab),
             Message::EventOccurred(event) => return self.handle_event(event),
-            Message::ToggleDiff(enabled) => {
-                self.show_diff = enabled;
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = if enabled {
-                    "Diff view enabled"
-                } else {
-                    "Diff view disabled"
-                };
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
-            }
+
+            // Settings domain
+            Message::ToggleDiff(enabled) => return handlers::handle_toggle_diff(self, enabled),
             Message::ToggleZebraStriping(enabled) => {
-                self.show_zebra_striping = enabled;
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = if enabled {
-                    "Zebra striping enabled"
-                } else {
-                    "Zebra striping disabled"
-                };
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_toggle_zebra_striping(self, enabled)
             }
             Message::ToggleAutoRevert(enabled) => {
-                self.auto_revert_enabled = enabled;
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = if enabled {
-                    "Auto-revert enabled"
-                } else {
-                    "Auto-revert disabled"
-                };
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_toggle_auto_revert(self, enabled)
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
-                self.auto_revert_timeout_secs = timeout.clamp(5, 120);
-                self.mark_config_dirty();
-                // Schedule debounced logging - log after 2s of no changes
-                let desc = format!("Auto-revert timeout set to {}s", timeout);
-                self.schedule_slider_log(desc);
+                handlers::handle_auto_revert_timeout_changed(self, timeout)
             }
             Message::ToggleEventLog(enabled) => {
-                // Log settings change BEFORE changing the value
-                // When disabling, we need to log with the OLD value (true) so it actually logs
-                let old_value = self.enable_event_log;
-                self.enable_event_log = enabled;
-                self.mark_config_dirty();
-                let desc = if enabled {
-                    "Event logging enabled"
-                } else {
-                    "Event logging disabled"
-                };
-                return Task::perform(
-                    async move {
-                        // Use old_value when disabling (true), new value when enabling (true)
-                        // This ensures "disabled" message gets logged before turning off
-                        crate::audit::log_settings_saved(old_value || enabled, desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_toggle_event_log(self, enabled)
             }
             Message::ToggleStrictIcmp(enabled) => {
-                self.ruleset.advanced_security.strict_icmp = enabled;
-                self.update_cached_text();
-                self.mark_profile_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = if enabled {
-                    "Strict ICMP filtering enabled"
-                } else {
-                    "Strict ICMP filtering disabled"
-                };
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_toggle_strict_icmp(self, enabled)
             }
             Message::IcmpRateLimitChanged(rate) => {
-                self.ruleset.advanced_security.icmp_rate_limit = rate;
-                self.update_cached_text();
-                self.mark_profile_dirty();
-                // Schedule debounced logging - log after 2s of no changes
-                let desc = format!("ICMP rate limit set to {}/s", rate);
-                self.schedule_slider_log(desc);
+                handlers::handle_icmp_rate_limit_changed(self, rate)
             }
             Message::ToggleRpfRequested(enabled) => {
-                if enabled {
-                    self.pending_warning = Some(PendingWarning::EnableRpf);
-                } else {
-                    self.ruleset.advanced_security.enable_rpf = false;
-                    self.update_cached_text();
-                    self.mark_profile_dirty();
-                    let enable_event_log = self.enable_event_log;
-                    return Task::perform(
-                        async move {
-                            crate::audit::log_settings_saved(
-                                enable_event_log,
-                                "RPF (reverse path filtering) disabled",
-                            )
-                            .await;
-                        },
-                        |_| Message::AuditLogWritten,
-                    );
-                }
+                return handlers::handle_toggle_rpf_requested(self, enabled)
             }
-            Message::ConfirmEnableRpf => {
-                self.pending_warning = None;
-                self.ruleset.advanced_security.enable_rpf = true;
-                self.update_cached_text();
-                self.mark_profile_dirty();
-                let enable_event_log = self.enable_event_log;
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(
-                            enable_event_log,
-                            "RPF (reverse path filtering) enabled",
-                        )
-                        .await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
-            }
-            Message::CancelWarning => {
-                self.pending_warning = None;
-            }
+            Message::ConfirmEnableRpf => return handlers::handle_confirm_enable_rpf(self),
+            Message::CancelWarning => handlers::handle_cancel_warning(self),
             Message::ToggleDroppedLogging(enabled) => {
-                self.ruleset.advanced_security.log_dropped = enabled;
-                self.update_cached_text();
-                self.mark_profile_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = if enabled {
-                    "Dropped packet logging enabled"
-                } else {
-                    "Dropped packet logging disabled"
-                };
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_toggle_dropped_logging(self, enabled)
             }
-            Message::LogRateChanged(rate) => {
-                // Validate log rate (slider ensures 1-100 range, but check for warnings)
-                match crate::validators::validate_log_rate(rate) {
-                    Ok(Some(warning)) => {
-                        // Valid but with warning - still accept it
-                        tracing::debug!("Log rate {rate}/min: {warning}");
-                    }
-                    Ok(None) => {
-                        // Valid with no warnings
-                    }
-                    Err(e) => {
-                        // Should not happen with slider, but handle it
-                        tracing::warn!("Invalid log rate {rate}: {e}");
-                        return Task::none();
-                    }
-                }
-                self.ruleset.advanced_security.log_rate_per_minute = rate;
-                self.update_cached_text();
-                self.mark_profile_dirty();
-                // Schedule debounced logging - log after 2s of no changes
-                let desc = format!("Log rate limit set to {}/min", rate);
-                self.schedule_slider_log(desc);
-            }
-            Message::CheckSliderLog => {
-                return self.handle_check_slider_log();
-            }
+            Message::LogRateChanged(rate) => handlers::handle_log_rate_changed(self, rate),
+            Message::CheckSliderLog => return handlers::handle_check_slider_log(self),
             Message::LogPrefixChanged(prefix) => {
-                // Validate and sanitize log prefix
-                match crate::validators::validate_log_prefix(&prefix) {
-                    Ok(sanitized) => {
-                        self.ruleset.advanced_security.log_prefix = sanitized.clone();
-                        self.update_cached_text();
-                        self.mark_profile_dirty();
-                        let enable_event_log = self.enable_event_log;
-                        let desc = format!("Log prefix changed to '{}'", sanitized);
-                        return Task::perform(
-                            async move {
-                                crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                            },
-                            |_| Message::AuditLogWritten,
-                        );
-                    }
-                    Err(e) => {
-                        // Invalid prefix - don't save, just log the error
-                        tracing::warn!("Invalid log prefix '{prefix}': {e}");
-                        return Task::none();
-                    }
-                }
+                return handlers::handle_log_prefix_changed(self, prefix)
             }
             Message::ServerModeToggled(enabled) => {
-                if enabled {
-                    self.pending_warning = Some(PendingWarning::EnableServerMode);
-                } else {
-                    self.ruleset.advanced_security.egress_profile =
-                        crate::core::firewall::EgressProfile::Desktop;
-                    self.update_cached_text();
-                    self.mark_profile_dirty();
-                    let enable_event_log = self.enable_event_log;
-                    return Task::perform(
-                        async move {
-                            crate::audit::log_settings_saved(
-                                enable_event_log,
-                                "Server mode disabled (desktop profile)",
-                            )
-                            .await;
-                        },
-                        |_| Message::AuditLogWritten,
-                    );
-                }
+                return handlers::handle_server_mode_toggled(self, enabled)
             }
-            Message::ConfirmServerMode => {
-                self.pending_warning = None;
-                self.ruleset.advanced_security.egress_profile =
-                    crate::core::firewall::EgressProfile::Server;
-                self.update_cached_text();
-                self.mark_profile_dirty();
-                let enable_event_log = self.enable_event_log;
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(
-                            enable_event_log,
-                            "Server mode enabled (server profile)",
-                        )
-                        .await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
-            }
+            Message::ConfirmServerMode => return handlers::handle_confirm_server_mode(self),
             Message::ToggleDiagnostics(show) => {
-                self.show_diagnostics = show;
-
-                // Load audit log asynchronously if opening modal and cache is dirty
-                if show && self.audit_log_dirty {
-                    return Task::perform(Self::load_audit_entries(), Message::AuditEntriesLoaded);
-                }
+                return handlers::handle_toggle_diagnostics(self, show)
             }
-            Message::DiagnosticsFilterChanged(filter) => self.diagnostics_filter = filter,
+            Message::DiagnosticsFilterChanged(filter) => {
+                handlers::handle_diagnostics_filter_changed(self, filter)
+            }
             Message::AuditEntriesLoaded(entries) => {
-                self.cached_audit_entries = entries;
-                self.audit_log_dirty = false;
+                handlers::handle_audit_entries_loaded(self, entries)
             }
             Message::CheckAuditLogRefresh => {
                 // Auto-refresh: only load if dirty (subscription fires every 100ms while modal open)
@@ -1500,152 +1156,41 @@ impl State {
                     return Task::perform(Self::load_audit_entries(), Message::AuditEntriesLoaded);
                 }
             }
-            Message::AuditLogWritten => {
-                // Audit log write completed, mark cache dirty to trigger refresh
-                self.audit_log_dirty = true;
+            Message::AuditLogWritten => handlers::handle_audit_log_written(self),
+            Message::ClearEventLog => handlers::handle_clear_event_log(self),
+            Message::ToggleShortcutsHelp(show) => {
+                handlers::handle_toggle_shortcuts_help(self, show)
             }
-            Message::ClearEventLog => {
-                if let Some(mut path) = crate::utils::get_state_dir() {
-                    path.push("audit.log");
-                    let _ = std::fs::remove_file(path);
-                    self.audit_log_dirty = true; // Refresh after clearing
-                }
-            }
-            Message::ToggleShortcutsHelp(show) => self.show_shortcuts_help = show,
-            Message::Undo => {
-                if let Some(description) = self.command_history.undo(&mut self.ruleset) {
-                    self.mark_profile_dirty();
-                    tracing::info!("Undid: {}", description);
-                    let enable_event_log = self.enable_event_log;
-                    let desc = description.clone();
-                    return Task::perform(
-                        async move {
-                            crate::audit::log_undone(enable_event_log, &desc).await;
-                        },
-                        |_| Message::AuditLogWritten,
-                    );
-                }
-            }
-            Message::Redo => {
-                if let Some(description) = self.command_history.redo(&mut self.ruleset) {
-                    self.mark_profile_dirty();
-                    tracing::info!("Redid: {}", description);
-                    let enable_event_log = self.enable_event_log;
-                    let desc = description.clone();
-                    return Task::perform(
-                        async move {
-                            crate::audit::log_redone(enable_event_log, &desc).await;
-                        },
-                        |_| Message::AuditLogWritten,
-                    );
-                }
-            }
-            Message::ThemeChanged(choice) => {
-                self.current_theme = choice;
-                self.theme = choice.to_theme();
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = format!("Theme changed to {}", choice.name());
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
-            }
-            Message::OpenThemePicker => {
-                // Pre-compute all theme conversions once on modal open
-                let cached_themes: Vec<_> = crate::theme::ThemeChoice::iter()
-                    .map(|choice| (choice, choice.to_theme()))
-                    .collect();
-
-                self.theme_picker = Some(ThemePickerState {
-                    search: String::new(),
-                    search_lowercase: String::new(),
-                    filter: ThemeFilter::All,
-                    original_theme: self.current_theme,
-                    cached_themes,
-                });
-            }
+            Message::Undo => return handlers::handle_undo(self),
+            Message::Redo => return handlers::handle_redo(self),
+            Message::ThemeChanged(choice) => return handlers::handle_theme_changed(self, choice),
+            Message::OpenThemePicker => handlers::handle_open_theme_picker(self),
             Message::ThemePickerSearchChanged(search) => {
-                if let Some(picker) = &mut self.theme_picker {
-                    picker.search_lowercase = search.to_lowercase();
-                    picker.search = search;
-                }
+                handlers::handle_theme_picker_search_changed(self, search)
             }
             Message::ThemePickerFilterChanged(filter) => {
-                if let Some(picker) = &mut self.theme_picker {
-                    picker.filter = filter;
-                }
+                handlers::handle_theme_picker_filter_changed(self, filter)
             }
-            Message::ThemePreview(choice) => {
-                self.current_theme = choice;
-                self.theme = choice.to_theme();
+            Message::ThemePreview(choice) => handlers::handle_theme_preview(self, choice),
+            Message::ApplyTheme => return handlers::handle_apply_theme(self),
+            Message::CancelThemePicker => handlers::handle_cancel_theme_picker(self),
+            Message::ThemePreviewButtonClick => {
+                handlers::handle_theme_preview_button_click(self)
             }
-            Message::ApplyTheme => {
-                self.theme_picker = None;
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = format!("Theme changed to {}", self.current_theme.name());
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
-            }
-            Message::CancelThemePicker => {
-                if let Some(picker) = &self.theme_picker {
-                    self.current_theme = picker.original_theme;
-                    self.theme = picker.original_theme.to_theme();
-                }
-                self.theme_picker = None;
-            }
-            Message::ThemePreviewButtonClick => {}
             Message::RegularFontChanged(choice) => {
-                self.regular_font_choice = choice.clone();
-                self.font_regular = choice.to_font();
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = format!("UI font changed to {}", choice.name());
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_regular_font_changed(self, choice)
             }
             Message::MonoFontChanged(choice) => {
-                self.mono_font_choice = choice.clone();
-                self.font_mono = choice.to_font();
-                self.font_picker = None;
-                self.mark_config_dirty();
-                let enable_event_log = self.enable_event_log;
-                let desc = format!("Monospace font changed to {}", choice.name());
-                return Task::perform(
-                    async move {
-                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_mono_font_changed(self, choice)
             }
             Message::OpenFontPicker(target) => {
-                self.font_picker = Some(FontPickerState {
-                    target,
-                    search: String::new(),
-                    search_lowercase: String::new(),
-                });
+                handlers::handle_open_font_picker(self, target);
                 return focus(Id::from(view::FONT_SEARCH_INPUT_ID));
             }
             Message::FontPickerSearchChanged(search) => {
-                if let Some(picker) = &mut self.font_picker {
-                    picker.search_lowercase = search.to_lowercase();
-                    picker.search = search;
-                }
+                handlers::handle_font_picker_search_changed(self, search)
             }
-            Message::CloseFontPicker => {
-                self.font_picker = None;
-            }
+            Message::CloseFontPicker => handlers::handle_close_font_picker(self),
             Message::RuleFormTagInputChanged(s) => {
                 if let Some(f) = &mut self.rule_form {
                     f.tag_input = s;
@@ -1677,32 +1222,7 @@ impl State {
                 }
                 self.update_filter_cache();
             }
-            Message::OpenLogsFolder => {
-                if let Some(state_dir) = crate::utils::get_state_dir()
-                    && state_dir.exists()
-                    && state_dir.is_dir()
-                    && let Ok(canonical) = state_dir.canonicalize()
-                {
-                    #[cfg(target_os = "linux")]
-                    {
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg(canonical.as_os_str())
-                            .spawn();
-                    }
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = std::process::Command::new("open")
-                            .arg(canonical.as_os_str())
-                            .spawn();
-                    }
-                    #[cfg(target_os = "windows")]
-                    {
-                        let _ = std::process::Command::new("explorer")
-                            .arg(canonical.as_os_str())
-                            .spawn();
-                    }
-                }
-            }
+            Message::OpenLogsFolder => handlers::handle_open_logs_folder(),
             Message::RuleDragStart(id) => {
                 self.dragged_rule_id = Some(id);
                 self.hovered_drop_target_id = None;

@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_filter_fonts_empty_query() {
-        let fonts = vec![
+        let fonts = [
             FontChoice::SystemDefault,
             FontChoice::SystemMonospace,
         ];
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_filter_fonts_match() {
-        let fonts = vec![
+        let fonts = [
             FontChoice::SystemDefault,
             FontChoice::SystemMonospace,
         ];

@@ -688,6 +688,7 @@ pub async fn log_rules_reordered(enable_event_log: bool, label: &str, direction:
 /// * `enable_event_log` - Whether event logging is enabled
 /// * `format` - Export format ("nft" or "json")
 /// * `path` - Path where the file was exported
+#[allow(dead_code)]
 pub async fn log_export_completed(enable_event_log: bool, format: &str, path: &str) {
     if !enable_event_log {
         return;

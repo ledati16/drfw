@@ -113,6 +113,7 @@ pub fn list_interfaces() -> Vec<String> {
 ///     // User cancelled dialog
 /// }
 /// ```
+#[allow(dead_code)]
 pub fn pick_save_path(default_name: &str, extension: &str) -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
         .set_file_name(default_name)
