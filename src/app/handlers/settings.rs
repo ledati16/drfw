@@ -7,8 +7,6 @@
 //! - Theme and font selection
 //! - Debounced auto-save
 
-#![allow(dead_code)]
-
 use crate::app::{Message, PendingWarning, State};
 use iced::Task;
 

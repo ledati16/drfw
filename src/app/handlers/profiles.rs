@@ -7,8 +7,6 @@
 //! - Profile manager UI state
 //! - Profile list refreshing
 
-#![allow(dead_code)]
-
 use crate::app::{BannerSeverity, FirewallRuleset, Message, State};
 use crate::audit;
 use iced::Task;

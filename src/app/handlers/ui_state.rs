@@ -8,8 +8,6 @@
 //! - Undo/redo
 //! - Banner management
 
-#![allow(dead_code)]
-
 use crate::app::{DiagnosticsFilter, FontPickerTarget, Message, State, ThemeFilter, WorkspaceTab};
 use iced::Task;
 use strum::IntoEnumIterator;

@@ -7,8 +7,6 @@
 //! - Form field updates (with UI state validation)
 //! - Search and tag filtering
 
-#![allow(dead_code)]
-
 use crate::app::{Message, RuleForm, State};
 use crate::audit;
 use crate::command::{
@@ -294,7 +292,6 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
 }
 
 /// Handles drag-and-drop reordering of rules
-#[allow(dead_code)]
 pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<Message> {
     let Some(drag_id) = state.dragged_rule_id else {
         return Task::none();

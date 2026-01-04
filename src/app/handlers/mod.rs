@@ -16,7 +16,6 @@ pub mod test_utils;
 // Re-export all handlers for clean imports in app/mod.rs
 pub(crate) use apply::*;
 pub(crate) use export::*;
-#[allow(unused_imports)]
 pub(crate) use profiles::*;
 pub(crate) use rules::*;
 pub(crate) use settings::*;

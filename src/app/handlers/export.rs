@@ -7,8 +7,6 @@
 //! - Opening logs folder
 //! - Loading audit entries
 
-#![allow(dead_code)]
-
 use crate::app::{BannerSeverity, Message, State};
 use iced::Task;
 

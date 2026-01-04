@@ -1192,382 +1192,72 @@ impl State {
             }
             Message::CloseFontPicker => handlers::handle_close_font_picker(self),
             Message::RuleFormTagInputChanged(s) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.tag_input = s;
-                }
+                handlers::handle_rule_form_tag_input_changed(self, s)
             }
-            Message::RuleFormAddTag => {
-                if let Some(f) = &mut self.rule_form {
-                    let tag = crate::validators::sanitize_label(f.tag_input.trim());
-                    if !tag.is_empty()
-                        && !f.tags.contains(&tag)
-                        && tag.len() <= 20
-                        && f.tags.len() < 10
-                    {
-                        f.tags.push(tag);
-                        f.tag_input.clear();
-                    }
-                }
-            }
-            Message::RuleFormRemoveTag(tag) => {
-                if let Some(f) = &mut self.rule_form {
-                    f.tags.retain(|t| t != &tag);
-                }
-            }
-            Message::FilterByTag(tag) => {
-                self.filter_tag = tag;
-                if self.filter_tag.is_none() {
-                    self.rule_search.clear();
-                    self.rule_search_lowercase.clear();
-                }
-                self.update_filter_cache();
-            }
+            Message::RuleFormAddTag => handlers::handle_rule_form_add_tag(self),
+            Message::RuleFormRemoveTag(tag) => handlers::handle_rule_form_remove_tag(self, tag),
+            Message::FilterByTag(tag) => handlers::handle_filter_by_tag(self, tag),
             Message::OpenLogsFolder => handlers::handle_open_logs_folder(),
-            Message::RuleDragStart(id) => {
-                self.dragged_rule_id = Some(id);
-                self.hovered_drop_target_id = None;
-            }
-            Message::RuleDropped(target_id) => {
-                if let Some(dragged_id) = self.dragged_rule_id
-                    && dragged_id != target_id
-                    && let Some(old_index) =
-                        self.ruleset.rules.iter().position(|r| r.id == dragged_id)
-                    && let Some(new_index) =
-                        self.ruleset.rules.iter().position(|r| r.id == target_id)
-                {
-                    let label = self.ruleset.rules[old_index].label.clone();
-                    let direction = if new_index < old_index { "up" } else { "down" };
-                    let enable_event_log = self.enable_event_log;
-
-                    let command = crate::command::ReorderRuleCommand {
-                        rule_id: dragged_id,
-                        old_index,
-                        new_index,
-                    };
-                    self.command_history
-                        .execute(Box::new(command), &mut self.ruleset);
-                    self.mark_profile_dirty();
-                    self.dragged_rule_id = None;
-                    self.hovered_drop_target_id = None;
-
-                    // Log reorder event
-                    return Task::perform(
-                        async move {
-                            crate::audit::log_rules_reordered(enable_event_log, &label, direction)
-                                .await;
-                        },
-                        |_| Message::AuditLogWritten,
-                    );
-                }
-                self.dragged_rule_id = None;
-                self.hovered_drop_target_id = None;
-            }
-            Message::RuleHoverStart(id) => {
-                if self.dragged_rule_id.is_some() {
-                    self.hovered_drop_target_id = Some(id);
-                }
-            }
-            Message::RuleHoverEnd => {
-                self.hovered_drop_target_id = None;
-            }
-            Message::ProfileSelected(name) => {
-                return self.handle_switch_profile(name);
-            }
+            Message::RuleDragStart(id) => handlers::handle_rule_drag_start(self, id),
+            Message::RuleDropped(target_id) => return handlers::handle_rule_dropped(self, target_id),
+            Message::RuleHoverStart(id) => handlers::handle_rule_hover_start(self, id),
+            Message::RuleHoverEnd => handlers::handle_rule_hover_end(self),
+            Message::ProfileSelected(name) => return handlers::handle_profile_selected(self, name),
             Message::ProfileSwitched(name, ruleset) => {
-                let from_profile = self.active_profile_name.clone();
-                self.ruleset = ruleset.clone();
-                self.cached_disk_profile = Some(ruleset);
-                self.active_profile_name = name.clone();
-                self.command_history = crate::command::CommandHistory::default();
-                self.update_cached_text();
-                self.mark_config_dirty();
-
-                // Log profile switch
-                let enable_event_log = self.enable_event_log;
-                let to_profile = name;
-                return Task::perform(
-                    async move {
-                        crate::audit::log_profile_switched(
-                            enable_event_log,
-                            &from_profile,
-                            &to_profile,
-                        )
-                        .await;
-                    },
-                    |_| Message::AuditLogWritten,
-                );
+                return handlers::handle_profile_switched(self, name, ruleset)
             }
-            Message::SaveProfileAs(name) => {
-                let creating_empty = self
-                    .profile_manager
-                    .as_ref()
-                    .map(|mgr| mgr.creating_empty)
-                    .unwrap_or(false);
-
-                let ruleset = if creating_empty {
-                    FirewallRuleset::default()
-                } else {
-                    self.ruleset.clone()
-                };
-
-                let name_clone = name.clone();
-                let name_for_log = name.clone();
-                let enable_event_log = self.enable_event_log;
-
-                // Update current ruleset if creating empty profile
-                if creating_empty {
-                    self.ruleset = ruleset.clone();
-                    // Rebuild UI caches for new empty ruleset
-                    self.update_cached_text();
-                }
-
-                // Update cached disk profile to reflect what we're about to save
-                // This prevents false "dirty" detection when switching profiles
-                self.cached_disk_profile = Some(ruleset.clone());
-
-                self.active_profile_name = name;
-                self.mark_config_dirty();
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.creating_new = false;
-                    mgr.creating_empty = false;
-                    mgr.new_name_input.clear();
-                }
-
-                return Task::perform(
-                    async move {
-                        // Save profile then refresh list
-                        crate::core::profiles::save_profile(&name_clone, &ruleset).await?;
-                        crate::core::profiles::list_profiles().await
-                    },
-                    |result| match result {
-                        Ok(profiles) => Message::ProfileListUpdated(profiles),
-                        Err(e) => {
-                            eprintln!("Failed to save/list profiles: {e}");
-                            Message::Noop
-                        }
-                    },
-                )
-                .chain(Task::future(async move {
-                    // Log profile creation
-                    crate::audit::log_profile_created(enable_event_log, &name_for_log).await;
-                    Message::AuditLogWritten
-                }));
-            }
+            Message::SaveProfileAs(name) => return handlers::handle_save_profile_as(self, name),
             Message::ProfileListUpdated(profiles) => {
-                self.available_profiles = profiles;
+                handlers::handle_profile_list_updated(self, profiles)
             }
             Message::StartCreatingNewProfile => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.creating_new = true;
-                    mgr.creating_empty = false;
-                    mgr.new_name_input = String::new();
-                }
+                handlers::handle_start_creating_new_profile(self)
             }
-            Message::CreateEmptyProfile => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.creating_new = true;
-                    mgr.creating_empty = true;
-                    mgr.new_name_input = String::new();
-                }
-            }
+            Message::CreateEmptyProfile => handlers::handle_create_empty_profile(self),
             Message::NewProfileNameChanged(name) => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.new_name_input = name;
-                }
+                handlers::handle_new_profile_name_changed(self, name)
             }
             Message::CancelCreatingNewProfile => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.creating_new = false;
-                    mgr.creating_empty = false;
-                    mgr.new_name_input.clear();
-                }
+                handlers::handle_cancel_creating_new_profile(self)
             }
-            Message::OpenProfileManager => {
-                self.profile_manager = Some(ProfileManagerState {
-                    renaming_name: None,
-                    deleting_name: None,
-                    creating_new: false,
-                    creating_empty: false,
-                    new_name_input: String::new(),
-                });
-            }
-            Message::CloseProfileManager => {
-                self.profile_manager = None;
-            }
+            Message::OpenProfileManager => handlers::handle_open_profile_manager(self),
+            Message::CloseProfileManager => handlers::handle_close_profile_manager(self),
             Message::DeleteProfileRequested(name) => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.deleting_name = Some(name);
-                }
+                handlers::handle_delete_profile_requested(self, name)
             }
-            Message::ConfirmDeleteProfile => {
-                if let Some(mgr) = &mut self.profile_manager
-                    && let Some(name) = mgr.deleting_name.take()
-                {
-                    // Business logic validation: ensure at least one profile remains
-                    if self.available_profiles.len() <= 1 {
-                        self.push_banner("Cannot delete last profile", BannerSeverity::Error, 6);
-                        return Task::none();
-                    }
-
-                    // Business logic validation: cannot delete active profile
-                    if name == self.active_profile_name {
-                        self.push_banner(
-                            "Cannot delete active profile - switch to another profile first",
-                            BannerSeverity::Error,
-                            8,
-                        );
-                        return Task::none();
-                    }
-
-                    let enable_event_log = self.enable_event_log;
-                    let deleted_name = name.clone();
-                    return Task::perform(
-                        async move {
-                            crate::core::profiles::delete_profile(&name).await?;
-                            crate::core::profiles::list_profiles().await
-                        },
-                        move |result| match result {
-                            Ok(profiles) => Message::ProfileDeleted(Ok(profiles)),
-                            Err(e) => Message::ProfileDeleted(Err(format!(
-                                "Failed to delete profile: {e}"
-                            ))),
-                        },
-                    )
-                    .chain(Task::future(async move {
-                        // Log profile deletion
-                        crate::audit::log_profile_deleted(enable_event_log, &deleted_name).await;
-                        Message::AuditLogWritten
-                    }));
-                }
+            Message::ConfirmDeleteProfile => return handlers::handle_confirm_delete_profile(self),
+            Message::ProfileDeleted(result) => {
+                return handlers::handle_profile_deleted(self, result)
             }
-            Message::ProfileDeleted(result) => match result {
-                Ok(profiles) => {
-                    let old_active = self.active_profile_name.clone();
-                    self.available_profiles = profiles.clone();
-                    // If we deleted the active profile, switch to first available
-                    if !profiles.iter().any(|p| p == &old_active) {
-                        let next = profiles.first().cloned().unwrap_or_else(|| {
-                            crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()
-                        });
-                        return self.perform_profile_switch(next);
-                    }
-                }
-                Err(e) => {
-                    let msg = if e.len() > 55 {
-                        format!("Failed to delete profile: {}...", &e[..46])
-                    } else {
-                        format!("Failed to delete profile: {}", e)
-                    };
-                    self.push_banner(&msg, BannerSeverity::Error, 8);
-                }
-            },
-            Message::CancelDeleteProfile => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.deleting_name = None;
-                }
-            }
+            Message::CancelDeleteProfile => handlers::handle_cancel_delete_profile(self),
             Message::RenameProfileRequested(name) => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.renaming_name = Some((name.clone(), name));
-                }
+                handlers::handle_rename_profile_requested(self, name)
             }
             Message::ProfileNewNameChanged(new_name) => {
-                if let Some(mgr) = &mut self.profile_manager
-                    && let Some((old, _)) = &mgr.renaming_name
-                {
-                    mgr.renaming_name = Some((old.clone(), new_name));
-                }
+                handlers::handle_profile_new_name_changed(self, new_name)
             }
             Message::ConfirmRenameProfile => {
-                if let Some(mgr) = &mut self.profile_manager
-                    && let Some((old, new)) = mgr.renaming_name.take()
-                {
-                    let was_active = self.active_profile_name == old;
-                    if was_active {
-                        self.active_profile_name = new.clone();
-                        self.mark_config_dirty();
-                    }
-
-                    let enable_event_log = self.enable_event_log;
-                    let old_name = old.clone();
-                    let new_name = new.clone();
-
-                    return Task::perform(
-                        async move {
-                            crate::core::profiles::rename_profile(&old, &new).await?;
-                            crate::core::profiles::list_profiles().await
-                        },
-                        move |result| match result {
-                            Ok(profiles) => Message::ProfileRenamed(Ok(profiles)),
-                            Err(e) => Message::ProfileRenamed(Err(format!("Rename failed: {e}"))),
-                        },
-                    )
-                    .chain(Task::future(async move {
-                        // Log profile rename
-                        crate::audit::log_profile_renamed(enable_event_log, &old_name, &new_name)
-                            .await;
-                        Message::AuditLogWritten
-                    }));
-                }
+                return handlers::handle_confirm_rename_profile(self)
             }
-            Message::ProfileRenamed(result) => match result {
-                Ok(profiles) => {
-                    self.available_profiles = profiles;
-                }
-                Err(e) => {
-                    let msg = if e.len() > 55 {
-                        format!("Failed to rename profile: {}...", &e[..46])
-                    } else {
-                        format!("Failed to rename profile: {}", e)
-                    };
-                    self.push_banner(&msg, BannerSeverity::Error, 8);
-                }
-            },
-            Message::CancelRenameProfile => {
-                if let Some(mgr) = &mut self.profile_manager {
-                    mgr.renaming_name = None;
-                }
-            }
+            Message::ProfileRenamed(result) => handlers::handle_profile_renamed(self, result),
+            Message::CancelRenameProfile => handlers::handle_cancel_rename_profile(self),
             Message::ConfirmProfileSwitch => {
-                if let Some(name) = self.pending_profile_switch.take() {
-                    let profile_name = self.active_profile_name.clone();
-                    let ruleset = self.ruleset.clone();
-
-                    // Update cached disk profile before saving to avoid false dirty detection
-                    self.cached_disk_profile = Some(ruleset.clone());
-
-                    return Task::perform(
-                        async move {
-                            crate::core::profiles::save_profile(&profile_name, &ruleset).await
-                        },
-                        move |_result| Message::ProfileSwitchAfterSave(name.clone()),
-                    );
-                }
+                return handlers::handle_confirm_profile_switch(self)
             }
             Message::DiscardProfileSwitch => {
-                if let Some(name) = self.pending_profile_switch.take() {
-                    return self.perform_profile_switch(name);
-                }
+                return handlers::handle_discard_profile_switch(self)
             }
-            Message::CancelProfileSwitch => {
-                self.pending_profile_switch = None;
-            }
+            Message::CancelProfileSwitch => handlers::handle_cancel_profile_switch(self),
             Message::ProfileSwitchAfterSave(name) => {
-                // Directly perform switch without checking dirty flag
-                // (we just saved, so cached_disk_profile is already updated)
-                return self.perform_profile_switch(name);
+                return handlers::handle_profile_switch_after_save(self, name)
             }
-            Message::PruneBanners => {
-                self.prune_expired_banners();
+            Message::PruneBanners => handlers::handle_prune_banners(self),
+            Message::DismissBanner(index) => handlers::handle_dismiss_banner(self, index),
+            Message::CheckConfigSave => return handlers::handle_check_config_save(self),
+            Message::CheckProfileSave => return handlers::handle_check_profile_save(self),
+            Message::DiskProfileLoaded(profile) => {
+                handlers::handle_disk_profile_loaded(self, profile)
             }
-            Message::DismissBanner(index) => {
-                if index < self.banners.len() {
-                    self.banners.remove(index);
-                }
-            }
-            Message::CheckConfigSave => return self.handle_check_config_save(),
-            Message::CheckProfileSave => return self.handle_check_profile_save(),
-            Message::DiskProfileLoaded(profile) => self.handle_disk_profile_loaded(profile),
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
