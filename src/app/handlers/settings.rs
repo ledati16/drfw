@@ -99,7 +99,6 @@ pub(crate) fn handle_toggle_event_log(state: &mut State, enabled: bool) -> Task<
 /// Handles toggling strict ICMP mode
 pub(crate) fn handle_toggle_strict_icmp(state: &mut State, enabled: bool) -> Task<Message> {
     state.ruleset.advanced_security.strict_icmp = enabled;
-    state.update_cached_text();
     state.mark_profile_dirty();
     let enable_event_log = state.enable_event_log;
     let desc = if enabled {
@@ -118,7 +117,6 @@ pub(crate) fn handle_toggle_strict_icmp(state: &mut State, enabled: bool) -> Tas
 /// Handles ICMP rate limit change
 pub(crate) fn handle_icmp_rate_limit_changed(state: &mut State, rate: u32) {
     state.ruleset.advanced_security.icmp_rate_limit = rate;
-    state.update_cached_text();
     state.mark_profile_dirty();
     // Schedule debounced logging - log after 2s of no changes
     let desc = format!("ICMP rate limit set to {}/s", rate);
@@ -132,7 +130,6 @@ pub(crate) fn handle_toggle_rpf_requested(state: &mut State, enabled: bool) -> T
         Task::none()
     } else {
         state.ruleset.advanced_security.enable_rpf = false;
-        state.update_cached_text();
         state.mark_profile_dirty();
         let enable_event_log = state.enable_event_log;
         Task::perform(
@@ -152,7 +149,6 @@ pub(crate) fn handle_toggle_rpf_requested(state: &mut State, enabled: bool) -> T
 pub(crate) fn handle_confirm_enable_rpf(state: &mut State) -> Task<Message> {
     state.pending_warning = None;
     state.ruleset.advanced_security.enable_rpf = true;
-    state.update_cached_text();
     state.mark_profile_dirty();
     let enable_event_log = state.enable_event_log;
     Task::perform(
@@ -175,7 +171,6 @@ pub(crate) fn handle_cancel_warning(state: &mut State) {
 /// Handles toggling dropped packet logging
 pub(crate) fn handle_toggle_dropped_logging(state: &mut State, enabled: bool) -> Task<Message> {
     state.ruleset.advanced_security.log_dropped = enabled;
-    state.update_cached_text();
     state.mark_profile_dirty();
     let enable_event_log = state.enable_event_log;
     let desc = if enabled {
@@ -209,7 +204,6 @@ pub(crate) fn handle_log_rate_changed(state: &mut State, rate: u32) {
         }
     }
     state.ruleset.advanced_security.log_rate_per_minute = rate;
-    state.update_cached_text();
     state.mark_profile_dirty();
     // Schedule debounced logging - log after 2s of no changes
     let desc = format!("Log rate limit set to {}/min", rate);
@@ -243,7 +237,6 @@ pub(crate) fn handle_log_prefix_changed(state: &mut State, prefix: String) -> Ta
     match crate::validators::validate_log_prefix(&prefix) {
         Ok(sanitized) => {
             state.ruleset.advanced_security.log_prefix = sanitized.clone();
-            state.update_cached_text();
             state.mark_profile_dirty();
             let enable_event_log = state.enable_event_log;
             let desc = format!("Log prefix changed to '{}'", sanitized);
@@ -270,7 +263,6 @@ pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Ta
     } else {
         state.ruleset.advanced_security.egress_profile =
             crate::core::firewall::EgressProfile::Desktop;
-        state.update_cached_text();
         state.mark_profile_dirty();
         let enable_event_log = state.enable_event_log;
         Task::perform(
@@ -291,7 +283,6 @@ pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
     state.pending_warning = None;
     state.ruleset.advanced_security.egress_profile =
         crate::core::firewall::EgressProfile::Server;
-    state.update_cached_text();
     state.mark_profile_dirty();
     let enable_event_log = state.enable_event_log;
     Task::perform(
@@ -323,21 +314,6 @@ pub(crate) fn handle_check_config_save(state: &mut State) -> Task<Message> {
 
     state.config_dirty = false;
     state.save_config()
-}
-
-/// Handles theme changed
-pub(crate) fn handle_theme_changed(state: &mut State, choice: crate::theme::ThemeChoice) -> Task<Message> {
-    state.current_theme = choice;
-    state.theme = choice.to_theme();
-    state.mark_config_dirty();
-    let enable_event_log = state.enable_event_log;
-    let desc = format!("Theme changed to {}", choice.name());
-    Task::perform(
-        async move {
-            crate::audit::log_settings_saved(enable_event_log, &desc).await;
-        },
-        |_| Message::AuditLogWritten,
-    )
 }
 
 /// Handles regular font changed

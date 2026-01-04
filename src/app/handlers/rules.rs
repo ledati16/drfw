@@ -202,7 +202,6 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
         }
 
         state.mark_profile_dirty();
-        state.update_cached_text();
         state.form_errors = None;
 
         // Log rule change with proper completion tracking
@@ -242,7 +241,6 @@ pub(crate) fn handle_toggle_rule(state: &mut State, id: Uuid) -> Task<Message> {
         .execute(cmd, &mut state.ruleset);
 
     state.mark_profile_dirty();
-    state.update_cached_text();
 
     // Audit log with proper completion tracking
     Task::perform(
@@ -280,7 +278,6 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
 
     state.deleting_id = None;
     state.mark_profile_dirty();
-    state.update_cached_text();
 
     // Audit log with proper completion tracking
     Task::perform(
@@ -329,7 +326,6 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
     state.dragged_rule_id = None;
     state.hovered_drop_target_id = None;
     state.mark_profile_dirty();
-    state.update_cached_text();
 
     // Audit log
     if state.enable_event_log {

@@ -70,6 +70,49 @@ pub fn blocking_wrapper_1() -> Type1 {
 
 **Note:** This is a soft guideline, not a hard rule. Prioritize logical cohesion over arbitrary line counts.
 
+### Refactoring Large Files
+
+When splitting monolithic files into modules:
+
+**Domain Separation:**
+```rust
+// ✅ Group by domain responsibility
+handlers/
+  rules.rs      // Rule CRUD, form handling, drag-drop
+  apply.rs      // Apply/verify/revert workflow
+  profiles.rs   // Profile management
+  settings.rs   // Configuration changes
+  ui_state.rs   // Modal state, undo/redo, keyboard
+  export.rs     // Export and audit operations
+```
+
+**Avoid Redundant Operations:**
+```rust
+// ❌ BAD: Calling internal implementation twice
+state.mark_profile_dirty();  // Calls update_cached_text() internally
+state.update_cached_text();  // Redundant second call
+
+// ✅ GOOD: Let mark_profile_dirty handle cache updates
+state.mark_profile_dirty();
+```
+
+**Check method internals** before calling multiple state-changing methods in sequence.
+
+**Handler Organization:**
+- **Module docs:** Explain domain scope at top of file
+- **Logical grouping:** Related handlers together (create/edit/delete for same entity)
+- **Tests at bottom:** Keep handler tests in same file for discoverability
+- **Pure helpers:** Extract to `helpers/` if no state mutation
+
+**Refactoring Checklist:**
+1. Read original file completely before splitting
+2. Verify all methods accounted for (count functions before/after)
+3. Check for internal method calls that might be duplicated
+4. Run `cargo test` and `cargo clippy` after each phase
+5. Add unit tests for extracted handlers
+
+**Example:** `app/mod.rs` refactor (2026-01-04) split 2,940 lines into 8 handler modules with zero bugs by following this pattern.
+
 ---
 
 ## 2. Error Handling
