@@ -2631,21 +2631,21 @@ impl State {
         Task::perform(
             async move {
                 // Use native file dialog for better UX
-                let path = crate::utils::pick_save_path(&filename, "json")
-                    .or_else(|| {
-                        // Fallback if user cancels dialog
-                        crate::utils::get_data_dir().map(|mut p| {
-                            p.push(&filename);
-                            p
-                        })
-                    })
-                    .unwrap_or_else(|| std::path::PathBuf::from(&filename));
+                let Some(path) = crate::utils::pick_save_path(&filename, "json") else {
+                    return None; // User canceled - do nothing
+                };
 
-                std::fs::write(&path, json)
-                    .map(|()| path.to_string_lossy().to_string())
-                    .map_err(|e| format!("Failed to export JSON: {e}"))
+                Some(
+                    std::fs::write(&path, json)
+                        .map(|()| path.to_string_lossy().to_string())
+                        .map_err(|e| format!("Failed to export JSON: {e}")),
+                )
             },
-            Message::ExportResult,
+            |result| match result {
+                Some(Ok(path)) => Message::ExportResult(Ok(path)),
+                Some(Err(e)) => Message::ExportResult(Err(e)),
+                None => Message::ToggleExportModal(false), // Just close modal on cancel
+            },
         )
     }
 
@@ -2656,21 +2656,21 @@ impl State {
         Task::perform(
             async move {
                 // Use native file dialog for better UX
-                let path = crate::utils::pick_save_path(&filename, "nft")
-                    .or_else(|| {
-                        // Fallback if user cancels dialog
-                        crate::utils::get_data_dir().map(|mut p| {
-                            p.push(&filename);
-                            p
-                        })
-                    })
-                    .unwrap_or_else(|| std::path::PathBuf::from(&filename));
+                let Some(path) = crate::utils::pick_save_path(&filename, "nft") else {
+                    return None; // User canceled - do nothing
+                };
 
-                std::fs::write(&path, nft_text)
-                    .map(|()| path.to_string_lossy().to_string())
-                    .map_err(|e| format!("Failed to export nftables text: {e}"))
+                Some(
+                    std::fs::write(&path, nft_text)
+                        .map(|()| path.to_string_lossy().to_string())
+                        .map_err(|e| format!("Failed to export nftables text: {e}")),
+                )
             },
-            Message::ExportResult,
+            |result| match result {
+                Some(Ok(path)) => Message::ExportResult(Ok(path)),
+                Some(Err(e)) => Message::ExportResult(Err(e)),
+                None => Message::ToggleExportModal(false), // Just close modal on cancel
+            },
         )
     }
 
