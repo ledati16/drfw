@@ -15,7 +15,6 @@ pub fn format_audit_event<'a>(
     event: &AuditEvent,
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
-    regular_font: iced::Font,
 ) -> Element<'a, Message> {
     // Format timestamp as HH:MM:SS
     let time = event.timestamp.format("%H:%M:%S").to_string();
@@ -186,7 +185,7 @@ pub fn format_audit_event<'a>(
             }),
         text(description)
             .size(12)
-            .font(regular_font)
+            .font(mono_font)
             .color(theme.fg_primary),
     ]
     .spacing(8)
@@ -292,7 +291,7 @@ pub fn view_diagnostics_modal<'a>(
                         } else {
                             filtered_events
                                 .into_iter()
-                                .map(|event| format_audit_event(event, theme, mono_font, regular_font))
+                                .map(|event| format_audit_event(event, theme, mono_font))
                                 .collect()
                         })
                         .spacing(4)
