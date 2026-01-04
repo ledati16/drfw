@@ -83,6 +83,9 @@ pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
 pub(crate) fn handle_cancel_rule_form(state: &mut State) {
     state.rule_form = None;
     state.form_errors = None;
+    if state.status == crate::app::AppStatus::AwaitingApply {
+        state.status = crate::app::AppStatus::Idle;
+    }
 }
 
 /// Handles saving new or edited rule
@@ -577,6 +580,10 @@ pub(crate) fn handle_rule_search_changed(state: &mut State, value: String) {
 
 pub(crate) fn handle_filter_by_tag(state: &mut State, tag: Option<Arc<String>>) {
     state.filter_tag = tag;
+    if state.filter_tag.is_none() {
+        state.rule_search.clear();
+        state.rule_search_lowercase.clear();
+    }
     state.update_filter_cache();
 }
 
@@ -586,6 +593,7 @@ pub(crate) fn handle_filter_by_tag(state: &mut State, tag: Option<Arc<String>>) 
 
 pub(crate) fn handle_rule_drag_start(state: &mut State, id: Uuid) {
     state.dragged_rule_id = Some(id);
+    state.hovered_drop_target_id = None;
 }
 
 pub(crate) fn handle_rule_hover_start(state: &mut State, id: Uuid) {

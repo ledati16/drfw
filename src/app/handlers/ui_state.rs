@@ -155,6 +155,7 @@ pub(crate) fn handle_open_font_picker(state: &mut State, target: FontPickerTarge
 /// Handles font picker search change
 pub(crate) fn handle_font_picker_search_changed(state: &mut State, search: String) {
     if let Some(picker) = &mut state.font_picker {
+        picker.search_lowercase = search.to_lowercase();
         picker.search = search;
     }
 }
