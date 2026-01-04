@@ -1,145 +1,18 @@
 pub mod syntax_cache;
 pub mod ui_components;
+mod helpers;
 mod view;
+
+use helpers::{calculate_max_content_width, calculate_max_content_width_from_refs, fuzzy_filter_fonts, fuzzy_filter_themes, truncate_path_smart};
 
 use crate::core::firewall::{FirewallRuleset, Protocol, Rule};
 use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Animation, Element, Task, animation};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use strum::IntoEnumIterator;
-
-/// Smart truncate a file path to fit in notifications
-///
-/// Keeps the filename and 1-2 parent directories for context.
-/// Example: "/very/long/path/to/configs/production/rules.nft"
-///       -> ".../production/rules.nft"
-fn truncate_path_smart(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        return path.to_string();
-    }
-
-    let path_obj = Path::new(path);
-
-    // Always keep filename
-    let filename = path_obj
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("file");
-
-    // Try to keep parent directory for context
-    let parent = path_obj.parent();
-
-    if let Some(parent) = parent
-        && let Some(parent_name) = parent.file_name().and_then(|f| f.to_str())
-    {
-        let short = format!(".../{parent_name}/{filename}");
-        if short.len() <= max_len {
-            return short;
-        }
-    }
-
-    // Fallback: just filename with ellipsis
-    format!(".../{filename}")
-}
-
-/// Fuzzy filters fonts by name using the nucleo matcher.
-///
-/// Returns fonts sorted by match quality (best matches first).
-/// Empty queries return all fonts with a score of 0.
-///
-/// Uses buffer reuse optimization to minimize allocations during filtering.
-///
-/// # Arguments
-///
-/// * `fonts` - Iterator of font choices to filter
-/// * `query` - Search string (case-insensitive matching)
-///
-/// # Returns
-///
-/// Vector of (font, score) tuples sorted by descending score (best matches first).
-/// Higher scores indicate better matches.
-pub fn fuzzy_filter_fonts<'a>(
-    fonts: impl Iterator<Item = &'a crate::fonts::FontChoice>,
-    query: &str,
-) -> Vec<(&'a crate::fonts::FontChoice, u16)> {
-    if query.is_empty() {
-        return fonts.map(|f| (f, 0)).collect();
-    }
-
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    let mut needle_buf = Vec::new();
-    let needle = Utf32Str::new(query, &mut needle_buf);
-
-    // Reuse buffer across all fonts to reduce allocations
-    let mut haystack_buf = Vec::new();
-
-    let mut results: Vec<_> = fonts
-        .filter_map(|font| {
-            haystack_buf.clear(); // Reuse instead of reallocate
-            let haystack = Utf32Str::new(font.name_lowercase(), &mut haystack_buf);
-            matcher
-                .fuzzy_match(haystack, needle)
-                .map(|score| (font, score))
-        })
-        .collect();
-
-    // Sort by score descending (highest relevance first)
-    results.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-    results
-}
-
-/// Fuzzy filters themes by name using the nucleo matcher.
-///
-/// Returns themes sorted by match quality (best matches first).
-/// Empty queries return all themes with a score of 0.
-///
-/// Uses buffer reuse optimization to minimize allocations during filtering.
-///
-/// # Arguments
-///
-/// * `themes` - Iterator of theme choices to filter
-/// * `query` - Search string (case-insensitive matching)
-///
-/// # Returns
-///
-/// Vector of (theme, score) tuples sorted by descending score (best matches first).
-/// Higher scores indicate better matches.
-pub fn fuzzy_filter_themes(
-    themes: impl Iterator<Item = crate::theme::ThemeChoice>,
-    query: &str,
-) -> Vec<(crate::theme::ThemeChoice, u16)> {
-    if query.is_empty() {
-        return themes.map(|t| (t, 0)).collect();
-    }
-
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    let query_lowercase = query.to_lowercase();
-    let mut needle_buf = Vec::new();
-    let needle = Utf32Str::new(&query_lowercase, &mut needle_buf);
-
-    // Reuse buffer across all themes to reduce allocations
-    let mut haystack_buf = Vec::new();
-
-    let mut results: Vec<_> = themes
-        .filter_map(|theme| {
-            let theme_name_lowercase = theme.name().to_lowercase();
-            haystack_buf.clear(); // Reuse instead of reallocate
-            let haystack = Utf32Str::new(&theme_name_lowercase, &mut haystack_buf);
-            matcher
-                .fuzzy_match(haystack, needle)
-                .map(|score| (theme, score))
-        })
-        .collect();
-
-    // Sort by score descending (highest relevance first)
-    results.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-    results
-}
 
 /// In-app notification banner severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,50 +569,6 @@ impl State {
         view::view(self)
     }
 
-    fn calculate_max_content_width(tokens: &[syntax_cache::HighlightedLine]) -> f32 {
-        const CHAR_WIDTH_PX: f32 = 8.4;
-        const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
-        const TRAILING_PADDING_PX: f32 = 60.0;
-        const MIN_WIDTH_PX: f32 = 800.0;
-        const MAX_WIDTH_PX: f32 = 3000.0;
-
-        let max_char_count = tokens
-            .iter()
-            .map(|line| {
-                let indent_chars = line.indent;
-                let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
-                indent_chars + token_chars
-            })
-            .max()
-            .unwrap_or(0);
-
-        let content_width =
-            LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
-        content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
-    }
-
-    fn calculate_max_content_width_from_refs(tokens: &[&syntax_cache::HighlightedLine]) -> f32 {
-        const CHAR_WIDTH_PX: f32 = 8.4;
-        const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
-        const TRAILING_PADDING_PX: f32 = 60.0;
-        const MIN_WIDTH_PX: f32 = 800.0;
-        const MAX_WIDTH_PX: f32 = 3000.0;
-
-        let max_char_count = tokens
-            .iter()
-            .map(|line| {
-                let indent_chars = line.indent;
-                let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
-                indent_chars + token_chars
-            })
-            .max()
-            .unwrap_or(0);
-
-        let content_width =
-            LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
-        content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
-    }
-
     pub fn new() -> (Self, Task<Message>) {
         let config = crate::config::load_config_blocking();
         let current_theme = config.theme_choice;
@@ -909,11 +738,11 @@ impl State {
             None
         };
 
-        self.cached_nft_width_px = Self::calculate_max_content_width(&self.cached_nft_tokens);
+        self.cached_nft_width_px = calculate_max_content_width(&self.cached_nft_tokens);
         self.cached_diff_width_px = if let Some(ref diff_tokens) = self.cached_diff_tokens {
             let diff_lines: Vec<&syntax_cache::HighlightedLine> =
                 diff_tokens.iter().map(|(_, line)| line).collect();
-            Self::calculate_max_content_width_from_refs(&diff_lines)
+            calculate_max_content_width_from_refs(&diff_lines)
         } else {
             self.cached_nft_width_px
         };
