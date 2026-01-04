@@ -631,6 +631,39 @@ pub fn poimandres() -> AppTheme {
     )
 }
 
+/// Pnevma - High-contrast neutral theme with desaturated earth tones
+/// Pure neutral gray base with soft, muted colors for reduced visual fatigue
+pub fn pnevma() -> AppTheme {
+    AppTheme::from_hex(
+        "Pnevma",
+        0x001C_1C1C, // bg_base - Pure neutral dark gray (v2)
+        0x0018_1818, // bg_sidebar - Slightly darker
+        0x0024_2424, // bg_surface - Slightly lighter surface
+        0x002F_2E2D, // bg_elevated - Color0 (v2)
+        0x004A_4845, // bg_hover - Color8 bright black (v2)
+        0x004D_4D4D, // bg_active - Selection background (v2)
+        0x00D0_D0D0, // fg_primary - Foreground/Color7 (v2)
+        0x00B0_B0B0, // fg_secondary - Dimmed foreground
+        0x006A_6866, // fg_muted - Muted gray
+        0x001C_1C1C, // fg_on_accent - Dark on light (v2)
+        0x007F_A5BD, // accent - Color4 blue (v2)
+        0x00A1_BDCE, // accent_hover - Color12 bright blue (v2)
+        0x0090_A57D, // success - Color2 green (v2)
+        0x00D7_AF87, // warning - Color3 orange (v2)
+        0x00A3_6666, // danger - Color1 red (v2)
+        0x007F_A5BD, // info - Color4 blue (v2)
+        0x002F_2E2D, // border - Color0 match
+        0x007F_A5BD, // border_strong - Accent blue
+        0x0024_2424, // divider - Surface match
+        0x00C7_9EC4, // syntax_keyword - Color5 magenta (v2)
+        0x007F_A5BD, // syntax_type - Color4 blue (v2)
+        0x0090_A57D, // syntax_string - Color2 green (v2)
+        0x00D7_AF87, // syntax_number - Color3 orange (v2)
+        0x004A_4845, // syntax_comment - Color8 muted (v2)
+        0x008A_DBB4, // syntax_operator - Color6 cyan (v2)
+    )
+}
+
 /// Night Owl - Professional dark blue theme optimized for night coding
 /// Dark navy with vibrant syntax colors for excellent readability
 pub fn night_owl() -> AppTheme {
@@ -890,6 +923,7 @@ mod tests {
             catppuccin_mocha(),
             rose_pine(),
             poimandres(),
+            pnevma(),
             // Nature/atmospheric dark themes
             nord(),
             gruvbox(),
@@ -931,6 +965,7 @@ mod tests {
         let _ = catppuccin_mocha();
         let _ = rose_pine();
         let _ = poimandres();
+        let _ = pnevma();
         // Nature/atmospheric dark themes
         let _ = nord();
         let _ = gruvbox();

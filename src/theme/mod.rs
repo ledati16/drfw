@@ -241,6 +241,7 @@ pub enum ThemeChoice {
     CatppuccinMocha,
     RosePine,
     Poimandres, // 141K - Semantic minimalist
+    Pnevma,     // High-contrast neutral with desaturated earth tones
 
     // ═══════════════════════════════════════════════════
     // NATURE/ATMOSPHERIC DARK THEMES
@@ -284,6 +285,7 @@ impl ThemeChoice {
             Self::CatppuccinMocha => "Catppuccin Mocha",
             Self::RosePine => "Rosé Pine",
             Self::Poimandres => "Poimandres",
+            Self::Pnevma => "Pnevma",
             // Nature/atmospheric dark themes
             Self::Nord => "Nord",
             Self::Gruvbox => "Gruvbox Dark",
@@ -321,6 +323,7 @@ impl ThemeChoice {
             Self::CatppuccinMocha => presets::catppuccin_mocha(),
             Self::RosePine => presets::rose_pine(),
             Self::Poimandres => presets::poimandres(),
+            Self::Pnevma => presets::pnevma(),
             // Nature/atmospheric dark themes
             Self::Nord => presets::nord(),
             Self::Gruvbox => presets::gruvbox(),
