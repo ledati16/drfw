@@ -359,6 +359,83 @@ pub(crate) fn handle_save_to_system_result(state: &mut State, result: Result<(),
     }
 }
 
+/// Handles apply/revert errors with user-friendly messages and audit logging
+pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: String) -> Task<Message> {
+    use crate::app::{AppStatus, BannerSeverity};
+
+    state.status = AppStatus::Idle;
+
+    // Detect elevation-specific errors and handle accordingly
+    if error.contains("Authentication cancelled") {
+        state.push_banner("Authentication was cancelled", BannerSeverity::Warning, 5);
+        let enable_event_log = state.enable_event_log;
+        return Task::perform(
+            async move {
+                crate::audit::log_elevation_cancelled(
+                    enable_event_log,
+                    "User cancelled authentication".to_string(),
+                )
+                .await;
+            },
+            |_| Message::AuditLogWritten,
+        );
+    } else if error.contains("Authentication failed") {
+        state.push_banner("Authentication failed", BannerSeverity::Error, 5);
+        let enable_event_log = state.enable_event_log;
+        let error_msg = error.clone();
+        return Task::perform(
+            async move {
+                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+            },
+            |_| Message::AuditLogWritten,
+        );
+    } else if error.contains("timed out") || error.contains("Operation timed out") {
+        state.push_banner("Authentication timed out", BannerSeverity::Error, 5);
+        let enable_event_log = state.enable_event_log;
+        let error_msg = error.clone();
+        return Task::perform(
+            async move {
+                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+            },
+            |_| Message::AuditLogWritten,
+        );
+    } else if error.contains("No authentication agent") || error.contains("No polkit") {
+        state.push_banner(
+            "No authentication agent available. Install polkit.",
+            BannerSeverity::Error,
+            8,
+        );
+        let enable_event_log = state.enable_event_log;
+        let error_msg = error.clone();
+        return Task::perform(
+            async move {
+                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+            },
+            |_| Message::AuditLogWritten,
+        );
+    } else if error.contains("nft binary not found") || error.contains("nftables") {
+        state.push_banner("nftables not installed", BannerSeverity::Error, 5);
+        let enable_event_log = state.enable_event_log;
+        let error_msg = error.clone();
+        return Task::perform(
+            async move {
+                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+            },
+            |_| Message::AuditLogWritten,
+        );
+    } else {
+        // Generic error - show error message
+        let msg = if error.len() > 80 {
+            format!("{}...", &error[..77])
+        } else {
+            error.clone()
+        };
+        state.push_banner(&msg, BannerSeverity::Error, 8);
+    }
+
+    Task::none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

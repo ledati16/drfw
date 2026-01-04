@@ -308,33 +308,21 @@ pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
 
 /// Handles periodic config save check (debounced)
 pub(crate) fn handle_check_config_save(state: &mut State) -> Task<Message> {
+    const DEBOUNCE_MS: u64 = 500;
+
     if !state.config_dirty {
         return Task::none();
     }
 
-    let config = crate::config::AppConfig {
-        theme_choice: state.current_theme,
-        regular_font: state.regular_font_choice.clone(),
-        mono_font: state.mono_font_choice.clone(),
-        show_diff: state.show_diff,
-        show_zebra_striping: state.show_zebra_striping,
-        auto_revert_enabled: state.auto_revert_enabled,
-        auto_revert_timeout_secs: state.auto_revert_timeout_secs,
-        enable_event_log: state.enable_event_log,
-        active_profile: state.active_profile_name.clone(),
-    };
+    // Check if enough time has passed since last change
+    if let Some(last_change) = state.last_config_change
+        && last_change.elapsed().as_millis() < DEBOUNCE_MS as u128
+    {
+        return Task::none();
+    }
 
     state.config_dirty = false;
-
-    Task::perform(
-        async move { crate::config::save_config(&config).await },
-        |result| {
-            if let Err(e) = result {
-                eprintln!("Auto-save config failed: {e}");
-            }
-            Message::Noop
-        },
-    )
+    state.save_config()
 }
 
 /// Handles theme changed

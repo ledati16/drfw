@@ -366,25 +366,23 @@ pub(crate) fn handle_profile_switch_after_save(state: &mut State, name: String) 
 
 /// Handles periodic profile save check (debounced)
 pub(crate) fn handle_check_profile_save(state: &mut State) -> Task<Message> {
-    if !state.is_profile_dirty() {
+    const DEBOUNCE_MS: u64 = 1000; // 1 second for profiles
+
+    if !state.profile_dirty {
         return Task::none();
     }
 
-    let profile_name = state.active_profile_name.clone();
-    let ruleset = state.ruleset.clone();
+    // Check if enough time has passed since last change
+    if let Some(last_change) = state.last_profile_change
+        && last_change.elapsed().as_millis() < DEBOUNCE_MS as u128
+    {
+        return Task::none();
+    }
 
-    // Update cached disk profile before saving to avoid false dirty detection
-    state.cached_disk_profile = Some(ruleset.clone());
-
-    Task::perform(
-        async move { crate::core::profiles::save_profile(&profile_name, &ruleset).await },
-        |result| {
-            if let Err(e) = result {
-                eprintln!("Auto-save profile failed: {e}");
-            }
-            Message::DiskProfileLoaded(None)
-        },
-    )
+    state.profile_dirty = false;
+    let save_task = state.save_profile();
+    let refresh_task = state.refresh_disk_profile_cache();
+    save_task.chain(refresh_task)
 }
 
 /// Handles disk profile loaded for cache refresh
