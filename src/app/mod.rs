@@ -621,6 +621,8 @@ pub enum Message {
     AuditEntriesLoaded(Vec<crate::audit::AuditEvent>),
     /// Check if audit log needs refresh (auto-refresh subscription)
     CheckAuditLogRefresh,
+    /// Audit log write completed (mark cache dirty)
+    AuditLogWritten,
     ClearEventLog,
     OpenLogsFolder,
     ExportAsJson,
@@ -1073,7 +1075,7 @@ impl State {
                 async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 },
-                |_| Message::Noop,
+                |_| Message::AuditLogWritten,
             );
         }
         Task::none()
@@ -1329,11 +1331,13 @@ impl State {
                     // Log auto-revert confirmation
                     let enable_event_log = self.enable_event_log;
                     let timeout_secs = self.auto_revert_timeout_secs;
-                    tokio::spawn(async move {
-                        crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs)
-                            .await;
-                    });
-                    self.audit_log_dirty = true;
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_auto_revert_confirmed(enable_event_log, timeout_secs)
+                                .await;
+                        },
+                        |_| Message::AuditLogWritten,
+                    );
                 }
             }
             Message::RevertClicked => return self.handle_revert_clicked(),
@@ -1344,7 +1348,6 @@ impl State {
                     BannerSeverity::Warning,
                     5,
                 );
-                self.audit_log_dirty = true;
             }
             Message::CountdownTick => return self.handle_countdown_tick(),
             Message::TabChanged(tab) => self.active_tab = tab,
@@ -1406,42 +1409,51 @@ impl State {
             Message::EventOccurred(event) => return self.handle_event(event),
             Message::ToggleDiff(enabled) => {
                 self.show_diff = enabled;
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = if enabled {
                     "Diff view enabled"
                 } else {
                     "Diff view disabled"
                 };
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::ToggleZebraStriping(enabled) => {
                 self.show_zebra_striping = enabled;
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = if enabled {
                     "Zebra striping enabled"
                 } else {
                     "Zebra striping disabled"
                 };
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::ToggleAutoRevert(enabled) => {
                 self.auto_revert_enabled = enabled;
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = if enabled {
                     "Auto-revert enabled"
                 } else {
                     "Auto-revert disabled"
                 };
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 self.auto_revert_timeout_secs = timeout.clamp(5, 120);
@@ -1454,32 +1466,38 @@ impl State {
                 // Log settings change BEFORE changing the value
                 // When disabling, we need to log with the OLD value (true) so it actually logs
                 let old_value = self.enable_event_log;
+                self.enable_event_log = enabled;
+                self.mark_config_dirty();
                 let desc = if enabled {
                     "Event logging enabled"
                 } else {
                     "Event logging disabled"
                 };
-                tokio::spawn(async move {
-                    // Use old_value when disabling (true), new value when enabling (true)
-                    // This ensures "disabled" message gets logged before turning off
-                    crate::audit::log_settings_saved(old_value || enabled, desc).await;
-                });
-                self.enable_event_log = enabled;
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        // Use old_value when disabling (true), new value when enabling (true)
+                        // This ensures "disabled" message gets logged before turning off
+                        crate::audit::log_settings_saved(old_value || enabled, desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::ToggleStrictIcmp(enabled) => {
                 self.ruleset.advanced_security.strict_icmp = enabled;
                 self.update_cached_text();
+                self.mark_profile_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = if enabled {
                     "Strict ICMP filtering enabled"
                 } else {
                     "Strict ICMP filtering disabled"
                 };
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, desc).await;
-                });
-                self.mark_profile_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::IcmpRateLimitChanged(rate) => {
                 self.ruleset.advanced_security.icmp_rate_limit = rate;
@@ -1495,30 +1513,36 @@ impl State {
                 } else {
                     self.ruleset.advanced_security.enable_rpf = false;
                     self.update_cached_text();
-                    let enable_event_log = self.enable_event_log;
-                    tokio::spawn(async move {
-                        crate::audit::log_settings_saved(
-                            enable_event_log,
-                            "RPF (reverse path filtering) disabled",
-                        )
-                        .await;
-                    });
                     self.mark_profile_dirty();
+                    let enable_event_log = self.enable_event_log;
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_settings_saved(
+                                enable_event_log,
+                                "RPF (reverse path filtering) disabled",
+                            )
+                            .await;
+                        },
+                        |_| Message::AuditLogWritten,
+                    );
                 }
             }
             Message::ConfirmEnableRpf => {
                 self.pending_warning = None;
                 self.ruleset.advanced_security.enable_rpf = true;
                 self.update_cached_text();
-                let enable_event_log = self.enable_event_log;
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(
-                        enable_event_log,
-                        "RPF (reverse path filtering) enabled",
-                    )
-                    .await;
-                });
                 self.mark_profile_dirty();
+                let enable_event_log = self.enable_event_log;
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(
+                            enable_event_log,
+                            "RPF (reverse path filtering) enabled",
+                        )
+                        .await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::CancelWarning => {
                 self.pending_warning = None;
@@ -1526,16 +1550,19 @@ impl State {
             Message::ToggleDroppedLogging(enabled) => {
                 self.ruleset.advanced_security.log_dropped = enabled;
                 self.update_cached_text();
+                self.mark_profile_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = if enabled {
                     "Dropped packet logging enabled"
                 } else {
                     "Dropped packet logging disabled"
                 };
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, desc).await;
-                });
-                self.mark_profile_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::LogRateChanged(rate) => {
                 // Validate log rate (slider ensures 1-100 range, but check for warnings)
@@ -1569,12 +1596,15 @@ impl State {
                     Ok(sanitized) => {
                         self.ruleset.advanced_security.log_prefix = sanitized.clone();
                         self.update_cached_text();
+                        self.mark_profile_dirty();
                         let enable_event_log = self.enable_event_log;
                         let desc = format!("Log prefix changed to '{}'", sanitized);
-                        tokio::spawn(async move {
-                            crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                        });
-                        self.mark_profile_dirty();
+                        return Task::perform(
+                            async move {
+                                crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                            },
+                            |_| Message::AuditLogWritten,
+                        );
                     }
                     Err(e) => {
                         // Invalid prefix - don't save, just log the error
@@ -1590,15 +1620,18 @@ impl State {
                     self.ruleset.advanced_security.egress_profile =
                         crate::core::firewall::EgressProfile::Desktop;
                     self.update_cached_text();
-                    let enable_event_log = self.enable_event_log;
-                    tokio::spawn(async move {
-                        crate::audit::log_settings_saved(
-                            enable_event_log,
-                            "Server mode disabled (desktop profile)",
-                        )
-                        .await;
-                    });
                     self.mark_profile_dirty();
+                    let enable_event_log = self.enable_event_log;
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_settings_saved(
+                                enable_event_log,
+                                "Server mode disabled (desktop profile)",
+                            )
+                            .await;
+                        },
+                        |_| Message::AuditLogWritten,
+                    );
                 }
             }
             Message::ConfirmServerMode => {
@@ -1606,15 +1639,18 @@ impl State {
                 self.ruleset.advanced_security.egress_profile =
                     crate::core::firewall::EgressProfile::Server;
                 self.update_cached_text();
-                let enable_event_log = self.enable_event_log;
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(
-                        enable_event_log,
-                        "Server mode enabled (server profile)",
-                    )
-                    .await;
-                });
                 self.mark_profile_dirty();
+                let enable_event_log = self.enable_event_log;
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(
+                            enable_event_log,
+                            "Server mode enabled (server profile)",
+                        )
+                        .await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::ToggleDiagnostics(show) => {
                 self.show_diagnostics = show;
@@ -1635,6 +1671,10 @@ impl State {
                     return Task::perform(Self::load_audit_entries(), Message::AuditEntriesLoaded);
                 }
             }
+            Message::AuditLogWritten => {
+                // Audit log write completed, mark cache dirty to trigger refresh
+                self.audit_log_dirty = true;
+            }
             Message::ClearEventLog => {
                 if let Some(mut path) = crate::utils::get_state_dir() {
                     path.push("audit.log");
@@ -1649,9 +1689,12 @@ impl State {
                     tracing::info!("Undid: {}", description);
                     let enable_event_log = self.enable_event_log;
                     let desc = description.clone();
-                    tokio::spawn(async move {
-                        crate::audit::log_undone(enable_event_log, &desc).await;
-                    });
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_undone(enable_event_log, &desc).await;
+                        },
+                        |_| Message::AuditLogWritten,
+                    );
                 }
             }
             Message::Redo => {
@@ -1660,20 +1703,26 @@ impl State {
                     tracing::info!("Redid: {}", description);
                     let enable_event_log = self.enable_event_log;
                     let desc = description.clone();
-                    tokio::spawn(async move {
-                        crate::audit::log_redone(enable_event_log, &desc).await;
-                    });
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_redone(enable_event_log, &desc).await;
+                        },
+                        |_| Message::AuditLogWritten,
+                    );
                 }
             }
             Message::ThemeChanged(choice) => {
                 self.current_theme = choice;
                 self.theme = choice.to_theme();
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = format!("Theme changed to {}", choice.name());
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::OpenThemePicker => {
                 // Pre-compute all theme conversions once on modal open
@@ -1706,12 +1755,15 @@ impl State {
             }
             Message::ApplyTheme => {
                 self.theme_picker = None;
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = format!("Theme changed to {}", self.current_theme.name());
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::CancelThemePicker => {
                 if let Some(picker) = &self.theme_picker {
@@ -1724,23 +1776,29 @@ impl State {
             Message::RegularFontChanged(choice) => {
                 self.regular_font_choice = choice.clone();
                 self.font_regular = choice.to_font();
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = format!("UI font changed to {}", choice.name());
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::MonoFontChanged(choice) => {
                 self.mono_font_choice = choice.clone();
                 self.font_mono = choice.to_font();
                 self.font_picker = None;
+                self.mark_config_dirty();
                 let enable_event_log = self.enable_event_log;
                 let desc = format!("Monospace font changed to {}", choice.name());
-                tokio::spawn(async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                });
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_settings_saved(enable_event_log, &desc).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::OpenFontPicker(target) => {
                 self.font_picker = Some(FontPickerState {
@@ -1840,12 +1898,17 @@ impl State {
                     self.command_history
                         .execute(Box::new(command), &mut self.ruleset);
                     self.mark_profile_dirty();
+                    self.dragged_rule_id = None;
+                    self.hovered_drop_target_id = None;
 
                     // Log reorder event
-                    tokio::spawn(async move {
-                        crate::audit::log_rules_reordered(enable_event_log, &label, direction)
-                            .await;
-                    });
+                    return Task::perform(
+                        async move {
+                            crate::audit::log_rules_reordered(enable_event_log, &label, direction)
+                                .await;
+                        },
+                        |_| Message::AuditLogWritten,
+                    );
                 }
                 self.dragged_rule_id = None;
                 self.hovered_drop_target_id = None;
@@ -1868,20 +1931,22 @@ impl State {
                 self.active_profile_name = name.clone();
                 self.command_history = crate::command::CommandHistory::default();
                 self.update_cached_text();
+                self.mark_config_dirty();
 
                 // Log profile switch
                 let enable_event_log = self.enable_event_log;
                 let to_profile = name;
-                tokio::spawn(async move {
-                    crate::audit::log_profile_switched(
-                        enable_event_log,
-                        &from_profile,
-                        &to_profile,
-                    )
-                    .await;
-                });
-
-                self.mark_config_dirty();
+                return Task::perform(
+                    async move {
+                        crate::audit::log_profile_switched(
+                            enable_event_log,
+                            &from_profile,
+                            &to_profile,
+                        )
+                        .await;
+                    },
+                    |_| Message::AuditLogWritten,
+                );
             }
             Message::SaveProfileAs(name) => {
                 let creating_empty = self
@@ -2428,33 +2493,17 @@ impl State {
         &mut self,
         result: Result<crate::core::verify::VerifyResult, String>,
     ) -> Task<Message> {
-        match &result {
-            Ok(verify_result) => {
-                let success = verify_result.success;
-                let error_count = verify_result.errors.len();
-                let error = if verify_result.success {
-                    None
-                } else {
-                    Some(verify_result.errors.join("; "))
-                };
-                let enable_event_log = self.enable_event_log;
-                tokio::spawn(async move {
-                    crate::audit::log_verify(enable_event_log, success, error_count, error).await;
-                });
-            }
-            Err(e) => {
-                let error = e.clone();
-                let enable_event_log = self.enable_event_log;
-                tokio::spawn(async move {
-                    crate::audit::log_verify(enable_event_log, false, 0, Some(error)).await;
-                });
-            }
-        }
-
         match result {
             Ok(verify_result) if verify_result.success => {
                 self.status = AppStatus::AwaitingApply;
-                Task::none()
+                let enable_event_log = self.enable_event_log;
+                let error_count = verify_result.errors.len();
+                Task::perform(
+                    async move {
+                        crate::audit::log_verify(enable_event_log, true, error_count, None).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                )
             }
             Ok(verify_result) => {
                 self.status = AppStatus::Idle;
@@ -2467,7 +2516,15 @@ impl State {
                     )
                 };
                 self.push_banner(&error_summary, BannerSeverity::Error, 8);
-                Task::none()
+                let enable_event_log = self.enable_event_log;
+                let error_count = verify_result.errors.len();
+                let error = Some(verify_result.errors.join("; "));
+                Task::perform(
+                    async move {
+                        crate::audit::log_verify(enable_event_log, false, error_count, error).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                )
             }
             Err(e) => {
                 self.status = AppStatus::Idle;
@@ -2477,7 +2534,14 @@ impl State {
                     format!("Verification error: {}", e)
                 };
                 self.push_banner(&msg, BannerSeverity::Error, 8);
-                Task::none()
+                let enable_event_log = self.enable_event_log;
+                let error = e.clone();
+                Task::perform(
+                    async move {
+                        crate::audit::log_verify(enable_event_log, false, 0, Some(error)).await;
+                    },
+                    |_| Message::AuditLogWritten,
+                )
             }
         }
     }
@@ -2506,6 +2570,7 @@ impl State {
             },
             Message::ApplyResult,
         )
+        .chain(Task::done(Message::AuditLogWritten))
     }
 
     fn handle_apply_result(&mut self, snapshot: serde_json::Value) {
@@ -2551,9 +2616,7 @@ impl State {
                 5,
             );
         }
-
-        // Mark audit log dirty since apply operation logged to it
-        self.audit_log_dirty = true;
+        // Note: audit_log_dirty set by handle_proceed_to_apply's Task chain to AuditLogWritten
     }
 
     fn handle_revert_clicked(&mut self) -> Task<Message> {
@@ -2578,7 +2641,8 @@ impl State {
                     final_result.map_err(|e| e.to_string())
                 },
                 Message::RevertResult,
-            );
+            )
+            .chain(Task::done(Message::AuditLogWritten));
         }
         Task::none()
     }
@@ -2599,14 +2663,14 @@ impl State {
                     10,
                 );
 
-                // Log auto-revert timeout
-                tokio::spawn(async move {
-                    crate::audit::log_auto_revert_timed_out(enable_event_log, timeout_secs).await;
-                });
-
-                // Spawn revert task directly instead of going through RevertClicked message
+                // Spawn revert task with audit logging
                 return Task::perform(
                     async move {
+                        // Log timeout event
+                        crate::audit::log_auto_revert_timed_out(enable_event_log, timeout_secs)
+                            .await;
+
+                        // Perform revert
                         let result = crate::core::nft_json::restore_snapshot(&snapshot).await;
                         let final_result = if result.is_err() {
                             crate::core::nft_json::restore_with_fallback().await
@@ -2618,11 +2682,14 @@ impl State {
                             .as_ref()
                             .err()
                             .map(std::string::ToString::to_string);
+
+                        // Log revert result
                         crate::audit::log_revert(enable_event_log, success, error.clone()).await;
                         final_result.map_err(|e| e.to_string())
                     },
                     Message::RevertResult,
-                );
+                )
+                .chain(Task::done(Message::AuditLogWritten));
             }
 
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
