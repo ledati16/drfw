@@ -1,28 +1,28 @@
 //! Diagnostics modal and event log viewer
 
 use crate::app::ui_components::{
-    card_container, danger_button, primary_button, secondary_button, themed_horizontal_rule,
-    themed_pick_list, themed_pick_list_menu, themed_scrollable,
+    card_container, danger_button, secondary_button, section_header_container, themed_pick_list,
+    themed_pick_list_menu, themed_scrollable,
 };
 use crate::app::{DiagnosticsFilter, Message, State};
 use crate::audit::{AuditEvent, EventType};
 use crate::utils::get_state_dir;
-use iced::widget::{button, column, container, pick_list, row, rule, scrollable, text};
-use iced::{Alignment, Border, Element, Length};
+use iced::widget::{button, column, container, pick_list, row, scrollable, space, text};
+use iced::{Alignment, Border, Element, Length, Padding};
 
 /// Formats an audit event for display in the Diagnostics modal
 pub fn format_audit_event<'a>(
     event: &AuditEvent,
     theme: &crate::theme::AppTheme,
-    font: iced::Font,
+    mono_font: iced::Font,
+    regular_font: iced::Font,
 ) -> Element<'a, Message> {
     // Format timestamp as HH:MM:SS
     let time = event.timestamp.format("%H:%M:%S").to_string();
 
-    // Choose icon and color based on event type and success
-    let (icon, icon_color, description) = match (&event.event_type, event.success) {
+    // Choose status color based on event type and success
+    let (status_color, description) = match (&event.event_type, event.success) {
         (EventType::ApplyRules, true) => (
-            "✓",
             theme.success,
             format!(
                 "Applied {} rules ({} enabled)",
@@ -30,7 +30,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::ApplyRules, false) => (
-            "✗",
             theme.danger,
             format!(
                 "Failed to apply rules: {}",
@@ -38,12 +37,10 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::RevertRules, true) => (
-            "⟲",
             theme.warning,
             "Reverted to previous ruleset".to_string(),
         ),
         (EventType::RevertRules, false) => (
-            "✗",
             theme.danger,
             format!(
                 "Revert failed: {}",
@@ -51,12 +48,10 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::VerifyRules, true) => (
-            "✓",
             theme.success,
             "Rules verified successfully".to_string(),
         ),
         (EventType::VerifyRules, false) => (
-            "✗",
             theme.danger,
             format!(
                 "Verification failed: {} errors",
@@ -64,17 +59,14 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::ProfileCreated, _) => (
-            "➕",
             theme.accent,
             format!("Created profile '{}'", event.details["profile_name"]),
         ),
         (EventType::ProfileDeleted, _) => (
-            "➖",
             theme.accent,
             format!("Deleted profile '{}'", event.details["profile_name"]),
         ),
         (EventType::ProfileRenamed, _) => (
-            "✎",
             theme.accent,
             format!(
                 "Renamed profile '{}' → '{}'",
@@ -82,7 +74,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::ProfileSwitched, _) => (
-            "↔",
             theme.accent,
             format!(
                 "Switched profile: '{}' → '{}'",
@@ -90,7 +81,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::SettingsSaved, _) => (
-            "⚙",
             theme.accent,
             event.details["description"]
                 .as_str()
@@ -98,7 +88,6 @@ pub fn format_audit_event<'a>(
                 .to_string(),
         ),
         (EventType::AutoRevertConfirmed, _) => (
-            "✓",
             theme.success,
             format!(
                 "Auto-revert confirmed ({}s timeout)",
@@ -106,17 +95,14 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::AutoRevertTimedOut, _) => (
-            "⏱",
             theme.warning,
             format!("Auto-revert timed out ({}s)", event.details["timeout_secs"]),
         ),
         (EventType::ElevationCancelled, _) => (
-            "⚠",
             theme.warning,
             "Authentication cancelled by user".to_string(),
         ),
         (EventType::ElevationFailed, _) => (
-            "✗",
             theme.danger,
             format!(
                 "Authentication failed: {}",
@@ -124,7 +110,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::RuleCreated, _) => (
-            "➕",
             theme.success,
             format!(
                 "Created rule '{}'{}",
@@ -136,7 +121,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::RuleDeleted, _) => (
-            "➖",
             theme.danger,
             format!(
                 "Deleted rule '{}'",
@@ -144,7 +128,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::RuleModified, _) => (
-            "✎",
             theme.accent,
             format!(
                 "Modified rule '{}'{}",
@@ -156,7 +139,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::RuleToggled, _) => (
-            "⏻",
             theme.accent,
             format!(
                 "Rule '{}' {}",
@@ -169,7 +151,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::RulesReordered, _) => (
-            "↕",
             theme.accent,
             format!(
                 "Moved rule '{}' {}",
@@ -178,7 +159,6 @@ pub fn format_audit_event<'a>(
             ),
         ),
         (EventType::ExportCompleted, _) => (
-            "📤",
             theme.success,
             format!(
                 "Exported {} to {}",
@@ -189,14 +169,27 @@ pub fn format_audit_event<'a>(
     };
 
     row![
-        text(time).size(13).font(font).color(theme.fg_muted),
-        text(icon).size(15).color(icon_color),
+        text(time)
+            .size(11)
+            .font(mono_font)
+            .color(theme.fg_muted),
+        container(text(""))
+            .width(Length::Fixed(8.0))
+            .height(Length::Fixed(8.0))
+            .style(move |_| container::Style {
+                background: Some(status_color.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
         text(description)
-            .size(14)
-            .font(font)
+            .size(12)
+            .font(regular_font)
             .color(theme.fg_primary),
     ]
-    .spacing(12)
+    .spacing(8)
     .align_y(Alignment::Center)
     .width(Length::Fill)
     .into()
@@ -245,24 +238,24 @@ pub fn view_diagnostics_modal<'a>(
         })
         .collect();
 
+    let event_count = filtered_events.len();
+
     container(
         column![
-            row![
-                text("📊 Diagnostics & Logs")
-                    .size(24)
+            container(
+                text("Event Log")
+                    .size(18)
                     .font(regular_font)
-                    .color(theme.warning),
-                rule::horizontal(0).style(move |_| themed_horizontal_rule(theme)),
-            ]
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .width(Length::Fill),
-            // Filter and count
+                    .color(theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
+            // Filter
             row![
-                text(format!("Event Log ({} entries)", filtered_events.len()))
-                    .size(14)
+                text("Filter:")
+                    .size(12)
                     .font(regular_font)
-                    .color(theme.fg_primary),
+                    .color(theme.fg_muted),
                 pick_list(
                     vec![
                         DiagnosticsFilter::All,
@@ -280,29 +273,38 @@ pub fn view_diagnostics_modal<'a>(
                 .style(move |_, status| themed_pick_list(theme, status))
                 .menu_style(move |_| themed_pick_list_menu(theme)),
             ]
-            .spacing(12)
+            .spacing(8)
             .align_y(Alignment::Center),
             // Event log section
             container(
                 scrollable(
-                    column(if filtered_events.is_empty() {
-                        vec![text(if state.enable_event_log {
-                            "No events match the current filter"
+                    container(
+                        column(if filtered_events.is_empty() {
+                            vec![text(if state.enable_event_log {
+                                "No events match the current filter"
+                            } else {
+                                "Event logging is disabled. Enable it in Settings to track operations."
+                            })
+                            .size(12)
+                            .font(regular_font)
+                            .color(theme.fg_muted)
+                            .into()]
                         } else {
-                            "Event logging is disabled. Enable it in Settings to track operations."
+                            filtered_events
+                                .into_iter()
+                                .map(|event| format_audit_event(event, theme, mono_font, regular_font))
+                                .collect()
                         })
-                        .size(12)
-                        .font(regular_font)
-                        .color(theme.fg_muted)
-                        .into()]
-                    } else {
-                        filtered_events
-                            .into_iter()
-                            .map(|event| format_audit_event(event, theme, mono_font))
-                            .collect()
+                        .spacing(4)
+                    )
+                    .padding(Padding {
+                        top: 8.0,
+                        right: 8.0,
+                        bottom: 8.0,
+                        left: 8.0,
                     })
-                    .spacing(8),
                 )
+                .spacing(0)  // Embedded mode prevents overlap
                 .style(move |_, status| themed_scrollable(theme, status)),
             )
             .width(Length::Fill)
@@ -314,10 +316,18 @@ pub fn view_diagnostics_modal<'a>(
                     ..Default::default()
                 },
                 ..Default::default()
-            })
-            .padding(12),
+            }),
             // Action buttons
             row![
+                container(
+                    text(format!("{} events", event_count))
+                        .size(10)
+                        .font(mono_font)
+                        .color(theme.fg_muted)
+                )
+                .padding([2, 6])
+                .style(move |_| section_header_container(theme)),
+                space::Space::new().width(Length::Fill),
                 button(text("Clear Log").size(14).font(regular_font))
                     .on_press(Message::ClearEventLog)
                     .padding([10, 20])
@@ -325,17 +335,17 @@ pub fn view_diagnostics_modal<'a>(
                 button(text("Open Logs Folder").size(14).font(regular_font))
                     .on_press(Message::OpenLogsFolder)
                     .padding([10, 20])
-                    .style(move |_, status| primary_button(theme, status)),
+                    .style(move |_, status| secondary_button(theme, status)),
                 button(text("Close").size(14).font(regular_font))
                     .on_press(Message::ToggleDiagnostics(false))
                     .padding([10, 20])
                     .style(move |_, status| secondary_button(theme, status)),
             ]
-            .spacing(12)
+            .spacing(8)
             .align_y(Alignment::Center),
         ]
-        .spacing(20)
-        .padding(32),
+        .spacing(16)
+        .padding(24),
     )
     .max_width(1000)
     .style(move |_| card_container(theme))

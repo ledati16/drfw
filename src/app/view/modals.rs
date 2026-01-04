@@ -1,8 +1,10 @@
 //! Modal dialogs (warnings and export)
 
-use crate::app::ui_components::{card_button, card_container, danger_button, secondary_button};
+use crate::app::ui_components::{
+    card_button, card_container, danger_button, secondary_button, section_header_container,
+};
 use crate::app::{Message, PendingWarning};
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{button, column, container, row, space, text};
 use iced::{Alignment, Border, Element, Length};
 
 pub fn view_warning_modal<'a>(
@@ -64,54 +66,48 @@ pub fn view_export_modal(
 ) -> Element<'_, Message> {
     container(
         column![
-            text("📤 Export Rules")
-                .size(24)
-                .font(regular_font)
-                .color(theme.warning),
-            text("Choose the export format:")
-                .size(14)
+            container(
+                text("Export")
+                    .size(18)
+                    .font(regular_font)
+                    .color(theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
+            text("Choose export format:")
+                .size(12)
                 .font(regular_font)
                 .color(theme.fg_muted),
             column![
                 button(
-                    row![
-                        text("📄").size(20),
-                        column![
-                            text("Export as JSON")
-                                .size(16)
-                                .font(regular_font)
-                                .color(theme.fg_primary),
-                            text("Structured data format for automation and backup")
-                                .size(12)
-                                .font(regular_font)
-                                .color(theme.fg_muted),
-                        ]
-                        .spacing(4),
+                    column![
+                        text("Export as JSON")
+                            .size(14)
+                            .font(regular_font)
+                            .color(theme.fg_primary),
+                        text("Structured data format for automation and backup")
+                            .size(11)
+                            .font(regular_font)
+                            .color(theme.fg_muted),
                     ]
-                    .spacing(12)
-                    .align_y(Alignment::Center)
+                    .spacing(4)
                     .padding(16)
                 )
                 .on_press(Message::ExportAsJson)
                 .style(move |_, status| card_button(theme, status))
                 .width(Length::Fill),
                 button(
-                    row![
-                        text("📝").size(20),
-                        column![
-                            text("Export as nftables text")
-                                .size(16)
-                                .font(regular_font)
-                                .color(theme.fg_primary),
-                            text("Human-readable .nft format for manual editing")
-                                .size(12)
-                                .font(regular_font)
-                                .color(theme.fg_muted),
-                        ]
-                        .spacing(4),
+                    column![
+                        text("Export as nftables text")
+                            .size(14)
+                            .font(regular_font)
+                            .color(theme.fg_primary),
+                        text("Human-readable .nft format for manual editing")
+                            .size(11)
+                            .font(regular_font)
+                            .color(theme.fg_muted),
                     ]
-                    .spacing(12)
-                    .align_y(Alignment::Center)
+                    .spacing(4)
                     .padding(16)
                 )
                 .on_press(Message::ExportAsNft)
@@ -120,16 +116,20 @@ pub fn view_export_modal(
             ]
             .spacing(12),
             text("Files will be saved to ~/Downloads/ or your data directory")
-                .size(11)
+                .size(10)
                 .font(regular_font)
                 .color(theme.fg_muted),
-            button(text("Cancel").size(14).font(regular_font))
-                .on_press(Message::ToggleExportModal(false)) // Toggle to close
-                .padding([10, 20])
-                .style(move |_, status| secondary_button(theme, status)),
+            row![
+                space::Space::new().width(Length::Fill),
+                button(text("Cancel").size(14).font(regular_font))
+                    .on_press(Message::ToggleExportModal(false))
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(theme, status)),
+            ]
+            .align_y(Alignment::Center),
         ]
-        .spacing(20)
-        .padding(32)
+        .spacing(16)
+        .padding(24)
         .align_x(Alignment::Center),
     )
     .max_width(500)
