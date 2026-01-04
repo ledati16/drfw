@@ -169,7 +169,7 @@ pub fn format_audit_event<'a>(
 
     row![
         text(time)
-            .size(11)
+            .size(12)
             .font(mono_font)
             .color(theme.fg_muted),
         container(text(""))
@@ -184,7 +184,7 @@ pub fn format_audit_event<'a>(
                 ..Default::default()
             }),
         text(description)
-            .size(12)
+            .size(13)
             .font(mono_font)
             .color(theme.fg_primary),
     ]
