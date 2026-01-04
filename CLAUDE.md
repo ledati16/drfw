@@ -61,6 +61,38 @@ pub fn blocking_wrapper_1() -> Type1 {
 - Extraction would obscure intent
 - Pattern has subtle differences between uses
 
+**Real-world example: Button styling consolidation**
+```rust
+// ❌ BEFORE: 8 functions × ~70 lines = 560 lines of duplication
+pub fn primary_button(theme, status) -> Style {
+    let base = Style { background: theme.accent, ... };
+    match status {
+        Hovered => Style { background: brighten(theme.accent), ... },
+        Pressed => Style { background: darken(theme.accent), ... },
+        // ... repeated for all states
+    }
+}
+// ... 7 more nearly-identical functions
+
+// ✅ AFTER: Configuration-driven with shared builder
+struct ButtonStyleConfig {
+    base_color: ButtonColorSource,
+    hover_brightness: f32,
+    // ... config fields
+}
+
+impl ButtonStyleConfig {
+    const PRIMARY: Self = Self { base_color: Accent, hover_brightness: 1.08, ... };
+    const DANGER: Self = Self { base_color: Danger, hover_brightness: 1.08, ... };
+    // ... 6 more const configs
+}
+
+pub fn primary_button(theme, status) -> Style {
+    build_button_style(theme, status, ButtonStyleConfig::PRIMARY)  // 1 line
+}
+```
+Result: 8 functions reduced to single-line delegations, unified logic in `build_button_style()`.
+
 ### File Size Guidelines
 
 - **Single file limit:** ~4000 lines (e.g., `app/view.rs` is at this threshold)
@@ -404,6 +436,45 @@ pub fn view(&self) -> Element {
 - Lowercase search strings (`.to_lowercase()` once per keystroke)
 - Filtered/sorted collections (once per data change)
 - Syntax highlighting tokens (once per text change)
+- Display strings for frequently-rendered data (see example below)
+
+**Example: Caching formatted display strings**
+```rust
+// In your data struct (e.g., Rule)
+pub struct Rule {
+    pub action: Action,
+    pub rate_limit: Option<RateLimit>,
+    // ... other fields ...
+
+    // Cached display strings (Phase 2.3 optimization)
+    #[serde(skip)]
+    pub action_display: String,  // Pre-formatted "D (5/s)" or "A"
+
+    #[serde(skip)]
+    pub interface_display: String,  // Pre-formatted "@eth0" or "Any"
+}
+
+// Populate in rebuild_caches() (called once per data change)
+pub fn rebuild_caches(&mut self) {
+    self.action_display = if let Some(ref rate_limit) = self.rate_limit_display {
+        format!("{} ({})", self.action.as_char(), rate_limit)
+    } else {
+        self.action.as_char().to_string()
+    };
+
+    self.interface_display = if let Some(ref iface) = self.interface {
+        format!("@{}", iface)
+    } else {
+        "Any".to_string()
+    };
+}
+
+// In view() - zero allocations per frame
+pub fn view(&self) -> Element {
+    text(&rule.action_display)  // ✅ Use cached string
+    // NOT: text(format!("{}", rule.action))  // ❌ Allocates every frame
+}
+```
 
 **Pre-allocate collections:**
 ```rust
@@ -416,9 +487,16 @@ let mut output = String::with_capacity(estimated_size);
 // ❌ Allocates every frame
 let text = format!("{}-{}", start, end);
 
-// ✅ Stack buffer
+// ✅ Cache as struct field (best for repeated rendering)
+self.cached_range = format!("{}-{}", start, end);  // Once in update()
+text(&self.cached_range)  // Reference in view()
+
+// ✅ Stack buffer (for one-time use)
 let mut buf = String::with_capacity(12);
 write!(&mut buf, "{}-{}", start, end).ok();
+
+// ✅ Static reference (for simple conversions)
+"Any".into()  // Not "Any".to_string()
 ```
 
 **Debounce file saves:**
@@ -660,6 +738,6 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-01-02 (Post-implementation review - added DRY, file size guidelines, unwrap safety, TODO hygiene)
+**Last Updated:** 2026-01-04 (Phase 2-3 optimizations - added button config example, display string caching, allocation avoidance patterns)
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14

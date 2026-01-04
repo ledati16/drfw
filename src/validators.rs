@@ -27,7 +27,43 @@
 /// assert!(!safe.contains('\n'));
 /// assert!(!safe.contains('"'));
 /// ```
+///
+/// Generic validator for labeled strings (labels, log prefixes, etc.)
+/// Phase 3.3: Extracted to avoid duplication between validate_label() and validate_log_prefix()
+fn validate_labeled_string(
+    input: &str,
+    max_len: usize,
+    allow_colon: bool,
+    allow_empty: bool,
+) -> Result<String, &'static str> {
+    if !allow_empty && input.is_empty() {
+        return Err("Cannot be empty");
+    }
+
+    if input.len() > max_len {
+        return Err("Too long");
+    }
+
+    let sanitized: String = input
+        .chars()
+        .filter(|c| {
+            // SECURITY: Use ASCII-only to prevent Unicode bypasses and multi-byte issues
+            c.is_ascii_alphanumeric()
+                || matches!(c, ' ' | '-' | '_' | '.')
+                || (allow_colon && *c == ':')
+        })
+        .take(max_len)
+        .collect();
+
+    if sanitized.is_empty() && !input.is_empty() {
+        return Err("Contains only invalid characters");
+    }
+
+    Ok(sanitized)
+}
+
 pub fn sanitize_label(input: &str) -> String {
+    // Note: sanitize_label has different semantics than validators - it never errors, just truncates
     input
         .chars()
         .filter(|c| {
@@ -264,24 +300,13 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
 /// - All characters are invalid (becomes empty after sanitization)
 #[allow(dead_code)]
 pub fn validate_log_prefix(prefix: &str) -> Result<String, &'static str> {
-    if prefix.is_empty() {
-        return Err("Log prefix cannot be empty");
-    }
-
-    if prefix.len() > 64 {
-        return Err("Log prefix too long (max 64 chars)");
-    }
-
-    let sanitized: String = prefix
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | ':' | '.'))
-        .collect();
-
-    if sanitized.is_empty() {
-        return Err("Log prefix contains only invalid characters");
-    }
-
-    Ok(sanitized)
+    // Phase 3.3: Use generic helper
+    validate_labeled_string(prefix, 64, true, false).map_err(|err| match err {
+        "Cannot be empty" => "Log prefix cannot be empty",
+        "Too long" => "Log prefix too long (max 64 chars)",
+        "Contains only invalid characters" => "Log prefix contains only invalid characters",
+        _ => err,
+    })
 }
 
 #[cfg(test)]

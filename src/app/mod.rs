@@ -1,8 +1,8 @@
-pub mod syntax_cache;
-pub mod ui_components;
 mod forms;
 mod handlers;
 mod helpers;
+pub mod syntax_cache;
+pub mod ui_components;
 mod view;
 
 // Re-export form types
@@ -244,7 +244,6 @@ pub enum AppStatus {
     Reverting,
 }
 
-
 #[derive(Debug, Clone)]
 pub enum Message {
     AddRuleClicked,
@@ -479,7 +478,6 @@ impl State {
         (state, Task::none())
     }
 
-
     /// Add a banner to the notification queue (max 2 visible)
     pub fn push_banner(
         &mut self,
@@ -595,12 +593,10 @@ impl State {
         self.cached_filtered_rule_indices = indices;
     }
 
-
     fn mark_config_dirty(&mut self) {
         self.config_dirty = true;
         self.last_config_change = Some(std::time::Instant::now());
     }
-
 
     fn mark_profile_dirty(&mut self) {
         self.profile_dirty = true;
@@ -608,14 +604,9 @@ impl State {
         self.update_cached_text(); // UI updates immediately
     }
 
-
     fn schedule_slider_log(&mut self, description: String) {
         self.pending_slider_log = Some((description, std::time::Instant::now()));
     }
-
-
-
-
 
     pub fn is_dirty(&self) -> bool {
         self.last_applied_ruleset.as_ref().is_none_or(|last| {
@@ -689,19 +680,43 @@ impl State {
             Message::CancelRuleForm => handlers::handle_cancel_rule_form(self),
             Message::SaveRuleForm => return handlers::handle_save_rule_form(self),
             Message::RuleFormLabelChanged(s) => handlers::handle_rule_form_label_changed(self, s),
-            Message::RuleFormProtocolChanged(p) => handlers::handle_rule_form_protocol_changed(self, p),
-            Message::RuleFormPortStartChanged(s) => handlers::handle_rule_form_port_start_changed(self, s),
-            Message::RuleFormPortEndChanged(s) => handlers::handle_rule_form_port_end_changed(self, s),
+            Message::RuleFormProtocolChanged(p) => {
+                handlers::handle_rule_form_protocol_changed(self, p)
+            }
+            Message::RuleFormPortStartChanged(s) => {
+                handlers::handle_rule_form_port_start_changed(self, s)
+            }
+            Message::RuleFormPortEndChanged(s) => {
+                handlers::handle_rule_form_port_end_changed(self, s)
+            }
             Message::RuleFormSourceChanged(s) => handlers::handle_rule_form_source_changed(self, s),
-            Message::RuleFormInterfaceChanged(s) => handlers::handle_rule_form_interface_changed(self, s),
-            Message::RuleFormChainChanged(chain) => handlers::handle_rule_form_chain_changed(self, chain),
-            Message::RuleFormToggleAdvanced(show) => handlers::handle_rule_form_toggle_advanced(self, show),
-            Message::RuleFormDestinationChanged(s) => handlers::handle_rule_form_destination_changed(self, s),
-            Message::RuleFormActionChanged(action) => handlers::handle_rule_form_action_changed(self, action),
-            Message::RuleFormToggleRateLimit(enabled) => handlers::handle_rule_form_toggle_rate_limit(self, enabled),
-            Message::RuleFormRateLimitCountChanged(s) => handlers::handle_rule_form_rate_limit_count_changed(self, s),
-            Message::RuleFormRateLimitUnitChanged(unit) => handlers::handle_rule_form_rate_limit_unit_changed(self, unit),
-            Message::RuleFormConnectionLimitChanged(s) => handlers::handle_rule_form_connection_limit_changed(self, s),
+            Message::RuleFormInterfaceChanged(s) => {
+                handlers::handle_rule_form_interface_changed(self, s)
+            }
+            Message::RuleFormChainChanged(chain) => {
+                handlers::handle_rule_form_chain_changed(self, chain)
+            }
+            Message::RuleFormToggleAdvanced(show) => {
+                handlers::handle_rule_form_toggle_advanced(self, show)
+            }
+            Message::RuleFormDestinationChanged(s) => {
+                handlers::handle_rule_form_destination_changed(self, s)
+            }
+            Message::RuleFormActionChanged(action) => {
+                handlers::handle_rule_form_action_changed(self, action)
+            }
+            Message::RuleFormToggleRateLimit(enabled) => {
+                handlers::handle_rule_form_toggle_rate_limit(self, enabled)
+            }
+            Message::RuleFormRateLimitCountChanged(s) => {
+                handlers::handle_rule_form_rate_limit_count_changed(self, s)
+            }
+            Message::RuleFormRateLimitUnitChanged(unit) => {
+                handlers::handle_rule_form_rate_limit_unit_changed(self, unit)
+            }
+            Message::RuleFormConnectionLimitChanged(s) => {
+                handlers::handle_rule_form_connection_limit_changed(self, s)
+            }
             Message::RuleSearchChanged(s) => handlers::handle_rule_search_changed(self, s),
             Message::ToggleRuleEnabled(id) => return handlers::handle_toggle_rule(self, id),
             Message::DeleteRuleRequested(id) => handlers::handle_delete_rule_requested(self, id),
@@ -710,10 +725,12 @@ impl State {
 
             // Apply domain
             Message::ApplyClicked => return handlers::handle_apply_clicked(self),
-            Message::VerifyCompleted(result) => return handlers::handle_verify_completed(self, result),
+            Message::VerifyCompleted(result) => {
+                return handlers::handle_verify_completed(self, result);
+            }
             Message::ProceedToApply => return handlers::handle_proceed_to_apply(self),
             Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
-                return handlers::handle_apply_or_revert_error(self, e)
+                return handlers::handle_apply_or_revert_error(self, e);
             }
             Message::ApplyResult(Ok(snapshot)) => handlers::handle_apply_result(self, snapshot),
             Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),
@@ -721,7 +738,9 @@ impl State {
             Message::RevertResult(result) => handlers::handle_revert_result(self, result),
             Message::CountdownTick => return handlers::handle_countdown_tick(self),
             Message::SaveToSystemClicked => return handlers::handle_save_to_system(self),
-            Message::SaveToSystemResult(result) => handlers::handle_save_to_system_result(self, result),
+            Message::SaveToSystemResult(result) => {
+                handlers::handle_save_to_system_result(self, result)
+            }
 
             // Export domain
             Message::ToggleExportModal(show) => handlers::handle_toggle_export_modal(self, show),
@@ -736,42 +755,42 @@ impl State {
             // Settings domain
             Message::ToggleDiff(enabled) => return handlers::handle_toggle_diff(self, enabled),
             Message::ToggleZebraStriping(enabled) => {
-                return handlers::handle_toggle_zebra_striping(self, enabled)
+                return handlers::handle_toggle_zebra_striping(self, enabled);
             }
             Message::ToggleAutoRevert(enabled) => {
-                return handlers::handle_toggle_auto_revert(self, enabled)
+                return handlers::handle_toggle_auto_revert(self, enabled);
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 handlers::handle_auto_revert_timeout_changed(self, timeout)
             }
             Message::ToggleEventLog(enabled) => {
-                return handlers::handle_toggle_event_log(self, enabled)
+                return handlers::handle_toggle_event_log(self, enabled);
             }
             Message::ToggleStrictIcmp(enabled) => {
-                return handlers::handle_toggle_strict_icmp(self, enabled)
+                return handlers::handle_toggle_strict_icmp(self, enabled);
             }
             Message::IcmpRateLimitChanged(rate) => {
                 handlers::handle_icmp_rate_limit_changed(self, rate)
             }
             Message::ToggleRpfRequested(enabled) => {
-                return handlers::handle_toggle_rpf_requested(self, enabled)
+                return handlers::handle_toggle_rpf_requested(self, enabled);
             }
             Message::ConfirmEnableRpf => return handlers::handle_confirm_enable_rpf(self),
             Message::CancelWarning => handlers::handle_cancel_warning(self),
             Message::ToggleDroppedLogging(enabled) => {
-                return handlers::handle_toggle_dropped_logging(self, enabled)
+                return handlers::handle_toggle_dropped_logging(self, enabled);
             }
             Message::LogRateChanged(rate) => handlers::handle_log_rate_changed(self, rate),
             Message::CheckSliderLog => return handlers::handle_check_slider_log(self),
             Message::LogPrefixChanged(prefix) => {
-                return handlers::handle_log_prefix_changed(self, prefix)
+                return handlers::handle_log_prefix_changed(self, prefix);
             }
             Message::ServerModeToggled(enabled) => {
-                return handlers::handle_server_mode_toggled(self, enabled)
+                return handlers::handle_server_mode_toggled(self, enabled);
             }
             Message::ConfirmServerMode => return handlers::handle_confirm_server_mode(self),
             Message::ToggleDiagnostics(show) => {
-                return handlers::handle_toggle_diagnostics(self, show)
+                return handlers::handle_toggle_diagnostics(self, show);
             }
             Message::DiagnosticsFilterChanged(filter) => {
                 handlers::handle_diagnostics_filter_changed(self, filter)
@@ -779,9 +798,7 @@ impl State {
             Message::AuditEntriesLoaded(entries) => {
                 handlers::handle_audit_entries_loaded(self, entries)
             }
-            Message::CheckAuditLogRefresh => {
-                return handlers::handle_check_audit_log_refresh(self)
-            }
+            Message::CheckAuditLogRefresh => return handlers::handle_check_audit_log_refresh(self),
             Message::AuditLogWritten => handlers::handle_audit_log_written(self),
             Message::ClearEventLog => handlers::handle_clear_event_log(self),
             Message::ToggleShortcutsHelp(show) => {
@@ -799,14 +816,12 @@ impl State {
             Message::ThemePreview(choice) => handlers::handle_theme_preview(self, choice),
             Message::ApplyTheme => return handlers::handle_apply_theme(self),
             Message::CancelThemePicker => handlers::handle_cancel_theme_picker(self),
-            Message::ThemePreviewButtonClick => {
-                handlers::handle_theme_preview_button_click(self)
-            }
+            Message::ThemePreviewButtonClick => handlers::handle_theme_preview_button_click(self),
             Message::RegularFontChanged(choice) => {
-                return handlers::handle_regular_font_changed(self, choice)
+                return handlers::handle_regular_font_changed(self, choice);
             }
             Message::MonoFontChanged(choice) => {
-                return handlers::handle_mono_font_changed(self, choice)
+                return handlers::handle_mono_font_changed(self, choice);
             }
             Message::OpenFontPicker(target) => {
                 handlers::handle_open_font_picker(self, target);
@@ -824,27 +839,25 @@ impl State {
             Message::FilterByTag(tag) => handlers::handle_filter_by_tag(self, tag),
             Message::OpenLogsFolder => handlers::handle_open_logs_folder(),
             Message::RuleDragStart(id) => handlers::handle_rule_drag_start(self, id),
-            Message::RuleDropped(target_id) => return handlers::handle_rule_dropped(self, target_id),
+            Message::RuleDropped(target_id) => {
+                return handlers::handle_rule_dropped(self, target_id);
+            }
             Message::RuleHoverStart(id) => handlers::handle_rule_hover_start(self, id),
             Message::RuleHoverEnd => handlers::handle_rule_hover_end(self),
             Message::ProfileSelected(name) => return handlers::handle_profile_selected(self, name),
             Message::ProfileSwitched(name, ruleset) => {
-                return handlers::handle_profile_switched(self, name, ruleset)
+                return handlers::handle_profile_switched(self, name, ruleset);
             }
             Message::SaveProfileAs(name) => return handlers::handle_save_profile_as(self, name),
             Message::ProfileListUpdated(profiles) => {
                 handlers::handle_profile_list_updated(self, profiles)
             }
-            Message::StartCreatingNewProfile => {
-                handlers::handle_start_creating_new_profile(self)
-            }
+            Message::StartCreatingNewProfile => handlers::handle_start_creating_new_profile(self),
             Message::CreateEmptyProfile => handlers::handle_create_empty_profile(self),
             Message::NewProfileNameChanged(name) => {
                 handlers::handle_new_profile_name_changed(self, name)
             }
-            Message::CancelCreatingNewProfile => {
-                handlers::handle_cancel_creating_new_profile(self)
-            }
+            Message::CancelCreatingNewProfile => handlers::handle_cancel_creating_new_profile(self),
             Message::OpenProfileManager => handlers::handle_open_profile_manager(self),
             Message::CloseProfileManager => handlers::handle_close_profile_manager(self),
             Message::DeleteProfileRequested(name) => {
@@ -852,7 +865,7 @@ impl State {
             }
             Message::ConfirmDeleteProfile => return handlers::handle_confirm_delete_profile(self),
             Message::ProfileDeleted(result) => {
-                return handlers::handle_profile_deleted(self, result)
+                return handlers::handle_profile_deleted(self, result);
             }
             Message::CancelDeleteProfile => handlers::handle_cancel_delete_profile(self),
             Message::RenameProfileRequested(name) => {
@@ -861,20 +874,14 @@ impl State {
             Message::ProfileNewNameChanged(new_name) => {
                 handlers::handle_profile_new_name_changed(self, new_name)
             }
-            Message::ConfirmRenameProfile => {
-                return handlers::handle_confirm_rename_profile(self)
-            }
+            Message::ConfirmRenameProfile => return handlers::handle_confirm_rename_profile(self),
             Message::ProfileRenamed(result) => handlers::handle_profile_renamed(self, result),
             Message::CancelRenameProfile => handlers::handle_cancel_rename_profile(self),
-            Message::ConfirmProfileSwitch => {
-                return handlers::handle_confirm_profile_switch(self)
-            }
-            Message::DiscardProfileSwitch => {
-                return handlers::handle_discard_profile_switch(self)
-            }
+            Message::ConfirmProfileSwitch => return handlers::handle_confirm_profile_switch(self),
+            Message::DiscardProfileSwitch => return handlers::handle_discard_profile_switch(self),
             Message::CancelProfileSwitch => handlers::handle_cancel_profile_switch(self),
             Message::ProfileSwitchAfterSave(name) => {
-                return handlers::handle_profile_switch_after_save(self, name)
+                return handlers::handle_profile_switch_after_save(self, name);
             }
             Message::PruneBanners => handlers::handle_prune_banners(self),
             Message::DismissBanner(index) => handlers::handle_dismiss_banner(self, index),

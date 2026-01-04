@@ -285,21 +285,10 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 let action_badge = if rule.action == crate::core::firewall::Action::Accept {
                     None
                 } else {
-                    let action_char = match rule.action {
-                        crate::core::firewall::Action::Drop => "D",
-                        crate::core::firewall::Action::Reject => "R",
-                        crate::core::firewall::Action::Accept => "", // unreachable
-                    };
-
-                    let action_text = if let Some(ref rate_limit) = rule.rate_limit_display {
-                        format!("{action_char} ({rate_limit})")
-                    } else {
-                        action_char.to_string()
-                    };
-
+                    // Phase 2.3: Use cached action_display string (no allocation)
                     Some(
                         container(
-                            text(action_text)
+                            text(&rule.action_display)
                                 .size(9)
                                 .font(state.font_mono)
                                 .color(theme.fg_on_accent)
@@ -467,10 +456,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 let mut detail_items: Vec<Element<'_, Message>> = Vec::with_capacity(4);
 
                 // 1. Interface (Far Left)
-                if let Some(ref iface) = rule.interface {
+                if rule.interface.is_some() {
+                    // Phase 2.3: Use cached interface_display string (no allocation)
                     detail_items.push(
                         container(
-                            text(format!("@{iface}"))
+                            text(&rule.interface_display)
                                 .size(9)
                                 .font(state.font_mono)
                                 .color(if rule.enabled {

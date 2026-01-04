@@ -281,8 +281,7 @@ pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Ta
 /// Handles confirming server mode
 pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
     state.pending_warning = None;
-    state.ruleset.advanced_security.egress_profile =
-        crate::core::firewall::EgressProfile::Server;
+    state.ruleset.advanced_security.egress_profile = crate::core::firewall::EgressProfile::Server;
     state.mark_profile_dirty();
     let enable_event_log = state.enable_event_log;
     Task::perform(
@@ -317,7 +316,10 @@ pub(crate) fn handle_check_config_save(state: &mut State) -> Task<Message> {
 }
 
 /// Handles regular font changed
-pub(crate) fn handle_regular_font_changed(state: &mut State, choice: crate::fonts::RegularFontChoice) -> Task<Message> {
+pub(crate) fn handle_regular_font_changed(
+    state: &mut State,
+    choice: crate::fonts::RegularFontChoice,
+) -> Task<Message> {
     state.regular_font_choice = choice.clone();
     state.font_regular = choice.to_font();
     state.mark_config_dirty();
@@ -332,7 +334,10 @@ pub(crate) fn handle_regular_font_changed(state: &mut State, choice: crate::font
 }
 
 /// Handles mono font changed
-pub(crate) fn handle_mono_font_changed(state: &mut State, choice: crate::fonts::MonoFontChoice) -> Task<Message> {
+pub(crate) fn handle_mono_font_changed(
+    state: &mut State,
+    choice: crate::fonts::MonoFontChoice,
+) -> Task<Message> {
     state.mono_font_choice = choice.clone();
     state.font_mono = choice.to_font();
     state.font_picker = None;

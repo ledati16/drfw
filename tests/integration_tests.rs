@@ -77,6 +77,8 @@ fn create_test_ruleset() -> FirewallRuleset {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
     ruleset
 }
@@ -218,6 +220,8 @@ async fn test_multiple_rules_verification() {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
     }
 
@@ -370,6 +374,8 @@ async fn test_checksum_changes_on_modification() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     let snapshot2 = ruleset1.to_nftables_json();
@@ -436,6 +442,8 @@ async fn test_all_protocol_types_generate_valid_json() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     // UDP
@@ -463,6 +471,8 @@ async fn test_all_protocol_types_generate_valid_json() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     // ICMP
@@ -490,6 +500,8 @@ async fn test_all_protocol_types_generate_valid_json() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     // Any
@@ -517,6 +529,8 @@ async fn test_all_protocol_types_generate_valid_json() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     let json = ruleset.to_nftables_json();
@@ -559,6 +573,8 @@ async fn test_complex_rule_configurations() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     // Rule with interface filter
@@ -586,6 +602,8 @@ async fn test_complex_rule_configurations() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     // Rule with port range
@@ -616,6 +634,8 @@ async fn test_complex_rule_configurations() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     // Rule with everything
@@ -643,6 +663,8 @@ async fn test_complex_rule_configurations() {
         source_string: None,
         destination_string: None,
         rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
     });
 
     let json = ruleset.to_nftables_json();

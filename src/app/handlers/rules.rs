@@ -166,6 +166,8 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
+            interface_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
         };
         rule.rebuild_caches();
 
@@ -178,7 +180,12 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
         if is_edit {
             // EDIT EXISTING RULE
             // Safe pattern from CLAUDE.md Section 13
-            let Some(old_rule) = state.ruleset.rules.iter().find(|r| r.id == rule.id).cloned()
+            let Some(old_rule) = state
+                .ruleset
+                .rules
+                .iter()
+                .find(|r| r.id == rule.id)
+                .cloned()
             else {
                 tracing::error!(
                     "SaveRuleForm for non-existent rule ID: {}. \
@@ -239,9 +246,7 @@ pub(crate) fn handle_toggle_rule(state: &mut State, id: Uuid) -> Task<Message> {
         rule_id: id,
         was_enabled,
     });
-    state
-        .command_history
-        .execute(cmd, &mut state.ruleset);
+    state.command_history.execute(cmd, &mut state.ruleset);
 
     state.mark_profile_dirty();
 
@@ -275,9 +280,7 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
         rule: rule_clone.clone(),
         index,
     });
-    state
-        .command_history
-        .execute(cmd, &mut state.ruleset);
+    state.command_history.execute(cmd, &mut state.ruleset);
 
     state.deleting_id = None;
     state.mark_profile_dirty();
@@ -322,9 +325,7 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
         old_index,
         new_index,
     });
-    state
-        .command_history
-        .execute(cmd, &mut state.ruleset);
+    state.command_history.execute(cmd, &mut state.ruleset);
 
     state.dragged_rule_id = None;
     state.hovered_drop_target_id = None;
@@ -383,10 +384,7 @@ pub(crate) fn handle_rule_form_protocol_changed(state: &mut State, protocol: Pro
     form.protocol = protocol;
 
     // Clear ports if switching to ICMP or Any (doesn't use ports)
-    if matches!(
-        protocol,
-        Protocol::Icmp | Protocol::Icmpv6 | Protocol::Any
-    ) {
+    if matches!(protocol, Protocol::Icmp | Protocol::Icmpv6 | Protocol::Any) {
         form.port_start.clear();
         form.port_end.clear();
     }
@@ -645,9 +643,6 @@ mod tests {
         state.rule_form = Some(RuleForm::default());
 
         handle_rule_form_label_changed(&mut state, "Test Label".to_string());
-        assert_eq!(
-            state.rule_form.as_ref().unwrap().label,
-            "Test Label"
-        );
+        assert_eq!(state.rule_form.as_ref().unwrap().label, "Test Label");
     }
 }

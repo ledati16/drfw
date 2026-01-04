@@ -47,6 +47,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let json = ruleset.to_nftables_json();
@@ -95,6 +97,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let text = ruleset.to_nft_text();
@@ -130,6 +134,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let json = ruleset.to_nftables_json();
@@ -247,6 +253,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -277,6 +285,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -304,6 +314,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let text = ruleset.to_nft_text();
@@ -387,6 +399,8 @@ mod tests_impl {
                 source_string: None,
                 destination_string: None,
                 rate_limit_display: None,
+                action_display: String::new(),
+                interface_display: String::new(),
             });
         }
 
@@ -456,6 +470,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -483,6 +499,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -510,6 +528,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let text = ruleset.to_nft_text();
@@ -568,6 +588,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -595,6 +617,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -622,6 +646,8 @@ mod tests_impl {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let text = ruleset.to_nft_text();
@@ -712,6 +738,8 @@ mod property_tests {
                 source_string: None,
                 destination_string: None,
                 rate_limit_display: None,
+                action_display: String::new(),
+                interface_display: String::new(),
             }
         }
     }
@@ -843,6 +871,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
         ruleset
     }
@@ -931,6 +961,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let json = ruleset.to_nftables_json();
@@ -983,6 +1015,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let json2 = ruleset1.to_nftables_json();
@@ -1092,6 +1126,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -1119,6 +1155,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         ruleset.rules.push(Rule {
@@ -1146,6 +1184,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let json = ruleset.to_nftables_json();
@@ -1209,6 +1249,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         // UDP rule
@@ -1237,6 +1279,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         // Any protocol rule
@@ -1265,6 +1309,8 @@ mod integration_tests {
             source_string: None,
             destination_string: None,
             rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
         });
 
         let json = ruleset.to_nftables_json();

@@ -165,7 +165,7 @@ pub fn view_rule_form<'a>(
                     pick_list(
                         iface_options,
                         Some(if form.interface.is_empty() {
-                            "Any".to_string()
+                            "Any".into() // Phase 3.2: Use .into() instead of .to_string()
                         } else {
                             form.interface.clone()
                         }),

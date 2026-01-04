@@ -12,8 +12,7 @@ use iced::Task;
 
 /// Handles exporting as JSON
 pub(crate) fn handle_export_as_json(state: &State) -> Task<Message> {
-    let json =
-        serde_json::to_string_pretty(&state.ruleset.to_nftables_json()).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&state.ruleset.to_nftables_json()).unwrap_or_default();
     Task::perform(
         async move {
             use rfd::AsyncFileDialog;

@@ -101,6 +101,9 @@ inactive_tab_button(theme, status)  // Unselected tabs
 dirty_button(theme, status)         // Unsaved changes indicator
 ```
 
+### Implementation Note
+All button functions use a unified `ButtonStyleConfig` system internally to avoid code duplication. Each button type is defined as a const configuration with specific colors, shadows, and interaction states. **Do not create new button functions**—modify existing configurations or add new const configs to the system.
+
 ### Standard Padding/Sizing
 ```rust
 // Primary action buttons
@@ -565,18 +568,19 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 ### ❌ Don't
 - Implement `Catalog` traits for `AppTheme`
 - Use gradients on interactive elements (breaks shadows)
-- Create inline button styles
+- Create inline button styles or duplicate button functions
 - Use `..Default::default()` for borders (resets radius)
 - Apply fixed `menu_height()` to short dropdowns
-- Compute expensive operations in `view()`
+- Compute expensive operations in `view()` (e.g., `format!()`, `.to_string()`)
 - Use hardcoded RGB colors
 - Forget to set `.font()` on text widgets (won't respect user font choice)
 - Use monospace for user-facing explanatory text
 
 ### ✅ Do
-- Use centralized style functions
-- Use semantic color names
-- Cache computed data in `update()`
+- Use centralized style functions from `ui_components.rs`
+- Use semantic color names from theme
+- Cache computed/formatted strings in struct fields (`#[serde(skip)]`)
+- Pre-compute display strings in `rebuild_caches()` or `update()`
 - Preserve rounded corners on warning modals
 - Test across multiple themes (light and dark)
 - Pre-allocate collections when size is known

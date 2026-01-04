@@ -2,11 +2,16 @@
 
 use crate::app::syntax_cache::HighlightedLine;
 
-/// Calculate maximum content width from highlighted lines (owned slice)
+/// Calculate maximum content width from highlighted lines (generic implementation)
 ///
-/// Works with slices of `HighlightedLine`.
-/// Used for horizontal scrolling calculations in syntax-highlighted views.
-pub fn calculate_max_content_width(tokens: &[HighlightedLine]) -> f32 {
+/// Works with both owned slices (`&[HighlightedLine]`) and reference slices (`&[&HighlightedLine]`)
+/// via the `IntoIterator` trait. Used for horizontal scrolling calculations in syntax-highlighted views.
+///
+/// Phase 3.1: Unified implementation to eliminate code duplication
+fn calculate_max_content_width_generic<'a, I>(tokens: I) -> f32
+where
+    I: IntoIterator<Item = &'a HighlightedLine>,
+{
     const CHAR_WIDTH_PX: f32 = 8.4;
     const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
     const TRAILING_PADDING_PX: f32 = 60.0;
@@ -14,7 +19,7 @@ pub fn calculate_max_content_width(tokens: &[HighlightedLine]) -> f32 {
     const MAX_WIDTH_PX: f32 = 3000.0;
 
     let max_char_count = tokens
-        .iter()
+        .into_iter()
         .map(|line| {
             let indent_chars = line.indent;
             let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
@@ -28,30 +33,20 @@ pub fn calculate_max_content_width(tokens: &[HighlightedLine]) -> f32 {
     content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
 }
 
+/// Calculate maximum content width from highlighted lines (owned slice)
+///
+/// Works with slices of `HighlightedLine`.
+/// Used for horizontal scrolling calculations in syntax-highlighted views.
+pub fn calculate_max_content_width(tokens: &[HighlightedLine]) -> f32 {
+    calculate_max_content_width_generic(tokens)
+}
+
 /// Calculate maximum content width from highlighted lines (reference slice)
 ///
 /// Works with slices of references to `HighlightedLine`.
 /// Used for horizontal scrolling calculations when working with borrowed data.
 pub fn calculate_max_content_width_from_refs(tokens: &[&HighlightedLine]) -> f32 {
-    const CHAR_WIDTH_PX: f32 = 8.4;
-    const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
-    const TRAILING_PADDING_PX: f32 = 60.0;
-    const MIN_WIDTH_PX: f32 = 800.0;
-    const MAX_WIDTH_PX: f32 = 3000.0;
-
-    let max_char_count = tokens
-        .iter()
-        .map(|line| {
-            let indent_chars = line.indent;
-            let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
-            indent_chars + token_chars
-        })
-        .max()
-        .unwrap_or(0);
-
-    let content_width =
-        LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
-    content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
+    calculate_max_content_width_generic(tokens.iter().copied())
 }
 
 #[cfg(test)]

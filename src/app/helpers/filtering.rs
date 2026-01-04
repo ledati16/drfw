@@ -99,16 +99,13 @@ pub fn fuzzy_filter_themes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strum::IntoEnumIterator;
     use crate::fonts::FontChoice;
     use crate::theme::ThemeChoice;
+    use strum::IntoEnumIterator;
 
     #[test]
     fn test_fuzzy_filter_fonts_empty_query() {
-        let fonts = [
-            FontChoice::SystemDefault,
-            FontChoice::SystemMonospace,
-        ];
+        let fonts = [FontChoice::SystemDefault, FontChoice::SystemMonospace];
         let results = fuzzy_filter_fonts(fonts.iter(), "");
         assert_eq!(results.len(), 2);
         // All scores should be 0 for empty query
@@ -117,10 +114,7 @@ mod tests {
 
     #[test]
     fn test_fuzzy_filter_fonts_match() {
-        let fonts = [
-            FontChoice::SystemDefault,
-            FontChoice::SystemMonospace,
-        ];
+        let fonts = [FontChoice::SystemDefault, FontChoice::SystemMonospace];
         let results = fuzzy_filter_fonts(fonts.iter(), "mono");
         // Should find SystemMonospace
         assert_eq!(results.len(), 1);

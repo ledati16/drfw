@@ -208,6 +208,16 @@ impl Action {
             Action::Reject => "Reject",
         }
     }
+
+    /// Returns single-character abbreviation for compact UI display
+    /// Used in action badges (Phase 2.3 optimization)
+    pub const fn as_char(self) -> &'static str {
+        match self {
+            Action::Accept => "A",
+            Action::Drop => "D",
+            Action::Reject => "R",
+        }
+    }
 }
 
 /// Time unit for rate limiting
@@ -355,6 +365,14 @@ pub struct Rule {
     /// Cached rate limit display string for efficient view rendering (e.g., "5/m", "10/s")
     #[serde(skip)]
     pub rate_limit_display: Option<String>,
+    /// Cached action display string for efficient view rendering (e.g., "A", "D (5/s)", "R")
+    /// Combines action character with rate limit if present (Phase 2.3 optimization)
+    #[serde(skip)]
+    pub action_display: String,
+    /// Cached interface display string for efficient view rendering (e.g., "@eth0", "Any")
+    /// (Phase 2.3 optimization)
+    #[serde(skip)]
+    pub interface_display: String,
 }
 
 impl Rule {
@@ -390,6 +408,18 @@ impl Rule {
             };
             format!("{}/{}", rl.count, unit_abbrev)
         });
+        // Phase 2.3: Cache action display string (combines action + rate limit)
+        self.action_display = if let Some(ref rate_limit) = self.rate_limit_display {
+            format!("{} ({})", self.action.as_char(), rate_limit)
+        } else {
+            self.action.as_char().to_string()
+        };
+        // Phase 2.3: Cache interface display string
+        self.interface_display = if let Some(ref iface) = self.interface {
+            format!("@{}", iface)
+        } else {
+            "Any".to_string()
+        };
     }
 
     /// Updates label and its cached lowercase version
@@ -472,6 +502,8 @@ impl Rule {
             source_string: None,         // Issue #10: Will be populated by rebuild_caches()
             destination_string: None,
             rate_limit_display: None, // Will be populated by rebuild_caches()
+            action_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
+            interface_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
         };
         rule.rebuild_caches();
         rule

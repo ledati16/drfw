@@ -229,9 +229,7 @@ pub(crate) async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
 pub(crate) fn handle_event(state: &mut State, event: iced::Event) -> Task<Message> {
     use crate::app::AppStatus;
 
-    if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) =
-        event
-    {
+    if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event {
         match key.as_ref() {
             iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter)
                 if state.rule_form.is_some() =>
@@ -270,21 +268,15 @@ pub(crate) fn handle_event(state: &mut State, event: iced::Event) -> Task<Messag
             iced::keyboard::Key::Named(iced::keyboard::key::Named::F1) => {
                 return Task::done(Message::ToggleShortcutsHelp(true));
             }
-            iced::keyboard::Key::Character("n")
-                if modifiers.command() || modifiers.control() =>
-            {
+            iced::keyboard::Key::Character("n") if modifiers.command() || modifiers.control() => {
                 if !matches!(state.status, AppStatus::PendingConfirmation { .. }) {
                     return Task::done(Message::AddRuleClicked);
                 }
             }
-            iced::keyboard::Key::Character("s")
-                if modifiers.command() || modifiers.control() =>
-            {
+            iced::keyboard::Key::Character("s") if modifiers.command() || modifiers.control() => {
                 return Task::done(Message::ApplyClicked);
             }
-            iced::keyboard::Key::Character("e")
-                if modifiers.command() || modifiers.control() =>
-            {
+            iced::keyboard::Key::Character("e") if modifiers.command() || modifiers.control() => {
                 return Task::done(Message::ToggleExportModal(true));
             }
             iced::keyboard::Key::Character("z")
@@ -301,9 +293,7 @@ pub(crate) fn handle_event(state: &mut State, event: iced::Event) -> Task<Messag
                     return Task::done(Message::Redo);
                 }
             }
-            iced::keyboard::Key::Character("y")
-                if modifiers.command() || modifiers.control() =>
-            {
+            iced::keyboard::Key::Character("y") if modifiers.command() || modifiers.control() => {
                 if state.command_history.can_redo() {
                     return Task::done(Message::Redo);
                 }

@@ -116,8 +116,14 @@ pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
             let result = crate::core::nft_json::apply_with_snapshot(nft_json).await;
             let success = result.is_ok();
             let error = result.as_ref().err().map(std::string::ToString::to_string);
-            audit::log_apply(enable_event_log, rule_count, enabled_count, success, error.clone())
-                .await;
+            audit::log_apply(
+                enable_event_log,
+                rule_count,
+                enabled_count,
+                success,
+                error.clone(),
+            )
+            .await;
             result.map_err(|e| e.to_string())
         },
         Message::ApplyResult,
@@ -162,7 +168,11 @@ pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value
     } else {
         // Auto-revert disabled: show success banner and return to idle
         state.status = AppStatus::Idle;
-        state.push_banner("Firewall rules applied successfully!", BannerSeverity::Success, 5);
+        state.push_banner(
+            "Firewall rules applied successfully!",
+            BannerSeverity::Success,
+            5,
+        );
     }
 }
 
@@ -278,7 +288,11 @@ pub(crate) fn handle_revert_result(state: &mut State, result: Result<(), String>
     match result {
         Ok(()) => {
             state.status = AppStatus::Idle;
-            state.push_banner("Firewall rules reverted successfully", BannerSeverity::Info, 5);
+            state.push_banner(
+                "Firewall rules reverted successfully",
+                BannerSeverity::Info,
+                5,
+            );
         }
         Err(e) => {
             state.status = AppStatus::Idle;
@@ -447,6 +461,9 @@ mod tests {
         state.status = AppStatus::Idle;
         let _task = handle_apply_clicked(&mut state);
         // Should transition to Verifying (or stay Idle if polkit agent not running)
-        assert!(matches!(state.status, AppStatus::Verifying | AppStatus::Idle));
+        assert!(matches!(
+            state.status,
+            AppStatus::Verifying | AppStatus::Idle
+        ));
     }
 }
