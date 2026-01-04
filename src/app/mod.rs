@@ -1263,7 +1263,7 @@ impl State {
                             )
                             .await;
                         },
-                        |_| Message::Noop,
+                        |_| Message::AuditLogWritten,
                     );
                 } else if e.contains("Authentication failed") {
                     self.push_banner("Authentication failed", BannerSeverity::Error, 5);
@@ -1273,7 +1273,7 @@ impl State {
                         async move {
                             crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
                         },
-                        |_| Message::Noop,
+                        |_| Message::AuditLogWritten,
                     );
                 } else if e.contains("timed out") || e.contains("Operation timed out") {
                     self.push_banner("Authentication timed out", BannerSeverity::Error, 5);
@@ -1283,7 +1283,7 @@ impl State {
                         async move {
                             crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
                         },
-                        |_| Message::Noop,
+                        |_| Message::AuditLogWritten,
                     );
                 } else if e.contains("No authentication agent") || e.contains("No polkit") {
                     self.push_banner(
@@ -1297,7 +1297,7 @@ impl State {
                         async move {
                             crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
                         },
-                        |_| Message::Noop,
+                        |_| Message::AuditLogWritten,
                     );
                 } else if e.contains("nft binary not found") || e.contains("nftables") {
                     self.push_banner("nftables not installed", BannerSeverity::Error, 5);
@@ -1307,7 +1307,7 @@ impl State {
                         async move {
                             crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
                         },
-                        |_| Message::Noop,
+                        |_| Message::AuditLogWritten,
                     );
                 } else {
                     // Generic error - show error message
@@ -1378,7 +1378,7 @@ impl State {
                         crate::audit::log_export_completed(enable_event_log, format, &path_clone)
                             .await;
                     },
-                    |_| Message::Noop,
+                    |_| Message::AuditLogWritten,
                 );
             }
             Message::ExportResult(Err(e)) => {
@@ -2001,7 +2001,7 @@ impl State {
                 .chain(Task::future(async move {
                     // Log profile creation
                     crate::audit::log_profile_created(enable_event_log, &name_for_log).await;
-                    Message::Noop
+                    Message::AuditLogWritten
                 }));
             }
             Message::ProfileListUpdated(profiles) => {
@@ -2087,7 +2087,7 @@ impl State {
                     .chain(Task::future(async move {
                         // Log profile deletion
                         crate::audit::log_profile_deleted(enable_event_log, &deleted_name).await;
-                        Message::Noop
+                        Message::AuditLogWritten
                     }));
                 }
             }
@@ -2157,7 +2157,7 @@ impl State {
                         // Log profile rename
                         crate::audit::log_profile_renamed(enable_event_log, &old_name, &new_name)
                             .await;
-                        Message::Noop
+                        Message::AuditLogWritten
                     }));
                 }
             }
@@ -2402,7 +2402,7 @@ impl State {
                         .await;
                     }
                 },
-                |_| Message::Noop,
+                |_| Message::AuditLogWritten,
             );
         }
         Task::none()
@@ -2427,7 +2427,7 @@ impl State {
                 async move {
                     crate::audit::log_rule_toggled(enable_event_log, &label, !was_enabled).await;
                 },
-                |_| Message::Noop,
+                |_| Message::AuditLogWritten,
             );
         }
         Task::none()
@@ -2451,7 +2451,7 @@ impl State {
                 async move {
                     crate::audit::log_rule_deleted(enable_event_log, &label).await;
                 },
-                |_| Message::Noop,
+                |_| Message::AuditLogWritten,
             );
         }
         self.deleting_id = None;
