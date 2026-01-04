@@ -115,10 +115,6 @@ pub fn view_export_modal(
                 .width(Length::Fill),
             ]
             .spacing(12),
-            text("Files will be saved to ~/Downloads/ or your data directory")
-                .size(10)
-                .font(regular_font)
-                .color(theme.fg_muted),
             row![
                 space::Space::new().width(Length::Fill),
                 button(text("Cancel").size(14).font(regular_font))
