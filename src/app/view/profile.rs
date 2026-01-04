@@ -115,22 +115,22 @@ pub fn view_profile_manager<'a>(
                 container(
                     row![
                         text("Delete this profile?")
-                            .size(12)
+                            .size(11)
                             .font(state.font_regular)
                             .color(theme.danger)
                             .width(Length::Fill),
-                        button(text("No").size(12).font(state.font_regular))
+                        button(text("Cancel").size(11).font(state.font_regular))
                             .on_press(Message::CancelDeleteProfile)
                             .padding([4, 10])
                             .style(move |_, status| secondary_button(theme, status)),
-                        button(text("Yes, Delete").size(12).font(state.font_regular))
+                        button(text("Delete").size(11).font(state.font_regular))
                             .on_press(Message::ConfirmDeleteProfile)
                             .padding([4, 10])
                             .style(move |_, status| danger_button(theme, status)),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center)
-                    .padding([6, 10]),
+                    .padding(8.0),
                 )
                 .style(move |_| card_container(theme))
                 .into()
