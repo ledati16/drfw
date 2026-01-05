@@ -60,7 +60,7 @@ pub(crate) fn handle_verify_completed(
                 async move {
                     audit::log_verify(enable_event_log, true, error_count, None).await;
                 },
-                |_| Message::AuditLogWritten,
+                |()| Message::AuditLogWritten,
             )
         }
         Ok(verify_result) => {
@@ -81,7 +81,7 @@ pub(crate) fn handle_verify_completed(
                 async move {
                     audit::log_verify(enable_event_log, false, error_count, error).await;
                 },
-                |_| Message::AuditLogWritten,
+                |()| Message::AuditLogWritten,
             )
         }
         Err(e) => {
@@ -89,7 +89,7 @@ pub(crate) fn handle_verify_completed(
             let msg = if e.len() > 60 {
                 format!("Verification error: {}...", &e[..57])
             } else {
-                format!("Verification error: {}", e)
+                format!("Verification error: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error, 8);
             let enable_event_log = state.enable_event_log;
@@ -98,7 +98,7 @@ pub(crate) fn handle_verify_completed(
                 async move {
                     audit::log_verify(enable_event_log, false, 0, Some(error)).await;
                 },
-                |_| Message::AuditLogWritten,
+                |()| Message::AuditLogWritten,
             )
         }
     }
@@ -141,7 +141,7 @@ pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value
         let msg = if e.to_string().len() > 45 {
             "Warning: Failed to save snapshot. Rollback may be unavailable.".to_string()
         } else {
-            format!("Warning: Failed to save snapshot: {}", e)
+            format!("Warning: Failed to save snapshot: {e}")
         };
         state.push_banner(&msg, BannerSeverity::Warning, 10);
     }
@@ -278,7 +278,7 @@ pub(crate) fn handle_confirm_clicked(state: &mut State) -> Task<Message> {
             async move {
                 audit::log_auto_revert_confirmed(enable_event_log, timeout_secs).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     }
     Task::none()
@@ -300,7 +300,7 @@ pub(crate) fn handle_revert_result(state: &mut State, result: Result<(), String>
             let msg = if e.len() > 55 {
                 format!("Revert failed: {}...", &e[..52])
             } else {
-                format!("Revert failed: {}", e)
+                format!("Revert failed: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error, 10);
         }
@@ -367,7 +367,7 @@ pub(crate) fn handle_save_to_system_result(state: &mut State, result: Result<(),
             let msg = if e.len() > 50 {
                 format!("Save failed: {}...", &e[..47])
             } else {
-                format!("Save failed: {}", e)
+                format!("Save failed: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error, 8);
         }
@@ -375,7 +375,7 @@ pub(crate) fn handle_save_to_system_result(state: &mut State, result: Result<(),
 }
 
 /// Handles apply/revert errors with user-friendly messages and audit logging
-pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: String) -> Task<Message> {
+pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Task<Message> {
     use crate::app::{AppStatus, BannerSeverity};
 
     state.status = AppStatus::Idle;
@@ -392,27 +392,27 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: String) -> 
                 )
                 .await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     } else if error.contains("Authentication failed") {
         state.push_banner("Authentication failed", BannerSeverity::Error, 5);
         let enable_event_log = state.enable_event_log;
-        let error_msg = error.clone();
+        let error_msg = error.to_owned();
         return Task::perform(
             async move {
                 crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     } else if error.contains("timed out") || error.contains("Operation timed out") {
         state.push_banner("Authentication timed out", BannerSeverity::Error, 5);
         let enable_event_log = state.enable_event_log;
-        let error_msg = error.clone();
+        let error_msg = error.to_owned();
         return Task::perform(
             async move {
                 crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     } else if error.contains("No authentication agent") || error.contains("No polkit") {
         state.push_banner(
@@ -421,32 +421,32 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: String) -> 
             8,
         );
         let enable_event_log = state.enable_event_log;
-        let error_msg = error.clone();
+        let error_msg = error.to_owned();
         return Task::perform(
             async move {
                 crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     } else if error.contains("nft binary not found") || error.contains("nftables") {
         state.push_banner("nftables not installed", BannerSeverity::Error, 5);
         let enable_event_log = state.enable_event_log;
-        let error_msg = error.clone();
+        let error_msg = error.to_owned();
         return Task::perform(
             async move {
                 crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
-    } else {
-        // Generic error - show error message
-        let msg = if error.len() > 80 {
-            format!("{}...", &error[..77])
-        } else {
-            error.clone()
-        };
-        state.push_banner(&msg, BannerSeverity::Error, 8);
     }
+
+    // Generic error - show error message
+    let msg = if error.len() > 80 {
+        format!("{}...", &error[..77])
+    } else {
+        error.to_owned()
+    };
+    state.push_banner(&msg, BannerSeverity::Error, 8);
 
     Task::none()
 }

@@ -55,7 +55,7 @@ pub(crate) fn handle_undo(state: &mut State) -> Task<Message> {
             async move {
                 crate::audit::log_undone(enable_event_log, &desc).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     }
     Task::none()
@@ -72,7 +72,7 @@ pub(crate) fn handle_redo(state: &mut State) -> Task<Message> {
             async move {
                 crate::audit::log_redone(enable_event_log, &desc).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     }
     Task::none()
@@ -130,7 +130,7 @@ pub(crate) fn handle_apply_theme(state: &mut State) -> Task<Message> {
         async move {
             crate::audit::log_settings_saved(enable_event_log, &desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 

@@ -416,7 +416,7 @@ impl Rule {
         };
         // Phase 2.3: Cache interface display string
         self.interface_display = if let Some(ref iface) = self.interface {
-            format!("@{}", iface)
+            format!("@{iface}")
         } else {
             "Any".to_string()
         };
@@ -636,7 +636,7 @@ impl FirewallRuleset {
     }
 
     /// Creates a rule add wrapper with the standard drfw table structure
-    fn rule_add(chain: &str, expr: Vec<serde_json::Value>, comment: &str) -> serde_json::Value {
+    fn rule_add(chain: &str, expr: &[serde_json::Value], comment: &str) -> serde_json::Value {
         serde_json::json!({
             "add": {
                 "rule": {
@@ -862,7 +862,7 @@ impl FirewallRuleset {
             let ipv4_expr = build_icmp_rule("icmp", Some(ipv4_types), advanced.icmp_rate_limit);
             nft_rules.push(Self::rule_add(
                 "input",
-                ipv4_expr,
+                &ipv4_expr,
                 "allow essential icmp (strict mode)",
             ));
 
@@ -885,17 +885,17 @@ impl FirewallRuleset {
                 build_icmp_rule("ipv6-icmp", Some(ipv6_types), advanced.icmp_rate_limit);
             nft_rules.push(Self::rule_add(
                 "input",
-                ipv6_expr,
+                &ipv6_expr,
                 "allow essential icmpv6 (strict mode)",
             ));
         } else {
             // Default mode: Allow all ICMP (except redirects which are already blocked)
 
             let ipv4_expr = build_icmp_rule("icmp", None, advanced.icmp_rate_limit);
-            nft_rules.push(Self::rule_add("input", ipv4_expr, "allow icmp"));
+            nft_rules.push(Self::rule_add("input", &ipv4_expr, "allow icmp"));
 
             let ipv6_expr = build_icmp_rule("ipv6-icmp", None, advanced.icmp_rate_limit);
-            nft_rules.push(Self::rule_add("input", ipv6_expr, "allow icmp v6"));
+            nft_rules.push(Self::rule_add("input", &ipv6_expr, "allow icmp v6"));
         }
     }
 

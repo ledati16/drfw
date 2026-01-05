@@ -79,14 +79,9 @@ pub fn list_interfaces() -> Vec<String> {
     let mut interfaces: Vec<String> = NetworkInterface::show()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|iface| {
-            // Filter out loopback (already handled by base rules)
-            if iface.name != "lo" {
-                Some(iface.name)
-            } else {
-                None
-            }
-        })
+        // Filter out loopback (already handled by base rules)
+        .filter(|iface| iface.name != "lo")
+        .map(|iface| iface.name)
         .collect();
 
     interfaces.sort();

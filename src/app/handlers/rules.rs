@@ -224,7 +224,7 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
                     audit::log_rule_created(enable_event_log, &label, &protocol, port_str).await;
                 }
             },
-            |_| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
+            |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
         );
     }
 
@@ -255,7 +255,7 @@ pub(crate) fn handle_toggle_rule(state: &mut State, id: Uuid) -> Task<Message> {
         async move {
             audit::log_rule_toggled(enable_event_log, &label, !was_enabled).await;
         },
-        |_| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
+        |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
     )
 }
 
@@ -290,7 +290,7 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
         async move {
             audit::log_rule_deleted(enable_event_log, &rule_clone.label).await;
         },
-        |_| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
+        |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
     )
 }
 
@@ -348,7 +348,7 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
             async move {
                 audit::log_rules_reordered(enable_event_log, &rule_label, direction).await;
             },
-            |_| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
+            |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
         )
     } else {
         Task::none()
@@ -555,7 +555,7 @@ pub(crate) fn handle_rule_form_add_tag(state: &mut State) {
     }
 }
 
-pub(crate) fn handle_rule_form_remove_tag(state: &mut State, tag: String) {
+pub(crate) fn handle_rule_form_remove_tag(state: &mut State, tag: &str) {
     let Some(form) = &mut state.rule_form else {
         tracing::error!(
             "RuleFormRemoveTag sent without active form. \
@@ -563,15 +563,15 @@ pub(crate) fn handle_rule_form_remove_tag(state: &mut State, tag: String) {
         );
         return;
     };
-    form.tags.retain(|t| t != &tag);
+    form.tags.retain(|t| t != tag);
 }
 
 // ============================================================================
 // Search and filtering
 // ============================================================================
 
-pub(crate) fn handle_rule_search_changed(state: &mut State, value: String) {
-    state.rule_search = value.clone();
+pub(crate) fn handle_rule_search_changed(state: &mut State, value: &str) {
+    value.clone_into(&mut state.rule_search);
     state.rule_search_lowercase = value.to_lowercase();
     state.update_filter_cache();
 }

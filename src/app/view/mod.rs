@@ -148,7 +148,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     };
 
     // Banner overlay layer (free-floating at top-right, ABOVE modal backdrop)
-    let with_banners: Element<'_, Message> = if !state.banners.is_empty() {
+    let with_banners: Element<'_, Message> = if state.banners.is_empty() {
+        with_overlay
+    } else {
         let banner_column = column(
             state
                 .banners
@@ -171,8 +173,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 .align_y(alignment::Vertical::Top)
         ]
         .into()
-    } else {
-        with_overlay
     };
 
     // Diagnostics modal overlay (on top of everything)

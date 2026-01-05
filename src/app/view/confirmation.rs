@@ -11,13 +11,13 @@ use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Sha
 // Helper Functions - Build modal body content
 // ============================================================================
 
-/// Build the body content for AwaitingApply state
-fn build_awaiting_body<'a>(
+/// Build the body content for `AwaitingApply` state
+fn build_awaiting_body(
     auto_revert_enabled: bool,
     auto_revert_timeout: u64,
-    theme: &'a crate::theme::AppTheme,
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     let description_row = if auto_revert_enabled {
         let timeout_val = auto_revert_timeout.min(120);
         container(row![
@@ -25,7 +25,7 @@ fn build_awaiting_body<'a>(
                 .size(14)
                 .font(font)
                 .color(theme.fg_muted),
-            text(format!("{}", timeout_val))
+            text(format!("{timeout_val}"))
                 .size(14)
                 .font(iced::Font {
                     weight: iced::font::Weight::Bold,
@@ -63,12 +63,12 @@ fn build_awaiting_body<'a>(
     .into()
 }
 
-/// Build the buttons for AwaitingApply state
-fn build_awaiting_buttons<'a>(
+/// Build the buttons for `AwaitingApply` state
+fn build_awaiting_buttons(
     auto_revert_enabled: bool,
-    theme: &'a crate::theme::AppTheme,
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     let button_text = if auto_revert_enabled {
         "Apply & Start Timer"
     } else {
@@ -90,10 +90,7 @@ fn build_awaiting_buttons<'a>(
 }
 
 /// Build the body content for Applying state (new!)
-fn build_applying_body<'a>(
-    theme: &'a crate::theme::AppTheme,
-    font: iced::Font,
-) -> Element<'a, Message> {
+fn build_applying_body(theme: &crate::theme::AppTheme, font: iced::Font) -> Element<'_, Message> {
     text("Updating firewall configuration...")
         .size(14)
         .font(font)
@@ -104,11 +101,11 @@ fn build_applying_body<'a>(
 }
 
 /// Build the buttons for Applying state (disabled versions)
-fn build_applying_buttons<'a>(
+fn build_applying_buttons(
     auto_revert_enabled: bool,
-    theme: &'a crate::theme::AppTheme,
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     let button_text = if auto_revert_enabled {
         "Apply & Start Timer"
     } else {
@@ -127,13 +124,13 @@ fn build_applying_buttons<'a>(
     .into()
 }
 
-/// Build the body content for PendingConfirmation state
-fn build_confirmation_body<'a>(
+/// Build the body content for `PendingConfirmation` state
+fn build_confirmation_body(
     remaining: u32,
     animated_progress: f32,
-    theme: &'a crate::theme::AppTheme,
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     let progress = animated_progress;
 
     column![
@@ -310,11 +307,11 @@ fn build_confirmation_body<'a>(
     .into()
 }
 
-/// Build the buttons for PendingConfirmation state
-fn build_confirmation_buttons<'a>(
-    theme: &'a crate::theme::AppTheme,
+/// Build the buttons for `PendingConfirmation` state
+fn build_confirmation_buttons(
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     row![
         button(text("Rollback").size(14).font(font))
             .on_press(Message::RevertClicked)
@@ -334,9 +331,9 @@ fn build_confirmation_buttons<'a>(
 // ============================================================================
 
 /// Unified apply flow modal that handles all three states:
-/// - AwaitingApply: "Commit Changes?" with enabled buttons
-/// - Applying: "Applying Rules..." with disabled buttons (no flash!)
-/// - PendingConfirmation: Countdown timer with progress bar
+/// - `AwaitingApply`: "Commit Changes?" with enabled buttons
+/// - `Applying`: "Applying Rules..." with disabled buttons (no flash!)
+/// - `PendingConfirmation`: Countdown timer with progress bar
 pub fn view_apply_flow_modal<'a>(
     status: &'a AppStatus,
     auto_revert_enabled: bool,

@@ -143,7 +143,7 @@ pub struct ThemePickerState {
     pub search_lowercase: String,
     pub filter: ThemeFilter,
     pub original_theme: crate::theme::ThemeChoice,
-    /// Pre-computed theme conversions to avoid repeated to_theme() calls
+    /// Pre-computed theme conversions to avoid repeated `to_theme()` calls
     pub cached_themes: Vec<(crate::theme::ThemeChoice, crate::theme::AppTheme)>,
 }
 
@@ -682,43 +682,43 @@ impl State {
             Message::SaveRuleForm => return handlers::handle_save_rule_form(self),
             Message::RuleFormLabelChanged(s) => handlers::handle_rule_form_label_changed(self, s),
             Message::RuleFormProtocolChanged(p) => {
-                handlers::handle_rule_form_protocol_changed(self, p)
+                handlers::handle_rule_form_protocol_changed(self, p);
             }
             Message::RuleFormPortStartChanged(s) => {
-                handlers::handle_rule_form_port_start_changed(self, s)
+                handlers::handle_rule_form_port_start_changed(self, s);
             }
             Message::RuleFormPortEndChanged(s) => {
-                handlers::handle_rule_form_port_end_changed(self, s)
+                handlers::handle_rule_form_port_end_changed(self, s);
             }
             Message::RuleFormSourceChanged(s) => handlers::handle_rule_form_source_changed(self, s),
             Message::RuleFormInterfaceChanged(s) => {
-                handlers::handle_rule_form_interface_changed(self, s)
+                handlers::handle_rule_form_interface_changed(self, s);
             }
             Message::RuleFormChainChanged(chain) => {
-                handlers::handle_rule_form_chain_changed(self, chain)
+                handlers::handle_rule_form_chain_changed(self, chain);
             }
             Message::RuleFormToggleAdvanced(show) => {
-                handlers::handle_rule_form_toggle_advanced(self, show)
+                handlers::handle_rule_form_toggle_advanced(self, show);
             }
             Message::RuleFormDestinationChanged(s) => {
-                handlers::handle_rule_form_destination_changed(self, s)
+                handlers::handle_rule_form_destination_changed(self, s);
             }
             Message::RuleFormActionChanged(action) => {
-                handlers::handle_rule_form_action_changed(self, action)
+                handlers::handle_rule_form_action_changed(self, action);
             }
             Message::RuleFormToggleRateLimit(enabled) => {
-                handlers::handle_rule_form_toggle_rate_limit(self, enabled)
+                handlers::handle_rule_form_toggle_rate_limit(self, enabled);
             }
             Message::RuleFormRateLimitCountChanged(s) => {
-                handlers::handle_rule_form_rate_limit_count_changed(self, s)
+                handlers::handle_rule_form_rate_limit_count_changed(self, s);
             }
             Message::RuleFormRateLimitUnitChanged(unit) => {
-                handlers::handle_rule_form_rate_limit_unit_changed(self, unit)
+                handlers::handle_rule_form_rate_limit_unit_changed(self, unit);
             }
             Message::RuleFormConnectionLimitChanged(s) => {
-                handlers::handle_rule_form_connection_limit_changed(self, s)
+                handlers::handle_rule_form_connection_limit_changed(self, s);
             }
-            Message::RuleSearchChanged(s) => handlers::handle_rule_search_changed(self, s),
+            Message::RuleSearchChanged(s) => handlers::handle_rule_search_changed(self, &s),
             Message::ToggleRuleEnabled(id) => return handlers::handle_toggle_rule(self, id),
             Message::DeleteRuleRequested(id) => handlers::handle_delete_rule_requested(self, id),
             Message::CancelDelete => handlers::handle_cancel_delete(self),
@@ -731,7 +731,7 @@ impl State {
             }
             Message::ProceedToApply => return handlers::handle_proceed_to_apply(self),
             Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
-                return handlers::handle_apply_or_revert_error(self, e);
+                return handlers::handle_apply_or_revert_error(self, &e);
             }
             Message::ApplyResult(Ok(snapshot)) => handlers::handle_apply_result(self, snapshot),
             Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),
@@ -740,7 +740,7 @@ impl State {
             Message::CountdownTick => return handlers::handle_countdown_tick(self),
             Message::SaveToSystemClicked => return handlers::handle_save_to_system(self),
             Message::SaveToSystemResult(result) => {
-                handlers::handle_save_to_system_result(self, result)
+                handlers::handle_save_to_system_result(self, result);
             }
 
             // Export domain
@@ -762,7 +762,7 @@ impl State {
                 return handlers::handle_toggle_auto_revert(self, enabled);
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
-                handlers::handle_auto_revert_timeout_changed(self, timeout)
+                handlers::handle_auto_revert_timeout_changed(self, timeout);
             }
             Message::ToggleEventLog(enabled) => {
                 return handlers::handle_toggle_event_log(self, enabled);
@@ -771,7 +771,7 @@ impl State {
                 return handlers::handle_toggle_strict_icmp(self, enabled);
             }
             Message::IcmpRateLimitChanged(rate) => {
-                handlers::handle_icmp_rate_limit_changed(self, rate)
+                handlers::handle_icmp_rate_limit_changed(self, rate);
             }
             Message::ToggleRpfRequested(enabled) => {
                 return handlers::handle_toggle_rpf_requested(self, enabled);
@@ -784,7 +784,7 @@ impl State {
             Message::LogRateChanged(rate) => handlers::handle_log_rate_changed(self, rate),
             Message::CheckSliderLog => return handlers::handle_check_slider_log(self),
             Message::LogPrefixChanged(prefix) => {
-                return handlers::handle_log_prefix_changed(self, prefix);
+                return handlers::handle_log_prefix_changed(self, &prefix);
             }
             Message::ServerModeToggled(enabled) => {
                 return handlers::handle_server_mode_toggled(self, enabled);
@@ -794,49 +794,49 @@ impl State {
                 return handlers::handle_toggle_diagnostics(self, show);
             }
             Message::DiagnosticsFilterChanged(filter) => {
-                handlers::handle_diagnostics_filter_changed(self, filter)
+                handlers::handle_diagnostics_filter_changed(self, filter);
             }
             Message::AuditEntriesLoaded(entries) => {
-                handlers::handle_audit_entries_loaded(self, entries)
+                handlers::handle_audit_entries_loaded(self, entries);
             }
             Message::CheckAuditLogRefresh => return handlers::handle_check_audit_log_refresh(self),
             Message::AuditLogWritten => handlers::handle_audit_log_written(self),
             Message::ClearEventLog => handlers::handle_clear_event_log(self),
             Message::ToggleShortcutsHelp(show) => {
-                handlers::handle_toggle_shortcuts_help(self, show)
+                handlers::handle_toggle_shortcuts_help(self, show);
             }
             Message::Undo => return handlers::handle_undo(self),
             Message::Redo => return handlers::handle_redo(self),
             Message::OpenThemePicker => handlers::handle_open_theme_picker(self),
             Message::ThemePickerSearchChanged(search) => {
-                handlers::handle_theme_picker_search_changed(self, search)
+                handlers::handle_theme_picker_search_changed(self, search);
             }
             Message::ThemePickerFilterChanged(filter) => {
-                handlers::handle_theme_picker_filter_changed(self, filter)
+                handlers::handle_theme_picker_filter_changed(self, filter);
             }
             Message::ThemePreview(choice) => handlers::handle_theme_preview(self, choice),
             Message::ApplyTheme => return handlers::handle_apply_theme(self),
             Message::CancelThemePicker => handlers::handle_cancel_theme_picker(self),
             Message::ThemePreviewButtonClick => handlers::handle_theme_preview_button_click(self),
             Message::RegularFontChanged(choice) => {
-                return handlers::handle_regular_font_changed(self, choice);
+                return handlers::handle_regular_font_changed(self, &choice);
             }
             Message::MonoFontChanged(choice) => {
-                return handlers::handle_mono_font_changed(self, choice);
+                return handlers::handle_mono_font_changed(self, &choice);
             }
             Message::OpenFontPicker(target) => {
                 handlers::handle_open_font_picker(self, target);
                 return focus(Id::from(view::FONT_SEARCH_INPUT_ID));
             }
             Message::FontPickerSearchChanged(search) => {
-                handlers::handle_font_picker_search_changed(self, search)
+                handlers::handle_font_picker_search_changed(self, search);
             }
             Message::CloseFontPicker => handlers::handle_close_font_picker(self),
             Message::RuleFormTagInputChanged(s) => {
-                handlers::handle_rule_form_tag_input_changed(self, s)
+                handlers::handle_rule_form_tag_input_changed(self, s);
             }
             Message::RuleFormAddTag => handlers::handle_rule_form_add_tag(self),
-            Message::RuleFormRemoveTag(tag) => handlers::handle_rule_form_remove_tag(self, tag),
+            Message::RuleFormRemoveTag(tag) => handlers::handle_rule_form_remove_tag(self, &tag),
             Message::FilterByTag(tag) => handlers::handle_filter_by_tag(self, tag),
             Message::OpenLogsFolder => handlers::handle_open_logs_folder(),
             Message::RuleDragStart(id) => handlers::handle_rule_drag_start(self, id),
@@ -851,18 +851,18 @@ impl State {
             }
             Message::SaveProfileAs(name) => return handlers::handle_save_profile_as(self, name),
             Message::ProfileListUpdated(profiles) => {
-                handlers::handle_profile_list_updated(self, profiles)
+                handlers::handle_profile_list_updated(self, profiles);
             }
             Message::StartCreatingNewProfile => handlers::handle_start_creating_new_profile(self),
             Message::CreateEmptyProfile => handlers::handle_create_empty_profile(self),
             Message::NewProfileNameChanged(name) => {
-                handlers::handle_new_profile_name_changed(self, name)
+                handlers::handle_new_profile_name_changed(self, name);
             }
             Message::CancelCreatingNewProfile => handlers::handle_cancel_creating_new_profile(self),
             Message::OpenProfileManager => handlers::handle_open_profile_manager(self),
             Message::CloseProfileManager => handlers::handle_close_profile_manager(self),
             Message::DeleteProfileRequested(name) => {
-                handlers::handle_delete_profile_requested(self, name)
+                handlers::handle_delete_profile_requested(self, name);
             }
             Message::ConfirmDeleteProfile => return handlers::handle_confirm_delete_profile(self),
             Message::ProfileDeleted(result) => {
@@ -870,10 +870,10 @@ impl State {
             }
             Message::CancelDeleteProfile => handlers::handle_cancel_delete_profile(self),
             Message::RenameProfileRequested(name) => {
-                handlers::handle_rename_profile_requested(self, name)
+                handlers::handle_rename_profile_requested(self, name);
             }
             Message::ProfileNewNameChanged(new_name) => {
-                handlers::handle_profile_new_name_changed(self, new_name)
+                handlers::handle_profile_new_name_changed(self, new_name);
             }
             Message::ConfirmRenameProfile => return handlers::handle_confirm_rename_profile(self),
             Message::ProfileRenamed(result) => handlers::handle_profile_renamed(self, result),
@@ -889,7 +889,7 @@ impl State {
             Message::CheckConfigSave => return handlers::handle_check_config_save(self),
             Message::CheckProfileSave => return handlers::handle_check_profile_save(self),
             Message::DiskProfileLoaded(profile) => {
-                handlers::handle_disk_profile_loaded(self, profile)
+                handlers::handle_disk_profile_loaded(self, profile);
             }
             Message::Noop => {
                 // No-op for async operations that don't need handling
@@ -913,10 +913,10 @@ impl State {
                 _ => iced::Subscription::none(),
             },
             // Prune expired banners every second
-            if !self.banners.is_empty() {
-                iced::time::every(Duration::from_secs(1)).map(|_| Message::PruneBanners)
-            } else {
+            if self.banners.is_empty() {
                 iced::Subscription::none()
+            } else {
+                iced::time::every(Duration::from_secs(1)).map(|_| Message::PruneBanners)
             },
             // Config auto-save subscription
             if self.config_dirty {

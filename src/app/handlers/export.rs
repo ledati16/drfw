@@ -25,7 +25,7 @@ pub(crate) fn handle_export_as_json(state: &State) -> Task<Message> {
             if let Some(file) = file {
                 tokio::fs::write(file.path(), json)
                     .await
-                    .map(|_| file.path().display().to_string())
+                    .map(|()| file.path().display().to_string())
                     .map_err(|e| format!("Failed to write file: {e}"))
             } else {
                 Err("Export cancelled".to_string())
@@ -50,7 +50,7 @@ pub(crate) fn handle_export_as_nft(state: &State) -> Task<Message> {
             if let Some(file) = file {
                 tokio::fs::write(file.path(), text)
                     .await
-                    .map(|_| file.path().display().to_string())
+                    .map(|()| file.path().display().to_string())
                     .map_err(|e| format!("Failed to write file: {e}"))
             } else {
                 Err("Export cancelled".to_string())
@@ -66,7 +66,7 @@ pub(crate) fn handle_export_result(state: &mut State, result: Result<String, Str
     match result {
         Ok(path) => {
             let msg = crate::app::helpers::truncate_path_smart(&path, 60);
-            state.push_banner(format!("Exported to {}", msg), BannerSeverity::Success, 5);
+            state.push_banner(format!("Exported to {msg}"), BannerSeverity::Success, 5);
         }
         Err(e) if e == "Export cancelled" => {
             // User cancelled - don't show error
@@ -75,7 +75,7 @@ pub(crate) fn handle_export_result(state: &mut State, result: Result<String, Str
             let msg = if e.len() > 50 {
                 format!("Export failed: {}...", &e[..47])
             } else {
-                format!("Export failed: {}", e)
+                format!("Export failed: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error, 8);
         }

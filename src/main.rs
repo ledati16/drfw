@@ -90,7 +90,7 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
             // Countdown with only the timer colored
             print!("\rAuto-revert in ");
             let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-            print!("{:2}s", remaining);
+            print!("{remaining:2}s");
             let _ = stdout().execute(ResetColor);
             print!("  [c/Enter=confirm, r=revert now]   ");
             std::io::stdout().flush().ok();
@@ -100,10 +100,10 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
                 && let Ok(Event::Key(key)) = event::read()
             {
                 match key.code {
-                    KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
+                    KeyCode::Char('c' | 'C') | KeyCode::Enter => {
                         return ConfirmResult::Confirmed;
                     }
-                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                    KeyCode::Char('r' | 'R') => {
                         print!("\r\x1b[K"); // Clear line
                         println!("Reverting...");
                         match core::nft_json::restore_snapshot(snapshot).await {

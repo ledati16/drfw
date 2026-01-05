@@ -146,6 +146,8 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                     "   └ Timeout",
                     "Seconds before automatic revert (5-120s)",
                     row![
+                        // Precision loss acceptable: timeout is 5-120s, well within f64/u64 precision
+                        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         slider(5.0..=120.0, state.auto_revert_timeout_secs as f64, |v| Message::AutoRevertTimeoutChanged(v as u64))
                             .width(Length::Fill)
                             .style(move |_, status| themed_slider(theme, status)),

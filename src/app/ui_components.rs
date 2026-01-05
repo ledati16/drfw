@@ -9,7 +9,7 @@ use iced::{Border, Color, Gradient, Shadow, Vector};
 // =============================================================================
 
 /// Configuration for button styling variations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct ButtonStyleConfig {
     /// Base background color source
     base_color: ButtonColorSource,
@@ -43,12 +43,12 @@ struct ButtonStyleConfig {
     snap: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum ButtonColorSource {
     Accent,
     Danger,
     Surface,
-    /// For tabs: use pre-defined accent_hover on hover
+    /// For tabs: use pre-defined `accent_hover` on hover
     AccentWithHoverColor,
     /// For dirty button: pre-shift warning color
     ShiftedWarning,
@@ -244,10 +244,9 @@ fn build_button_style(
 ) -> button::Style {
     // Resolve base color
     let base_color = match config.base_color {
-        ButtonColorSource::Accent => theme.accent,
+        ButtonColorSource::Accent | ButtonColorSource::AccentWithHoverColor => theme.accent,
         ButtonColorSource::Danger => theme.danger,
         ButtonColorSource::Surface => theme.bg_surface,
-        ButtonColorSource::AccentWithHoverColor => theme.accent,
         ButtonColorSource::ShiftedWarning => {
             // Special: shift warning color by 20% (dirty button)
             if theme.is_light() {

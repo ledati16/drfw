@@ -29,7 +29,7 @@
 /// ```
 ///
 /// Generic validator for labeled strings (labels, log prefixes, etc.)
-/// Phase 3.3: Extracted to avoid duplication between validate_label() and validate_log_prefix()
+/// Extracted to avoid duplication between label and log prefix validation
 fn validate_labeled_string(
     input: &str,
     max_len: usize,
@@ -199,8 +199,7 @@ pub fn validate_connection_limit(limit: u32) -> Result<Option<String>, String> {
 
     if limit > 10_000 {
         return Ok(Some(format!(
-            "High connection limit ({}) - typical: 10-1000",
-            limit
+            "High connection limit ({limit}) - typical: 10-1000"
         )));
     }
 
@@ -226,10 +225,7 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
     }
 
     if rate > 60 {
-        return Ok(Some(format!(
-            "High log rate ({}/min) - default: 5/min",
-            rate
-        )));
+        return Ok(Some(format!("High log rate ({rate}/min) - default: 5/min")));
     }
 
     Ok(None)

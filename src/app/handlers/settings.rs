@@ -24,7 +24,7 @@ pub(crate) fn handle_toggle_diff(state: &mut State, enabled: bool) -> Task<Messa
         async move {
             crate::audit::log_settings_saved(enable_event_log, desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn handle_toggle_zebra_striping(state: &mut State, enabled: bool) -> 
         async move {
             crate::audit::log_settings_saved(enable_event_log, desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn handle_toggle_auto_revert(state: &mut State, enabled: bool) -> Tas
         async move {
             crate::audit::log_settings_saved(enable_event_log, desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -69,7 +69,7 @@ pub(crate) fn handle_auto_revert_timeout_changed(state: &mut State, timeout: u64
     state.auto_revert_timeout_secs = timeout.clamp(5, 120);
     state.mark_config_dirty();
     // Schedule debounced logging - log after 2s of no changes
-    let desc = format!("Auto-revert timeout set to {}s", timeout);
+    let desc = format!("Auto-revert timeout set to {timeout}s");
     state.schedule_slider_log(desc);
 }
 
@@ -92,7 +92,7 @@ pub(crate) fn handle_toggle_event_log(state: &mut State, enabled: bool) -> Task<
             // This ensures "disabled" message gets logged before turning off
             crate::audit::log_settings_saved(old_value || enabled, desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -110,7 +110,7 @@ pub(crate) fn handle_toggle_strict_icmp(state: &mut State, enabled: bool) -> Tas
         async move {
             crate::audit::log_settings_saved(enable_event_log, desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -119,7 +119,7 @@ pub(crate) fn handle_icmp_rate_limit_changed(state: &mut State, rate: u32) {
     state.ruleset.advanced_security.icmp_rate_limit = rate;
     state.mark_profile_dirty();
     // Schedule debounced logging - log after 2s of no changes
-    let desc = format!("ICMP rate limit set to {}/s", rate);
+    let desc = format!("ICMP rate limit set to {rate}/s");
     state.schedule_slider_log(desc);
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn handle_toggle_rpf_requested(state: &mut State, enabled: bool) -> T
                 )
                 .await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         )
     }
 }
@@ -159,7 +159,7 @@ pub(crate) fn handle_confirm_enable_rpf(state: &mut State) -> Task<Message> {
             )
             .await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -182,7 +182,7 @@ pub(crate) fn handle_toggle_dropped_logging(state: &mut State, enabled: bool) ->
         async move {
             crate::audit::log_settings_saved(enable_event_log, desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -206,7 +206,7 @@ pub(crate) fn handle_log_rate_changed(state: &mut State, rate: u32) {
     state.ruleset.advanced_security.log_rate_per_minute = rate;
     state.mark_profile_dirty();
     // Schedule debounced logging - log after 2s of no changes
-    let desc = format!("Log rate limit set to {}/min", rate);
+    let desc = format!("Log rate limit set to {rate}/min");
     state.schedule_slider_log(desc);
 }
 
@@ -215,7 +215,7 @@ pub(crate) fn handle_check_slider_log(state: &mut State) -> Task<Message> {
     const DEBOUNCE_MS: u64 = 2000; // 2 seconds for slider changes
 
     if let Some((description, last_change)) = &state.pending_slider_log
-        && last_change.elapsed().as_millis() >= DEBOUNCE_MS as u128
+        && last_change.elapsed().as_millis() >= u128::from(DEBOUNCE_MS)
     {
         let desc = description.clone();
         state.pending_slider_log = None;
@@ -224,7 +224,7 @@ pub(crate) fn handle_check_slider_log(state: &mut State) -> Task<Message> {
             async move {
                 crate::audit::log_settings_saved(enable_event_log, &desc).await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         );
     }
 
@@ -232,19 +232,23 @@ pub(crate) fn handle_check_slider_log(state: &mut State) -> Task<Message> {
 }
 
 /// Handles log prefix change
-pub(crate) fn handle_log_prefix_changed(state: &mut State, prefix: String) -> Task<Message> {
+pub(crate) fn handle_log_prefix_changed(state: &mut State, prefix: &str) -> Task<Message> {
     // Validate and sanitize log prefix
-    match crate::validators::validate_log_prefix(&prefix) {
+    match crate::validators::validate_log_prefix(prefix) {
         Ok(sanitized) => {
-            state.ruleset.advanced_security.log_prefix = sanitized.clone();
+            state
+                .ruleset
+                .advanced_security
+                .log_prefix
+                .clone_from(&sanitized);
             state.mark_profile_dirty();
             let enable_event_log = state.enable_event_log;
-            let desc = format!("Log prefix changed to '{}'", sanitized);
+            let desc = format!("Log prefix changed to '{sanitized}'");
             Task::perform(
                 async move {
                     crate::audit::log_settings_saved(enable_event_log, &desc).await;
                 },
-                |_| Message::AuditLogWritten,
+                |()| Message::AuditLogWritten,
             )
         }
         Err(e) => {
@@ -273,7 +277,7 @@ pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Ta
                 )
                 .await;
             },
-            |_| Message::AuditLogWritten,
+            |()| Message::AuditLogWritten,
         )
     }
 }
@@ -292,7 +296,7 @@ pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
             )
             .await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -306,7 +310,7 @@ pub(crate) fn handle_check_config_save(state: &mut State) -> Task<Message> {
 
     // Check if enough time has passed since last change
     if let Some(last_change) = state.last_config_change
-        && last_change.elapsed().as_millis() < DEBOUNCE_MS as u128
+        && last_change.elapsed().as_millis() < u128::from(DEBOUNCE_MS)
     {
         return Task::none();
     }
@@ -318,7 +322,7 @@ pub(crate) fn handle_check_config_save(state: &mut State) -> Task<Message> {
 /// Handles regular font changed
 pub(crate) fn handle_regular_font_changed(
     state: &mut State,
-    choice: crate::fonts::RegularFontChoice,
+    choice: &crate::fonts::RegularFontChoice,
 ) -> Task<Message> {
     state.regular_font_choice = choice.clone();
     state.font_regular = choice.to_font();
@@ -329,14 +333,14 @@ pub(crate) fn handle_regular_font_changed(
         async move {
             crate::audit::log_settings_saved(enable_event_log, &desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
 /// Handles mono font changed
 pub(crate) fn handle_mono_font_changed(
     state: &mut State,
-    choice: crate::fonts::MonoFontChoice,
+    choice: &crate::fonts::MonoFontChoice,
 ) -> Task<Message> {
     state.mono_font_choice = choice.clone();
     state.font_mono = choice.to_font();
@@ -348,7 +352,7 @@ pub(crate) fn handle_mono_font_changed(
         async move {
             crate::audit::log_settings_saved(enable_event_log, &desc).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 

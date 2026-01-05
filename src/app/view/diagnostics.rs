@@ -112,7 +112,7 @@ pub fn format_audit_event<'a>(
                 event.details["label"].as_str().unwrap_or(""),
                 event.details["ports"]
                     .as_str()
-                    .map(|p| format!(" ({})", p))
+                    .map(|p| format!(" ({p})"))
                     .unwrap_or_default()
             ),
         ),
@@ -130,7 +130,7 @@ pub fn format_audit_event<'a>(
                 event.details["label"].as_str().unwrap_or(""),
                 event.details["ports"]
                     .as_str()
-                    .map(|p| format!(" ({})", p))
+                    .map(|p| format!(" ({p})"))
                     .unwrap_or_default()
             ),
         ),
@@ -316,7 +316,7 @@ pub fn view_diagnostics_modal<'a>(
             // Action buttons
             row![
                 container(
-                    text(format!("{} events", event_count))
+                    text(format!("{event_count} events"))
                         .size(10)
                         .font(mono_font)
                         .color(theme.fg_muted)

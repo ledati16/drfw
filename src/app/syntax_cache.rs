@@ -327,6 +327,9 @@ fn parse_nft_line(line: &str) -> Vec<Token> {
 }
 
 fn parse_nft_tokens(line: &str) -> Vec<Token> {
+    #[allow(clippy::enum_glob_use)] // Clear within this match-heavy function
+    use NftToken::*;
+
     let mut tokens = Vec::with_capacity(AVG_NFT_TOKENS_PER_LINE);
     let mut lex = NftToken::lexer(line);
 
@@ -338,8 +341,6 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
 
         let span = lex.span();
         let text = &line[span];
-
-        use NftToken::*;
         match token {
             // Actions - semantic colors + bold for maximum visibility
             Accept => {
@@ -382,15 +383,7 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
                     italic: false,
                 });
             }
-            IpAddress | Ipv6Address => {
-                tokens.push(Token {
-                    text: Cow::Owned(text.to_string()),
-                    color: TokenColor::Number,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            Number => {
+            IpAddress | Ipv6Address | Number => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Number,
@@ -510,15 +503,7 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
                     italic: false,
                 });
             }
-            Identifier => {
-                tokens.push(Token {
-                    text: Cow::Owned(text.to_string()),
-                    color: TokenColor::Primary,
-                    bold: false,
-                    italic: false,
-                });
-            }
-            Whitespace => {
+            Identifier | Whitespace => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Primary,

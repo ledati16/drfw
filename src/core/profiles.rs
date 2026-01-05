@@ -337,7 +337,7 @@ pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), Profil
 /// - Manual deletion of all profiles
 /// - Filesystem corruption
 ///
-/// If no profiles exist, creates "default" profile with default FirewallRuleset.
+/// If no profiles exist, creates "default" profile with default `FirewallRuleset`.
 /// Also performs cleanup of orphaned checksum files.
 ///
 /// # Async
@@ -391,7 +391,7 @@ async fn cleanup_orphaned_checksums() -> Result<usize, ProfileError> {
             && let Some(profile_name) = stem.strip_suffix(".json")
         {
             // Check if corresponding .json exists
-            let json_path = dir.join(format!("{}.json", profile_name));
+            let json_path = dir.join(format!("{profile_name}.json"));
 
             if !tokio::fs::try_exists(&json_path).await? {
                 // Orphaned checksum - delete it

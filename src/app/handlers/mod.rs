@@ -1,7 +1,7 @@
 //! Message handlers organized by domain
 //!
 //! This module contains all message handlers extracted from the monolithic
-//! update() method, organized by functional domain for better maintainability.
+//! `update()` method, organized by functional domain for better maintainability.
 
 pub mod apply;
 pub mod export;

@@ -47,7 +47,7 @@ pub(crate) fn handle_profile_switched(
     let from_profile = state.active_profile_name.clone();
     state.ruleset = ruleset.clone();
     state.cached_disk_profile = Some(ruleset);
-    state.active_profile_name = name.clone();
+    state.active_profile_name.clone_from(&name);
     state.command_history = crate::command::CommandHistory::default();
     state.update_cached_text();
     state.mark_config_dirty();
@@ -58,7 +58,7 @@ pub(crate) fn handle_profile_switched(
         async move {
             audit::log_profile_switched(enable_event_log, &from_profile, &to_profile).await;
         },
-        |_| Message::AuditLogWritten,
+        |()| Message::AuditLogWritten,
     )
 }
 
@@ -67,8 +67,7 @@ pub(crate) fn handle_save_profile_as(state: &mut State, name: String) -> Task<Me
     let creating_empty = state
         .profile_manager
         .as_ref()
-        .map(|mgr| mgr.creating_empty)
-        .unwrap_or(false);
+        .is_some_and(|mgr| mgr.creating_empty);
 
     let ruleset = if creating_empty {
         FirewallRuleset::default()
@@ -227,7 +226,7 @@ pub(crate) fn handle_profile_deleted(
     match result {
         Ok(profiles) => {
             let old_active = state.active_profile_name.clone();
-            state.available_profiles = profiles.clone();
+            state.available_profiles.clone_from(&profiles);
             // If we deleted the active profile, switch to first available
             if !profiles.iter().any(|p| p == &old_active) {
                 let next = profiles
@@ -242,7 +241,7 @@ pub(crate) fn handle_profile_deleted(
             let msg = if e.len() > 55 {
                 format!("Failed to delete profile: {}...", &e[..46])
             } else {
-                format!("Failed to delete profile: {}", e)
+                format!("Failed to delete profile: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error, 8);
             Task::none()
@@ -280,7 +279,7 @@ pub(crate) fn handle_confirm_rename_profile(state: &mut State) -> Task<Message> 
     {
         let was_active = state.active_profile_name == old;
         if was_active {
-            state.active_profile_name = new.clone();
+            state.active_profile_name.clone_from(&new);
             state.mark_config_dirty();
         }
 
@@ -316,7 +315,7 @@ pub(crate) fn handle_profile_renamed(state: &mut State, result: Result<Vec<Strin
             let msg = if e.len() > 55 {
                 format!("Failed to rename profile: {}...", &e[..46])
             } else {
-                format!("Failed to rename profile: {}", e)
+                format!("Failed to rename profile: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error, 8);
         }
@@ -375,7 +374,7 @@ pub(crate) fn handle_check_profile_save(state: &mut State) -> Task<Message> {
 
     // Check if enough time has passed since last change
     if let Some(last_change) = state.last_profile_change
-        && last_change.elapsed().as_millis() < DEBOUNCE_MS as u128
+        && last_change.elapsed().as_millis() < u128::from(DEBOUNCE_MS)
     {
         return Task::none();
     }

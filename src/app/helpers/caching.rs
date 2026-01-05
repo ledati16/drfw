@@ -28,6 +28,8 @@ where
         .max()
         .unwrap_or(0);
 
+    // Precision loss acceptable: max_char_count is bounded by line length (~200 chars max)
+    #[allow(clippy::cast_precision_loss)]
     let content_width =
         LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
     content_width.clamp(MIN_WIDTH_PX, MAX_WIDTH_PX)
