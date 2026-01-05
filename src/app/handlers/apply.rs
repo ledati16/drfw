@@ -12,6 +12,7 @@ use crate::audit;
 use chrono::Utc;
 use iced::Task;
 use std::time::Duration;
+use tracing::warn;
 
 /// Handles apply button click (starts verification)
 pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
@@ -136,7 +137,7 @@ pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value
     state.last_applied_ruleset = Some(state.ruleset.clone());
 
     if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
-        eprintln!("Failed to save snapshot to disk: {e}");
+        warn!("Failed to save snapshot to disk: {e}");
         let msg = if e.to_string().len() > 45 {
             "Warning: Failed to save snapshot. Rollback may be unavailable.".to_string()
         } else {

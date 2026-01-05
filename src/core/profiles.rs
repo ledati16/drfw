@@ -35,6 +35,9 @@ pub enum ProfileError {
 
     #[error("Data directory not available")]
     DataDirUnavailable,
+
+    #[error("Rule limit exceeded: {current} rules (maximum: {limit})")]
+    RuleLimitExceeded { current: usize, limit: usize },
 }
 
 /// Validates a profile name for filesystem safety.
@@ -165,15 +168,10 @@ pub async fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
 
     // Validate rule count to prevent memory exhaustion
     if ruleset.rules.len() > crate::core::firewall::MAX_RULES {
-        return Err(ProfileError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "Profile '{}' contains {} rules (max: {})",
-                name,
-                ruleset.rules.len(),
-                crate::core::firewall::MAX_RULES
-            ),
-        )));
+        return Err(ProfileError::RuleLimitExceeded {
+            current: ruleset.rules.len(),
+            limit: crate::core::firewall::MAX_RULES,
+        });
     }
 
     // Rebuild caches for each rule to ensure performant UI rendering/filtering

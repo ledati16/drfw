@@ -285,6 +285,30 @@ fn create_elevated_command(args: &[&str]) -> Result<Command> {
 - **Audit logging:** Log all privileged operations with timestamps
 - **Test bypass:** `DRFW_TEST_NO_ELEVATION=1` for unit tests
 
+### Subprocess Timeout Pattern
+**All subprocess calls should have timeouts** to prevent indefinite hangs:
+
+```rust
+// ✅ Async with timeout
+match tokio::time::timeout(Duration::from_secs(5), child.wait_with_output()).await {
+    Ok(Ok(output)) => process_output(output),
+    Ok(Err(e)) => handle_io_error(e),
+    Err(_) => handle_timeout(),
+}
+
+// ✅ Sync subprocess (for non-async contexts)
+use std::process::Command;
+let output = Command::new("pgrep")
+    .args(["-a", "polkit"])
+    .output()  // Note: no built-in timeout in std::process
+    .map_err(|e| /* handle error */)?;
+```
+
+**Note:** `std::process::Command` has no built-in timeout. For sync calls that could hang (e.g., network operations, user prompts), consider:
+1. Using `tokio::process::Command` with `tokio::time::timeout`
+2. Spawning in a separate thread with a timeout mechanism
+3. Documenting the potential hang in function docs
+
 ### Rejected Approaches
 **Do not:**
 - Implement custom auth dialogs (security complexity, maintenance burden)
@@ -738,6 +762,6 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-01-04 (Phase 2-3 optimizations - added button config example, display string caching, allocation avoidance patterns)
+**Last Updated:** 2026-01-05 (Audit review - added subprocess timeout pattern in Section 4)
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14

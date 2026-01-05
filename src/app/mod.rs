@@ -20,6 +20,7 @@ use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::error;
 
 /// In-app notification banner severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -638,7 +639,7 @@ impl State {
         Task::perform(
             async move {
                 if let Err(e) = crate::config::save_config(&config).await {
-                    eprintln!("Failed to save configuration: {e}");
+                    error!("Failed to save configuration: {e}");
                 }
             },
             |()| Message::Noop,
@@ -652,7 +653,7 @@ impl State {
         Task::perform(
             async move {
                 if let Err(e) = crate::core::profiles::save_profile(&profile_name, &ruleset).await {
-                    eprintln!("Failed to save profile: {e}");
+                    error!("Failed to save profile: {e}");
                 }
             },
             |()| Message::Noop,

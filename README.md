@@ -3,7 +3,7 @@
 A minimal, safe, stateful nftables GUI for desktop Linux.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Rust](https://img.shields.io/badge/rust-1.83%2B-orange.svg)
+![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 
 ## Philosophy
 
@@ -13,6 +13,48 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **JSON-first**: Uses nftables' JSON API exclusively (no shell interpolation, no command injection risks)
 - **Safety-first**: Automatic snapshots, pre-apply verification, and dead-man switch with auto-revert
 - **Desktop-friendly**: Conservative defaults that work out-of-the-box for most users
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      DRFW GUI (Iced)                        │
+├───────────────┬─────────────────┬───────────────────────────┤
+│   Sidebar     │   Rule Editor   │   Preview (nft/JSON/Diff) │
+│  • Profiles   │   • Form inputs │   • Syntax highlighting   │
+│  • Filters    │   • Validation  │   • Live preview          │
+│  • Tags       │   • Presets     │   • Diff view             │
+└───────────────┴─────────────────┴───────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      Core Engine                            │
+│  ┌──────────────┐  ┌────────────────┐  ┌─────────────────┐  │
+│  │   Profiles   │  │   Validators   │  │ JSON Generator  │  │
+│  │  save/load   │  │  input safety  │  │  nftables JSON  │  │
+│  └──────────────┘  └────────────────┘  └─────────────────┘  │
+│  ┌──────────────┐  ┌────────────────┐  ┌─────────────────┐  │
+│  │  Snapshots   │  │  Audit Logger  │  │   Verification  │  │
+│  │  rollback    │  │  event logging │  │   nft --check   │  │
+│  └──────────────┘  └────────────────┘  └─────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│           Elevation Layer (run0 → sudo → pkexec)            │
+│    • Automatic fallback based on environment                │
+│    • No shell interpolation (direct Command::args)          │
+│    • Timeout protection (120s default)                      │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    nftables (kernel)                        │
+│    • JSON API only (nft --json)                             │
+│    • inet family (IPv4 + IPv6)                              │
+│    • drfw table with input/forward/output chains            │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Features
 
@@ -54,7 +96,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - Linux kernel 4.14+ with nftables support
 - `nftables` package installed
 - Privilege escalation: `run0` (preferred, systemd v256+) OR `pkexec` (GUI) OR `sudo` (CLI)
-- Rust 1.83+ (for building from source)
+- Rust 1.85+ (2024 edition) - Install via [rustup](https://rustup.rs)
 
 **Check if nftables is installed:**
 ```bash

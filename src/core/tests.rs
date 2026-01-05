@@ -804,6 +804,41 @@ mod property_tests {
             // Should have base rules (14) + user rules
             prop_assert!(nft_array.len() >= 14);
         }
+
+        #[test]
+        fn test_rate_limit_serialization_roundtrip(
+            count in 1u32..1000,
+            unit_idx in 0usize..4
+        ) {
+            use crate::core::firewall::{RateLimit, TimeUnit};
+
+            let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
+            let rate_limit = RateLimit { count, unit: units[unit_idx] };
+
+            // Test serialization
+            let json = serde_json::to_string(&rate_limit).unwrap();
+            let parsed: RateLimit = serde_json::from_str(&json).unwrap();
+
+            prop_assert_eq!(rate_limit.count, parsed.count);
+            prop_assert_eq!(rate_limit.unit, parsed.unit);
+        }
+
+        #[test]
+        fn test_rate_limit_display_format(
+            count in 1u32..1000,
+            unit_idx in 0usize..4
+        ) {
+            use crate::core::firewall::{RateLimit, TimeUnit};
+
+            let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
+            let rate_limit = RateLimit { count, unit: units[unit_idx] };
+
+            let display = rate_limit.to_string();
+
+            // Display should contain count and unit abbreviation
+            prop_assert!(display.contains(&count.to_string()));
+            prop_assert!(display.contains('/'));
+        }
     }
 }
 
@@ -1026,6 +1061,105 @@ mod integration_tests {
             checksum1, checksum2,
             "Checksums should differ for different rulesets"
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Snapshot Validation Tests (M2: snapshot restore failure paths)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_validate_snapshot_rejects_missing_nftables() {
+        use serde_json::json;
+
+        // Completely invalid structure - missing nftables key
+        let invalid = json!({ "something_else": [] });
+        assert!(
+            nft_json::validate_snapshot(&invalid).is_err(),
+            "Should reject JSON without nftables array"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_snapshot_allows_empty_nftables() {
+        use serde_json::json;
+
+        // Empty nftables array is allowed for recovery scenarios
+        let empty = json!({ "nftables": [] });
+        assert!(
+            nft_json::validate_snapshot(&empty).is_ok(),
+            "Should allow empty nftables array for recovery"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_snapshot_rejects_no_table_ops() {
+        use serde_json::json;
+
+        // Has nftables array but no table operations or objects
+        let no_table = json!({
+            "nftables": [
+                { "metainfo": { "json_schema_version": 1 } }
+            ]
+        });
+        assert!(
+            nft_json::validate_snapshot(&no_table).is_err(),
+            "Should reject snapshot with no table operations"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_snapshot_accepts_table_add() {
+        use serde_json::json;
+
+        // Valid snapshot with table add operation
+        let with_add = json!({
+            "nftables": [
+                { "add": { "table": { "family": "inet", "name": "drfw" } } }
+            ]
+        });
+        assert!(
+            nft_json::validate_snapshot(&with_add).is_ok(),
+            "Should accept snapshot with table add"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_snapshot_accepts_table_object() {
+        use serde_json::json;
+
+        // Valid snapshot with table object (nft list format)
+        let with_table = json!({
+            "nftables": [
+                { "table": { "family": "inet", "name": "drfw", "handle": 0 } }
+            ]
+        });
+        assert!(
+            nft_json::validate_snapshot(&with_table).is_ok(),
+            "Should accept snapshot with table object"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_emergency_default_ruleset_is_valid() {
+        // Emergency ruleset should pass validation
+        let emergency = nft_json::get_emergency_default_ruleset();
+        assert!(
+            nft_json::validate_snapshot(&emergency).is_ok(),
+            "Emergency default ruleset should be valid"
+        );
+
+        // Verify it has expected structure
+        let nftables = emergency.get("nftables").unwrap().as_array().unwrap();
+        assert!(
+            nftables.len() > 5,
+            "Emergency ruleset should have multiple rules"
+        );
+
+        // Verify it has a table add operation
+        let has_table = nftables
+            .iter()
+            .any(|v| v.get("add").and_then(|a| a.get("table")).is_some());
+        assert!(has_table, "Emergency ruleset should add a table");
     }
 
     #[tokio::test]

@@ -225,14 +225,14 @@ pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // POPULAR DARK THEMES (by downloads/rating)
     // ═══════════════════════════════════════════════════
-    GitHubDark,       // 17.9M - #1 most popular globally
-    Dracula,          // 7.5M - Iconic purple/pink
-    OneDark,          // 7.2M - VSCode favorite
-    Monokai,          // 2M+ - Classic warm
+    GitHubDark,        // 17.9M - #1 most popular globally
+    Dracula,           // 7.5M - Iconic purple/pink
+    OneDark,           // 7.2M - VSCode favorite
+    Monokai,           // 2M+ - Classic warm
     MaterialPalenight, // 2.46M - Purple-blue professional
-    NightOwl,         // 1.9M - Accessible dark navy
-    SynthWave84,      // 1.3M - Retro cyberpunk
-    MinDark,          // 551K - Minimal aesthetic
+    NightOwl,          // 1.9M - Accessible dark navy
+    SynthWave84,       // 1.3M - Retro cyberpunk
+    MinDark,           // 551K - Minimal aesthetic
 
     // ═══════════════════════════════════════════════════
     // MODERN DARK THEMES

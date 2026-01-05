@@ -10,6 +10,7 @@
 use crate::app::{BannerSeverity, FirewallRuleset, Message, State};
 use crate::audit;
 use iced::Task;
+use tracing::error;
 
 /// Handles profile selection (with dirty check)
 pub(crate) fn handle_profile_selected(state: &mut State, name: String) -> Task<Message> {
@@ -30,7 +31,7 @@ pub(crate) fn perform_profile_switch(state: &mut State, name: String) -> Task<Me
         move |result| match result {
             Ok(ruleset) => Message::ProfileSwitched(name, ruleset),
             Err(e) => {
-                eprintln!("Failed to load profile: {e}");
+                error!("Failed to load profile: {e}");
                 Message::Noop
             }
         },
@@ -104,7 +105,7 @@ pub(crate) fn handle_save_profile_as(state: &mut State, name: String) -> Task<Me
         |result| match result {
             Ok(profiles) => Message::ProfileListUpdated(profiles),
             Err(e) => {
-                eprintln!("Failed to save/list profiles: {e}");
+                error!("Failed to save/list profiles: {e}");
                 Message::Noop
             }
         },

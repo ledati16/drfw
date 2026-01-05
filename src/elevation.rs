@@ -36,14 +36,6 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-/// Default timeout for pkexec operations (2 minutes)
-///
-/// This prevents indefinite hangs if the polkit daemon is unresponsive
-/// or the user doesn't respond to the authentication prompt.
-// Suggested default for callers of execute_elevated_nft
-#[allow(dead_code)]
-const DEFAULT_PKEXEC_TIMEOUT: Duration = Duration::from_secs(120);
-
 /// Error type for privilege elevation operations
 #[derive(Debug, thiserror::Error)]
 pub enum ElevationError {
@@ -102,7 +94,16 @@ pub enum ElevationError {
 /// - polkit-kde-authentication-agent-1
 /// - lxqt-policykit-agent
 /// - And all other standard GUI agents
-pub fn is_polkit_agent_running() -> bool {
+///
+/// # Performance
+///
+/// Uses `pgrep` which typically completes in <100ms. This is a synchronous call
+/// without an explicit timeout, but `pgrep` is a fast process enumeration that
+/// reads from `/proc` and returns quickly. Called once at startup to detect
+/// the GUI environment.
+// Used in app::handlers::apply (binary only, not in lib.rs)
+#[allow(dead_code)]
+pub(crate) fn is_polkit_agent_running() -> bool {
     std::process::Command::new("pgrep")
         .arg("-a") // Show full command line
         .arg("polkit")

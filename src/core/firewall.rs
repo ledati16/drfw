@@ -615,6 +615,43 @@ impl FirewallRuleset {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // JSON Helper Functions (DRY consolidation)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Creates a match expression for nft meta keys (l4proto, iifname, oifname, etc.)
+    fn meta_match(key: &str, value: impl serde::Serialize) -> serde_json::Value {
+        serde_json::json!({
+            "match": {
+                "left": { "meta": { "key": key } },
+                "op": "==",
+                "right": value
+            }
+        })
+    }
+
+    /// Creates a rate limit expression
+    fn rate_limit(rate: u32, per: &str) -> serde_json::Value {
+        serde_json::json!({ "limit": { "rate": rate, "per": per } })
+    }
+
+    /// Creates a rule add wrapper with the standard drfw table structure
+    fn rule_add(chain: &str, expr: Vec<serde_json::Value>, comment: &str) -> serde_json::Value {
+        serde_json::json!({
+            "add": {
+                "rule": {
+                    "family": "inet",
+                    "table": "drfw",
+                    "chain": chain,
+                    "expr": expr,
+                    "comment": comment
+                }
+            }
+        })
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+
     /// Generates the nftables JSON representation of the ruleset.
     /// Follows the spec in Section 4 of `PLAN_DRFW.md`.
     pub fn to_nftables_json(&self) -> serde_json::Value {
@@ -788,128 +825,77 @@ impl FirewallRuleset {
     fn add_icmp_rules(nft_rules: &mut Vec<serde_json::Value>, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
 
+        // Helper to build ICMP rule expressions with optional rate limiting
+        let build_icmp_rule = |protocol: &str,
+                               type_filter: Option<serde_json::Value>,
+                               rate_limit: u32|
+         -> Vec<serde_json::Value> {
+            let mut expr = vec![Self::meta_match("l4proto", protocol)];
+
+            if let Some(filter) = type_filter {
+                expr.push(filter);
+            }
+
+            if rate_limit > 0 {
+                expr.push(Self::rate_limit(rate_limit, "second"));
+            }
+
+            expr.push(json!({ "accept": null }));
+            expr
+        };
+
         if advanced.strict_icmp {
             // Strict ICMP mode: Only allow essential types
 
             // IPv4 ICMP - essential types only
-            let mut ipv4_expr = vec![
-                json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }),
-                json!({ "match": { "left": { "payload": { "protocol": "icmp", "field": "type" } }, "op": "==", "right": {"set": [
-                    "echo-reply",           // Type 0: ping responses
+            let ipv4_types = json!({ "match": {
+                "left": { "payload": { "protocol": "icmp", "field": "type" } },
+                "op": "==",
+                "right": {"set": [
+                    "echo-reply",              // Type 0: ping responses
                     "destination-unreachable", // Type 3: path MTU discovery
-                    "echo-request",         // Type 8: allow being pinged
-                    "time-exceeded"         // Type 11: traceroute
-                ]} } }),
-            ];
+                    "echo-request",            // Type 8: allow being pinged
+                    "time-exceeded"            // Type 11: traceroute
+                ]}
+            }});
 
-            // Optional: Add rate limiting
-            if advanced.icmp_rate_limit > 0 {
-                ipv4_expr.insert(
-                    2,
-                    json!({ "limit": { "rate": advanced.icmp_rate_limit, "per": "second" } }),
-                );
-            }
-
-            ipv4_expr.push(json!({ "accept": null }));
-
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": ipv4_expr,
-                        "comment": "allow essential icmp (strict mode)"
-                    }
-                }
-            }));
+            let ipv4_expr = build_icmp_rule("icmp", Some(ipv4_types), advanced.icmp_rate_limit);
+            nft_rules.push(Self::rule_add(
+                "input",
+                ipv4_expr,
+                "allow essential icmp (strict mode)",
+            ));
 
             // IPv6 ICMP - essential types only (more types required for IPv6 to function)
-            let mut ipv6_expr = vec![
-                json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }),
-                json!({ "match": { "left": { "payload": { "protocol": "icmpv6", "field": "type" } }, "op": "==", "right": {"set": [
+            let ipv6_types = json!({ "match": {
+                "left": { "payload": { "protocol": "icmpv6", "field": "type" } },
+                "op": "==",
+                "right": {"set": [
                     "destination-unreachable", // Type 1
-                    "packet-too-big",         // Type 2: path MTU (CRITICAL for IPv6)
-                    "time-exceeded",          // Type 3
-                    "echo-request",           // Type 128
-                    "echo-reply",             // Type 129
-                    "nd-neighbor-solicit",    // Type 135 (CRITICAL for IPv6)
-                    "nd-neighbor-advert"      // Type 136 (CRITICAL for IPv6)
-                ]} } }),
-            ];
+                    "packet-too-big",          // Type 2: path MTU (CRITICAL for IPv6)
+                    "time-exceeded",           // Type 3
+                    "echo-request",            // Type 128
+                    "echo-reply",              // Type 129
+                    "nd-neighbor-solicit",     // Type 135 (CRITICAL for IPv6)
+                    "nd-neighbor-advert"       // Type 136 (CRITICAL for IPv6)
+                ]}
+            }});
 
-            if advanced.icmp_rate_limit > 0 {
-                ipv6_expr.insert(
-                    2,
-                    json!({ "limit": { "rate": advanced.icmp_rate_limit, "per": "second" } }),
-                );
-            }
-
-            ipv6_expr.push(json!({ "accept": null }));
-
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": ipv6_expr,
-                        "comment": "allow essential icmpv6 (strict mode)"
-                    }
-                }
-            }));
+            let ipv6_expr =
+                build_icmp_rule("ipv6-icmp", Some(ipv6_types), advanced.icmp_rate_limit);
+            nft_rules.push(Self::rule_add(
+                "input",
+                ipv6_expr,
+                "allow essential icmpv6 (strict mode)",
+            ));
         } else {
             // Default mode: Allow all ICMP (except redirects which are already blocked)
 
-            // IPv4 ICMP
-            let mut ipv4_expr = vec![
-                json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }),
-            ];
+            let ipv4_expr = build_icmp_rule("icmp", None, advanced.icmp_rate_limit);
+            nft_rules.push(Self::rule_add("input", ipv4_expr, "allow icmp"));
 
-            if advanced.icmp_rate_limit > 0 {
-                ipv4_expr.push(
-                    json!({ "limit": { "rate": advanced.icmp_rate_limit, "per": "second" } }),
-                );
-            }
-
-            ipv4_expr.push(json!({ "accept": null }));
-
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": ipv4_expr,
-                        "comment": "allow icmp"
-                    }
-                }
-            }));
-
-            // IPv6 ICMP
-            let mut ipv6_expr = vec![
-                json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }),
-            ];
-
-            if advanced.icmp_rate_limit > 0 {
-                ipv6_expr.push(
-                    json!({ "limit": { "rate": advanced.icmp_rate_limit, "per": "second" } }),
-                );
-            }
-
-            ipv6_expr.push(json!({ "accept": null }));
-
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": ipv6_expr,
-                        "comment": "allow icmp v6"
-                    }
-                }
-            }));
+            let ipv6_expr = build_icmp_rule("ipv6-icmp", None, advanced.icmp_rate_limit);
+            nft_rules.push(Self::rule_add("input", ipv6_expr, "allow icmp v6"));
         }
     }
 
@@ -918,25 +904,28 @@ impl FirewallRuleset {
         // Issue #11: Pre-allocate with typical max size (protocol + ports + src + interface + state + comment + action)
         let mut expressions = Vec::with_capacity(8);
 
+        // Issue #9: Protocol matching using meta_match helper (static strings, no allocation)
         match rule.protocol {
             Protocol::Any => {}
             Protocol::Tcp | Protocol::Udp => {
-                // Issue #9: Use as_str() for static string (no allocation)
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": rule.protocol.as_str() } }));
+                expressions.push(Self::meta_match("l4proto", rule.protocol.as_str()));
             }
             Protocol::TcpAndUdp => {
                 // Match both TCP and UDP using nftables set syntax
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": {"set": ["tcp", "udp"]} } }));
+                expressions.push(Self::meta_match("l4proto", json!({"set": ["tcp", "udp"]})));
             }
             Protocol::Icmp => {
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }));
+                expressions.push(Self::meta_match("l4proto", "icmp"));
             }
             Protocol::Icmpv6 => {
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }));
+                expressions.push(Self::meta_match("l4proto", "ipv6-icmp"));
             }
             Protocol::IcmpBoth => {
                 // Match both ICMP and ICMPv6 for dual-stack support
-                expressions.push(json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": {"set": ["icmp", "ipv6-icmp"]} } }));
+                expressions.push(Self::meta_match(
+                    "l4proto",
+                    json!({"set": ["icmp", "ipv6-icmp"]}),
+                ));
             }
         }
 
@@ -959,9 +948,7 @@ impl FirewallRuleset {
         }
 
         if let Some(ref iface) = rule.interface {
-            expressions.push(json!({
-                "match": { "left": { "meta": { "key": "iifname" } }, "op": "==", "right": iface }
-            }));
+            expressions.push(Self::meta_match("iifname", iface));
         }
 
         if let Some(ref ports) = rule.ports
@@ -1048,7 +1035,7 @@ impl FirewallRuleset {
                 "rule": {
                     "family": "inet",
                     "table": "drfw",
-                    "chain": rule.chain.to_string(),
+                    "chain": rule.chain.as_ref(),
                     "expr": expressions,
                     "comment": if rule.label.is_empty() { None } else { Some(&rule.label) }
                 }
@@ -1073,7 +1060,7 @@ impl FirewallRuleset {
                         "expr": [
                             { "limit": { "rate": advanced.log_rate_per_minute, "per": "minute" } },
                             { "log": {
-                                "prefix": advanced.log_prefix.clone(),
+                                "prefix": &advanced.log_prefix,
                                 "level": "info"
                             } },
                         ],
