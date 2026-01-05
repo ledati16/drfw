@@ -48,6 +48,8 @@
 //!     source_string: None,
 //!     destination_string: None,
 //!     rate_limit_display: None,
+//!     action_display: String::new(),
+//!     interface_display: String::new(),
 //! };
 //! rule.rebuild_caches();
 //!

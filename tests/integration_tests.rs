@@ -1,7 +1,13 @@
 //! Integration tests for DRFW
 //!
 //! These tests verify end-to-end functionality including apply/revert flows,
-//! error handling, and concurrent operation blocking.
+//! error handling, CLI operations, and verification with mock nft.
+//!
+//! **Test Organization:**
+//! - Snapshot validation tests are in `src/core/nft_json.rs` (authoritative)
+//! - Verification tests with mock/real nft are here
+//! - CLI command integration tests are here
+//! - Profile operations are here
 //!
 //! # Running with Mock
 //!
@@ -50,14 +56,20 @@ fn setup_mock_nft() {
     }
 }
 
-/// Create a basic test ruleset
+/// Create a basic test ruleset with one SSH rule
 fn create_test_ruleset() -> FirewallRuleset {
     let mut ruleset = FirewallRuleset::new();
-    ruleset.rules.push(Rule {
+    ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
+    ruleset
+}
+
+/// Create a test rule with label and optional port
+fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
+    let mut rule = Rule {
         id: Uuid::new_v4(),
-        label: "Test SSH".to_string(),
+        label: label.to_string(),
         protocol: Protocol::Tcp,
-        ports: Some(PortRange::single(22)),
+        ports: port.map(PortRange::single),
         source: None,
         interface: None,
         chain: drfw::core::firewall::Chain::Input,
@@ -79,8 +91,57 @@ fn create_test_ruleset() -> FirewallRuleset {
         rate_limit_display: None,
         action_display: String::new(),
         interface_display: String::new(),
-    });
-    ruleset
+    };
+    rule.rebuild_caches();
+    rule
+}
+
+/// Helper to check if verification result indicates permission issues
+fn is_permission_error(errors: &[String]) -> bool {
+    errors.iter().any(|e| {
+        e.contains("Operation not permitted")
+            || e.contains("Permission denied")
+            || e.contains("cache initialization")
+    })
+}
+
+/// Create a test rule with full configuration options
+fn create_full_test_rule(
+    label: &str,
+    protocol: Protocol,
+    port: Option<u16>,
+    source: Option<&str>,
+    interface: Option<&str>,
+) -> Rule {
+    let mut rule = Rule {
+        id: Uuid::new_v4(),
+        label: label.to_string(),
+        protocol,
+        ports: port.map(PortRange::single),
+        source: source.and_then(|s| s.parse().ok()),
+        interface: interface.map(String::from),
+        chain: drfw::core::firewall::Chain::Input,
+        enabled: true,
+        tags: vec![],
+        created_at: chrono::Utc::now(),
+        destination: None,
+        action: Action::Accept,
+        rate_limit: None,
+        connection_limit: 0,
+        // Cached fields
+        label_lowercase: String::new(),
+        interface_lowercase: None,
+        tags_lowercase: Vec::new(),
+        protocol_lowercase: "",
+        port_display: String::new(),
+        source_string: None,
+        destination_string: None,
+        rate_limit_display: None,
+        action_display: String::new(),
+        interface_display: String::new(),
+    };
+    rule.rebuild_caches();
+    rule
 }
 
 #[tokio::test]
@@ -230,165 +291,16 @@ async fn test_multiple_rules_verification() {
     assert!(result.is_ok(), "Multi-rule verification should succeed");
 }
 
-#[tokio::test]
-async fn test_snapshot_creation_and_validation() {
-    let ruleset = create_test_ruleset();
-    let snapshot = ruleset.to_nftables_json();
+// ============================================================================
+// NOTE: Snapshot validation and checksum tests are in src/core/nft_json.rs
+// These tests were removed to avoid duplication. See nft_json.rs for:
+// - test_validate_snapshot_*
+// - test_compute_checksum_*
+// - test_emergency_default_*
+// ============================================================================
 
-    // Validate snapshot structure
-    let validation_result = nft_json::validate_snapshot(&snapshot);
-    assert!(
-        validation_result.is_ok(),
-        "Snapshot should be valid: {:?}",
-        validation_result
-    );
-
-    // Checksum should be deterministic
-    let checksum1 = nft_json::compute_checksum(&snapshot);
-    let checksum2 = nft_json::compute_checksum(&snapshot);
-    assert_eq!(checksum1, checksum2, "Checksums should be identical");
-    assert_eq!(checksum1.len(), 64, "SHA-256 should be 64 hex chars");
-}
-
-#[tokio::test]
-async fn test_corrupted_snapshot_rejected() {
-    use serde_json::json;
-
-    // Missing nftables array
-    let invalid_snapshot = json!({
-        "invalid": []
-    });
-
-    let result = nft_json::validate_snapshot(&invalid_snapshot);
-    assert!(result.is_err(), "Invalid snapshot should be rejected");
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("missing nftables array"),
-        "Should mention missing nftables array"
-    );
-}
-
-#[tokio::test]
-async fn test_empty_snapshot_warning_only() {
-    use serde_json::json;
-
-    // Empty snapshots are now allowed (with warning) for emergency recovery scenarios
-    // They must still have table operations though
-    let empty_snapshot = json!({
-        "nftables": [
-            { "add": { "table": { "family": "inet", "name": "drfw" } } }
-        ]
-    });
-
-    let result = nft_json::validate_snapshot(&empty_snapshot);
-    // Should pass validation even if minimal
-    assert!(
-        result.is_ok(),
-        "Minimal snapshot with table should be valid: {:?}",
-        result
-    );
-}
-
-#[tokio::test]
-async fn test_snapshot_without_tables_rejected() {
-    use serde_json::json;
-
-    let no_tables = json!({
-        "nftables": [
-            { "random": "stuff" }
-        ]
-    });
-
-    let result = nft_json::validate_snapshot(&no_tables);
-    assert!(result.is_err(), "Snapshot without tables should fail");
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("no table operations"),
-        "Should mention missing tables"
-    );
-}
-
-#[tokio::test]
-async fn test_emergency_default_ruleset_is_valid() {
-    setup_mock_nft();
-
-    let emergency = nft_json::get_emergency_default_ruleset();
-
-    // Should pass validation
-    let validation = nft_json::validate_snapshot(&emergency);
-    assert!(
-        validation.is_ok(),
-        "Emergency ruleset should be valid: {:?}",
-        validation
-    );
-
-    // Should have expected structure
-    let nftables = emergency["nftables"].as_array().unwrap();
-    assert!(!nftables.is_empty(), "Emergency ruleset should have rules");
-
-    // Verify it contains essential safety rules
-    let json_str = serde_json::to_string(&emergency).unwrap();
-    assert!(
-        json_str.contains("loopback"),
-        "Should allow loopback traffic"
-    );
-    assert!(
-        json_str.contains("established"),
-        "Should allow established connections"
-    );
-    assert!(json_str.contains("invalid"), "Should drop invalid packets");
-}
-
-#[tokio::test]
-async fn test_checksum_changes_on_modification() {
-    let mut ruleset1 = create_test_ruleset();
-    let snapshot1 = ruleset1.to_nftables_json();
-    let checksum1 = nft_json::compute_checksum(&snapshot1);
-
-    // Modify ruleset
-    ruleset1.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "New Rule".to_string(),
-        protocol: Protocol::Tcp,
-        ports: Some(PortRange::single(80)),
-        source: None,
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
-
-    let snapshot2 = ruleset1.to_nftables_json();
-    let checksum2 = nft_json::compute_checksum(&snapshot2);
-
-    assert_ne!(
-        checksum1, checksum2,
-        "Checksums should differ after modification"
-    );
-}
-
-#[tokio::test]
-async fn test_json_generation_deterministic() {
+#[test]
+fn test_json_generation_deterministic() {
     let ruleset = create_test_ruleset();
 
     let json1 = ruleset.to_nftables_json();
@@ -413,125 +325,26 @@ async fn test_audit_logging_doesnt_panic() {
     // If we reach here without panicking, test passes
 }
 
-#[tokio::test]
-async fn test_all_protocol_types_generate_valid_json() {
+#[test]
+fn test_all_protocol_types_generate_valid_json() {
     let mut ruleset = FirewallRuleset::new();
 
-    // TCP
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "TCP".to_string(),
-        protocol: Protocol::Tcp,
-        ports: Some(PortRange::single(80)),
-        source: None,
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
-
-    // UDP
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "UDP".to_string(),
-        protocol: Protocol::Udp,
-        ports: Some(PortRange::single(53)),
-        source: None,
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
-
-    // ICMP
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "ICMP".to_string(),
-        protocol: Protocol::Icmp,
-        ports: None,
-        source: None,
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
-
-    // Any
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "Any".to_string(),
-        protocol: Protocol::Any,
-        ports: None,
-        source: Some("192.168.1.0/24".parse().unwrap()),
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
+    ruleset
+        .rules
+        .push(create_full_test_rule("TCP", Protocol::Tcp, Some(80), None, None));
+    ruleset
+        .rules
+        .push(create_full_test_rule("UDP", Protocol::Udp, Some(53), None, None));
+    ruleset
+        .rules
+        .push(create_full_test_rule("ICMP", Protocol::Icmp, None, None, None));
+    ruleset.rules.push(create_full_test_rule(
+        "Any",
+        Protocol::Any,
+        None,
+        Some("192.168.1.0/24"),
+        None,
+    ));
 
     let json = ruleset.to_nftables_json();
 
@@ -544,128 +357,45 @@ async fn test_all_protocol_types_generate_valid_json() {
     assert!(validation.is_ok(), "All protocol types should validate");
 }
 
-#[tokio::test]
-async fn test_complex_rule_configurations() {
+#[test]
+fn test_complex_rule_configurations() {
     let mut ruleset = FirewallRuleset::new();
 
     // Rule with source filter
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "With Source".to_string(),
-        protocol: Protocol::Tcp,
-        ports: Some(PortRange::single(22)),
-        source: Some("10.0.0.0/8".parse().unwrap()),
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
+    ruleset.rules.push(create_full_test_rule(
+        "With Source",
+        Protocol::Tcp,
+        Some(22),
+        Some("10.0.0.0/8"),
+        None,
+    ));
 
     // Rule with interface filter
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "With Interface".to_string(),
-        protocol: Protocol::Tcp,
-        ports: Some(PortRange::single(80)),
-        source: None,
-        interface: Some("eth0".to_string()),
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
+    ruleset.rules.push(create_full_test_rule(
+        "With Interface",
+        Protocol::Tcp,
+        Some(80),
+        None,
+        Some("eth0"),
+    ));
 
-    // Rule with port range
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "Port Range".to_string(),
-        protocol: Protocol::Tcp,
-        ports: Some(PortRange {
-            start: 8000,
-            end: 8999,
-        }),
-        source: None,
-        interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
+    // Rule with port range (needs custom construction)
+    let mut port_range_rule = create_full_test_rule("Port Range", Protocol::Tcp, None, None, None);
+    port_range_rule.ports = Some(PortRange {
+        start: 8000,
+        end: 8999,
     });
+    port_range_rule.rebuild_caches();
+    ruleset.rules.push(port_range_rule);
 
     // Rule with everything
-    ruleset.rules.push(Rule {
-        id: Uuid::new_v4(),
-        label: "Everything".to_string(),
-        protocol: Protocol::Udp,
-        ports: Some(PortRange::single(53)),
-        source: Some("8.8.8.8/32".parse().unwrap()),
-        interface: Some("wlan0".to_string()),
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec!["dns".to_string(), "public".to_string()],
-        created_at: chrono::Utc::now(),
-        destination: None,
-        action: Action::Accept,
-        rate_limit: None,
-        connection_limit: 0,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        source_string: None,
-        destination_string: None,
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-    });
+    ruleset.rules.push(create_full_test_rule(
+        "Everything",
+        Protocol::Udp,
+        Some(53),
+        Some("8.8.8.8/32"),
+        Some("wlan0"),
+    ));
 
     let json = ruleset.to_nftables_json();
     let validation = nft_json::validate_snapshot(&json);
@@ -723,8 +453,8 @@ async fn test_cli_list_profiles() {
     );
 }
 
-#[tokio::test]
-async fn test_cli_export_nft_format() {
+#[test]
+fn test_cli_export_nft_format() {
     // Test the export functionality used by `drfw export --format nft`
     let ruleset = create_test_ruleset();
     let nft_text = ruleset.to_nft_text();
@@ -746,8 +476,8 @@ async fn test_cli_export_nft_format() {
     );
 }
 
-#[tokio::test]
-async fn test_cli_export_json_format() {
+#[test]
+fn test_cli_export_json_format() {
     // Test the export functionality used by `drfw export --format json`
     let ruleset = create_test_ruleset();
     let json = ruleset.to_nftables_json();
@@ -788,29 +518,20 @@ async fn test_cli_verify_before_apply() {
                 verify_result.errors.is_empty(),
                 "Valid ruleset should have no errors"
             );
-        } else {
-            // If verification failed, check if it's due to permissions
-            let has_permission_error = verify_result
-                .errors
-                .iter()
-                .any(|e| e.contains("Operation not permitted") || e.contains("Permission denied"));
-
-            if !has_permission_error {
-                panic!(
-                    "Verification failed unexpectedly: {:?}",
-                    verify_result.errors
-                );
-            }
+        } else if !is_permission_error(&verify_result.errors) {
+            panic!(
+                "Verification failed unexpectedly: {:?}",
+                verify_result.errors
+            );
         }
+        // Permission errors are expected in unprivileged environments
     }
 }
 
-#[tokio::test]
-async fn test_cli_profile_load_and_rebuild_caches() {
+#[test]
+fn test_cli_profile_load_and_rebuild_caches() {
     // Test that profile loading rebuilds caches (important for CLI performance)
     // We'll create a ruleset, serialize it to JSON, then deserialize and check caches
-
-    use drfw::core::firewall::FirewallRuleset;
 
     let mut ruleset = create_test_ruleset();
 
@@ -879,7 +600,8 @@ async fn test_cli_profile_not_found() {
     // Test CLI error handling for missing profiles
     use drfw::core::profiles;
 
-    let result = profiles::load_profile("nonexistent_profile_12345").await;
+    // Use a short but valid profile name that doesn't exist
+    let result = profiles::load_profile("nonexistent_abc").await;
     assert!(result.is_err(), "Should error when profile doesn't exist");
 
     if let Err(e) = result {

@@ -857,16 +857,18 @@ mod integration_tests {
     //! sudo -E cargo test integration_tests -- --nocapture
     //! ```
     //!
-    //! Without elevated privileges, verification tests will skip but other
-    //! integration tests (checksums, audit logging, JSON generation) will run.
+    //! **Note on test organization:**
+    //! - Snapshot validation tests are in `nft_json.rs` (authoritative)
+    //! - Verification tests that need nft binary are here
+    //! - Checksum tests are in `nft_json.rs` (close to implementation)
 
     use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
-    use crate::core::nft_json;
+    use crate::core::test_helpers::{create_test_ruleset, setup_test_elevation_bypass};
     use crate::core::verify;
     use chrono::Utc;
     use uuid::Uuid;
 
-    /// Helper to check if nft is available and accessible
+    /// Helper to check if nft is available and accessible (async version for tokio tests)
     async fn is_nft_available() -> bool {
         tokio::process::Command::new("nft")
             .arg("--version")
@@ -878,43 +880,18 @@ mod integration_tests {
             .unwrap_or(false)
     }
 
-    /// Helper to create a simple test ruleset
-    fn create_test_ruleset() -> FirewallRuleset {
-        let mut ruleset = FirewallRuleset::new();
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Test SSH".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(22)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
-        ruleset
+    /// Helper to check if verification result indicates permission issues
+    fn is_permission_error(errors: &[String]) -> bool {
+        errors.iter().any(|e| {
+            e.contains("Operation not permitted")
+                || e.contains("Cannot run program --action")
+                || e.contains("cache initialization")
+        })
     }
 
     #[tokio::test]
     async fn test_verify_valid_ruleset() {
-        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
+        setup_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -932,13 +909,7 @@ mod integration_tests {
         let verify_result = result.unwrap();
 
         // Skip if we don't have privileges (expected in non-elevated test environment)
-        if !verify_result.success
-            && verify_result.errors.iter().any(|e| {
-                e.contains("Operation not permitted")
-                    || e.contains("Cannot run program --action")
-                    || e.contains("cache initialization")
-            })
-        {
+        if !verify_result.success && is_permission_error(&verify_result.errors) {
             eprintln!(
                 "Skipping test: nft verification requires elevated privileges or nft is unavailable"
             );
@@ -959,7 +930,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_invalid_port_range() {
-        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
+        setup_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -1007,162 +978,6 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn test_snapshot_checksum_consistency() {
-        let ruleset = create_test_ruleset();
-        let json = ruleset.to_nftables_json();
-
-        let checksum1 = nft_json::compute_checksum(&json);
-        let checksum2 = nft_json::compute_checksum(&json);
-
-        assert_eq!(checksum1, checksum2, "Checksums should be deterministic");
-        assert_eq!(checksum1.len(), 64, "SHA-256 hex should be 64 chars");
-    }
-
-    #[tokio::test]
-    async fn test_snapshot_checksum_changes_on_modification() {
-        let mut ruleset1 = create_test_ruleset();
-        let json1 = ruleset1.to_nftables_json();
-        let checksum1 = nft_json::compute_checksum(&json1);
-
-        // Modify the ruleset
-        ruleset1.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Test HTTP".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(80)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
-
-        let json2 = ruleset1.to_nftables_json();
-        let checksum2 = nft_json::compute_checksum(&json2);
-
-        assert_ne!(
-            checksum1, checksum2,
-            "Checksums should differ for different rulesets"
-        );
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Snapshot Validation Tests (M2: snapshot restore failure paths)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    #[tokio::test]
-    async fn test_validate_snapshot_rejects_missing_nftables() {
-        use serde_json::json;
-
-        // Completely invalid structure - missing nftables key
-        let invalid = json!({ "something_else": [] });
-        assert!(
-            nft_json::validate_snapshot(&invalid).is_err(),
-            "Should reject JSON without nftables array"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_validate_snapshot_allows_empty_nftables() {
-        use serde_json::json;
-
-        // Empty nftables array is allowed for recovery scenarios
-        let empty = json!({ "nftables": [] });
-        assert!(
-            nft_json::validate_snapshot(&empty).is_ok(),
-            "Should allow empty nftables array for recovery"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_validate_snapshot_rejects_no_table_ops() {
-        use serde_json::json;
-
-        // Has nftables array but no table operations or objects
-        let no_table = json!({
-            "nftables": [
-                { "metainfo": { "json_schema_version": 1 } }
-            ]
-        });
-        assert!(
-            nft_json::validate_snapshot(&no_table).is_err(),
-            "Should reject snapshot with no table operations"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_validate_snapshot_accepts_table_add() {
-        use serde_json::json;
-
-        // Valid snapshot with table add operation
-        let with_add = json!({
-            "nftables": [
-                { "add": { "table": { "family": "inet", "name": "drfw" } } }
-            ]
-        });
-        assert!(
-            nft_json::validate_snapshot(&with_add).is_ok(),
-            "Should accept snapshot with table add"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_validate_snapshot_accepts_table_object() {
-        use serde_json::json;
-
-        // Valid snapshot with table object (nft list format)
-        let with_table = json!({
-            "nftables": [
-                { "table": { "family": "inet", "name": "drfw", "handle": 0 } }
-            ]
-        });
-        assert!(
-            nft_json::validate_snapshot(&with_table).is_ok(),
-            "Should accept snapshot with table object"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_emergency_default_ruleset_is_valid() {
-        // Emergency ruleset should pass validation
-        let emergency = nft_json::get_emergency_default_ruleset();
-        assert!(
-            nft_json::validate_snapshot(&emergency).is_ok(),
-            "Emergency default ruleset should be valid"
-        );
-
-        // Verify it has expected structure
-        let nftables = emergency.get("nftables").unwrap().as_array().unwrap();
-        assert!(
-            nftables.len() > 5,
-            "Emergency ruleset should have multiple rules"
-        );
-
-        // Verify it has a table add operation
-        let has_table = nftables
-            .iter()
-            .any(|v| v.get("add").and_then(|a| a.get("table")).is_some());
-        assert!(has_table, "Emergency ruleset should add a table");
-    }
-
-    #[tokio::test]
     async fn test_audit_logging_integration() {
         // This test verifies that audit logging doesn't panic
         // We can't easily test the file contents without mocking
@@ -1170,7 +985,7 @@ mod integration_tests {
         let rule_count = ruleset.rules.len();
         let enabled_count = ruleset.rules.iter().filter(|r| r.enabled).count();
 
-        // This should not panic
+        // These should not panic
         crate::audit::log_apply(true, rule_count, enabled_count, true, None).await;
         crate::audit::log_apply(
             true,
@@ -1186,7 +1001,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_empty_ruleset() {
-        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
+        setup_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -1204,13 +1019,7 @@ mod integration_tests {
         let verify_result = result.unwrap();
 
         // Skip if we don't have privileges (expected in non-elevated test environment)
-        if !verify_result.success
-            && verify_result.errors.iter().any(|e| {
-                e.contains("Operation not permitted")
-                    || e.contains("Cannot run program --action")
-                    || e.contains("cache initialization")
-            })
-        {
+        if !verify_result.success && is_permission_error(&verify_result.errors) {
             eprintln!(
                 "Skipping test: nft verification requires elevated privileges or nft is unavailable"
             );
@@ -1226,101 +1035,18 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_multiple_rules() {
-        unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1") };
+        use crate::core::test_helpers::create_test_rule;
+
+        setup_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
         }
 
         let mut ruleset = FirewallRuleset::new();
-
-        // Add multiple rules
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Test SSH".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(22)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
-
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Test HTTP".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(80)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
-
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Test HTTPS".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(443)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
+        ruleset.rules.push(create_test_rule("Test HTTP", Some(80)));
+        ruleset.rules.push(create_test_rule("Test HTTPS", Some(443)));
 
         let json = ruleset.to_nftables_json();
         let result = verify::verify_ruleset(json).await;
@@ -1333,13 +1059,7 @@ mod integration_tests {
         let verify_result = result.unwrap();
 
         // Skip if we don't have privileges (expected in non-elevated test environment)
-        if !verify_result.success
-            && verify_result.errors.iter().any(|e| {
-                e.contains("Operation not permitted")
-                    || e.contains("Cannot run program --action")
-                    || e.contains("cache initialization")
-            })
-        {
+        if !verify_result.success && is_permission_error(&verify_result.errors) {
             eprintln!(
                 "Skipping test: nft verification requires elevated privileges or nft is unavailable"
             );
@@ -1353,99 +1073,30 @@ mod integration_tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_json_generation_with_all_protocol_types() {
+    #[test]
+    fn test_json_generation_with_all_protocol_types() {
+        use crate::core::test_helpers::create_full_test_rule;
+
         let mut ruleset = FirewallRuleset::new();
 
         // TCP rule
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "TCP Rule".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(80)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        ruleset
+            .rules
+            .push(create_full_test_rule("TCP Rule", Protocol::Tcp, Some(80), None, None));
 
         // UDP rule
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "UDP Rule".to_string(),
-            protocol: Protocol::Udp,
-            ports: Some(PortRange::single(53)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        ruleset
+            .rules
+            .push(create_full_test_rule("UDP Rule", Protocol::Udp, Some(53), None, None));
 
-        // Any protocol rule
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Any Protocol".to_string(),
-            protocol: Protocol::Any,
-            ports: None,
-            source: Some("192.168.1.0/24".parse().unwrap()),
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        // Any protocol rule with source
+        ruleset.rules.push(create_full_test_rule(
+            "Any Protocol",
+            Protocol::Any,
+            None,
+            Some("192.168.1.0/24"),
+            None,
+        ));
 
         let json = ruleset.to_nftables_json();
         let nft_array = json["nftables"].as_array().unwrap();

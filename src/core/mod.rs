@@ -16,4 +16,7 @@ pub mod profiles;
 pub mod verify;
 
 #[cfg(test)]
+pub mod test_helpers;
+
+#[cfg(test)]
 mod tests;

@@ -360,6 +360,68 @@ self.modify_state(cached_value);
 - **Integration tests:** Full workflows with graceful privilege skipping
 - **Environment safety:** Never touch real user data; use temp dirs and `DRFW_TEST_NO_ELEVATION=1`
 
+### Test File Organization
+
+| File | Purpose | Authoritative For |
+|------|---------|-------------------|
+| `src/core/tests.rs` | Unit tests for firewall JSON generation, property tests, verification tests | JSON output structure, rule ordering, protocol handling |
+| `src/core/nft_json.rs` | Module tests for snapshot and checksum functions | Snapshot validation, checksums, emergency ruleset |
+| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI operations, profiles | Verification flow, CLI exports, profile operations |
+| `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation) | - |
+| `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
+
+**Key principle:** Each test concept should exist in exactly ONE location. The "authoritative" location is closest to the implementation being tested.
+
+### Test Helper Modules
+
+Use the shared test helpers to avoid duplication:
+
+```rust
+// For core tests (firewall rules, rulesets)
+use crate::core::test_helpers::{create_test_ruleset, create_test_rule, create_full_test_rule};
+
+// For app handler tests (app state)
+use crate::app::handlers::test_utils::create_test_state;
+```
+
+### Environment Variables
+
+| Variable | Purpose | When to Use |
+|----------|---------|-------------|
+| `DRFW_TEST_NO_ELEVATION` | Bypasses pkexec/sudo/run0 in `create_elevated_nft_command()` | Tests that call nft directly |
+| `DRFW_USE_REAL_NFT` | Uses real nft instead of mock script | Manual testing with actual nftables |
+| `MOCK_NFT_FAIL_PERMS` | Makes mock_nft.sh simulate permission errors | Testing error handling |
+| `MOCK_NFT_FAIL_APPLY` | Makes mock_nft.sh simulate apply failures | Testing error handling |
+
+### Async vs Sync Tests
+
+**Use `#[tokio::test]` only when:**
+- The test actually calls `async` functions that need `.await`
+- Testing async workflows (verify_ruleset, apply, profile I/O)
+
+**Use `#[test]` for:**
+- Pure data transformation (JSON generation, serialization)
+- Synchronous validation
+- Cache rebuilding tests
+
+```rust
+// ❌ Unnecessary async - no await needed
+#[tokio::test]
+async fn test_json_output() {
+    let ruleset = create_test_ruleset();
+    let json = ruleset.to_nftables_json();  // Not async
+    assert!(json["nftables"].is_array());
+}
+
+// ✅ Correct - synchronous test
+#[test]
+fn test_json_output() {
+    let ruleset = create_test_ruleset();
+    let json = ruleset.to_nftables_json();
+    assert!(json["nftables"].is_array());
+}
+```
+
 ### Test Patterns
 ```rust
 #[test]
@@ -371,12 +433,12 @@ fn test_validator() {
 
 #[tokio::test]
 async fn test_elevated_operation() {
-    unsafe { std::env::set_var("DRFW_TEST_NO_ELEVATION", "1"); }
+    use crate::core::test_helpers::setup_test_elevation_bypass;
+
+    setup_test_elevation_bypass();  // Sets DRFW_TEST_NO_ELEVATION=1
 
     let result = apply_rules().await;
     assert!(result.is_ok());
-
-    unsafe { std::env::remove_var("DRFW_TEST_NO_ELEVATION"); }
 }
 ```
 
@@ -384,6 +446,20 @@ async fn test_elevated_operation() {
 - Tests must **skip** (not fail) when run without privileges
 - Check for "Operation not permitted" in stderr
 - Document privilege requirements in module-level docs
+- Tests using mock nft should always pass (no privilege required)
+
+### Running Tests
+
+```bash
+# Run all tests (some may skip without nft)
+cargo test
+
+# Run with mock nft script (no privileges needed)
+PATH="tests:$PATH" cargo test
+
+# Run with real nftables (requires sudo)
+sudo -E DRFW_USE_REAL_NFT=1 cargo test
+```
 
 ### TODO Comment Hygiene
 
