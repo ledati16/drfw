@@ -14,16 +14,85 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Safety-first**: Automatic snapshots, pre-apply verification, and dead-man switch with auto-revert
 - **Desktop-friendly**: Conservative defaults that work out-of-the-box for most users
 
+## Screenshots
+
+*(Coming soon)*
+
+## Features
+
+### Core Functionality
+- **Add/edit/delete firewall rules** via clean GUI
+- **Protocol filtering**: TCP, UDP, TCP+UDP, ICMP (v4), ICMPv6, ICMP (both), or Any
+- **Port ranges**: Single port or range (e.g., `8000-8080`)
+- **Source/Destination IP filtering**: Allow traffic from/to specific networks (CIDR notation)
+- **Interface filtering**: Allow traffic on specific interfaces (eth0, tailscale0, docker0, etc.)
+- **Rule reordering**: Drag-and-drop to change rule priority
+- **Enable/disable toggles**: Disable rules without deleting them
+- **Tag-based organization**: Add multiple tags per rule, filter by tag
+- **Search**: Real-time fuzzy search across all rule fields
+
+### Advanced Rule Options
+- **Action types**: Accept, Drop, or Reject
+- **Rate limiting**: Per-rule rate limits (e.g., 5 connections/minute)
+- **Connection limiting**: Max simultaneous connections per rule
+- **Chain selection**: Input or Output (Output only in Server Mode)
+
+### Safety Features
+- **Pre-apply verification**: `nft --check` validates syntax before elevation
+- **Automatic snapshots**: Captures current ruleset before every apply
+- **Dead-man switch**: Configurable countdown (5-120s) with auto-revert if not confirmed
+- **Manual revert**: One-click restore to previous snapshot
+- **Undo/Redo**: Full history for all rule modifications (Ctrl+Z / Ctrl+Shift+Z)
+
+### Advanced Security Settings
+All disabled by default for maximum compatibility:
+
+| Setting | Purpose | Warning |
+|---------|---------|---------|
+| **Strict ICMP** | Allow only ping + MTU discovery | Breaks network diagnostics |
+| **ICMP Rate Limiting** | Prevent ping floods | May affect monitoring tools |
+| **Anti-spoofing (RPF)** | Drop packets with spoofed source IPs | **Breaks Docker, VPNs, complex routing** |
+| **Dropped Packet Logging** | Log filtered traffic to syslog | Can fill logs quickly |
+| **Server Mode** | Block all outbound by default | Requires explicit egress rules |
+
+### User Experience
+- **24 color themes**: Oxide, Dracula, Tokyo Night, Catppuccin, Nord, Gruvbox, and more
+- **Custom fonts**: Select UI and monospace fonts from system fonts
+- **Live preview**: Syntax-highlighted nftables output
+- **Diff view**: See exactly what changes before applying
+- **In-app notifications**: Success, warning, and error banners
+- **Diagnostics viewer**: Built-in audit log browser with filtering
+- **Keyboard shortcuts**: Ctrl+N (new rule), Ctrl+S (apply), Ctrl+E (export), F1 (help)
+
+### Profile Management
+- **Multiple profiles**: Save different rule configurations
+- **Quick switching**: Change profiles with unsaved-changes detection
+- **Import/Export**: Export as nftables text or JSON
+
+### CLI Interface
+Full command-line support for scripting and automation:
+
+```bash
+drfw              # Launch GUI
+drfw list         # List all profiles
+drfw status       # Show active profile and rule count
+drfw apply <profile>                 # Apply with 15s auto-revert safety
+drfw apply <profile> --confirm 30    # Apply with 30s timeout
+drfw apply <profile> --no-confirm    # Apply permanently (no safety net)
+drfw export <profile> --format nft   # Export as nftables text
+drfw export <profile> --format json  # Export as JSON
+```
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      DRFW GUI (Iced)                        │
 ├───────────────┬─────────────────┬───────────────────────────┤
-│   Sidebar     │   Rule Editor   │   Preview (nft/JSON/Diff) │
+│   Sidebar     │   Rule Editor   │   Preview (nft/Diff)      │
 │  • Profiles   │   • Form inputs │   • Syntax highlighting   │
-│  • Filters    │   • Validation  │   • Live preview          │
-│  • Tags       │   • Presets     │   • Diff view             │
+│  • Search     │   • Validation  │   • Live preview          │
+│  • Tags       │   • Advanced    │   • Diff view             │
 └───────────────┴─────────────────┴───────────────────────────┘
                               │
                               ▼
@@ -56,38 +125,6 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Features
-
-### Core Functionality
-- ✅ **Add/edit/delete firewall rules** via clean GUI
-- ✅ **Service presets** (SSH, HTTP, HTTPS, DNS, Minecraft, Plex, WireGuard)
-- ✅ **Protocol filtering** (TCP, UDP, ICMP, ICMPv6, or Any)
-- ✅ **Port ranges** (single port or range)
-- ✅ **Source IP/CIDR filtering** (allow from specific networks)
-- ✅ **Interface filtering** (allow traffic on specific network interfaces)
-- ✅ **Rule reordering** and enable/disable toggles
-
-### Safety Features
-- ✅ **Pre-apply verification** using `nft --check` before applying rules
-- ✅ **Automatic snapshot** before every apply
-- ✅ **Dead-man switch**: 15-second countdown with auto-revert if not confirmed
-- ✅ **Manual revert**: One-click restore to previous snapshot
-- ✅ **Audit logging**: All privileged operations logged to `~/.local/state/drfw/audit.log`
-
-### Advanced Security (Optional, All Disabled by Default)
-- ⚙️ **Strict ICMP filtering** (essential types only)
-- ⚙️ **ICMP rate limiting** (prevent ping floods)
-- ⚙️ **Anti-spoofing (RPF)** - ⚠️ Breaks Docker/VPNs
-- ⚙️ **Dropped packet logging** with rate limiting
-- ⚙️ **Egress filtering** (Desktop vs Server profiles)
-- ⚙️ **ICMP redirect blocking** (prevents MITM attacks)
-
-### User Experience
-- 🎨 **Modern dark theme** with syntax-highlighted nftables preview
-- 📋 **Live preview** of generated rules (both nftables text and JSON)
-- ⚡ **Inline validation** with helpful error messages
-- 💾 **Persistent configuration** saved to `~/.local/share/drfw/ruleset.json`
-
 ## Installation
 
 ### Prerequisites
@@ -95,15 +132,15 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 **Required:**
 - Linux kernel 4.14+ with nftables support
 - `nftables` package installed
-- Privilege escalation: `run0` (preferred, systemd v256+) OR `pkexec` (GUI) OR `sudo` (CLI)
-- Rust 1.85+ (2024 edition) - Install via [rustup](https://rustup.rs)
+- Privilege escalation: `run0` (systemd v256+), `sudo`, or `pkexec`
+- Rust 1.85+ (2024 edition) — Install via [rustup](https://rustup.rs)
 
-**Check if nftables is installed:**
+**Check nftables:**
 ```bash
 nft --version
 ```
 
-**Install nftables if needed:**
+**Install nftables:**
 ```bash
 # Arch Linux
 sudo pacman -S nftables
@@ -121,24 +158,16 @@ sudo zypper install nftables
 ### Building from Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/yourusername/drfw.git
 cd drfw
-
-# Build release binary
 cargo build --release
-
-# Run
 ./target/release/drfw
 ```
 
-### Installation (System-wide)
+### System-wide Installation
 
 ```bash
-# After building, install to /usr/local/bin
 sudo cp target/release/drfw /usr/local/bin/
-
-# Run from anywhere
 drfw
 ```
 
@@ -146,188 +175,151 @@ drfw
 
 ### Basic Workflow
 
-1. **Launch DRFW**
-   ```bash
-   drfw
-   ```
-
-2. **Add a rule**
-   - Click **[+ Add Rule]**
-   - Select a preset (e.g., SSH) or configure manually:
-     - **Protocol**: TCP, UDP, ICMP, or Any
-     - **Ports**: Single port (e.g., `22`) or range (e.g., `8000-8080`)
-     - **Source**: Leave empty for "Any", or specify CIDR (e.g., `192.168.1.0/24`)
-     - **Interface**: Leave empty or specify (e.g., `eth0`, `tailscale0`)
-     - **Label**: Optional description (e.g., "SSH from home network")
-   - Click **Add**
-
-3. **Preview rules**
-   - View syntax-highlighted nftables text in the **Nftables Preview** tab
-   - View raw JSON in the **JSON View** tab
-
-4. **Apply changes**
-   - Click **[Apply]**
-   - DRFW will:
-     - Verify rules using `nft --check`
-     - Create a snapshot of current rules
-     - Apply new rules with `pkexec`
-     - Start a 15-second countdown
-   - **Confirm** within 15 seconds, or rules will **auto-revert**
-
-5. **Save to system** (optional)
-   - If you want rules to persist across reboots
-   - Settings → **Save to System** (writes to `/etc/nftables.conf`)
+1. **Launch DRFW**: `drfw`
+2. **Add a rule**: Click **[+ Add Rule]**, configure protocol/port/source/interface
+3. **Preview**: View syntax-highlighted nftables output in the preview pane
+4. **Apply**: Click **[Apply]** — DRFW verifies, snapshots, then applies with elevation
+5. **Confirm**: Click **[Confirm]** within the countdown, or rules auto-revert
 
 ### Example Rules
 
-**Allow SSH from anywhere:**
-- Protocol: TCP
-- Port: 22
-- Label: "SSH"
+**Allow SSH:**
+- Protocol: TCP, Port: 22
 
-**Allow HTTP/HTTPS for web server:**
-- Protocol: TCP
-- Ports: 80 (add another rule for 443)
-- Label: "Web Server"
+**Allow web server:**
+- Protocol: TCP, Port: 80 (add another for 443)
 
-**Allow Minecraft server from local network only:**
-- Protocol: TCP
-- Port: 25565
-- Source: `192.168.1.0/24`
-- Label: "Minecraft (LAN only)"
+**Allow Minecraft from LAN only:**
+- Protocol: TCP, Port: 25565, Source: `192.168.1.0/24`
 
-**Allow all traffic from Tailscale VPN:**
-- Protocol: Any
-- Interface: `tailscale0`
-- Label: "Tailscale VPN"
+**Allow all Tailscale VPN traffic:**
+- Protocol: Any, Interface: `tailscale0`
 
-## VPN and Network Application Compatibility
+**Rate-limited SSH (prevent brute force):**
+- Protocol: TCP, Port: 22, Rate Limit: 3/minute
 
-### How DRFW Interacts with Other Applications
+### NetworkManager Integration
 
-DRFW creates its own nftables table (`drfw`) at **priority -10**, which means DRFW rules are evaluated **FIRST**, before other applications like Tailscale, Docker, or WireGuard.
+DRFW's CLI makes automatic profile switching trivial. Create a dispatcher script:
 
-**This is intentional**: DRFW is your primary firewall. Other applications' nftables rules are **NOT destroyed**, but DRFW has priority in rule evaluation.
+```bash
+# /etc/NetworkManager/dispatcher.d/99-drfw
+#!/bin/bash
+case "$2" in
+    up)
+        case "$1" in
+            wlan0) /usr/local/bin/drfw apply public --no-confirm ;;
+            eth0)  /usr/local/bin/drfw apply home --no-confirm ;;
+        esac
+        ;;
+esac
+```
 
-### Using DRFW with VPNs (Tailscale, WireGuard, etc.)
+```bash
+sudo chmod +x /etc/NetworkManager/dispatcher.d/99-drfw
+```
 
-To allow VPN traffic, create an **interface-based rule**:
+### VPN Compatibility
 
-1. Click **[+ Add Rule]**
-2. Set **Protocol** to "Any"
-3. Set **Interface** to your VPN interface (see table below)
-4. Leave **Ports** and **Source** empty
-5. Set **Label** to describe the VPN (e.g., "Tailscale VPN")
-6. Click **Add**
-
-This creates a rule: `iifname "tailscale0" accept`
+DRFW creates its own nftables table (`drfw`) at **priority -10**, evaluated before other applications. VPN rules from Tailscale, WireGuard, etc. are preserved but DRFW has priority.
 
 **Common VPN interfaces:**
 
-| Application | Interface Name | Alternative |
-|-------------|----------------|-------------|
-| Tailscale   | `tailscale0`   | -           |
-| WireGuard   | `wg0`          | `wg1`, etc. |
-| OpenVPN     | `tun0`         | `tap0`      |
-| Docker      | `docker0`      | -           |
-| libvirt/KVM | `virbr0`       | -           |
+| Application | Interface |
+|-------------|-----------|
+| Tailscale | `tailscale0` |
+| WireGuard | `wg0` |
+| OpenVPN | `tun0` / `tap0` |
+| Docker | `docker0` |
+| libvirt/KVM | `virbr0` |
 
-**Alternatively**, you can allow specific VPN ports:
-- Tailscale: UDP 41641
-- WireGuard: UDP 51820 (or your configured port)
-- OpenVPN: UDP 1194 or TCP 443 (varies by config)
+**Warning:** Do NOT enable "Anti-spoofing (RPF)" if you use Docker or VPNs.
 
-### ⚠️ Docker Compatibility
+## Recovery
 
-**Do NOT enable "Anti-spoofing (RPF)"** in Advanced Settings if you use Docker. RPF breaks Docker's network routing.
+### Auto-Revert
+If you don't confirm within the countdown (default 15s), rules automatically revert.
 
-To allow Docker containers to communicate:
-- Add an interface rule for `docker0`
-- Or add specific port rules for services running in containers
+### Manual Revert
+Click **[Revert]** in the confirmation dialog, or restore from snapshot:
 
-### Why No Auto-Detection?
-
-DRFW follows the "dumb firewall" philosophy: **explicit is better than implicit**. You control exactly what's allowed. No magic, no surprises, no security holes from auto-allowing things you didn't know about.
-
-## Recovery Procedures
-
-### If You Lock Yourself Out
-
-**Scenario**: You applied rules that blocked your SSH connection or can't confirm within 15 seconds.
-
-**Solution 1: Auto-revert**
-- Wait 15 seconds. DRFW will automatically revert to the previous snapshot.
-
-**Solution 2: Manual revert via GUI**
-- If the GUI is accessible, click **[Revert]** in the confirmation dialog.
-
-**Solution 3: Manual revert via console**
-1. Access the machine physically or via console
-2. Find the latest snapshot:
-   ```bash
-   ls -lt ~/.local/state/drfw/
-   ```
-3. Restore the snapshot:
-   ```bash
-   sudo nft -f ~/.local/state/drfw/snapshot-<UUID>.nft
-   ```
-   Or if you have the JSON snapshot:
-   ```bash
-   sudo nft --json -f ~/.local/state/drfw/snapshot-<UUID>.json
-   ```
-
-**Solution 4: Emergency flush**
-If snapshots are corrupted or unavailable:
 ```bash
-# WARNING: This removes ALL firewall rules (allows everything)
+ls -lt ~/.local/state/drfw/snapshots/
+sudo nft -f ~/.local/state/drfw/snapshots/snapshot-<UUID>.json
+```
+
+### Emergency Flush
+```bash
+# WARNING: Removes ALL firewall rules
 sudo nft flush ruleset
 ```
 
-Then reboot or restart networking to restore default distro firewall rules.
-
-### Check Audit Logs
-
-DRFW logs all operations to `~/.local/state/drfw/audit.log`:
+### Audit Logs
 ```bash
 cat ~/.local/state/drfw/audit.log | jq
 ```
 
-Logs include timestamps, rule counts, snapshot locations, and error messages.
-
 ## Configuration Files
 
-DRFW uses the XDG Base Directory specification:
+| Purpose | Location |
+|---------|----------|
+| App config | `~/.config/drfw/config.json` |
+| Profiles | `~/.local/share/drfw/profiles/*.json` |
+| Snapshots | `~/.local/state/drfw/snapshots/*.json` |
+| Audit log | `~/.local/state/drfw/audit.log` |
 
-| File/Directory | Location | Purpose |
-|----------------|----------|---------|
-| Configuration | `~/.local/share/drfw/ruleset.json` | Persistent rule configuration |
-| Snapshots | `~/.local/state/drfw/snapshot-*.json` | Pre-apply snapshots for recovery |
-| Audit log | `~/.local/state/drfw/audit.log` | JSON-lines log of all operations |
-| Application log | `~/.local/state/drfw/drfw.log` | Debug/error logs |
+All files created with `0o600` permissions.
 
-All files have `0o600` (user-only) permissions for security.
+## Keyboard Shortcuts
 
-## Advanced Settings
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+N** | Add new rule |
+| **Ctrl+S** | Apply changes |
+| **Ctrl+E** | Export rules |
+| **Ctrl+Z** | Undo |
+| **Ctrl+Shift+Z** | Redo |
+| **Esc** | Close modal/form |
+| **F1** | Show shortcuts |
 
-Access via **Settings** tab in the GUI.
+## Known Limitations
 
-### ⚠️ Warning: Advanced Settings Can Break Things
+These are intentional design decisions:
 
-All advanced settings are **OFF by default** for desktop compatibility. Only enable if you understand the implications.
+- **No IPv4/IPv6 split**: Rules apply to both (inet family)
+- **Single table**: DRFW manages `drfw` table only, doesn't modify others
+- **No custom chains**: All rules in input/output/forward chains
+- **No ICMP type filtering**: Only strict (essential types) or permissive (all)
+- **No MAC filtering**: Easily spoofed, LAN-only
+- **No time-based rules**: Use cron/systemd timers with CLI instead
 
-| Setting | Default | What It Breaks |
-|---------|---------|----------------|
-| **Strict ICMP** | OFF | Network diagnostics, some games |
-| **ICMP Rate Limiting** | 0 (disabled) | High-frequency ping tools |
-| **Anti-spoofing (RPF)** | OFF | Docker, VPNs, complex routing |
-| **Dropped Packet Logging** | OFF | Fills logs, impacts performance |
-| **Egress Filtering (Server mode)** | Desktop | All outbound connections must be explicitly allowed |
+## Packaging
 
-### When to Use Server Mode
+### Compile-Time Configuration
 
-**Desktop mode** (default): All outbound connections are allowed. Suitable for workstations, gaming PCs, laptops.
+Distro packagers can customize paths at build time using environment variables:
 
-**Server mode**: All outbound connections are blocked by default. You must explicitly allow outbound traffic. Suitable for public-facing servers where you want tight control.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DRFW_SYSTEM_NFT_PATH` | `/etc/nftables.conf` | System nftables config path |
+| `DRFW_SYSTEM_NFT_SERVICE` | `nftables.service` | Systemd service name |
+
+**Examples:**
+
+```bash
+# Debian/Ubuntu/Arch (default)
+cargo build --release
+
+# Fedora/RHEL
+DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf cargo build --release
+
+# Custom setup
+DRFW_SYSTEM_NFT_PATH=/etc/drfw/rules.nft \
+DRFW_SYSTEM_NFT_SERVICE=drfw.service \
+cargo build --release
+```
+
+The configured path is baked into the binary at compile time and shown in the UI when using "Save to System".
 
 ## Development
 
@@ -335,118 +327,64 @@ All advanced settings are **OFF by default** for desktop compatibility. Only ena
 
 ```
 src/
-  main.rs              # Entry point
-  app/                 # GUI (Iced)
-    mod.rs             # State machine, message handling
-    view.rs            # UI layout and rendering
-    ui_components.rs   # Reusable widgets
-  core/                # Firewall logic (GUI-independent)
-    firewall.rs        # Rule model, JSON generation
-    nft_json.rs        # nftables JSON API integration
-    verify.rs          # Pre-apply verification
-    error.rs           # Error handling and translation
-    tests.rs           # Unit + integration + property tests
-  config.rs            # Persistent configuration
-  validators.rs        # Input validation/sanitization
-  audit.rs             # Audit logging
-  elevation.rs         # Privilege escalation (pkexec)
-  utils.rs             # Helpers
+├── main.rs              # Entry point, CLI commands
+├── app/                 # GUI application
+│   ├── mod.rs          # State machine, messages
+│   ├── view/           # UI components (sidebar, workspace, forms, modals)
+│   └── handlers/       # Message handlers by domain
+├── core/               # Firewall logic (GUI-independent)
+│   ├── firewall.rs     # Rule model, JSON generation
+│   ├── nft_json.rs     # nftables JSON API
+│   ├── verify.rs       # Pre-apply verification
+│   └── profiles.rs     # Profile persistence
+├── theme/              # 24 color themes
+├── config.rs           # Application configuration
+├── validators.rs       # Input validation
+├── audit.rs            # Audit logging
+└── elevation.rs        # Privilege escalation
 ```
 
 ### Running Tests
 
 ```bash
-# Run all tests
-cargo test
-
-# Run with privileges (for integration tests)
-sudo -E cargo test
-
-# Run specific test suite
-cargo test --test core
-
-# Run property-based tests (fuzzing)
-cargo test proptest
+cargo test                    # All tests
+cargo test --test integration # Integration tests only
+cargo clippy -- -D warnings   # Lint
+cargo fmt --check             # Format check
 ```
-
-**Test coverage**: 67 tests (unit + integration + property-based)
 
 ### Code Quality
 
-```bash
-# Format code
-cargo fmt
-
-# Lint with Clippy (pedantic mode)
-cargo clippy -- -D warnings
-
-# Build for release
-cargo build --release
-```
-
-### Contributing
-
-DRFW follows strict coding standards documented in `CLAUDE.md`:
-- Security-first: No shell interpolation, allowlist-based validation, atomic file writes
-- Test coverage: Unit tests, integration tests, property-based tests for all validators
-- Documentation: Public APIs documented with examples
-- Error handling: User-friendly translations for all errors
+DRFW maintains strict standards:
+- 285+ tests (unit, integration, property-based)
+- Clippy pedantic with zero warnings
+- Security-first: no shell interpolation, allowlist validation, atomic writes
+- Performance: cached rendering, debounced saves, pre-computed display strings
 
 ## Security
 
 ### Threat Model
 
-DRFW is designed to protect against:
-- ✅ Command injection (via JSON-first nftables API, no shell interpolation)
-- ✅ Path traversal (validated paths, XDG directories)
-- ✅ Shell metacharacter injection (comprehensive input sanitization)
-- ✅ Unicode bypass attacks (ASCII-only validation for system identifiers)
-- ✅ TOCTOU races (atomic file writes with permissions set before data)
-- ✅ Privilege escalation abuse (explicit pkexec, argument validation)
+DRFW protects against:
+- Command injection (JSON API only, no shell interpolation)
+- Path traversal (validated paths, XDG directories)
+- Unicode bypass attacks (ASCII-only for system identifiers)
+- TOCTOU races (atomic file writes)
+- Privilege escalation abuse (explicit elevation, argument validation)
 
-### Reporting Security Issues
+### Reporting Vulnerabilities
 
-If you discover a security vulnerability, please email: [your-email@example.com]
-
-Do NOT open a public issue for security vulnerabilities.
-
-## Known Limitations
-
-- **No IPv4/IPv6 split rules**: Rules apply to both IPv4 and IPv6 (inet family)
-- **Input chain only**: Only filters incoming traffic (no OUTPUT or FORWARD chain rules)
-- **Single table**: DRFW manages one table (`drfw`), doesn't modify other tables
-- **No stateful tracking configuration**: Established/related tracking is always enabled
-- **No custom chains**: All rules go in the `input` chain
-
-Most of these are intentional design decisions to keep DRFW simple and safe.
-
-## Roadmap
-
-See `PLAN_DRFW.md` and `FUTURE_PLAN.md` for detailed development plans.
-
-**Upcoming features:**
-- Desktop notifications with action buttons
-- Diff view (current vs pending rules)
-- Diagnostics modal (audit log viewer)
-- Export functionality (save rules to file)
-- Multiple snapshot generations (keep last 5)
-- Keyboard shortcuts
+Email security issues privately. Do NOT open public issues for vulnerabilities.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details
+MIT License — see [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-- Built with [Iced](https://github.com/iced-rs/iced) GUI framework
-- Uses [nftables](https://netfilter.org/projects/nftables/) for firewall management
+- [Iced](https://github.com/iced-rs/iced) — GUI framework (same as COSMIC DE)
+- [nftables](https://netfilter.org/projects/nftables/) — Modern Linux firewall
 - Inspired by UFW's simplicity and firewalld's safety features
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/drfw/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/drfw/discussions)
-- **Documentation**: See `PLAN_DRFW.md` for architecture details
 
 ---
 

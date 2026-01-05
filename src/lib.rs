@@ -40,3 +40,35 @@ pub mod validators;
 // Re-export commonly used types
 pub use core::error::{Error, Result};
 pub use core::firewall::{FirewallRuleset, Protocol, Rule};
+
+// ============================================================================
+// Compile-time configurable paths for distro packagers
+// ============================================================================
+//
+// These can be overridden at build time by setting environment variables:
+//
+//   DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf cargo build --release
+//   DRFW_SYSTEM_NFT_SERVICE=firewalld.service cargo build --release
+//
+// Defaults:
+//   - DRFW_SYSTEM_NFT_PATH: /etc/nftables.conf (Debian, Ubuntu, Arch, openSUSE)
+//   - DRFW_SYSTEM_NFT_SERVICE: nftables.service
+//
+// Fedora/RHEL packagers should set:
+//   DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf
+
+/// Path to system nftables configuration file.
+///
+/// Override at compile time: `DRFW_SYSTEM_NFT_PATH=/custom/path cargo build`
+pub const SYSTEM_NFT_PATH: &str = match option_env!("DRFW_SYSTEM_NFT_PATH") {
+    Some(path) => path,
+    None => "/etc/nftables.conf",
+};
+
+/// Systemd service name for nftables persistence.
+///
+/// Override at compile time: `DRFW_SYSTEM_NFT_SERVICE=custom.service cargo build`
+pub const SYSTEM_NFT_SERVICE: &str = match option_env!("DRFW_SYSTEM_NFT_SERVICE") {
+    Some(svc) => svc,
+    None => "nftables.service",
+};

@@ -338,7 +338,7 @@ pub(crate) fn handle_save_to_system(state: &mut State) -> Task<Message> {
                     "cp",
                     "--preserve=mode",
                     &temp_path_str,
-                    "/etc/nftables.conf",
+                    drfw::SYSTEM_NFT_PATH,
                 ])
                 .status()
                 .await
@@ -346,7 +346,10 @@ pub(crate) fn handle_save_to_system(state: &mut State) -> Task<Message> {
             if status.success() {
                 Ok(())
             } else {
-                Err("Failed to copy configuration to /etc/nftables.conf".to_string())
+                Err(format!(
+                    "Failed to copy configuration to {}",
+                    drfw::SYSTEM_NFT_PATH
+                ))
             }
         },
         Message::SaveToSystemResult,
@@ -358,7 +361,7 @@ pub(crate) fn handle_save_to_system_result(state: &mut State, result: Result<(),
     match result {
         Ok(()) => {
             state.push_banner(
-                "Configuration saved to /etc/nftables.conf",
+                format!("Configuration saved to {}", drfw::SYSTEM_NFT_PATH),
                 BannerSeverity::Success,
                 5,
             );
