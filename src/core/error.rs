@@ -21,14 +21,8 @@ pub enum Error {
 
     /// Input validation failed
     #[error("Validation error in {field}: {message}")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Constructed in tests to verify translation
     Validation { field: String, message: String },
-
-    /// nft --check validation failed with specific errors
-    /// NOTE: Currently unused because nft --check requires privileges
-    #[allow(dead_code)]
-    #[error("Rule validation failed: {}", .0.join(", "))]
-    ValidationFailed(Vec<String>),
 
     /// Snapshot operation failed
     #[error("Snapshot error: {0}")]
@@ -36,7 +30,7 @@ pub enum Error {
 
     /// Privilege escalation failed
     #[error("Elevation error: {0}")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Constructed in tests to verify translation
     Elevation(String),
 
     /// Internal logic error
@@ -46,7 +40,7 @@ pub enum Error {
 
 /// Snapshot-specific errors
 #[derive(Debug, Error)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Constructed in tests to verify translation messages
 pub enum SnapshotError {
     #[error("Snapshot corrupted: invalid structure")]
     Corrupted,
@@ -68,19 +62,13 @@ pub enum SnapshotError {
 }
 
 impl Error {
-    /// Returns a user-friendly error message (legacy method, use `ErrorTranslation::translate` instead)
+    /// Returns a user-friendly error message
     ///
     /// Translates technical errors into messages that end users can understand
     /// and potentially act upon.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used in tests to verify translation
     pub fn user_message(&self) -> String {
         ErrorTranslation::translate(self).user_message
-    }
-
-    /// Translates nftables-specific errors to user-friendly messages (legacy)
-    #[allow(dead_code)]
-    fn translate_nftables_error(msg: &str) -> String {
-        NftablesErrorPattern::match_error(msg).user_message
     }
 }
 
@@ -89,7 +77,6 @@ impl Error {
 pub struct ErrorTranslation {
     pub user_message: String,
     pub suggestions: Vec<String>,
-    #[allow(dead_code)]
     pub help_url: Option<String>,
 }
 
@@ -107,7 +94,6 @@ impl ErrorTranslation {
         self
     }
 
-    #[allow(dead_code)]
     pub fn with_help(mut self, url: impl Into<String>) -> Self {
         self.help_url = Some(url.into());
         self
@@ -121,19 +107,6 @@ impl ErrorTranslation {
             Error::Validation { field, message } => Self::new(format!("{field}: {message}"))
                 .with_suggestion(format!("Check the '{field}' field and correct the value"))
                 .with_help("https://nftables.org/manpage/nft.txt"),
-
-            Error::ValidationFailed(errors) => {
-                let message = if errors.len() == 1 {
-                    format!("Rule validation failed: {}", errors[0])
-                } else {
-                    format!("Rule validation failed with {} errors", errors.len())
-                };
-                let mut translation = Self::new(message);
-                for err in errors {
-                    translation = translation.with_suggestion(err.clone());
-                }
-                translation.with_help("https://wiki.nftables.org/wiki-nftables/index.php/Quick_reference-nftables_in_10_minutes")
-            }
 
             Error::Elevation(msg) => Self::new(format!("Permission error: {msg}"))
                 .with_suggestion(

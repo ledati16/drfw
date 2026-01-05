@@ -314,35 +314,10 @@ impl CommandHistory {
         !self.redo_stack.is_empty()
     }
 
-    /// Returns the description of the next undo operation
-    #[allow(dead_code)]
-    pub fn undo_description(&self) -> Option<String> {
-        self.undo_stack.last().map(|cmd| cmd.description())
-    }
-
-    /// Returns the description of the next redo operation
-    #[allow(dead_code)]
-    pub fn redo_description(&self) -> Option<String> {
-        self.redo_stack.last().map(|cmd| cmd.description())
-    }
-
-    /// Clears the entire history
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-    }
-
     /// Returns the number of operations in the undo stack
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used in tests
     pub fn undo_count(&self) -> usize {
         self.undo_stack.len()
-    }
-
-    /// Returns the number of operations in the redo stack
-    #[allow(dead_code)]
-    pub fn redo_count(&self) -> usize {
-        self.redo_stack.len()
     }
 }
 

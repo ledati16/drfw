@@ -144,40 +144,6 @@ impl AuditLog {
 
         Ok(())
     }
-
-    /// Reads the most recent events from the log
-    ///
-    /// **Note**: The diagnostics viewer (implemented in `app/view.rs:2565`) reads
-    /// the audit log directly for performance reasons. This function is available
-    /// for programmatic access (e.g., CLI commands, future features) but is not
-    /// currently used by the GUI.
-    ///
-    /// # Arguments
-    ///
-    /// * `count` - Maximum number of events to return (most recent first)
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if file cannot be read or contains invalid JSON
-    #[allow(dead_code)]
-    pub async fn read_recent(&self, count: usize) -> std::io::Result<Vec<AuditEvent>> {
-        let content = tokio::fs::read_to_string(&self.log_path).await?;
-
-        let events: Vec<AuditEvent> = content
-            .lines()
-            .rev()
-            .take(count)
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-
-        Ok(events)
-    }
-
-    /// Returns the path to the audit log file
-    #[allow(dead_code)]
-    pub fn path(&self) -> &PathBuf {
-        &self.log_path
-    }
 }
 
 /// Logs an apply operation
@@ -671,36 +637,6 @@ pub async fn log_rules_reordered(enable_event_log: bool, label: &str, direction:
             serde_json::json!({
                 "label": label,
                 "direction": direction,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
-}
-
-/// Logs an export completion event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `format` - Export format ("nft" or "json")
-/// * `path` - Path where the file was exported
-#[allow(dead_code)]
-pub async fn log_export_completed(enable_event_log: bool, format: &str, path: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ExportCompleted,
-            true,
-            serde_json::json!({
-                "format": format,
-                "path": path,
             }),
             None,
         );

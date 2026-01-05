@@ -74,31 +74,6 @@ pub fn sanitize_label(input: &str) -> String {
         .collect()
 }
 
-/// Validates and sanitizes a rule label.
-///
-/// **Public API** - Provided for external validation of user input before creating rules.
-/// Has comprehensive test coverage and may be used by future features or external integrations.
-///
-/// # Errors
-///
-/// Returns `Err` if:
-/// - Label exceeds 64 characters
-/// - Label becomes empty after sanitization (all invalid chars)
-#[allow(dead_code)]
-pub fn validate_label(input: &str) -> Result<String, &'static str> {
-    if input.len() > 64 {
-        return Err("Label too long (max 64 characters)");
-    }
-
-    let sanitized = sanitize_label(input);
-
-    if sanitized.is_empty() && !input.is_empty() {
-        return Err("Label contains only invalid characters");
-    }
-
-    Ok(sanitized)
-}
-
 /// Validates a single port number.
 ///
 /// # Errors
@@ -232,33 +207,6 @@ pub fn validate_connection_limit(limit: u32) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Validates ICMP rate limit for advanced security settings.
-///
-/// ICMP traffic is typically low-volume, so limits are more restrictive.
-///
-/// # Errors
-///
-/// Returns `Err` if rate exceeds 1000/sec (ICMP should be low-volume).
-#[allow(dead_code)]
-pub fn validate_icmp_rate_limit(rate: u32) -> Result<Option<String>, String> {
-    if rate == 0 {
-        return Ok(None); // Disabled
-    }
-
-    if rate > 1000 {
-        return Err("ICMP rate exceeds max (1000/sec) - ICMP is low-volume".to_string());
-    }
-
-    if rate > 100 {
-        return Ok(Some(format!(
-            "ICMP rate ({}/sec) is high - typical: 10 pps",
-            rate
-        )));
-    }
-
-    Ok(None)
-}
-
 /// Validates log rate per minute.
 ///
 /// High log rates can flood system logs and impact performance.
@@ -268,7 +216,6 @@ pub fn validate_icmp_rate_limit(rate: u32) -> Result<Option<String>, String> {
 /// Returns `Err` if:
 /// - Rate is 0 (logs must be rate-limited if enabled)
 /// - Rate exceeds 1000/min (will flood logs)
-#[allow(dead_code)]
 pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
     if rate == 0 {
         return Err("Log rate must be at least 1/min".to_string());
@@ -298,7 +245,6 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
 /// - Prefix is empty
 /// - Prefix exceeds 64 characters
 /// - All characters are invalid (becomes empty after sanitization)
-#[allow(dead_code)]
 pub fn validate_log_prefix(prefix: &str) -> Result<String, &'static str> {
     // Phase 3.3: Use generic helper
     validate_labeled_string(prefix, 64, true, false).map_err(|err| match err {
@@ -355,24 +301,6 @@ mod tests {
         // Unicode should be removed (not alphanumeric ASCII)
         assert_eq!(sanitize_label("Test😀Emoji"), "TestEmoji");
         assert_eq!(sanitize_label("Test™Symbol"), "TestSymbol");
-    }
-
-    #[test]
-    fn test_validate_label_too_long() {
-        let long_label = "a".repeat(65);
-        assert!(validate_label(&long_label).is_err());
-    }
-
-    #[test]
-    fn test_validate_label_only_invalid_chars() {
-        assert!(validate_label("!!!").is_err());
-        assert!(validate_label("$$$").is_err());
-    }
-
-    #[test]
-    fn test_validate_label_valid() {
-        assert!(validate_label("SSH Access").is_ok());
-        assert_eq!(validate_label("SSH Access").unwrap(), "SSH Access");
     }
 
     #[test]
@@ -486,30 +414,6 @@ mod tests {
     fn test_validate_connection_limit_exceeds_max() {
         assert!(validate_connection_limit(99999).is_err());
         assert!(validate_connection_limit(234234234).is_err());
-    }
-
-    // ICMP rate limit tests
-    #[test]
-    fn test_validate_icmp_rate_limit_zero() {
-        assert!(validate_icmp_rate_limit(0).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_validate_icmp_rate_limit_normal() {
-        assert!(validate_icmp_rate_limit(10).unwrap().is_none());
-        assert!(validate_icmp_rate_limit(50).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_validate_icmp_rate_limit_warning() {
-        let result = validate_icmp_rate_limit(200).unwrap();
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("ICMP rate"));
-    }
-
-    #[test]
-    fn test_validate_icmp_rate_limit_exceeds_max() {
-        assert!(validate_icmp_rate_limit(5000).is_err());
     }
 
     // Log rate tests

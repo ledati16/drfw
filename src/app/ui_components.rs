@@ -47,11 +47,7 @@ struct ButtonStyleConfig {
 enum ButtonColorSource {
     Accent,
     Danger,
-    #[allow(dead_code)] // Reserved for future button variants
-    Warning,
     Surface,
-    #[allow(dead_code)] // Reserved for future button variants
-    Active,
     /// For tabs: use pre-defined accent_hover on hover
     AccentWithHoverColor,
     /// For dirty button: pre-shift warning color
@@ -250,9 +246,7 @@ fn build_button_style(
     let base_color = match config.base_color {
         ButtonColorSource::Accent => theme.accent,
         ButtonColorSource::Danger => theme.danger,
-        ButtonColorSource::Warning => theme.warning,
         ButtonColorSource::Surface => theme.bg_surface,
-        ButtonColorSource::Active => theme.bg_active,
         ButtonColorSource::AccentWithHoverColor => theme.accent,
         ButtonColorSource::ShiftedWarning => {
             // Special: shift warning color by 20% (dirty button)
@@ -967,17 +961,6 @@ pub fn modal_backdrop(theme: &AppTheme) -> container::Style {
 
 /// Themed horizontal rule (separator line)
 pub fn themed_horizontal_rule(theme: &AppTheme) -> rule::Style {
-    rule::Style {
-        color: theme.border,
-        radius: 0.0.into(),
-        fill_mode: rule::FillMode::Full,
-        snap: true,
-    }
-}
-
-/// Themed vertical rule (separator line)
-#[allow(dead_code)] // Available for future use
-pub fn themed_vertical_rule(theme: &AppTheme) -> rule::Style {
     rule::Style {
         color: theme.border,
         radius: 0.0.into(),

@@ -9,8 +9,6 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 pub struct VerifyResult {
     pub success: bool,
-    #[allow(dead_code)]
-    pub warnings: Vec<String>,
     pub errors: Vec<String>,
 }
 
@@ -19,7 +17,6 @@ impl VerifyResult {
     pub fn success() -> Self {
         Self {
             success: true,
-            warnings: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -28,7 +25,6 @@ impl VerifyResult {
     pub fn failure(errors: Vec<String>) -> Self {
         Self {
             success: false,
-            warnings: Vec::new(),
             errors,
         }
     }
@@ -148,7 +144,6 @@ mod tests {
         let result = VerifyResult::success();
         assert!(result.success);
         assert!(result.errors.is_empty());
-        assert!(result.warnings.is_empty());
     }
 
     #[test]

@@ -19,11 +19,8 @@ match_same_arms = "allow"
 # Theme creation requires many color parameters - this is unavoidable
 too_many_arguments = "allow"
 
-# Test-specific lints (used in test modules for color comparisons and test data generation)
+# Test-specific: float comparisons in tests for color validation
 float_cmp = "allow"
-uninlined_format_args = "allow"
-cast_possible_truncation = "allow"
-cast_precision_loss = "allow"
 
 [dependencies]
 # ═══════════════════════════════════════════════════════════════════════════
