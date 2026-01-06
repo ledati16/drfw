@@ -212,8 +212,20 @@ pub fn view_workspace<'a>(
     .spacing(16)
     .align_y(Alignment::Center);
 
+    // Version info - subtle, bottom-right
+    let version_text = container(
+        text(crate::version_string())
+            .size(9)
+            .font(state.font_mono)
+            .color(theme.fg_muted),
+    )
+    .width(Length::Fill)
+    .align_x(Alignment::End);
+
+    let footer_section = column![footer, version_text].spacing(12);
+
     container(
-        column![preview_header, editor, footer]
+        column![preview_header, editor, footer_section]
             .spacing(24)
             .padding(32),
     )
