@@ -1483,7 +1483,7 @@ impl FirewallRuleset {
 
         let _ = writeln!(
             out,
-            "        pkttype host limit rate 5/second counter reject with icmpx type admin-prohibited"
+            "        meta pkttype host limit rate 5/second counter reject with icmpx type admin-prohibited"
         );
 
         let _ = writeln!(out, "        counter");
@@ -1556,7 +1556,7 @@ impl FirewallRuleset {
 
         let _ = writeln!(
             out,
-            "        ip protocol icmp icmp type redirect drop comment \"drop icmp redirects\""
+            "        meta l4proto icmp icmp type redirect drop comment \"drop icmp redirects\""
         );
 
         let _ = writeln!(
@@ -1572,7 +1572,7 @@ impl FirewallRuleset {
             if advanced.icmp_rate_limit > 0 {
                 let _ = writeln!(
                     out,
-                    "        ip protocol icmp icmp type {{ echo-reply, destination-unreachable, echo-request, time-exceeded }} limit rate {}/second accept comment \"allow essential icmp (strict mode, rate limited)\"",
+                    "        meta l4proto icmp icmp type {{ echo-reply, destination-unreachable, echo-request, time-exceeded }} limit rate {}/second accept comment \"allow essential icmp (strict mode, rate limited)\"",
                     advanced.icmp_rate_limit
                 );
                 let _ = writeln!(
@@ -1583,7 +1583,7 @@ impl FirewallRuleset {
             } else {
                 let _ = writeln!(
                     out,
-                    "        ip protocol icmp icmp type {{ echo-reply, destination-unreachable, echo-request, time-exceeded }} accept comment \"allow essential icmp (strict mode)\""
+                    "        meta l4proto icmp icmp type {{ echo-reply, destination-unreachable, echo-request, time-exceeded }} accept comment \"allow essential icmp (strict mode)\""
                 );
                 let _ = writeln!(
                     out,
@@ -1600,7 +1600,7 @@ impl FirewallRuleset {
                 );
                 let _ = writeln!(
                     out,
-                    "        ip protocol icmp limit rate {}/second accept comment \"allow icmp (rate limited)\"",
+                    "        meta l4proto icmp limit rate {}/second accept comment \"allow icmp (rate limited)\"",
                     advanced.icmp_rate_limit
                 );
                 let _ = writeln!(
@@ -1611,7 +1611,7 @@ impl FirewallRuleset {
             } else {
                 let _ = writeln!(
                     out,
-                    "        ip protocol icmp accept comment \"allow icmp\""
+                    "        meta l4proto icmp accept comment \"allow icmp\""
                 );
                 let _ = writeln!(
                     out,
@@ -1739,10 +1739,10 @@ impl FirewallRuleset {
                     }
                 }
                 Protocol::Icmp => {
-                    let _ = write!(out, "icmp ");
+                    let _ = write!(out, "meta l4proto icmp ");
                 }
                 Protocol::Icmpv6 => {
-                    let _ = write!(out, "icmpv6 ");
+                    let _ = write!(out, "meta l4proto ipv6-icmp ");
                 }
                 Protocol::IcmpBoth => {
                     // Match both ICMP and ICMPv6 for dual-stack support

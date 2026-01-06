@@ -510,12 +510,16 @@ fn view_advanced_section<'a>(
                 )
                 .padding([2, 6])
                 .style(move |_| section_header_container(theme)),
-                pick_list(reject_options, Some(selected), Message::RuleFormRejectTypeChanged)
-                    .width(Length::Fill)
-                    .padding(8)
-                    .font(regular_font)
-                    .style(move |_, status| themed_pick_list(theme, status))
-                    .menu_style(move |_| themed_pick_list_menu(theme))
+                pick_list(
+                    reject_options,
+                    Some(selected),
+                    Message::RuleFormRejectTypeChanged
+                )
+                .width(Length::Fill)
+                .padding(8)
+                .font(regular_font)
+                .style(move |_, status| themed_pick_list(theme, status))
+                .menu_style(move |_| themed_pick_list_menu(theme))
             ]
             .spacing(4);
             if let Some(err) = reject_type_error {
