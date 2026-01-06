@@ -6,7 +6,7 @@ pub mod ui_components;
 mod view;
 
 // Re-export form types
-pub use forms::{FormErrors, RuleForm};
+pub use forms::{FormErrors, HelperType, RuleForm, RuleFormHelper};
 
 use helpers::{
     calculate_max_content_width, calculate_max_content_width_from_refs, fuzzy_filter_fonts,
@@ -55,10 +55,12 @@ pub struct State {
     pub banners: std::collections::VecDeque<NotificationBanner>,
     pub active_tab: WorkspaceTab,
     pub rule_form: Option<RuleForm>,
+    pub rule_form_helper: Option<RuleFormHelper>,
+    pub interface_combo_state: iced::widget::combo_box::State<String>,
+    pub output_interface_combo_state: iced::widget::combo_box::State<String>,
     pub countdown_remaining: u32,
     pub progress_animation: Animation<f32>,
     pub form_errors: Option<FormErrors>,
-    pub interfaces_with_any: Vec<String>,
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>,
     pub cached_nft_width_px: f32,
@@ -253,13 +255,9 @@ pub enum Message {
     SaveRuleForm,
     RuleFormLabelChanged(String),
     RuleFormProtocolChanged(Protocol),
-    RuleFormPortStartChanged(String),
-    RuleFormPortEndChanged(String),
-    RuleFormSourceChanged(String),
     RuleFormInterfaceChanged(String),
     RuleFormChainChanged(crate::core::firewall::Chain),
     RuleFormToggleAdvanced(bool),
-    RuleFormDestinationChanged(String),
     RuleFormActionChanged(crate::core::firewall::Action),
     RuleFormToggleRateLimit(bool),
     RuleFormRateLimitCountChanged(String),
@@ -327,14 +325,25 @@ pub enum Message {
     OpenFontPicker(FontPickerTarget),
     FontPickerSearchChanged(String),
     CloseFontPicker,
-    RuleFormTagInputChanged(String),
-    RuleFormAddTag,
-    RuleFormRemoveTag(String),
     FilterByTag(Option<Arc<String>>),
     RuleDragStart(uuid::Uuid),
     RuleDropped(uuid::Uuid),
     RuleHoverStart(uuid::Uuid),
     RuleHoverEnd,
+
+    // Helper modal messages (for multi-value fields)
+    OpenHelper(HelperType),
+    CloseHelper,
+    HelperInputChanged(String),
+    HelperAddValue,
+    HelperRemoveValue(usize),
+
+    // New rule form fields (backend features from additional_nft.md)
+    RuleFormOutputInterfaceChanged(String),
+    RuleFormRejectTypeChanged(crate::core::firewall::RejectType),
+    RuleFormRateLimitBurstChanged(String),
+    RuleFormLogEnabledToggled(bool),
+
     // Profile messages
     ProfileSelected(String),
     ProfileSwitched(String, FirewallRuleset),
@@ -406,11 +415,6 @@ impl State {
         let available_profiles = crate::core::profiles::list_profiles_blocking()
             .unwrap_or_else(|_| vec![crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()]);
 
-        let interfaces = crate::utils::list_interfaces();
-        let interfaces_with_any: Vec<String> = std::iter::once("Any".to_string())
-            .chain(interfaces.iter().cloned())
-            .collect();
-
         let theme = current_theme.to_theme();
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
@@ -424,10 +428,16 @@ impl State {
             banners: std::collections::VecDeque::new(),
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
+            rule_form_helper: None,
+            interface_combo_state: iced::widget::combo_box::State::new(
+                crate::utils::build_interface_suggestions(),
+            ),
+            output_interface_combo_state: iced::widget::combo_box::State::new(
+                crate::utils::build_interface_suggestions(),
+            ),
             countdown_remaining: 15,
             progress_animation: Animation::new(1.0),
             form_errors: None,
-            interfaces_with_any,
             cached_nft_tokens: Vec::new(),
             cached_diff_tokens: None,
             cached_nft_width_px: 800.0,
@@ -684,13 +694,6 @@ impl State {
             Message::RuleFormProtocolChanged(p) => {
                 handlers::handle_rule_form_protocol_changed(self, p);
             }
-            Message::RuleFormPortStartChanged(s) => {
-                handlers::handle_rule_form_port_start_changed(self, s);
-            }
-            Message::RuleFormPortEndChanged(s) => {
-                handlers::handle_rule_form_port_end_changed(self, s);
-            }
-            Message::RuleFormSourceChanged(s) => handlers::handle_rule_form_source_changed(self, s),
             Message::RuleFormInterfaceChanged(s) => {
                 handlers::handle_rule_form_interface_changed(self, s);
             }
@@ -699,9 +702,6 @@ impl State {
             }
             Message::RuleFormToggleAdvanced(show) => {
                 handlers::handle_rule_form_toggle_advanced(self, show);
-            }
-            Message::RuleFormDestinationChanged(s) => {
-                handlers::handle_rule_form_destination_changed(self, s);
             }
             Message::RuleFormActionChanged(action) => {
                 handlers::handle_rule_form_action_changed(self, action);
@@ -832,11 +832,6 @@ impl State {
                 handlers::handle_font_picker_search_changed(self, search);
             }
             Message::CloseFontPicker => handlers::handle_close_font_picker(self),
-            Message::RuleFormTagInputChanged(s) => {
-                handlers::handle_rule_form_tag_input_changed(self, s);
-            }
-            Message::RuleFormAddTag => handlers::handle_rule_form_add_tag(self),
-            Message::RuleFormRemoveTag(tag) => handlers::handle_rule_form_remove_tag(self, &tag),
             Message::FilterByTag(tag) => handlers::handle_filter_by_tag(self, tag),
             Message::OpenLogsFolder => handlers::handle_open_logs_folder(),
             Message::RuleDragStart(id) => handlers::handle_rule_drag_start(self, id),
@@ -845,6 +840,28 @@ impl State {
             }
             Message::RuleHoverStart(id) => handlers::handle_rule_hover_start(self, id),
             Message::RuleHoverEnd => handlers::handle_rule_hover_end(self),
+
+            // Helper modal messages
+            Message::OpenHelper(helper_type) => handlers::handle_open_helper(self, helper_type),
+            Message::CloseHelper => handlers::handle_close_helper(self),
+            Message::HelperInputChanged(s) => handlers::handle_helper_input_changed(self, s),
+            Message::HelperAddValue => handlers::handle_helper_add_value(self),
+            Message::HelperRemoveValue(index) => handlers::handle_helper_remove_value(self, index),
+
+            // New rule form field messages
+            Message::RuleFormOutputInterfaceChanged(s) => {
+                handlers::handle_rule_form_output_interface_changed(self, s);
+            }
+            Message::RuleFormRejectTypeChanged(reject_type) => {
+                handlers::handle_rule_form_reject_type_changed(self, reject_type);
+            }
+            Message::RuleFormRateLimitBurstChanged(s) => {
+                handlers::handle_rule_form_rate_limit_burst_changed(self, s);
+            }
+            Message::RuleFormLogEnabledToggled(enabled) => {
+                handlers::handle_rule_form_log_enabled_toggled(self, enabled);
+            }
+
             Message::ProfileSelected(name) => return handlers::handle_profile_selected(self, name),
             Message::ProfileSwitched(name, ruleset) => {
                 return handlers::handle_profile_switched(self, name, ruleset);

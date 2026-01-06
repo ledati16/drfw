@@ -73,6 +73,7 @@ pub fn ensure_dirs() -> std::io::Result<()> {
 /// # Returns
 ///
 /// A sorted vector of interface names (e.g., `["eth0", "wlan0"]`)
+/// Lists available network interfaces on the system (excluding loopback).
 pub fn list_interfaces() -> Vec<String> {
     use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 
@@ -86,6 +87,32 @@ pub fn list_interfaces() -> Vec<String> {
 
     interfaces.sort();
     interfaces
+}
+
+/// Builds interface suggestions for combo_box autocomplete.
+///
+/// Returns a list containing:
+/// 1. System interfaces (from `list_interfaces()`)
+/// 2. Wildcards for interface families that exist on the system
+///
+/// Wildcards are only added when matching interfaces are present.
+pub fn build_interface_suggestions() -> Vec<String> {
+    let mut suggestions = list_interfaces();
+
+    // Common interface prefixes for wildcard matching
+    let wildcard_prefixes = [
+        "eth", "enp", "ens", "wlan", "wlp", "docker", "veth", "br", "virbr", "wg", "tun", "tap",
+    ];
+
+    // Only add wildcards for interface families that actually exist on the system
+    for prefix in wildcard_prefixes {
+        let has_matching = suggestions.iter().any(|s| s.starts_with(prefix));
+        if has_matching {
+            suggestions.push(format!("{prefix}*"));
+        }
+    }
+
+    suggestions
 }
 
 /// Executes an async function in a blocking context.

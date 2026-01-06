@@ -1,8 +1,10 @@
 //! Rule form validation
 //!
 //! Handles validation of firewall rule form inputs with detailed error reporting.
+//! Supports multi-value fields (ports, IPs) with helper modal editing pattern.
 
-use crate::core::firewall::Protocol;
+use crate::core::firewall::{PortEntry, Protocol, RejectType};
+use ipnetwork::IpNetwork;
 
 /// Form validation errors for individual fields
 #[derive(Debug, Clone, Default)]
@@ -10,31 +12,73 @@ pub struct FormErrors {
     pub port: Option<String>,
     pub source: Option<String>,
     pub interface: Option<String>,
+    pub output_interface: Option<String>,
     pub destination: Option<String>,
     pub rate_limit: Option<String>,
     pub connection_limit: Option<String>,
+    pub reject_type: Option<String>,
+}
+
+/// Helper modal types for multi-value field editing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperType {
+    Ports,
+    SourceAddresses,
+    DestinationAddresses,
+    Tags,
+}
+
+/// Helper modal state for editing multi-value fields
+///
+/// The helper operates directly on RuleForm's Vec fields.
+/// This struct only holds UI state (input field, error message).
+#[derive(Debug, Clone, Default)]
+pub struct RuleFormHelper {
+    pub helper_type: Option<HelperType>,
+    pub input: String,
+    pub error: Option<String>,
 }
 
 /// Rule form state with validation
+///
+/// Supports multi-value fields via helper modals:
+/// - `ports`: Multiple port entries (single or range)
+/// - `sources`: Multiple source IP/CIDR addresses
+/// - `destinations`: Multiple destination IP/CIDR addresses
+/// - `tags`: Multiple organizational tags
 #[derive(Debug, Clone)]
 pub struct RuleForm {
     pub id: Option<uuid::Uuid>,
     pub label: String,
     pub protocol: Protocol,
-    pub port_start: String,
-    pub port_end: String,
-    pub source: String,
-    pub interface: String,
-    pub chain: crate::core::firewall::Chain,
+
+    // Multi-value fields (edited via helper modals)
+    pub ports: Vec<PortEntry>,
+    pub sources: Vec<IpNetwork>,
+    pub destinations: Vec<IpNetwork>,
     pub tags: Vec<String>,
-    pub tag_input: String,
-    pub show_advanced: bool,
-    pub destination: String,
+
+    // Single-value fields
+    pub interface: String,
+    pub output_interface: String,
+    pub chain: crate::core::firewall::Chain,
     pub action: crate::core::firewall::Action,
+    pub reject_type: RejectType,
+
+    // Rate limiting
     pub rate_limit_enabled: bool,
     pub rate_limit_count: String,
     pub rate_limit_unit: crate::core::firewall::TimeUnit,
+    pub rate_limit_burst: String,
+
+    // Connection limiting
     pub connection_limit: String,
+
+    // Per-rule logging
+    pub log_enabled: bool,
+
+    // UI state
+    pub show_advanced: bool,
 }
 
 impl Default for RuleForm {
@@ -43,20 +87,22 @@ impl Default for RuleForm {
             id: None,
             label: String::new(),
             protocol: Protocol::Tcp,
-            port_start: String::new(),
-            port_end: String::new(),
-            source: String::new(),
-            interface: String::new(),
-            chain: crate::core::firewall::Chain::Input,
+            ports: Vec::new(),
+            sources: Vec::new(),
+            destinations: Vec::new(),
             tags: Vec::new(),
-            tag_input: String::new(),
-            show_advanced: false,
-            destination: String::new(),
+            interface: String::new(),
+            output_interface: String::new(),
+            chain: crate::core::firewall::Chain::Input,
             action: crate::core::firewall::Action::Accept,
+            reject_type: RejectType::Default,
             rate_limit_enabled: false,
             rate_limit_count: String::new(),
             rate_limit_unit: crate::core::firewall::TimeUnit::Second,
+            rate_limit_burst: String::new(),
             connection_limit: String::new(),
+            log_enabled: false,
+            show_advanced: false,
         }
     }
 }
@@ -64,111 +110,83 @@ impl Default for RuleForm {
 impl RuleForm {
     /// Validates all form fields
     ///
-    /// Returns (ports, sources, destinations, errors) tuple where:
-    /// - ports: Validated port entries if applicable
-    /// - sources: Validated source IP/networks if provided
-    /// - destinations: Validated destination IP/networks if provided
-    /// - errors: Form errors if validation failed
-    pub fn validate(
-        &self,
-    ) -> (
-        Vec<crate::core::firewall::PortEntry>,
-        Vec<ipnetwork::IpNetwork>,
-        Vec<ipnetwork::IpNetwork>,
-        Option<FormErrors>,
-    ) {
+    /// Multi-value fields (ports, sources, destinations) are validated as Vec
+    /// and returned directly since they're already parsed during helper modal input.
+    ///
+    /// Returns Option<FormErrors> - None if validation passed
+    pub fn validate(&self) -> Option<FormErrors> {
         let mut errors = FormErrors::default();
         let mut has_errors = false;
 
-        let ports = self.validate_ports(&mut errors, &mut has_errors);
-        let sources = self.validate_source(&mut errors, &mut has_errors);
+        self.validate_ports(&mut errors, &mut has_errors);
+        self.validate_sources(&mut errors, &mut has_errors);
+        self.validate_destinations(&mut errors, &mut has_errors);
         self.validate_interface(&mut errors, &mut has_errors);
-        let destinations = self.validate_destination_ip(&mut errors, &mut has_errors);
+        self.validate_output_interface(&mut errors, &mut has_errors);
+        self.validate_reject_type(&mut errors, &mut has_errors);
         self.validate_rate_limit(&mut errors, &mut has_errors);
         self.validate_connection_limit(&mut errors, &mut has_errors);
 
-        if has_errors {
-            (vec![], vec![], vec![], Some(errors))
-        } else {
-            (ports, sources, destinations, None)
-        }
+        if has_errors { Some(errors) } else { None }
     }
 
-    fn validate_ports(
-        &self,
-        errors: &mut FormErrors,
-        has_errors: &mut bool,
-    ) -> Vec<crate::core::firewall::PortEntry> {
-        use crate::core::firewall::PortEntry;
-
+    fn validate_ports(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        // Ports are only relevant for TCP/UDP protocols
         if !matches!(
             self.protocol,
             Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
         ) {
-            return vec![];
+            return;
         }
 
-        // Empty port means "all ports" - return empty vec
-        if self.port_start.is_empty() {
-            return vec![];
-        }
-
-        let port_start = self.port_start.parse::<u16>();
-        let port_end = if self.port_end.is_empty() {
-            port_start.clone() // Clone is necessary: Result doesn't implement Copy
-        } else {
-            self.port_end.parse::<u16>()
-        };
-
-        if let (Ok(s), Ok(e)) = (port_start, port_end) {
-            match crate::validators::validate_port_range(s, e) {
-                Ok((start, end)) => {
-                    if start == end {
-                        vec![PortEntry::Single(start)]
-                    } else {
-                        vec![PortEntry::Range { start, end }]
-                    }
-                }
-                Err(msg) => {
-                    errors.port = Some(msg.to_string());
+        // Multi-value ports are already validated when added via helper
+        // Just check for any obvious issues
+        for port in &self.ports {
+            match port {
+                PortEntry::Single(p) if *p == 0 => {
+                    errors.port = Some("Port cannot be 0".to_string());
                     *has_errors = true;
-                    vec![]
+                    return;
                 }
+                PortEntry::Range { start, end } if start > end => {
+                    errors.port = Some("Port range start must be <= end".to_string());
+                    *has_errors = true;
+                    return;
+                }
+                _ => {}
             }
-        } else {
-            errors.port = Some("Invalid port number".to_string());
-            *has_errors = true;
-            vec![]
         }
     }
 
-    fn validate_source(
-        &self,
-        errors: &mut FormErrors,
-        has_errors: &mut bool,
-    ) -> Vec<ipnetwork::IpNetwork> {
-        if self.source.is_empty() {
-            return vec![];
+    fn validate_sources(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        // Check protocol/IP version compatibility for ICMP
+        for ip in &self.sources {
+            if self.protocol == Protocol::Icmp && ip.is_ipv6() {
+                errors.source = Some("ICMP (v4) cannot be used with IPv6 addresses".to_string());
+                *has_errors = true;
+                return;
+            } else if self.protocol == Protocol::Icmpv6 && ip.is_ipv4() {
+                errors.source = Some("ICMPv6 cannot be used with IPv4 addresses".to_string());
+                *has_errors = true;
+                return;
+            }
         }
+    }
 
-        let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() else {
-            errors.source = Some("Invalid IP address or CIDR (e.g. 192.168.1.0/24)".to_string());
-            *has_errors = true;
-            return vec![];
-        };
-
-        // Check protocol/IP version compatibility
-        if self.protocol == Protocol::Icmp && ip.is_ipv6() {
-            errors.source = Some("ICMP (v4) selected with IPv6 source".to_string());
-            *has_errors = true;
-            return vec![];
-        } else if self.protocol == Protocol::Icmpv6 && ip.is_ipv4() {
-            errors.source = Some("ICMPv6 selected with IPv4 source".to_string());
-            *has_errors = true;
-            return vec![];
+    fn validate_destinations(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        // Check protocol/IP version compatibility for ICMP
+        for ip in &self.destinations {
+            if self.protocol == Protocol::Icmp && ip.is_ipv6() {
+                errors.destination =
+                    Some("ICMP (v4) cannot be used with IPv6 addresses".to_string());
+                *has_errors = true;
+                return;
+            } else if self.protocol == Protocol::Icmpv6 && ip.is_ipv4() {
+                errors.destination = Some("ICMPv6 cannot be used with IPv4 addresses".to_string());
+                *has_errors = true;
+                return;
+            }
         }
-
-        vec![ip]
     }
 
     fn validate_interface(&self, errors: &mut FormErrors, has_errors: &mut bool) {
@@ -180,23 +198,21 @@ impl RuleForm {
         }
     }
 
-    fn validate_destination_ip(
-        &self,
-        errors: &mut FormErrors,
-        has_errors: &mut bool,
-    ) -> Vec<ipnetwork::IpNetwork> {
-        if self.destination.is_empty() {
-            return vec![];
-        }
-
-        let Ok(ip) = self.destination.parse::<ipnetwork::IpNetwork>() else {
-            errors.destination =
-                Some("Invalid destination IP or CIDR (domains not supported)".to_string());
+    fn validate_output_interface(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        if !self.output_interface.is_empty()
+            && let Err(msg) = crate::validators::validate_interface(&self.output_interface)
+        {
+            errors.output_interface = Some(msg.to_string());
             *has_errors = true;
-            return vec![];
-        };
+        }
+    }
 
-        vec![ip]
+    fn validate_reject_type(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        // TCP Reset is only valid for TCP protocol
+        if self.reject_type == RejectType::TcpReset && self.protocol != Protocol::Tcp {
+            errors.reject_type = Some("TCP Reset is only available for TCP protocol".to_string());
+            *has_errors = true;
+        }
     }
 
     fn validate_rate_limit(&self, errors: &mut FormErrors, has_errors: &mut bool) {
@@ -212,6 +228,12 @@ impl RuleForm {
             }
         } else if !self.rate_limit_count.is_empty() {
             errors.rate_limit = Some("Invalid rate limit number".to_string());
+            *has_errors = true;
+        }
+
+        // Validate burst if provided
+        if !self.rate_limit_burst.is_empty() && self.rate_limit_burst.parse::<u32>().is_err() {
+            errors.rate_limit = Some("Invalid burst number".to_string());
             *has_errors = true;
         }
     }

@@ -27,8 +27,6 @@ pub(crate) fn handle_add_rule_clicked(state: &mut State) {
 
 /// Handles opening the "Edit Rule" form
 pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
-    use crate::core::firewall::PortEntry;
-
     if let Some(rule) = state.ruleset.rules.iter().find(|r| r.id == id) {
         // Create form from existing rule
         let has_advanced = !rule.destinations.is_empty()
@@ -39,33 +37,22 @@ pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
             || !matches!(rule.reject_type, crate::core::firewall::RejectType::Default)
             || rule.log_enabled;
 
-        // Extract port start/end from first port entry (form only supports single entry for now)
-        let (port_start, port_end) = match rule.ports.first() {
-            Some(PortEntry::Single(p)) => (p.to_string(), String::new()),
-            Some(PortEntry::Range { start, end }) => (start.to_string(), end.to_string()),
-            None => (String::new(), String::new()),
-        };
-
         state.rule_form = Some(RuleForm {
             id: Some(rule.id),
             label: rule.label.clone(),
             protocol: rule.protocol,
-            port_start,
-            port_end,
-            source: rule
-                .sources
-                .first()
-                .map_or_else(String::new, std::string::ToString::to_string),
-            interface: rule.interface.clone().unwrap_or_default(),
-            chain: rule.chain,
+            // Multi-value fields - clone directly
+            ports: rule.ports.clone(),
+            sources: rule.sources.clone(),
+            destinations: rule.destinations.clone(),
             tags: rule.tags.clone(),
-            tag_input: String::new(),
-            show_advanced: has_advanced,
-            destination: rule
-                .destinations
-                .first()
-                .map_or_else(String::new, std::string::ToString::to_string),
+            // Single-value fields
+            interface: rule.interface.clone().unwrap_or_default(),
+            output_interface: rule.output_interface.clone().unwrap_or_default(),
+            chain: rule.chain,
             action: rule.action,
+            reject_type: rule.reject_type,
+            // Rate limiting
             rate_limit_enabled: rule.rate_limit.is_some(),
             rate_limit_count: rule
                 .rate_limit
@@ -75,11 +62,21 @@ pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
                 .rate_limit
                 .as_ref()
                 .map_or(crate::core::firewall::TimeUnit::Second, |rl| rl.unit),
+            rate_limit_burst: rule
+                .rate_limit
+                .as_ref()
+                .and_then(|rl| rl.burst)
+                .map_or_else(String::new, |b| b.to_string()),
+            // Connection limiting
             connection_limit: if rule.connection_limit > 0 {
                 rule.connection_limit.to_string()
             } else {
                 String::new()
             },
+            // Per-rule logging
+            log_enabled: rule.log_enabled,
+            // UI state
+            show_advanced: has_advanced,
         });
         state.form_errors = None;
     }
@@ -88,6 +85,7 @@ pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
 /// Handles canceling rule form (Add or Edit)
 pub(crate) fn handle_cancel_rule_form(state: &mut State) {
     state.rule_form = None;
+    state.rule_form_helper = None;
     state.form_errors = None;
     if state.status == crate::app::AppStatus::AwaitingApply {
         state.status = crate::app::AppStatus::Idle;
@@ -103,8 +101,7 @@ pub(crate) fn handle_cancel_rule_form(state: &mut State) {
 pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
     // Validate form exists
     if let Some(form_ref) = &state.rule_form {
-        let (ports, sources, destinations, errors) = form_ref.validate();
-        if let Some(errs) = errors {
+        if let Some(errs) = form_ref.validate() {
             state.form_errors = Some(errs);
             return Task::none();
         }
@@ -124,16 +121,22 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
         } else {
             Some(form.interface)
         };
+        let output_interface = if form.output_interface.is_empty() {
+            None
+        } else {
+            Some(form.output_interface)
+        };
 
+        // Parse rate limit with burst support
         let rate_limit = if form.rate_limit_enabled && !form.rate_limit_count.is_empty() {
-            form.rate_limit_count
-                .parse()
-                .ok()
-                .map(|count| crate::core::firewall::RateLimit {
+            form.rate_limit_count.parse().ok().map(|count| {
+                let burst = form.rate_limit_burst.parse::<u32>().ok().filter(|&b| b > 0);
+                crate::core::firewall::RateLimit {
                     count,
                     unit: form.rate_limit_unit,
-                    burst: None, // Form doesn't support burst yet
-                })
+                    burst,
+                }
+            })
         } else {
             None
         };
@@ -148,20 +151,22 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             id: form.id.unwrap_or_else(Uuid::new_v4),
             label: sanitized_label,
             protocol: form.protocol,
-            ports,
-            sources,
-            destinations,
+            // Multi-value fields from form
+            ports: form.ports,
+            sources: form.sources,
+            destinations: form.destinations,
+            // Single-value fields
             interface,
-            output_interface: None, // Form doesn't support output interface yet
+            output_interface,
             chain: form.chain,
             enabled: true,
             created_at: Utc::now(),
             tags: form.tags,
             action: form.action,
-            reject_type: crate::core::firewall::RejectType::Default, // Form doesn't support reject type yet
+            reject_type: form.reject_type,
             rate_limit,
             connection_limit,
-            log_enabled: false, // Form doesn't support logging yet
+            log_enabled: form.log_enabled,
             // Cached fields - will be populated by rebuild_caches()
             label_lowercase: String::new(),
             interface_lowercase: None,
@@ -392,42 +397,15 @@ pub(crate) fn handle_rule_form_protocol_changed(state: &mut State, protocol: Pro
 
     // Clear ports if switching to ICMP or Any (doesn't use ports)
     if matches!(protocol, Protocol::Icmp | Protocol::Icmpv6 | Protocol::Any) {
-        form.port_start.clear();
-        form.port_end.clear();
+        form.ports.clear();
     }
-}
 
-pub(crate) fn handle_rule_form_port_start_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormPortStartChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.port_start = value;
-}
-
-pub(crate) fn handle_rule_form_port_end_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormPortEndChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.port_end = value;
-}
-
-pub(crate) fn handle_rule_form_source_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormSourceChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.source = value;
+    // TCP Reset reject type is only valid for TCP - auto-reset to Default
+    if !matches!(protocol, Protocol::Tcp | Protocol::TcpAndUdp)
+        && form.reject_type == RejectType::TcpReset
+    {
+        form.reject_type = RejectType::Default;
+    }
 }
 
 pub(crate) fn handle_rule_form_interface_changed(state: &mut State, value: String) {
@@ -461,17 +439,6 @@ pub(crate) fn handle_rule_form_toggle_advanced(state: &mut State, show: bool) {
         return;
     };
     form.show_advanced = show;
-}
-
-pub(crate) fn handle_rule_form_destination_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormDestinationChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.destination = value;
 }
 
 pub(crate) fn handle_rule_form_action_changed(
@@ -535,44 +502,6 @@ pub(crate) fn handle_rule_form_connection_limit_changed(state: &mut State, value
     form.connection_limit = value;
 }
 
-pub(crate) fn handle_rule_form_tag_input_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormTagInputChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.tag_input = value;
-}
-
-pub(crate) fn handle_rule_form_add_tag(state: &mut State) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormAddTag sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-
-    let tag = validators::sanitize_label(form.tag_input.trim());
-    if !tag.is_empty() && !form.tags.contains(&tag) && form.tags.len() < 10 {
-        form.tags.push(tag);
-        form.tag_input.clear();
-    }
-}
-
-pub(crate) fn handle_rule_form_remove_tag(state: &mut State, tag: &str) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormRemoveTag sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.tags.retain(|t| t != tag);
-}
-
 // ============================================================================
 // Search and filtering
 // ============================================================================
@@ -607,6 +536,221 @@ pub(crate) fn handle_rule_hover_start(state: &mut State, id: Uuid) {
 
 pub(crate) fn handle_rule_hover_end(state: &mut State) {
     state.hovered_drop_target_id = None;
+}
+
+// ============================================================================
+// Helper modal handlers
+// ============================================================================
+
+use crate::app::{HelperType, RuleFormHelper};
+use crate::core::firewall::RejectType;
+
+pub(crate) fn handle_open_helper(state: &mut State, helper_type: HelperType) {
+    state.rule_form_helper = Some(RuleFormHelper {
+        helper_type: Some(helper_type),
+        input: String::new(),
+        error: None,
+    });
+}
+
+pub(crate) fn handle_close_helper(state: &mut State) {
+    state.rule_form_helper = None;
+}
+
+pub(crate) fn handle_helper_input_changed(state: &mut State, value: String) {
+    let Some(helper) = &mut state.rule_form_helper else {
+        return;
+    };
+    helper.input = value;
+    helper.error = None;
+}
+
+pub(crate) fn handle_helper_add_value(state: &mut State) {
+    let (Some(form), Some(helper)) = (&mut state.rule_form, &mut state.rule_form_helper) else {
+        return;
+    };
+
+    let Some(helper_type) = helper.helper_type else {
+        return;
+    };
+
+    let input = helper.input.trim();
+    if input.is_empty() {
+        return;
+    }
+
+    match helper_type {
+        HelperType::Ports => {
+            // Support bulk paste: "22, 80, 443, 8000-8080"
+            if input.contains(',') {
+                let (entries, errors) = validators::parse_bulk_ports(input);
+                let mut added = 0;
+                let mut duplicates = 0;
+
+                for entry in entries {
+                    if !form.ports.contains(&entry) {
+                        form.ports.push(entry);
+                        added += 1;
+                    } else {
+                        duplicates += 1;
+                    }
+                }
+
+                if !errors.is_empty() {
+                    helper.error = Some(format!(
+                        "Added {} ports, {} errors: {}",
+                        added,
+                        errors.len(),
+                        errors.first().map_or("", |(_, e)| e)
+                    ));
+                } else if duplicates > 0 {
+                    helper.error = Some(format!(
+                        "Added {} ports ({} duplicates skipped)",
+                        added, duplicates
+                    ));
+                } else if added > 0 {
+                    helper.input.clear();
+                    helper.error = None;
+                }
+            } else {
+                // Single port or range
+                match validators::validate_port_entry(input) {
+                    Ok(entry) => {
+                        if !form.ports.contains(&entry) {
+                            form.ports.push(entry);
+                            helper.input.clear();
+                            helper.error = None;
+                        } else {
+                            helper.error = Some("Port already added".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        helper.error = Some(e.to_string());
+                    }
+                }
+            }
+        }
+        HelperType::SourceAddresses => match input.parse::<ipnetwork::IpNetwork>() {
+            Ok(ip) => {
+                if !form.sources.contains(&ip) {
+                    form.sources.push(ip);
+                    helper.input.clear();
+                } else {
+                    helper.error = Some("Address already added".to_string());
+                }
+            }
+            Err(_) => {
+                helper.error = Some("Invalid IP/CIDR (e.g., 192.168.1.0/24)".to_string());
+            }
+        },
+        HelperType::DestinationAddresses => match input.parse::<ipnetwork::IpNetwork>() {
+            Ok(ip) => {
+                if !form.destinations.contains(&ip) {
+                    form.destinations.push(ip);
+                    helper.input.clear();
+                } else {
+                    helper.error = Some("Address already added".to_string());
+                }
+            }
+            Err(_) => {
+                helper.error = Some("Invalid IP/CIDR (e.g., 192.168.1.0/24)".to_string());
+            }
+        },
+        HelperType::Tags => {
+            let tag = validators::sanitize_label(input);
+            if tag.is_empty() {
+                helper.error = Some("Invalid tag".to_string());
+            } else if form.tags.len() >= 10 {
+                helper.error = Some("Maximum 10 tags allowed".to_string());
+            } else if form.tags.contains(&tag) {
+                helper.error = Some("Tag already added".to_string());
+            } else {
+                form.tags.push(tag);
+                helper.input.clear();
+            }
+        }
+    }
+}
+
+pub(crate) fn handle_helper_remove_value(state: &mut State, index: usize) {
+    let (Some(form), Some(helper)) = (&mut state.rule_form, &state.rule_form_helper) else {
+        return;
+    };
+
+    let Some(helper_type) = helper.helper_type else {
+        return;
+    };
+
+    match helper_type {
+        HelperType::Ports => {
+            if index < form.ports.len() {
+                form.ports.remove(index);
+            }
+        }
+        HelperType::SourceAddresses => {
+            if index < form.sources.len() {
+                form.sources.remove(index);
+            }
+        }
+        HelperType::DestinationAddresses => {
+            if index < form.destinations.len() {
+                form.destinations.remove(index);
+            }
+        }
+        HelperType::Tags => {
+            if index < form.tags.len() {
+                form.tags.remove(index);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// New rule form field handlers (backend features from additional_nft.md)
+// ============================================================================
+
+pub(crate) fn handle_rule_form_output_interface_changed(state: &mut State, value: String) {
+    let Some(form) = &mut state.rule_form else {
+        tracing::error!(
+            "RuleFormOutputInterfaceChanged sent without active form. \
+             This indicates a UI state management bug."
+        );
+        return;
+    };
+    form.output_interface = value;
+}
+
+pub(crate) fn handle_rule_form_reject_type_changed(state: &mut State, reject_type: RejectType) {
+    let Some(form) = &mut state.rule_form else {
+        tracing::error!(
+            "RuleFormRejectTypeChanged sent without active form. \
+             This indicates a UI state management bug."
+        );
+        return;
+    };
+    form.reject_type = reject_type;
+}
+
+pub(crate) fn handle_rule_form_rate_limit_burst_changed(state: &mut State, value: String) {
+    let Some(form) = &mut state.rule_form else {
+        tracing::error!(
+            "RuleFormRateLimitBurstChanged sent without active form. \
+             This indicates a UI state management bug."
+        );
+        return;
+    };
+    form.rate_limit_burst = value;
+}
+
+pub(crate) fn handle_rule_form_log_enabled_toggled(state: &mut State, enabled: bool) {
+    let Some(form) = &mut state.rule_form else {
+        tracing::error!(
+            "RuleFormLogEnabledToggled sent without active form. \
+             This indicates a UI state management bug."
+        );
+        return;
+    };
+    form.log_enabled = enabled;
 }
 
 // ============================================================================

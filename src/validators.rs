@@ -105,6 +105,85 @@ pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), &'static 
     }
 }
 
+/// Validates and parses a port entry from string input.
+///
+/// Accepts single ports ("22") or ranges ("8000-8080").
+///
+/// # Examples
+///
+/// ```
+/// use drfw::validators::validate_port_entry;
+/// use drfw::core::firewall::PortEntry;
+///
+/// assert!(matches!(validate_port_entry("22"), Ok(PortEntry::Single(22))));
+/// assert!(matches!(validate_port_entry("8000-8080"), Ok(PortEntry::Range { start: 8000, end: 8080 })));
+/// assert!(validate_port_entry("0").is_err());
+/// assert!(validate_port_entry("100-50").is_err());
+/// ```
+pub fn validate_port_entry(input: &str) -> Result<crate::core::firewall::PortEntry, &'static str> {
+    use crate::core::firewall::PortEntry;
+
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("Port cannot be empty");
+    }
+
+    if let Some((start_str, end_str)) = input.split_once('-') {
+        let start: u16 = start_str
+            .trim()
+            .parse()
+            .map_err(|_| "Invalid port number")?;
+        let end: u16 = end_str.trim().parse().map_err(|_| "Invalid port number")?;
+        validate_port_range(start, end)?;
+
+        if start == end {
+            Ok(PortEntry::Single(start))
+        } else {
+            Ok(PortEntry::Range { start, end })
+        }
+    } else {
+        let port: u16 = input.parse().map_err(|_| "Invalid port number")?;
+        validate_port(port)?;
+        Ok(PortEntry::Single(port))
+    }
+}
+
+/// Parses bulk port input (comma-separated) into port entries.
+///
+/// Returns successfully parsed entries and a list of errors.
+///
+/// # Examples
+///
+/// ```
+/// use drfw::validators::parse_bulk_ports;
+///
+/// let (ports, errors) = parse_bulk_ports("22, 80, 443, invalid, 8000-8080");
+/// assert_eq!(ports.len(), 4);
+/// assert_eq!(errors.len(), 1);
+/// ```
+pub fn parse_bulk_ports(
+    input: &str,
+) -> (
+    Vec<crate::core::firewall::PortEntry>,
+    Vec<(&str, &'static str)>,
+) {
+    let mut ports = Vec::new();
+    let mut errors = Vec::new();
+
+    for part in input.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match validate_port_entry(trimmed) {
+            Ok(entry) => ports.push(entry),
+            Err(e) => errors.push((trimmed, e)),
+        }
+    }
+
+    (ports, errors)
+}
+
 /// Validates interface name format per Linux kernel constraints.
 ///
 /// **NOTE:** This does NOT check if the interface exists on the system.

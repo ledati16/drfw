@@ -8,6 +8,7 @@ pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
 // Submodule declarations
 mod confirmation;
 mod diagnostics;
+mod helper_modals;
 mod modals;
 mod pickers;
 mod profile;
@@ -96,7 +97,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
             container(rule_form::view_rule_form(
                 form,
                 state.form_errors.as_ref(),
-                &state.interfaces_with_any, // Issue #4: Use cached list with "Any" prepended
+                &state.interface_combo_state,
+                &state.output_interface_combo_state,
                 theme,
                 state.font_regular,
                 state.font_mono,
@@ -147,9 +149,36 @@ pub fn view(state: &State) -> Element<'_, Message> {
         base.into()
     };
 
+    // Helper modal layer (appears on top of rule form when editing multi-value fields)
+    let with_helper: Element<'_, Message> =
+        if let (Some(form), Some(helper)) = (&state.rule_form, &state.rule_form_helper) {
+            if helper.helper_type.is_some() {
+                stack![
+                    with_overlay,
+                    container(helper_modals::view_helper_modal(
+                        form,
+                        helper,
+                        theme,
+                        state.font_regular,
+                        state.font_mono,
+                    ))
+                    .style(move |_| modal_backdrop(theme))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                ]
+                .into()
+            } else {
+                with_overlay
+            }
+        } else {
+            with_overlay
+        };
+
     // Banner overlay layer (free-floating at top-right, ABOVE modal backdrop)
     let with_banners: Element<'_, Message> = if state.banners.is_empty() {
-        with_overlay
+        with_helper
     } else {
         let banner_column = column(
             state
@@ -165,7 +194,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .padding(16);
 
         stack![
-            with_overlay,
+            with_helper,
             container(banner_column)
                 .width(Length::Fill)
                 .height(Length::Shrink)
