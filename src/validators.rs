@@ -112,9 +112,17 @@ pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), &'static 
 ///
 /// # Constraints
 ///
-/// - Maximum 15 characters (IFNAMSIZ - 1)
+/// - Maximum 15 characters (IFNAMSIZ - 1), or 16 if using wildcard suffix
 /// - ASCII alphanumeric, dot, dash, underscore only
 /// - Cannot be "." or ".."
+/// - Wildcard `*` allowed only at the end (suffix wildcard)
+///
+/// # Wildcards
+///
+/// nftables supports suffix wildcards for interface matching:
+/// - `eth*` matches eth0, eth1, eth2, etc.
+/// - `docker*` matches docker0, docker1, etc.
+/// - `veth*` matches all veth interfaces
 ///
 /// # Errors
 ///
@@ -124,20 +132,40 @@ pub fn validate_interface(name: &str) -> Result<String, &'static str> {
         return Ok(String::new());
     }
 
-    if name.len() > 15 {
-        return Err("Interface name too long (max 15 characters)");
+    // Check for wildcard - only allowed at end
+    let (base_name, has_wildcard) = if let Some(stripped) = name.strip_suffix('*') {
+        (stripped, true)
+    } else {
+        (name, false)
+    };
+
+    // Wildcard-only is invalid (need at least one character before *)
+    if has_wildcard && base_name.is_empty() {
+        return Err("Wildcard requires prefix (e.g., 'eth*')");
     }
 
-    if name == "." || name == ".." {
+    // Max length: 15 for normal, but nftables accepts 16 with wildcard
+    let max_len = if has_wildcard { 16 } else { 15 };
+    if name.len() > max_len {
+        return Err("Interface name too long (max 15 characters, or 16 with wildcard)");
+    }
+
+    if base_name == "." || base_name == ".." {
         return Err("Invalid interface name");
     }
 
-    // Check for valid characters (ASCII alphanumeric only, plus dot, dash, underscore)
-    if !name
+    // Check for valid characters in the base name (ASCII alphanumeric only, plus dot, dash, underscore)
+    // Wildcard * is only valid at the end, already stripped
+    if !base_name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
     {
         return Err("Interface name contains invalid characters");
+    }
+
+    // Check for * in the middle (invalid)
+    if base_name.contains('*') {
+        return Err("Wildcard (*) only allowed at end of interface name");
     }
 
     Ok(name.to_string())
@@ -360,6 +388,39 @@ mod tests {
         assert!(validate_interface(&name).is_ok());
     }
 
+    // Interface wildcard tests
+    #[test]
+    fn test_validate_interface_wildcard_valid() {
+        assert!(validate_interface("eth*").is_ok());
+        assert!(validate_interface("docker*").is_ok());
+        assert!(validate_interface("veth*").is_ok());
+        assert!(validate_interface("enp*").is_ok());
+        assert!(validate_interface("br0.*").is_ok());
+    }
+
+    #[test]
+    fn test_validate_interface_wildcard_only() {
+        assert!(validate_interface("*").is_err());
+    }
+
+    #[test]
+    fn test_validate_interface_wildcard_middle() {
+        assert!(validate_interface("eth*0").is_err());
+        assert!(validate_interface("*eth").is_err());
+        assert!(validate_interface("eth*net*").is_err());
+    }
+
+    #[test]
+    fn test_validate_interface_wildcard_max_length() {
+        // 15 chars + wildcard = 16 total, should be ok
+        let name = format!("{}*", "a".repeat(15));
+        assert!(validate_interface(&name).is_ok());
+
+        // 16 chars + wildcard = 17 total, too long
+        let long_name = format!("{}*", "a".repeat(16));
+        assert!(validate_interface(&long_name).is_err());
+    }
+
     // Rate limit validation tests
     #[test]
     fn test_validate_rate_limit_normal() {
@@ -531,6 +592,7 @@ mod property_tests {
         #[test]
         fn test_validate_interface_length_constraint(name in "[a-zA-Z0-9._-]{0,20}") {
             let result = validate_interface(&name);
+            // Without wildcard, max length is 15
             if name.len() <= 15 && name != "." && name != ".." {
                 prop_assert!(result.is_ok());
             } else if name.len() > 15 {
@@ -539,9 +601,24 @@ mod property_tests {
         }
 
         #[test]
+        fn test_validate_interface_wildcard_constraint(prefix in "[a-zA-Z0-9._-]{1,18}") {
+            // Test wildcard suffix validation
+            let with_wildcard = format!("{prefix}*");
+            let result = validate_interface(&with_wildcard);
+
+            // With wildcard, max total length is 16
+            if with_wildcard.len() <= 16 && prefix != "." && prefix != ".." {
+                prop_assert!(result.is_ok(), "Should accept valid wildcard: {}", with_wildcard);
+            } else if with_wildcard.len() > 16 {
+                prop_assert!(result.is_err(), "Should reject too-long wildcard: {}", with_wildcard);
+            }
+        }
+
+        #[test]
         fn test_validate_interface_char_constraint(
             valid_prefix in "[a-zA-Z0-9._-]{1,10}",
-            invalid_char in "[^a-zA-Z0-9._-]"
+            // Exclude '*' since it's valid at end (wildcard support)
+            invalid_char in "[^a-zA-Z0-9._\\-*]"
         ) {
             let invalid_name = format!("{valid_prefix}{invalid_char}");
             let result = validate_interface(&invalid_name);

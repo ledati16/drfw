@@ -22,36 +22,41 @@
 //! # Example
 //!
 //! ```
-//! use drfw::core::firewall::{Rule, Protocol, PortRange, Chain};
+//! use drfw::core::firewall::{Rule, Protocol, PortEntry, Chain};
 //! use uuid::Uuid;
 //!
 //! let mut rule = Rule {
 //!     id: Uuid::new_v4(),
 //!     label: "Allow SSH".to_string(),
 //!     protocol: Protocol::Tcp,
-//!     ports: Some(PortRange::single(22)),
-//!     source: None,
+//!     ports: vec![PortEntry::single(22)],  // Single port, or vec![22.into()]
+//!     sources: vec![],  // Empty = any source. Can mix IPv4/IPv6
 //!     interface: None,
+//!     output_interface: None,
 //!     chain: Chain::Input,
 //!     enabled: true,
 //!     created_at: chrono::Utc::now(),
 //!     tags: vec![],
 //!     // Advanced options
-//!     destination: None,
+//!     destinations: vec![],  // Empty = any destination. Can mix IPv4/IPv6
 //!     action: drfw::core::firewall::Action::Accept,
+//!     reject_type: drfw::core::firewall::RejectType::Default,
 //!     rate_limit: None,
 //!     connection_limit: 0,
+//!     log_enabled: false,
 //!     // Cached fields (populated by rebuild_caches())
 //!     label_lowercase: String::new(),
 //!     interface_lowercase: None,
+//!     output_interface_lowercase: None,
 //!     tags_lowercase: Vec::new(),
 //!     protocol_lowercase: "",
 //!     port_display: String::new(),
-//!     source_string: None,
-//!     destination_string: None,
+//!     sources_display: String::new(),
+//!     destinations_display: String::new(),
 //!     rate_limit_display: None,
 //!     action_display: String::new(),
 //!     interface_display: String::new(),
+//!     log_prefix: String::new(),
 //! };
 //! rule.rebuild_caches();
 //! ```
@@ -136,19 +141,32 @@ impl Protocol {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A port range with start and end values.
+///
+/// Used within [`PortEntry`] for representing port ranges.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PortRange {
     pub start: u16,
     pub end: u16,
 }
 
 impl PortRange {
-    #[allow(dead_code)]
-    pub fn single(port: u16) -> Self {
+    /// Creates a single-port range (start == end)
+    pub const fn single(port: u16) -> Self {
         Self {
             start: port,
             end: port,
         }
+    }
+
+    /// Creates a port range
+    pub const fn range(start: u16, end: u16) -> Self {
+        Self { start, end }
+    }
+
+    /// Returns true if this is a single port (not a range)
+    pub const fn is_single(&self) -> bool {
+        self.start == self.end
     }
 }
 
@@ -159,6 +177,110 @@ impl fmt::Display for PortRange {
         } else {
             write!(f, "{}-{}", self.start, self.end)
         }
+    }
+}
+
+/// A port entry that can be a single port or a range.
+///
+/// Used in [`Rule::ports`] to support multiple ports and ranges per rule.
+///
+/// # Examples
+///
+/// ```
+/// use drfw::core::firewall::PortEntry;
+///
+/// // Single ports
+/// let ssh = PortEntry::single(22);
+/// let http = PortEntry::single(80);
+///
+/// // Port ranges
+/// let high_ports = PortEntry::range(8000, 8080);
+///
+/// // Display
+/// assert_eq!(ssh.to_string(), "22");
+/// assert_eq!(high_ports.to_string(), "8000-8080");
+/// ```
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum PortEntry {
+    /// A single port
+    Single(u16),
+    /// A port range (inclusive)
+    Range { start: u16, end: u16 },
+}
+
+impl PortEntry {
+    /// Creates a single port entry
+    pub const fn single(port: u16) -> Self {
+        Self::Single(port)
+    }
+
+    /// Creates a port range entry
+    pub const fn range(start: u16, end: u16) -> Self {
+        Self::Range { start, end }
+    }
+
+    /// Converts from legacy PortRange to PortEntry
+    pub const fn from_port_range(pr: PortRange) -> Self {
+        if pr.start == pr.end {
+            Self::Single(pr.start)
+        } else {
+            Self::Range {
+                start: pr.start,
+                end: pr.end,
+            }
+        }
+    }
+
+    /// Returns the start port (for single port, this is the port itself)
+    pub const fn start(&self) -> u16 {
+        match self {
+            Self::Single(p) => *p,
+            Self::Range { start, .. } => *start,
+        }
+    }
+
+    /// Returns the end port (for single port, this is the port itself)
+    pub const fn end(&self) -> u16 {
+        match self {
+            Self::Single(p) => *p,
+            Self::Range { end, .. } => *end,
+        }
+    }
+
+    /// Returns true if this is a single port (not a range)
+    pub const fn is_single(&self) -> bool {
+        matches!(self, Self::Single(_))
+    }
+
+    /// Converts to nftables JSON value
+    pub fn to_nft_json(self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Self::Single(p) => json!(p),
+            Self::Range { start, end } => json!({ "range": [start, end] }),
+        }
+    }
+}
+
+impl fmt::Display for PortEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Single(p) => write!(f, "{p}"),
+            Self::Range { start, end } => write!(f, "{start}-{end}"),
+        }
+    }
+}
+
+impl From<u16> for PortEntry {
+    fn from(port: u16) -> Self {
+        Self::Single(port)
+    }
+}
+
+impl From<PortRange> for PortEntry {
+    fn from(pr: PortRange) -> Self {
+        Self::from_port_range(pr)
     }
 }
 
@@ -222,6 +344,63 @@ impl Action {
     }
 }
 
+/// Reject type for ICMP response selection
+///
+/// Controls what ICMP response is sent when rejecting a packet.
+/// Only applies when [`Action::Reject`] is selected.
+///
+/// **Note:** `TcpReset` is only valid for TCP protocol rules.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Default,
+    strum::Display,
+    strum::EnumString,
+    strum::EnumIter,
+    strum::AsRefStr,
+)]
+pub enum RejectType {
+    /// System default (port-unreachable)
+    #[default]
+    #[strum(serialize = "default")]
+    Default,
+    /// ICMP port unreachable - appears as "closed port"
+    #[strum(serialize = "port-unreachable")]
+    PortUnreachable,
+    /// ICMP host unreachable - appears as "host offline"
+    #[strum(serialize = "host-unreachable")]
+    HostUnreachable,
+    /// ICMP admin prohibited - explicit firewall block
+    #[strum(serialize = "admin-prohibited")]
+    AdminProhibited,
+    /// TCP RST - clean TCP connection close (TCP only!)
+    #[strum(serialize = "tcp-reset")]
+    TcpReset,
+}
+
+impl RejectType {
+    /// Returns display name for UI rendering
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            RejectType::Default => "Default",
+            RejectType::PortUnreachable => "Port Unreachable",
+            RejectType::HostUnreachable => "Host Unreachable",
+            RejectType::AdminProhibited => "Admin Prohibited",
+            RejectType::TcpReset => "TCP Reset",
+        }
+    }
+
+    /// Returns true if this reject type is only valid for TCP protocol
+    pub const fn requires_tcp(self) -> bool {
+        matches!(self, RejectType::TcpReset)
+    }
+}
+
 /// Time unit for rate limiting
 #[derive(
     Debug,
@@ -273,15 +452,27 @@ impl TimeUnit {
 ///
 /// Limits the rate at which packets can match this rule.
 /// Useful for preventing brute force attacks.
+///
+/// # Burst
+/// The optional `burst` field allows short bursts beyond the rate limit.
+/// For example, rate 5/minute with burst 10 allows up to 10 connections
+/// quickly, then enforces 5/minute average.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RateLimit {
     pub count: u32,
     pub unit: TimeUnit,
+    /// Optional burst allowance (0 or None = no burst)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst: Option<u32>,
 }
 
 impl fmt::Display for RateLimit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.count, self.unit)
+        if let Some(burst) = self.burst {
+            write!(f, "{}/{} burst {}", self.count, self.unit, burst)
+        } else {
+            write!(f, "{}/{}", self.count, self.unit)
+        }
     }
 }
 
@@ -315,9 +506,20 @@ pub struct Rule {
     pub id: Uuid,
     pub label: String,
     pub protocol: Protocol,
-    pub ports: Option<PortRange>,
-    pub source: Option<IpNetwork>,
+    /// Port entries (single ports or ranges). Empty = all ports.
+    /// Multiple entries create nftables anonymous sets: `dport { 22, 80, 443 }`
+    #[serde(default)]
+    pub ports: Vec<PortEntry>,
+    /// Source IP/network filters. Empty = any source.
+    /// IPv4 and IPv6 addresses can be mixed; DRFW splits them into separate nft rules.
+    #[serde(default)]
+    pub sources: Vec<IpNetwork>,
+    /// Input interface filter (iifname). Supports wildcards (e.g., "eth*")
     pub interface: Option<String>,
+    /// Output interface filter (oifname). Only for OUTPUT chain in Server Mode.
+    /// Supports wildcards (e.g., "eth*")
+    #[serde(default)]
+    pub output_interface: Option<String>,
     /// Chain direction (Input/Output) - only relevant in Server Mode
     #[serde(default)]
     pub chain: Chain,
@@ -329,18 +531,27 @@ pub struct Rule {
     pub tags: Vec<String>,
 
     // Advanced options
-    /// Destination IP/network filtering (for outbound traffic control)
+    /// Destination IP/network filters. Empty = any destination.
+    /// IPv4 and IPv6 addresses can be mixed; DRFW splits them into separate nft rules.
     #[serde(default)]
-    pub destination: Option<IpNetwork>,
+    pub destinations: Vec<IpNetwork>,
     /// Action to take when packet matches (Accept/Drop/Reject)
     #[serde(default)]
     pub action: Action,
+    /// Reject type selection (only used when action == Reject)
+    /// Controls the ICMP response type sent when rejecting packets
+    #[serde(default)]
+    pub reject_type: RejectType,
     /// Rate limiting configuration (prevent brute force)
     #[serde(default)]
     pub rate_limit: Option<RateLimit>,
     /// Connection limit (max simultaneous connections, 0 = disabled)
     #[serde(default)]
     pub connection_limit: u32,
+    /// Enable per-rule logging (logs matched packets before action)
+    /// Prefix is auto-generated from sanitized label: "DRFW-{label}: "
+    #[serde(default)]
+    pub log_enabled: bool,
 
     // Cached lowercase fields for search performance (Issue #1)
     /// Cached lowercase version of `label` for fast search filtering
@@ -349,6 +560,9 @@ pub struct Rule {
     /// Cached lowercase version of `interface` for fast search filtering
     #[serde(skip)]
     pub interface_lowercase: Option<String>,
+    /// Cached lowercase version of `output_interface` for fast search filtering
+    #[serde(skip)]
+    pub output_interface_lowercase: Option<String>,
     /// Cached lowercase versions of all tags for fast search filtering
     #[serde(skip)]
     pub tags_lowercase: Vec<String>,
@@ -358,12 +572,12 @@ pub struct Rule {
     /// Cached port display string for efficient view rendering (Issue #5)
     #[serde(skip)]
     pub port_display: String,
-    /// Cached source IP network string for efficient JSON generation (Issue #10)
+    /// Cached source IPs display string for efficient view rendering
     #[serde(skip)]
-    pub source_string: Option<String>,
-    /// Cached destination IP network string for efficient JSON generation
+    pub sources_display: String,
+    /// Cached destination IPs display string for efficient view rendering
     #[serde(skip)]
-    pub destination_string: Option<String>,
+    pub destinations_display: String,
     /// Cached rate limit display string for efficient view rendering (e.g., "5/m", "10/s")
     #[serde(skip)]
     pub rate_limit_display: Option<String>,
@@ -375,6 +589,10 @@ pub struct Rule {
     /// (Phase 2.3 optimization)
     #[serde(skip)]
     pub interface_display: String,
+    /// Cached sanitized log prefix for nftables log expression
+    /// Format: "DRFW-{sanitized_label}: " (max 64 chars)
+    #[serde(skip)]
+    pub log_prefix: String,
 }
 
 impl Rule {
@@ -383,23 +601,54 @@ impl Rule {
     pub fn rebuild_caches(&mut self) {
         self.label_lowercase = self.label.to_lowercase();
         self.interface_lowercase = self.interface.as_ref().map(|i| i.to_lowercase());
+        self.output_interface_lowercase = self.output_interface.as_ref().map(|i| i.to_lowercase());
         self.tags_lowercase = self.tags.iter().map(|t| t.to_lowercase()).collect();
         self.protocol_lowercase = self.protocol.as_str();
         // Issue #5: Cache port display string for efficient view rendering
-        self.port_display = self.ports.as_ref().map_or_else(
-            || "All".to_string(),
-            |p| {
-                if p.start == p.end {
-                    p.start.to_string()
-                } else {
-                    format!("{}-{}", p.start, p.end)
-                }
-            },
-        );
-        // Issue #10: Cache source IP string for efficient JSON generation
-        self.source_string = self.source.map(|s| s.to_string());
-        // Cache destination IP string for efficient JSON generation
-        self.destination_string = self.destination.map(|d| d.to_string());
+        self.port_display = if self.ports.is_empty() {
+            "All".to_string()
+        } else if self.ports.len() == 1 {
+            self.ports[0].to_string()
+        } else {
+            // Multiple ports - show count or abbreviated list
+            if self.ports.len() <= 3 {
+                self.ports
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                format!("{} ports", self.ports.len())
+            }
+        };
+        // Cache source IPs display string for efficient view rendering
+        self.sources_display = if self.sources.is_empty() {
+            "Any".to_string()
+        } else if self.sources.len() == 1 {
+            self.sources[0].to_string()
+        } else if self.sources.len() <= 2 {
+            self.sources
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            format!("{} addresses", self.sources.len())
+        };
+        // Cache destination IPs display string for efficient view rendering
+        self.destinations_display = if self.destinations.is_empty() {
+            "Any".to_string()
+        } else if self.destinations.len() == 1 {
+            self.destinations[0].to_string()
+        } else if self.destinations.len() <= 2 {
+            self.destinations
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            format!("{} addresses", self.destinations.len())
+        };
         // Cache rate limit display string for efficient view rendering
         self.rate_limit_display = self.rate_limit.map(|rl| {
             let unit_abbrev = match rl.unit {
@@ -408,7 +657,11 @@ impl Rule {
                 TimeUnit::Hour => "h",
                 TimeUnit::Day => "d",
             };
-            format!("{}/{}", rl.count, unit_abbrev)
+            if let Some(burst) = rl.burst {
+                format!("{}/{} b{}", rl.count, unit_abbrev, burst)
+            } else {
+                format!("{}/{}", rl.count, unit_abbrev)
+            }
         });
         // Phase 2.3: Cache action display string (combines action + rate limit)
         self.action_display = if let Some(ref rate_limit) = self.rate_limit_display {
@@ -422,6 +675,24 @@ impl Rule {
         } else {
             "Any".to_string()
         };
+        // Cache sanitized log prefix for nftables log expression
+        self.log_prefix = Self::sanitize_log_prefix(&self.label);
+    }
+
+    /// Sanitizes a label for use as nftables log prefix.
+    /// Format: "DRFW-{sanitized_label}: " (max 64 chars total)
+    fn sanitize_log_prefix(label: &str) -> String {
+        let sanitized: String = label
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            .take(50) // Leave room for "DRFW-" prefix and ": " suffix
+            .collect();
+
+        if sanitized.is_empty() {
+            "DRFW-rule: ".to_string()
+        } else {
+            format!("DRFW-{sanitized}: ")
+        }
     }
 
     /// Updates label and its cached lowercase version
@@ -465,14 +736,14 @@ impl Rule {
 
     /// Creates a Rule with specified fields and auto-initializes caches.
     /// Useful for tests and manual rule creation.
-    /// Advanced options (destination, action, `rate_limit`, `connection_limit`) use defaults.
+    /// Advanced options (destinations, action, `rate_limit`, `connection_limit`) use defaults.
     #[allow(clippy::too_many_arguments)]
     pub fn with_caches(
         id: Uuid,
         label: String,
         protocol: Protocol,
-        ports: Option<PortRange>,
-        source: Option<IpNetwork>,
+        ports: Vec<PortEntry>,
+        sources: Vec<IpNetwork>,
         interface: Option<String>,
         chain: Chain,
         enabled: bool,
@@ -484,28 +755,33 @@ impl Rule {
             label,
             protocol,
             ports,
-            source,
+            sources,
             interface,
+            output_interface: None,
             chain,
             enabled,
             created_at,
             tags,
             // Advanced options - use defaults
-            destination: None,
+            destinations: Vec::new(),
             action: Action::default(),
+            reject_type: RejectType::default(),
             rate_limit: None,
             connection_limit: 0,
+            log_enabled: false,
             // Initialize with empty caches - will be rebuilt next
             label_lowercase: String::new(),
             interface_lowercase: None,
+            output_interface_lowercase: None,
             tags_lowercase: Vec::new(),
             protocol_lowercase: "",
-            port_display: String::new(), // Issue #5: Will be populated by rebuild_caches()
-            source_string: None,         // Issue #10: Will be populated by rebuild_caches()
-            destination_string: None,
-            rate_limit_display: None, // Will be populated by rebuild_caches()
-            action_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
-            interface_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
+            port_display: String::new(),
+            sources_display: String::new(),
+            destinations_display: String::new(),
+            rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
+            log_prefix: String::new(),
         };
         rule.rebuild_caches();
         rule
@@ -777,7 +1053,7 @@ impl FirewallRuleset {
             (
                 "early drop of invalid connections",
                 vec![
-                    json!({ "match": { "left": { "ct": { "key": "state" } }, "op": "==", "right": ["invalid"] } }),
+                    json!({ "match": { "left": { "ct": { "key": "state" } }, "op": "==", "right": "invalid" } }),
                     json!({ "drop": null }),
                 ],
             ),
@@ -901,19 +1177,56 @@ impl FirewallRuleset {
         }
     }
 
+    /// Adds user rule(s) to the nft_rules vector.
+    /// May generate multiple nftables rules if the DRFW rule has mixed IPv4/IPv6 addresses.
+    ///
+    /// nftables requires separate rules for IPv4 and IPv6:
+    /// - `ip saddr` only matches IPv4 addresses
+    /// - `ip6 saddr` only matches IPv6 addresses
+    ///
+    /// So if a user specifies both IPv4 and IPv6 sources, we generate two nft rules.
     fn add_user_rule(nft_rules: &mut Vec<serde_json::Value>, rule: &Rule) {
+        // Split sources and destinations by IP version
+        let ipv4_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv4()).collect();
+        let ipv6_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv6()).collect();
+        let ipv4_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv4()).collect();
+        let ipv6_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv6()).collect();
+
+        // For rules with no IP filtering, generate a single rule
+        if rule.sources.is_empty() && rule.destinations.is_empty() {
+            Self::add_single_rule(nft_rules, rule, &[], &[]);
+            return;
+        }
+
+        // Generate IPv4 rule if we have IPv4 sources or destinations
+        if !ipv4_sources.is_empty() || !ipv4_dests.is_empty() {
+            Self::add_single_rule(nft_rules, rule, &ipv4_sources, &ipv4_dests);
+        }
+
+        // Generate IPv6 rule if we have IPv6 sources or destinations
+        if !ipv6_sources.is_empty() || !ipv6_dests.is_empty() {
+            Self::add_single_rule(nft_rules, rule, &ipv6_sources, &ipv6_dests);
+        }
+    }
+
+    /// Generates a single nftables rule with the given sources and destinations.
+    fn add_single_rule(
+        nft_rules: &mut Vec<serde_json::Value>,
+        rule: &Rule,
+        sources: &[&IpNetwork],
+        destinations: &[&IpNetwork],
+    ) {
         use serde_json::json;
-        // Issue #11: Pre-allocate with typical max size (protocol + ports + src + interface + state + comment + action)
+
         let mut expressions = Vec::with_capacity(8);
 
-        // Issue #9: Protocol matching using meta_match helper (static strings, no allocation)
+        // Protocol matching
         match rule.protocol {
             Protocol::Any => {}
             Protocol::Tcp | Protocol::Udp => {
                 expressions.push(Self::meta_match("l4proto", rule.protocol.as_str()));
             }
             Protocol::TcpAndUdp => {
-                // Match both TCP and UDP using nftables set syntax
                 expressions.push(Self::meta_match("l4proto", json!({"set": ["tcp", "udp"]})));
             }
             Protocol::Icmp => {
@@ -923,7 +1236,6 @@ impl FirewallRuleset {
                 expressions.push(Self::meta_match("l4proto", "ipv6-icmp"));
             }
             Protocol::IcmpBoth => {
-                // Match both ICMP and ICMPv6 for dual-stack support
                 expressions.push(Self::meta_match(
                     "l4proto",
                     json!({"set": ["icmp", "ipv6-icmp"]}),
@@ -931,105 +1243,137 @@ impl FirewallRuleset {
             }
         }
 
-        if let Some(src) = rule.source {
-            // Issue #10: Use cached source string (falls back to to_string() if cache not populated)
-            let src_string;
-            let src_str = if let Some(ref cached) = rule.source_string {
-                cached.as_str()
+        // Source IP filtering (all sources should be same IP version)
+        if !sources.is_empty() {
+            let is_ipv6 = sources[0].is_ipv6();
+            let protocol = if is_ipv6 { "ip6" } else { "ip" };
+
+            let src_val = if sources.len() == 1 {
+                json!(sources[0].to_string())
             } else {
-                src_string = src.to_string();
-                &src_string
+                let src_set: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+                json!({ "set": src_set })
             };
+
             expressions.push(json!({
                 "match": {
-                    "left": { "payload": { "protocol": if src.is_ipv6() { "ip6" } else { "ip" }, "field": "saddr" } },
+                    "left": { "payload": { "protocol": protocol, "field": "saddr" } },
                     "op": "==",
-                    "right": src_str
+                    "right": src_val
                 }
             }));
         }
 
+        // Input interface
         if let Some(ref iface) = rule.interface {
             expressions.push(Self::meta_match("iifname", iface));
         }
 
-        if let Some(ref ports) = rule.ports
+        // Output interface
+        if let Some(ref oiface) = rule.output_interface {
+            expressions.push(Self::meta_match("oifname", oiface));
+        }
+
+        // Port filtering
+        if !rule.ports.is_empty()
             && matches!(
                 rule.protocol,
                 Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
             )
         {
-            let port_val = if ports.start == ports.end {
-                json!(ports.start)
+            let port_val = if rule.ports.len() == 1 {
+                rule.ports[0].to_nft_json()
             } else {
-                json!({ "range": [ports.start, ports.end] })
+                let port_set: Vec<serde_json::Value> =
+                    rule.ports.iter().copied().map(PortEntry::to_nft_json).collect();
+                json!({ "set": port_set })
             };
 
-            // For TcpAndUdp, we need to match ports using th (transport header) instead of specific protocol
-            if matches!(rule.protocol, Protocol::TcpAndUdp) {
-                expressions.push(json!({
-                    "match": {
-                        "left": { "payload": { "protocol": "th", "field": "dport" } },
-                        "op": "==",
-                        "right": port_val
-                    }
-                }));
+            let protocol_key = if matches!(rule.protocol, Protocol::TcpAndUdp) {
+                "th"
             } else {
-                expressions.push(json!({
-                    "match": {
-                        // Issue #9: Use as_str() for static string (no allocation)
-                        "left": { "payload": { "protocol": rule.protocol.as_str(), "field": "dport" } },
-                        "op": "==",
-                        "right": port_val
-                    }
-                }));
-            }
-        }
-
-        // Advanced options: destination IP filtering
-        if let Some(dest) = rule.destination {
-            let dest_string;
-            let dest_str = if let Some(ref cached) = rule.destination_string {
-                cached.as_str()
-            } else {
-                dest_string = dest.to_string();
-                &dest_string
+                rule.protocol.as_str()
             };
+
             expressions.push(json!({
                 "match": {
-                    "left": { "payload": { "protocol": if dest.is_ipv6() { "ip6" } else { "ip" }, "field": "daddr" } },
+                    "left": { "payload": { "protocol": protocol_key, "field": "dport" } },
                     "op": "==",
-                    "right": dest_str
+                    "right": port_val
                 }
             }));
         }
 
-        // Advanced options: rate limiting
-        if let Some(rate_limit) = rule.rate_limit {
+        // Destination IP filtering (all destinations should be same IP version)
+        if !destinations.is_empty() {
+            let is_ipv6 = destinations[0].is_ipv6();
+            let protocol = if is_ipv6 { "ip6" } else { "ip" };
+
+            let dest_val = if destinations.len() == 1 {
+                json!(destinations[0].to_string())
+            } else {
+                let dest_set: Vec<String> = destinations.iter().map(|d| d.to_string()).collect();
+                json!({ "set": dest_set })
+            };
+
             expressions.push(json!({
-                "limit": {
-                    "rate": rate_limit.count,
-                    "per": rate_limit.unit.as_str()
+                "match": {
+                    "left": { "payload": { "protocol": protocol, "field": "daddr" } },
+                    "op": "==",
+                    "right": dest_val
                 }
             }));
+        }
+
+        // Advanced options: rate limiting (with optional burst)
+        if let Some(rate_limit) = rule.rate_limit {
+            let mut limit_obj = json!({
+                "rate": rate_limit.count,
+                "per": rate_limit.unit.as_str()
+            });
+            if let Some(burst) = rate_limit.burst.filter(|&b| b > 0) {
+                limit_obj["burst"] = json!(burst);
+            }
+            expressions.push(json!({ "limit": limit_obj }));
         }
 
         // Advanced options: connection limiting
         if rule.connection_limit > 0 {
             expressions.push(json!({
-                "match": {
-                    "left": { "ct": { "key": "count" } },
-                    "op": "<=",
-                    "right": rule.connection_limit
+                "ct count": { "val": rule.connection_limit }
+            }));
+        }
+
+        // Per-rule logging (before action, so log happens even if action is accept)
+        if rule.log_enabled {
+            expressions.push(json!({
+                "log": {
+                    "prefix": &rule.log_prefix,
+                    "level": "info"
                 }
             }));
         }
 
-        // Action (Accept/Drop/Reject)
+        // Action (Accept/Drop/Reject with optional reject type)
         match rule.action {
             Action::Accept => expressions.push(json!({ "accept": null })),
             Action::Drop => expressions.push(json!({ "drop": null })),
-            Action::Reject => expressions.push(json!({ "reject": null })),
+            Action::Reject => {
+                let reject_expr = match rule.reject_type {
+                    RejectType::Default => json!({ "reject": null }),
+                    RejectType::PortUnreachable => {
+                        json!({ "reject": { "type": "icmpx", "expr": "port-unreachable" } })
+                    }
+                    RejectType::HostUnreachable => {
+                        json!({ "reject": { "type": "icmpx", "expr": "host-unreachable" } })
+                    }
+                    RejectType::AdminProhibited => {
+                        json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } })
+                    }
+                    RejectType::TcpReset => json!({ "reject": { "type": "tcp reset" } }),
+                };
+                expressions.push(reject_expr);
+            }
         }
 
         nft_rules.push(json!({
@@ -1288,35 +1632,106 @@ impl FirewallRuleset {
                 continue;
             }
             let _ = write!(out, "        ");
-            if let Some(src) = rule.source {
-                let _ = write!(
-                    out,
-                    "{} saddr {src} ",
-                    if src.is_ipv4() { "ip" } else { "ip6" }
-                );
+            // Source IP filtering - show all sources (may be mixed IPv4/IPv6)
+            // Note: JSON generation splits by IP version, text preview shows simplified
+            if !rule.sources.is_empty() {
+                let ipv4_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv4()).collect();
+                let ipv6_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv6()).collect();
+
+                if !ipv4_sources.is_empty() {
+                    if ipv4_sources.len() == 1 {
+                        let _ = write!(out, "ip saddr {} ", ipv4_sources[0]);
+                    } else {
+                        let addrs = ipv4_sources
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let _ = write!(out, "ip saddr {{ {addrs} }} ");
+                    }
+                }
+                if !ipv6_sources.is_empty() {
+                    if ipv6_sources.len() == 1 {
+                        let _ = write!(out, "ip6 saddr {} ", ipv6_sources[0]);
+                    } else {
+                        let addrs = ipv6_sources
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let _ = write!(out, "ip6 saddr {{ {addrs} }} ");
+                    }
+                }
             }
-            if let Some(dest) = rule.destination {
-                let _ = write!(
-                    out,
-                    "{} daddr {dest} ",
-                    if dest.is_ipv4() { "ip" } else { "ip6" }
-                );
+            // Destination IP filtering - show all destinations
+            if !rule.destinations.is_empty() {
+                let ipv4_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv4()).collect();
+                let ipv6_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv6()).collect();
+
+                if !ipv4_dests.is_empty() {
+                    if ipv4_dests.len() == 1 {
+                        let _ = write!(out, "ip daddr {} ", ipv4_dests[0]);
+                    } else {
+                        let addrs = ipv4_dests
+                            .iter()
+                            .map(|d| d.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let _ = write!(out, "ip daddr {{ {addrs} }} ");
+                    }
+                }
+                if !ipv6_dests.is_empty() {
+                    if ipv6_dests.len() == 1 {
+                        let _ = write!(out, "ip6 daddr {} ", ipv6_dests[0]);
+                    } else {
+                        let addrs = ipv6_dests
+                            .iter()
+                            .map(|d| d.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let _ = write!(out, "ip6 daddr {{ {addrs} }} ");
+                    }
+                }
             }
             if let Some(ref iface) = rule.interface {
                 let _ = write!(out, "iifname \"{iface}\" ");
+            }
+            if let Some(ref oiface) = rule.output_interface {
+                let _ = write!(out, "oifname \"{oiface}\" ");
             }
             match rule.protocol {
                 Protocol::Any => {} // No-op
                 Protocol::Tcp | Protocol::Udp => {
                     let _ = write!(out, "{}", rule.protocol);
-                    if let Some(ref ports) = rule.ports {
-                        let _ = write!(out, " dport {ports} ");
+                    if !rule.ports.is_empty() {
+                        if rule.ports.len() == 1 {
+                            let _ = write!(out, " dport {} ", rule.ports[0]);
+                        } else {
+                            // Multiple ports - use set syntax
+                            let ports_str = rule
+                                .ports
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let _ = write!(out, " dport {{ {ports_str} }} ");
+                        }
                     }
                 }
                 Protocol::TcpAndUdp => {
                     let _ = write!(out, "meta l4proto {{ tcp, udp }}");
-                    if let Some(ref ports) = rule.ports {
-                        let _ = write!(out, " th dport {ports} ");
+                    if !rule.ports.is_empty() {
+                        if rule.ports.len() == 1 {
+                            let _ = write!(out, " th dport {} ", rule.ports[0]);
+                        } else {
+                            let ports_str = rule
+                                .ports
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let _ = write!(out, " th dport {{ {ports_str} }} ");
+                        }
                     }
                 }
                 Protocol::Icmp => {
@@ -1330,16 +1745,52 @@ impl FirewallRuleset {
                     let _ = write!(out, "meta l4proto {{ icmp, ipv6-icmp }} ");
                 }
             }
-            // Advanced options: rate limiting
+            // Advanced options: rate limiting (with optional burst)
             if let Some(rate_limit) = rule.rate_limit {
-                let _ = write!(out, "limit rate {}/{} ", rate_limit.count, rate_limit.unit);
+                if let Some(burst) = rate_limit.burst {
+                    let _ = write!(
+                        out,
+                        "limit rate {}/{} burst {} packets ",
+                        rate_limit.count, rate_limit.unit, burst
+                    );
+                } else {
+                    let _ = write!(out, "limit rate {}/{} ", rate_limit.count, rate_limit.unit);
+                }
             }
             // Advanced options: connection limiting
             if rule.connection_limit > 0 {
-                let _ = write!(out, "ct count <= {} ", rule.connection_limit);
+                let _ = write!(out, "ct count {} ", rule.connection_limit);
             }
-            // Action
-            let _ = write!(out, "{}", rule.action);
+            // Per-rule logging (before action)
+            if rule.log_enabled {
+                let _ = write!(out, "log prefix \"{}\" level info ", rule.log_prefix);
+            }
+            // Action (with optional reject type)
+            match rule.action {
+                Action::Accept => {
+                    let _ = write!(out, "accept");
+                }
+                Action::Drop => {
+                    let _ = write!(out, "drop");
+                }
+                Action::Reject => match rule.reject_type {
+                    RejectType::Default => {
+                        let _ = write!(out, "reject");
+                    }
+                    RejectType::PortUnreachable => {
+                        let _ = write!(out, "reject with icmpx type port-unreachable");
+                    }
+                    RejectType::HostUnreachable => {
+                        let _ = write!(out, "reject with icmpx type host-unreachable");
+                    }
+                    RejectType::AdminProhibited => {
+                        let _ = write!(out, "reject with icmpx type admin-prohibited");
+                    }
+                    RejectType::TcpReset => {
+                        let _ = write!(out, "reject with tcp reset");
+                    }
+                },
+            }
             if !rule.label.is_empty() {
                 let _ = write!(out, " comment \"{}\"", rule.label);
             }

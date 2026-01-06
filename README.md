@@ -286,12 +286,25 @@ All files created with `0o600` permissions.
 
 These are intentional design decisions:
 
-- **No IPv4/IPv6 split**: Rules apply to both (inet family)
 - **Single table**: DRFW manages `drfw` table only, doesn't modify others
 - **No custom chains**: All rules in input/output/forward chains
 - **No ICMP type filtering**: Only strict (essential types) or permissive (all)
 - **No MAC filtering**: Easily spoofed, LAN-only
 - **No time-based rules**: Use cron/systemd timers with CLI instead
+
+### IPv4 vs IPv6
+
+DRFW uses the `inet` family (dual-stack by default). Rules automatically apply to the correct IP version based on your source/destination addresses:
+
+| Source/Dest IP | Applies To |
+|----------------|------------|
+| `192.168.1.0/24` | IPv4 only |
+| `fd00::/8` | IPv6 only |
+| `0.0.0.0/0` | IPv4 only (explicit wildcard) |
+| `::/0` | IPv6 only (explicit wildcard) |
+| *(empty)* | Both IPv4 and IPv6 |
+
+This means most rules "just work" for both protocols without extra configuration.
 
 ## Packaging
 

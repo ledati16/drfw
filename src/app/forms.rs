@@ -64,31 +64,33 @@ impl Default for RuleForm {
 impl RuleForm {
     /// Validates all form fields
     ///
-    /// Returns (ports, source, errors) tuple where:
-    /// - ports: Validated port range if applicable
-    /// - source: Validated source IP/network if provided
+    /// Returns (ports, sources, destinations, errors) tuple where:
+    /// - ports: Validated port entries if applicable
+    /// - sources: Validated source IP/networks if provided
+    /// - destinations: Validated destination IP/networks if provided
     /// - errors: Form errors if validation failed
     pub fn validate(
         &self,
     ) -> (
-        Option<crate::core::firewall::PortRange>,
-        Option<ipnetwork::IpNetwork>,
+        Vec<crate::core::firewall::PortEntry>,
+        Vec<ipnetwork::IpNetwork>,
+        Vec<ipnetwork::IpNetwork>,
         Option<FormErrors>,
     ) {
         let mut errors = FormErrors::default();
         let mut has_errors = false;
 
         let ports = self.validate_ports(&mut errors, &mut has_errors);
-        let source = self.validate_source(&mut errors, &mut has_errors);
+        let sources = self.validate_source(&mut errors, &mut has_errors);
         self.validate_interface(&mut errors, &mut has_errors);
-        self.validate_destination(&mut errors, &mut has_errors);
+        let destinations = self.validate_destination_ip(&mut errors, &mut has_errors);
         self.validate_rate_limit(&mut errors, &mut has_errors);
         self.validate_connection_limit(&mut errors, &mut has_errors);
 
         if has_errors {
-            (None, None, Some(errors))
+            (vec![], vec![], vec![], Some(errors))
         } else {
-            (ports, source, None)
+            (ports, sources, destinations, None)
         }
     }
 
@@ -96,12 +98,19 @@ impl RuleForm {
         &self,
         errors: &mut FormErrors,
         has_errors: &mut bool,
-    ) -> Option<crate::core::firewall::PortRange> {
+    ) -> Vec<crate::core::firewall::PortEntry> {
+        use crate::core::firewall::PortEntry;
+
         if !matches!(
             self.protocol,
             Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
         ) {
-            return None;
+            return vec![];
+        }
+
+        // Empty port means "all ports" - return empty vec
+        if self.port_start.is_empty() {
+            return vec![];
         }
 
         let port_start = self.port_start.parse::<u16>();
@@ -113,17 +122,23 @@ impl RuleForm {
 
         if let (Ok(s), Ok(e)) = (port_start, port_end) {
             match crate::validators::validate_port_range(s, e) {
-                Ok((start, end)) => Some(crate::core::firewall::PortRange { start, end }),
+                Ok((start, end)) => {
+                    if start == end {
+                        vec![PortEntry::Single(start)]
+                    } else {
+                        vec![PortEntry::Range { start, end }]
+                    }
+                }
                 Err(msg) => {
                     errors.port = Some(msg.to_string());
                     *has_errors = true;
-                    None
+                    vec![]
                 }
             }
         } else {
             errors.port = Some("Invalid port number".to_string());
             *has_errors = true;
-            None
+            vec![]
         }
     }
 
@@ -131,29 +146,29 @@ impl RuleForm {
         &self,
         errors: &mut FormErrors,
         has_errors: &mut bool,
-    ) -> Option<ipnetwork::IpNetwork> {
-        let source = if self.source.is_empty() {
-            return None;
-        } else if let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() {
-            Some(ip)
-        } else {
+    ) -> Vec<ipnetwork::IpNetwork> {
+        if self.source.is_empty() {
+            return vec![];
+        }
+
+        let Ok(ip) = self.source.parse::<ipnetwork::IpNetwork>() else {
             errors.source = Some("Invalid IP address or CIDR (e.g. 192.168.1.0/24)".to_string());
             *has_errors = true;
-            return None;
+            return vec![];
         };
 
         // Check protocol/IP version compatibility
-        if let Some(src) = source {
-            if self.protocol == Protocol::Icmp && src.is_ipv6() {
-                errors.source = Some("ICMP (v4) selected with IPv6 source".to_string());
-                *has_errors = true;
-            } else if self.protocol == Protocol::Icmpv6 && src.is_ipv4() {
-                errors.source = Some("ICMPv6 selected with IPv4 source".to_string());
-                *has_errors = true;
-            }
+        if self.protocol == Protocol::Icmp && ip.is_ipv6() {
+            errors.source = Some("ICMP (v4) selected with IPv6 source".to_string());
+            *has_errors = true;
+            return vec![];
+        } else if self.protocol == Protocol::Icmpv6 && ip.is_ipv4() {
+            errors.source = Some("ICMPv6 selected with IPv4 source".to_string());
+            *has_errors = true;
+            return vec![];
         }
 
-        source
+        vec![ip]
     }
 
     fn validate_interface(&self, errors: &mut FormErrors, has_errors: &mut bool) {
@@ -165,13 +180,23 @@ impl RuleForm {
         }
     }
 
-    fn validate_destination(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        if !self.destination.is_empty() && self.destination.parse::<ipnetwork::IpNetwork>().is_err()
-        {
+    fn validate_destination_ip(
+        &self,
+        errors: &mut FormErrors,
+        has_errors: &mut bool,
+    ) -> Vec<ipnetwork::IpNetwork> {
+        if self.destination.is_empty() {
+            return vec![];
+        }
+
+        let Ok(ip) = self.destination.parse::<ipnetwork::IpNetwork>() else {
             errors.destination =
                 Some("Invalid destination IP or CIDR (domains not supported)".to_string());
             *has_errors = true;
-        }
+            return vec![];
+        };
+
+        vec![ip]
     }
 
     fn validate_rate_limit(&self, errors: &mut FormErrors, has_errors: &mut bool) {

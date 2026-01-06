@@ -1,8 +1,44 @@
 #[cfg(test)]
 mod tests_impl {
-    use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
+    use crate::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
     use chrono::Utc;
     use uuid::Uuid;
+
+    /// Helper to create a minimal test rule with sensible defaults
+    fn test_rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
+        Rule {
+            id: Uuid::nil(),
+            label: label.to_string(),
+            protocol,
+            ports,
+            sources: vec![],
+            destinations: vec![],
+            interface: None,
+            output_interface: None,
+            chain: crate::core::firewall::Chain::Input,
+            enabled: true,
+            tags: Vec::new(),
+            created_at: Utc::now(),
+            action: Action::Accept,
+            reject_type: RejectType::Default,
+            rate_limit: None,
+            connection_limit: 0,
+            log_enabled: false,
+            // Cached fields
+            label_lowercase: String::new(),
+            interface_lowercase: None,
+            output_interface_lowercase: None,
+            tags_lowercase: Vec::new(),
+            protocol_lowercase: "",
+            port_display: String::new(),
+            sources_display: String::new(),
+            destinations_display: String::new(),
+            rate_limit_display: None,
+            action_display: String::new(),
+            interface_display: String::new(),
+            log_prefix: String::new(),
+        }
+    }
 
     #[test]
     fn test_empty_ruleset_json() {
@@ -22,34 +58,11 @@ mod tests_impl {
     #[test]
     fn test_single_rule_json() {
         let mut ruleset = FirewallRuleset::new();
-        ruleset.rules.push(Rule {
-            id: Uuid::nil(),
-            label: "Allow SSH".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(22)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        ruleset.rules.push(test_rule(
+            "Allow SSH",
+            Protocol::Tcp,
+            vec![PortEntry::Single(22)],
+        ));
 
         let json = ruleset.to_nftables_json();
         let nft = json["nftables"].as_array().unwrap();
@@ -72,34 +85,11 @@ mod tests_impl {
     #[test]
     fn test_nft_text_output() {
         let mut ruleset = FirewallRuleset::new();
-        ruleset.rules.push(Rule {
-            id: Uuid::nil(),
-            label: "Allow HTTP".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(80)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        ruleset.rules.push(test_rule(
+            "Allow HTTP",
+            Protocol::Tcp,
+            vec![PortEntry::Single(80)],
+        ));
 
         let text = ruleset.to_nft_text();
         assert!(text.contains("tcp dport 80 accept comment \"Allow HTTP\""));
@@ -109,34 +99,13 @@ mod tests_impl {
     #[test]
     fn test_any_protocol_rule_json() {
         let mut ruleset = FirewallRuleset::new();
-        ruleset.rules.push(Rule {
-            id: Uuid::nil(),
-            label: "Allow All LAN".to_string(),
-            protocol: Protocol::Any,
-            ports: Some(PortRange::single(80)), // Ports should be ignored
-            source: Some("192.168.1.0/24".parse().unwrap()),
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule = test_rule(
+            "Allow All LAN",
+            Protocol::Any,
+            vec![PortEntry::Single(80)], // Ports should be ignored
+        );
+        rule.sources = vec!["192.168.1.0/24".parse().unwrap()];
+        ruleset.rules.push(rule);
 
         let json = ruleset.to_nftables_json();
         let nft = json["nftables"].as_array().unwrap();
@@ -228,95 +197,27 @@ mod tests_impl {
         let mut ruleset = FirewallRuleset::new();
 
         // Add several user rules with different configurations
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "SSH Access".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(22)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec!["secure".to_string()],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule1 = test_rule("SSH Access", Protocol::Tcp, vec![PortEntry::Single(22)]);
+        rule1.id = Uuid::new_v4();
+        rule1.tags = vec!["secure".to_string()];
+        ruleset.rules.push(rule1);
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Web Server".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange {
+        let mut rule2 = test_rule(
+            "Web Server",
+            Protocol::Tcp,
+            vec![PortEntry::Range {
                 start: 80,
                 end: 443,
-            }),
-            source: Some("0.0.0.0/0".parse().unwrap()),
-            interface: Some("eth0".to_string()),
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+            }],
+        );
+        rule2.id = Uuid::new_v4();
+        rule2.sources = vec!["0.0.0.0/0".parse().unwrap()];
+        rule2.interface = Some("eth0".to_string());
+        ruleset.rules.push(rule2);
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "DNS".to_string(),
-            protocol: Protocol::Udp,
-            ports: Some(PortRange::single(53)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule3 = test_rule("DNS", Protocol::Udp, vec![PortEntry::Single(53)]);
+        rule3.id = Uuid::new_v4();
+        ruleset.rules.push(rule3);
 
         let text = ruleset.to_nft_text();
         let json = ruleset.to_nftables_json();
@@ -374,34 +275,13 @@ mod tests_impl {
         ];
 
         for (i, label) in rule_labels.iter().enumerate() {
-            ruleset.rules.push(Rule {
-                id: Uuid::new_v4(),
-                label: label.to_string(),
-                protocol: Protocol::Tcp,
-                ports: Some(PortRange::single(8000 + i as u16)),
-                source: None,
-                interface: None,
-                chain: crate::core::firewall::Chain::Input,
-                enabled: true,
-                tags: vec![],
-                created_at: Utc::now(),
-                // Advanced options
-                destination: None,
-                action: Action::Accept,
-                rate_limit: None,
-                connection_limit: 0,
-                // Cached fields
-                label_lowercase: String::new(),
-                interface_lowercase: None,
-                tags_lowercase: Vec::new(),
-                protocol_lowercase: "",
-                port_display: String::new(),
-                source_string: None,
-                destination_string: None,
-                rate_limit_display: None,
-                action_display: String::new(),
-                interface_display: String::new(),
-            });
+            let mut rule = test_rule(
+                label,
+                Protocol::Tcp,
+                vec![PortEntry::Single(8000 + i as u16)],
+            );
+            rule.id = Uuid::new_v4();
+            ruleset.rules.push(rule);
         }
 
         let text = ruleset.to_nft_text();
@@ -445,92 +325,22 @@ mod tests_impl {
         // Verify that disabled rules are excluded from both text and JSON
         let mut ruleset = FirewallRuleset::new();
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Enabled Rule".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(80)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule1 = test_rule("Enabled Rule", Protocol::Tcp, vec![PortEntry::Single(80)]);
+        rule1.id = Uuid::new_v4();
+        ruleset.rules.push(rule1);
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Disabled Rule".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(443)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: false, // DISABLED
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule2 = test_rule("Disabled Rule", Protocol::Tcp, vec![PortEntry::Single(443)]);
+        rule2.id = Uuid::new_v4();
+        rule2.enabled = false; // DISABLED
+        ruleset.rules.push(rule2);
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Another Enabled".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(22)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule3 = test_rule(
+            "Another Enabled",
+            Protocol::Tcp,
+            vec![PortEntry::Single(22)],
+        );
+        rule3.id = Uuid::new_v4();
+        ruleset.rules.push(rule3);
 
         let text = ruleset.to_nft_text();
         let json = ruleset.to_nftables_json();
@@ -563,92 +373,18 @@ mod tests_impl {
         let mut ruleset = FirewallRuleset::new();
 
         // Add rules for each protocol type
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "TCP Rule".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(80)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule1 = test_rule("TCP Rule", Protocol::Tcp, vec![PortEntry::Single(80)]);
+        rule1.id = Uuid::new_v4();
+        ruleset.rules.push(rule1);
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "UDP Rule".to_string(),
-            protocol: Protocol::Udp,
-            ports: Some(PortRange::single(53)),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule2 = test_rule("UDP Rule", Protocol::Udp, vec![PortEntry::Single(53)]);
+        rule2.id = Uuid::new_v4();
+        ruleset.rules.push(rule2);
 
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Any Protocol".to_string(),
-            protocol: Protocol::Any,
-            ports: None,
-            source: Some("192.168.0.0/16".parse().unwrap()),
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule3 = test_rule("Any Protocol", Protocol::Any, vec![]);
+        rule3.id = Uuid::new_v4();
+        rule3.sources = vec!["192.168.0.0/16".parse().unwrap()];
+        ruleset.rules.push(rule3);
 
         let text = ruleset.to_nft_text();
         let json = ruleset.to_nftables_json();
@@ -683,7 +419,9 @@ mod tests_impl {
 
 #[cfg(test)]
 mod property_tests {
-    use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
+    use crate::core::firewall::{
+        Action, FirewallRuleset, PortEntry, PortRange, Protocol, RejectType, Rule,
+    };
     use chrono::Utc;
     use proptest::prelude::*;
     use uuid::Uuid;
@@ -704,6 +442,18 @@ mod property_tests {
     }
 
     prop_compose! {
+        fn arb_port_entry()(start in arb_port(), end in arb_port()) -> Vec<PortEntry> {
+            let s = start.min(end);
+            let e = start.max(end);
+            if s == e {
+                vec![PortEntry::Single(s)]
+            } else {
+                vec![PortEntry::Range { start: s, end: e }]
+            }
+        }
+    }
+
+    prop_compose! {
         fn arb_rule()(
             label in "[a-zA-Z0-9 ]{0,64}",
             protocol in prop_oneof![
@@ -711,35 +461,40 @@ mod property_tests {
                 Just(Protocol::Udp),
                 Just(Protocol::Any),
             ],
-            port_range in proptest::option::of(arb_port_range()),
+            port_entries in proptest::option::of(arb_port_entry()),
         ) -> Rule {
             Rule {
                 id: Uuid::new_v4(),
                 label,
                 protocol,
-                ports: port_range,
-                source: None,
+                ports: port_entries.unwrap_or_default(),
+                sources: vec![],
+                destinations: vec![],
                 interface: None,
+                output_interface: None,
                 chain: crate::core::firewall::Chain::Input,
                 enabled: true,
                 tags: Vec::new(),
                 created_at: Utc::now(),
                 // Advanced options
-                destination: None,
                 action: Action::Accept,
+                reject_type: RejectType::Default,
                 rate_limit: None,
                 connection_limit: 0,
+                log_enabled: false,
                 // Cached fields
                 label_lowercase: String::new(),
                 interface_lowercase: None,
+                output_interface_lowercase: None,
                 tags_lowercase: Vec::new(),
                 protocol_lowercase: "",
                 port_display: String::new(),
-                source_string: None,
-                destination_string: None,
+                sources_display: String::new(),
+                destinations_display: String::new(),
                 rate_limit_display: None,
                 action_display: String::new(),
                 interface_display: String::new(),
+                log_prefix: String::new(),
             }
         }
     }
@@ -813,7 +568,7 @@ mod property_tests {
             use crate::core::firewall::{RateLimit, TimeUnit};
 
             let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
-            let rate_limit = RateLimit { count, unit: units[unit_idx] };
+            let rate_limit = RateLimit { count, unit: units[unit_idx], burst: None };
 
             // Test serialization
             let json = serde_json::to_string(&rate_limit).unwrap();
@@ -831,7 +586,7 @@ mod property_tests {
             use crate::core::firewall::{RateLimit, TimeUnit};
 
             let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
-            let rate_limit = RateLimit { count, unit: units[unit_idx] };
+            let rate_limit = RateLimit { count, unit: units[unit_idx], burst: None };
 
             let display = rate_limit.to_string();
 
@@ -862,11 +617,11 @@ mod integration_tests {
     //! - Verification tests that need nft binary are here
     //! - Checksum tests are in `nft_json.rs` (close to implementation)
 
-    use crate::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
-    use crate::core::test_helpers::{create_test_ruleset, setup_test_elevation_bypass};
+    use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
+    use crate::core::test_helpers::{
+        create_test_rule, create_test_ruleset, setup_test_elevation_bypass,
+    };
     use crate::core::verify;
-    use chrono::Utc;
-    use uuid::Uuid;
 
     /// Helper to check if nft is available and accessible (async version for tokio tests)
     async fn is_nft_available() -> bool {
@@ -937,39 +692,15 @@ mod integration_tests {
         }
 
         let mut ruleset = FirewallRuleset::new();
-        // This is actually valid since we create the PortRange correctly,
+        // This is actually valid since we create the port range correctly,
         // but let's test the verification anyway
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: "Test Invalid".to_string(),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange {
-                start: 1,
-                end: 65535,
-            }),
-            source: None,
-            interface: None,
-            chain: crate::core::firewall::Chain::Input,
-            enabled: true,
-            tags: Vec::new(),
-            created_at: Utc::now(),
-            // Advanced options
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        let mut rule = create_test_rule("Test Invalid", Some(22));
+        rule.ports = vec![PortEntry::Range {
+            start: 1,
+            end: 65535,
+        }];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
 
         let json = ruleset.to_nftables_json();
         let result = verify::verify_ruleset(json).await;
@@ -1046,7 +777,9 @@ mod integration_tests {
         let mut ruleset = FirewallRuleset::new();
         ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
         ruleset.rules.push(create_test_rule("Test HTTP", Some(80)));
-        ruleset.rules.push(create_test_rule("Test HTTPS", Some(443)));
+        ruleset
+            .rules
+            .push(create_test_rule("Test HTTPS", Some(443)));
 
         let json = ruleset.to_nftables_json();
         let result = verify::verify_ruleset(json).await;
@@ -1080,14 +813,22 @@ mod integration_tests {
         let mut ruleset = FirewallRuleset::new();
 
         // TCP rule
-        ruleset
-            .rules
-            .push(create_full_test_rule("TCP Rule", Protocol::Tcp, Some(80), None, None));
+        ruleset.rules.push(create_full_test_rule(
+            "TCP Rule",
+            Protocol::Tcp,
+            Some(80),
+            None,
+            None,
+        ));
 
         // UDP rule
-        ruleset
-            .rules
-            .push(create_full_test_rule("UDP Rule", Protocol::Udp, Some(53), None, None));
+        ruleset.rules.push(create_full_test_rule(
+            "UDP Rule",
+            Protocol::Udp,
+            Some(53),
+            None,
+            None,
+        ));
 
         // Any protocol rule with source
         ruleset.rules.push(create_full_test_rule(
@@ -1107,5 +848,57 @@ mod integration_tests {
         // Verify JSON can be serialized
         let json_str = serde_json::to_string(&json);
         assert!(json_str.is_ok(), "JSON should serialize successfully");
+    }
+
+    #[test]
+    fn test_connection_limit_json_generation() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Connection Limited", Some(22));
+        rule.connection_limit = 5;
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let json_str = serde_json::to_string_pretty(&json).unwrap();
+
+        // Verify the JSON contains the correct ct count syntax
+        assert!(
+            json_str.contains(r#""ct count""#),
+            "JSON should contain 'ct count' key, got: {}",
+            json_str
+        );
+        assert!(
+            json_str.contains(r#""val": 5"#),
+            "JSON should contain 'val': 5, got: {}",
+            json_str
+        );
+        // Verify it does NOT contain the old wrong syntax
+        assert!(
+            !json_str.contains(r#""key": "count""#),
+            "JSON should NOT contain old 'key': 'count' syntax"
+        );
+    }
+
+    #[test]
+    fn test_connection_limit_text_generation() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Connection Limited", Some(22));
+        rule.connection_limit = 3;
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let text = ruleset.to_nft_text();
+
+        // Verify the text contains correct ct count syntax (no <= operator)
+        assert!(
+            text.contains("ct count 3"),
+            "Text should contain 'ct count 3', got: {}",
+            text
+        );
+        // Verify it does NOT contain the old wrong syntax
+        assert!(
+            !text.contains("ct count <="),
+            "Text should NOT contain 'ct count <=' syntax"
+        );
     }
 }

@@ -18,7 +18,9 @@
 //!
 //! ```no_run
 //! use drfw::command::{CommandHistory, AddRuleCommand};
-//! use drfw::core::firewall::{FirewallRuleset, Rule, Protocol, PortRange, Chain, Action};
+//! use drfw::core::firewall::{
+//!     FirewallRuleset, Rule, Protocol, PortEntry, Chain, Action, RejectType,
+//! };
 //! use uuid::Uuid;
 //!
 //! let mut ruleset = FirewallRuleset::new();
@@ -28,28 +30,33 @@
 //!     id: Uuid::new_v4(),
 //!     label: "Allow HTTP".to_string(),
 //!     protocol: Protocol::Tcp,
-//!     ports: Some(PortRange::single(80)),
-//!     source: None,
+//!     ports: vec![PortEntry::single(80)],
+//!     sources: vec![],
+//!     destinations: vec![],
 //!     interface: None,
+//!     output_interface: None,
 //!     chain: Chain::Input,
 //!     enabled: true,
 //!     tags: vec![],
 //!     created_at: chrono::Utc::now(),
-//!     destination: None,
 //!     action: Action::Accept,
+//!     reject_type: RejectType::Default,
 //!     rate_limit: None,
 //!     connection_limit: 0,
+//!     log_enabled: false,
 //!     // Cached fields (populated by rebuild_caches())
 //!     label_lowercase: String::new(),
 //!     interface_lowercase: None,
+//!     output_interface_lowercase: None,
 //!     tags_lowercase: Vec::new(),
 //!     protocol_lowercase: "",
 //!     port_display: String::new(),
-//!     source_string: None,
-//!     destination_string: None,
+//!     sources_display: String::new(),
+//!     destinations_display: String::new(),
 //!     rate_limit_display: None,
 //!     action_display: String::new(),
 //!     interface_display: String::new(),
+//!     log_prefix: String::new(),
 //! };
 //! rule.rebuild_caches();
 //!
@@ -333,8 +340,8 @@ mod tests {
             Uuid::new_v4(),
             label.to_string(),
             Protocol::Tcp,
-            None,                                // ports
-            None,                                // source
+            vec![],                              // ports
+            vec![],                              // sources
             None,                                // interface
             crate::core::firewall::Chain::Input, // chain
             true,                                // enabled

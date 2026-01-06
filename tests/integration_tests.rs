@@ -25,7 +25,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use drfw::core::firewall::{Action, FirewallRuleset, PortRange, Protocol, Rule};
+use drfw::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
 use drfw::core::nft_json;
 use drfw::core::verify;
 use std::env;
@@ -69,28 +69,33 @@ fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         id: Uuid::new_v4(),
         label: label.to_string(),
         protocol: Protocol::Tcp,
-        ports: port.map(PortRange::single),
-        source: None,
+        ports: port.map(|p| vec![PortEntry::Single(p)]).unwrap_or_default(),
+        sources: vec![],
+        destinations: vec![],
         interface: None,
+        output_interface: None,
         chain: drfw::core::firewall::Chain::Input,
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
-        destination: None,
         action: Action::Accept,
+        reject_type: RejectType::Default,
         rate_limit: None,
         connection_limit: 0,
+        log_enabled: false,
         // Cached fields
         label_lowercase: String::new(),
         interface_lowercase: None,
+        output_interface_lowercase: None,
         tags_lowercase: Vec::new(),
         protocol_lowercase: "",
         port_display: String::new(),
-        source_string: None,
-        destination_string: None,
+        sources_display: String::new(),
+        destinations_display: String::new(),
         rate_limit_display: None,
         action_display: String::new(),
         interface_display: String::new(),
+        log_prefix: String::new(),
     };
     rule.rebuild_caches();
     rule
@@ -117,28 +122,36 @@ fn create_full_test_rule(
         id: Uuid::new_v4(),
         label: label.to_string(),
         protocol,
-        ports: port.map(PortRange::single),
-        source: source.and_then(|s| s.parse().ok()),
+        ports: port.map(|p| vec![PortEntry::Single(p)]).unwrap_or_default(),
+        sources: source
+            .and_then(|s| s.parse().ok())
+            .map(|ip| vec![ip])
+            .unwrap_or_default(),
+        destinations: vec![],
         interface: interface.map(String::from),
+        output_interface: None,
         chain: drfw::core::firewall::Chain::Input,
         enabled: true,
         tags: vec![],
         created_at: chrono::Utc::now(),
-        destination: None,
         action: Action::Accept,
+        reject_type: RejectType::Default,
         rate_limit: None,
         connection_limit: 0,
+        log_enabled: false,
         // Cached fields
         label_lowercase: String::new(),
         interface_lowercase: None,
+        output_interface_lowercase: None,
         tags_lowercase: Vec::new(),
         protocol_lowercase: "",
         port_display: String::new(),
-        source_string: None,
-        destination_string: None,
+        sources_display: String::new(),
+        destinations_display: String::new(),
         rate_limit_display: None,
         action_display: String::new(),
         interface_display: String::new(),
+        log_prefix: String::new(),
     };
     rule.rebuild_caches();
     rule
@@ -257,33 +270,10 @@ async fn test_multiple_rules_verification() {
 
     // Add multiple rules
     for i in 0..5 {
-        ruleset.rules.push(Rule {
-            id: Uuid::new_v4(),
-            label: format!("Test Rule {}", i),
-            protocol: Protocol::Tcp,
-            ports: Some(PortRange::single(8000 + i)),
-            source: None,
-            interface: None,
-            chain: drfw::core::firewall::Chain::Input,
-            enabled: true,
-            tags: vec![],
-            created_at: chrono::Utc::now(),
-            destination: None,
-            action: Action::Accept,
-            rate_limit: None,
-            connection_limit: 0,
-            // Cached fields
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            source_string: None,
-            destination_string: None,
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-        });
+        ruleset.rules.push(create_test_rule(
+            &format!("Test Rule {}", i),
+            Some(8000 + i),
+        ));
     }
 
     let json = ruleset.to_nftables_json();
@@ -329,15 +319,27 @@ async fn test_audit_logging_doesnt_panic() {
 fn test_all_protocol_types_generate_valid_json() {
     let mut ruleset = FirewallRuleset::new();
 
-    ruleset
-        .rules
-        .push(create_full_test_rule("TCP", Protocol::Tcp, Some(80), None, None));
-    ruleset
-        .rules
-        .push(create_full_test_rule("UDP", Protocol::Udp, Some(53), None, None));
-    ruleset
-        .rules
-        .push(create_full_test_rule("ICMP", Protocol::Icmp, None, None, None));
+    ruleset.rules.push(create_full_test_rule(
+        "TCP",
+        Protocol::Tcp,
+        Some(80),
+        None,
+        None,
+    ));
+    ruleset.rules.push(create_full_test_rule(
+        "UDP",
+        Protocol::Udp,
+        Some(53),
+        None,
+        None,
+    ));
+    ruleset.rules.push(create_full_test_rule(
+        "ICMP",
+        Protocol::Icmp,
+        None,
+        None,
+        None,
+    ));
     ruleset.rules.push(create_full_test_rule(
         "Any",
         Protocol::Any,
@@ -381,10 +383,10 @@ fn test_complex_rule_configurations() {
 
     // Rule with port range (needs custom construction)
     let mut port_range_rule = create_full_test_rule("Port Range", Protocol::Tcp, None, None, None);
-    port_range_rule.ports = Some(PortRange {
+    port_range_rule.ports = vec![PortEntry::Range {
         start: 8000,
         end: 8999,
-    });
+    }];
     port_range_rule.rebuild_caches();
     ruleset.rules.push(port_range_rule);
 

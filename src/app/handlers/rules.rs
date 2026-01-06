@@ -27,28 +27,34 @@ pub(crate) fn handle_add_rule_clicked(state: &mut State) {
 
 /// Handles opening the "Edit Rule" form
 pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
+    use crate::core::firewall::PortEntry;
+
     if let Some(rule) = state.ruleset.rules.iter().find(|r| r.id == id) {
         // Create form from existing rule
-        let has_advanced = rule.destination.is_some()
+        let has_advanced = !rule.destinations.is_empty()
             || !matches!(rule.action, crate::core::firewall::Action::Accept)
             || rule.rate_limit.is_some()
-            || rule.connection_limit > 0;
+            || rule.connection_limit > 0
+            || rule.output_interface.is_some()
+            || !matches!(rule.reject_type, crate::core::firewall::RejectType::Default)
+            || rule.log_enabled;
+
+        // Extract port start/end from first port entry (form only supports single entry for now)
+        let (port_start, port_end) = match rule.ports.first() {
+            Some(PortEntry::Single(p)) => (p.to_string(), String::new()),
+            Some(PortEntry::Range { start, end }) => (start.to_string(), end.to_string()),
+            None => (String::new(), String::new()),
+        };
 
         state.rule_form = Some(RuleForm {
             id: Some(rule.id),
             label: rule.label.clone(),
             protocol: rule.protocol,
-            port_start: rule
-                .ports
-                .as_ref()
-                .map_or_else(String::new, |p| p.start.to_string()),
-            port_end: rule
-                .ports
-                .as_ref()
-                .map_or_else(String::new, |p| p.end.to_string()),
+            port_start,
+            port_end,
             source: rule
-                .source
-                .as_ref()
+                .sources
+                .first()
                 .map_or_else(String::new, std::string::ToString::to_string),
             interface: rule.interface.clone().unwrap_or_default(),
             chain: rule.chain,
@@ -56,8 +62,8 @@ pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
             tag_input: String::new(),
             show_advanced: has_advanced,
             destination: rule
-                .destination
-                .as_ref()
+                .destinations
+                .first()
                 .map_or_else(String::new, std::string::ToString::to_string),
             action: rule.action,
             rate_limit_enabled: rule.rate_limit.is_some(),
@@ -97,7 +103,7 @@ pub(crate) fn handle_cancel_rule_form(state: &mut State) {
 pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
     // Validate form exists
     if let Some(form_ref) = &state.rule_form {
-        let (ports, source, errors) = form_ref.validate();
+        let (ports, sources, destinations, errors) = form_ref.validate();
         if let Some(errs) = errors {
             state.form_errors = Some(errs);
             return Task::none();
@@ -119,12 +125,6 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             Some(form.interface)
         };
 
-        let destination = if form.destination.is_empty() {
-            None
-        } else {
-            form.destination.parse().ok()
-        };
-
         let rate_limit = if form.rate_limit_enabled && !form.rate_limit_count.is_empty() {
             form.rate_limit_count
                 .parse()
@@ -132,6 +132,7 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
                 .map(|count| crate::core::firewall::RateLimit {
                     count,
                     unit: form.rate_limit_unit,
+                    burst: None, // Form doesn't support burst yet
                 })
         } else {
             None
@@ -148,26 +149,32 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             label: sanitized_label,
             protocol: form.protocol,
             ports,
-            source,
+            sources,
+            destinations,
             interface,
+            output_interface: None, // Form doesn't support output interface yet
             chain: form.chain,
             enabled: true,
             created_at: Utc::now(),
             tags: form.tags,
-            destination,
             action: form.action,
+            reject_type: crate::core::firewall::RejectType::Default, // Form doesn't support reject type yet
             rate_limit,
             connection_limit,
+            log_enabled: false, // Form doesn't support logging yet
+            // Cached fields - will be populated by rebuild_caches()
             label_lowercase: String::new(),
             interface_lowercase: None,
+            output_interface_lowercase: None,
             tags_lowercase: Vec::new(),
             protocol_lowercase: "",
             port_display: String::new(),
-            source_string: None,
-            destination_string: None,
+            sources_display: String::new(),
+            destinations_display: String::new(),
             rate_limit_display: None,
-            action_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
-            interface_display: String::new(), // Phase 2.3: Will be populated by rebuild_caches()
+            action_display: String::new(),
+            interface_display: String::new(),
+            log_prefix: String::new(),
         };
         rule.rebuild_caches();
 

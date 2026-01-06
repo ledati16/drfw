@@ -5,7 +5,9 @@
 
 #![cfg(test)]
 
-use crate::core::firewall::{Action, Chain, FirewallRuleset, PortRange, Protocol, Rule};
+use crate::core::firewall::{
+    Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
+};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -30,28 +32,33 @@ pub fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         id: Uuid::new_v4(),
         label: label.to_string(),
         protocol: Protocol::Tcp,
-        ports: port.map(PortRange::single),
-        source: None,
+        ports: port.map(|p| vec![PortEntry::Single(p)]).unwrap_or_default(),
+        sources: vec![],
+        destinations: vec![],
         interface: None,
+        output_interface: None,
         chain: Chain::Input,
         enabled: true,
         tags: Vec::new(),
         created_at: Utc::now(),
-        destination: None,
         action: Action::Accept,
+        reject_type: RejectType::Default,
         rate_limit: None,
         connection_limit: 0,
+        log_enabled: false,
         // Cached fields - will be populated by rebuild_caches()
         label_lowercase: String::new(),
         interface_lowercase: None,
+        output_interface_lowercase: None,
         tags_lowercase: Vec::new(),
         protocol_lowercase: "",
         port_display: String::new(),
-        source_string: None,
-        destination_string: None,
+        sources_display: String::new(),
+        destinations_display: String::new(),
         rate_limit_display: None,
         action_display: String::new(),
         interface_display: String::new(),
+        log_prefix: String::new(),
     };
     rule.rebuild_caches();
     rule
@@ -77,28 +84,36 @@ pub fn create_full_test_rule(
         id: Uuid::new_v4(),
         label: label.to_string(),
         protocol,
-        ports: port.map(PortRange::single),
-        source: source.and_then(|s| s.parse().ok()),
+        ports: port.map(|p| vec![PortEntry::Single(p)]).unwrap_or_default(),
+        sources: source
+            .and_then(|s| s.parse().ok())
+            .map(|ip| vec![ip])
+            .unwrap_or_default(),
+        destinations: vec![],
         interface: interface.map(String::from),
+        output_interface: None,
         chain: Chain::Input,
         enabled: true,
         tags: Vec::new(),
         created_at: Utc::now(),
-        destination: None,
         action: Action::Accept,
+        reject_type: RejectType::Default,
         rate_limit: None,
         connection_limit: 0,
+        log_enabled: false,
         // Cached fields
         label_lowercase: String::new(),
         interface_lowercase: None,
+        output_interface_lowercase: None,
         tags_lowercase: Vec::new(),
         protocol_lowercase: "",
         port_display: String::new(),
-        source_string: None,
-        destination_string: None,
+        sources_display: String::new(),
+        destinations_display: String::new(),
         rate_limit_display: None,
         action_display: String::new(),
         interface_display: String::new(),
+        log_prefix: String::new(),
     };
     rule.rebuild_caches();
     rule
