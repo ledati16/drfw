@@ -56,7 +56,37 @@ mod theme;
 mod utils;
 mod validators;
 
+// Embed build-time information (git commit, dirty status, build timestamp)
+shadow_rs::shadow!(build);
+
 use clap::{Parser, Subcommand};
+
+/// Returns the version string with git info: "0.8.0 (a3f8c21)" or "0.8.0 (a3f8c21*)" if dirty
+pub fn version_string() -> String {
+    let dirty_marker = if build::GIT_CLEAN { "" } else { "*" };
+    format!("{} ({}{})", build::PKG_VERSION, build::SHORT_COMMIT, dirty_marker)
+}
+
+/// Short version for clap (must be &'static str)
+const fn short_version() -> &'static str {
+    shadow_rs::formatcp!(
+        "{} ({})",
+        build::PKG_VERSION,
+        build::SHORT_COMMIT
+    )
+}
+
+/// Returns a detailed version string for --version flag
+const fn long_version() -> &'static str {
+    shadow_rs::formatcp!(
+        "{} ({})\ncommit: {}\nbranch: {}\nbuild:  {}",
+        build::PKG_VERSION,
+        build::SHORT_COMMIT,
+        build::COMMIT_HASH,
+        build::BRANCH,
+        build::BUILD_TIME_3339
+    )
+}
 use crossterm::ExecutableCommand;
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use iced::Size;
@@ -135,6 +165,7 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
 
 #[derive(Parser)]
 #[command(name = "drfw")]
+#[command(version = short_version(), long_version = long_version())]
 #[command(about = "Dumb Rust Firewall - A minimal nftables manager", long_about = None)]
 struct Cli {
     #[command(subcommand)]
