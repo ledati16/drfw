@@ -918,6 +918,10 @@ impl FirewallRuleset {
     /// Per libnftables-json(5):
     /// - Single host (/32 IPv4, /128 IPv6): Plain IP string expression
     /// - Network prefix (any other CIDR): `{ "prefix": { "addr": "...", "len": N } }`
+    ///
+    /// For network prefixes, we use `.network()` to get the canonical network address.
+    /// This handles edge cases where users enter non-canonical CIDRs like "192.168.1.50/24"
+    /// which should be normalized to the network address "192.168.1.0".
     fn ip_to_nft_json(ip: &ipnetwork::IpNetwork) -> serde_json::Value {
         let is_single_host = match ip {
             ipnetwork::IpNetwork::V4(v4) => v4.prefix() == 32,
@@ -928,10 +932,10 @@ impl FirewallRuleset {
             // Single host - just the IP address string
             serde_json::json!(ip.ip().to_string())
         } else {
-            // Network prefix - use prefix object
+            // Network prefix - use prefix object with canonical network address
             serde_json::json!({
                 "prefix": {
-                    "addr": ip.ip().to_string(),
+                    "addr": ip.network().to_string(),
                     "len": ip.prefix()
                 }
             })

@@ -996,6 +996,348 @@ mod integration_tests {
         );
     }
 
+    /// Tests IP address JSON format compliance with libnftables-json(5) spec.
+    ///
+    /// Per spec:
+    /// - Single hosts (/32 IPv4, /128 IPv6): Plain IP string
+    /// - Network prefixes: { "prefix": { "addr": "...", "len": N } }
+    #[test]
+    fn test_ip_json_format_single_host_ipv4() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Single IPv4 Host", Some(22));
+        rule.sources = vec!["192.168.1.1".parse().unwrap()]; // Single host, /32
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        // Find the user rule
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "Single IPv4 Host")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        // Find the saddr match (second match after l4proto)
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        // Should be plain string, not prefix object
+        assert_eq!(
+            src_match["right"], "192.168.1.1",
+            "Single IPv4 host should be plain string"
+        );
+    }
+
+    #[test]
+    fn test_ip_json_format_single_host_ipv6() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Single IPv6 Host", Some(22));
+        rule.sources = vec!["2001:db8::1".parse().unwrap()]; // Single host, /128
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "Single IPv6 Host")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        assert_eq!(
+            src_match["right"], "2001:db8::1",
+            "Single IPv6 host should be plain string"
+        );
+    }
+
+    #[test]
+    fn test_ip_json_format_network_prefix_ipv4() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("IPv4 Network", Some(80));
+        rule.sources = vec!["192.168.1.0/24".parse().unwrap()];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "IPv4 Network")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        let right = &src_match["right"];
+        assert_eq!(
+            right["prefix"]["addr"], "192.168.1.0",
+            "Should have network address"
+        );
+        assert_eq!(right["prefix"]["len"], 24, "Should have prefix length 24");
+    }
+
+    #[test]
+    fn test_ip_json_format_network_prefix_ipv6() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("IPv6 Network", Some(443));
+        rule.sources = vec!["2001:db8::/32".parse().unwrap()];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "IPv6 Network")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        let right = &src_match["right"];
+        assert_eq!(
+            right["prefix"]["addr"], "2001:db8::",
+            "Should have correct network address"
+        );
+        assert_eq!(right["prefix"]["len"], 32, "Should have prefix length 32");
+    }
+
+    /// Tests that non-canonical CIDR inputs are normalized to network address.
+    #[test]
+    fn test_ip_json_format_normalizes_non_canonical_cidr() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Non-Canonical CIDR", Some(22));
+        // User enters host IP with /24 - should normalize to network address
+        rule.sources = vec!["192.168.1.50/24".parse().unwrap()];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "Non-Canonical CIDR")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        // Should normalize to 192.168.1.0, not keep 192.168.1.50
+        let right = &src_match["right"];
+        assert_eq!(
+            right["prefix"]["addr"], "192.168.1.0",
+            "Non-canonical CIDR should be normalized to network address"
+        );
+        assert_eq!(right["prefix"]["len"], 24);
+    }
+
+    /// Tests /0 prefix (any IP) generates correct format.
+    #[test]
+    fn test_ip_json_format_any_ipv4() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Any IPv4", Some(22));
+        rule.sources = vec!["0.0.0.0/0".parse().unwrap()];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "Any IPv4")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        let right = &src_match["right"];
+        assert_eq!(
+            right["prefix"]["addr"], "0.0.0.0",
+            "Should have 0.0.0.0 address"
+        );
+        assert_eq!(right["prefix"]["len"], 0, "Should have prefix length 0");
+    }
+
+    /// Tests multiple IPs in a set all use correct format.
+    #[test]
+    fn test_ip_json_format_set_with_mixed_types() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Mixed IP Types", Some(80));
+        rule.sources = vec![
+            "192.168.1.1".parse().unwrap(),   // Single host - plain string
+            "10.0.0.0/8".parse().unwrap(),    // Network - prefix object
+            "172.16.0.0/12".parse().unwrap(), // Network - prefix object
+        ];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rule = nft_array
+            .iter()
+            .find(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "Mixed IP Types")
+                    .unwrap_or(false)
+            })
+            .expect("Should find user rule");
+
+        let expr = user_rule["add"]["rule"]["expr"].as_array().unwrap();
+        let src_match = expr
+            .iter()
+            .filter(|e| e.get("match").is_some())
+            .find(|e| {
+                e["match"]["left"]
+                    .get("payload")
+                    .and_then(|p| p.get("field"))
+                    .and_then(|f| f.as_str())
+                    .map(|s| s == "saddr")
+                    .unwrap_or(false)
+            })
+            .and_then(|e| e.get("match"))
+            .expect("Should have saddr match");
+
+        let right = &src_match["right"];
+        let set = right["set"].as_array().expect("Should have set");
+
+        // First element: single host as plain string
+        assert_eq!(set[0], "192.168.1.1", "Single host should be plain string");
+
+        // Second element: 10.0.0.0/8 as prefix object
+        assert_eq!(set[1]["prefix"]["addr"], "10.0.0.0");
+        assert_eq!(set[1]["prefix"]["len"], 8);
+
+        // Third element: 172.16.0.0/12 as prefix object
+        assert_eq!(set[2]["prefix"]["addr"], "172.16.0.0");
+        assert_eq!(set[2]["prefix"]["len"], 12);
+    }
+
     /// Tests that empty sources/destinations generate a single rule.
     #[test]
     fn test_no_ip_filtering_generates_one_rule() {
