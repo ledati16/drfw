@@ -901,4 +901,270 @@ mod integration_tests {
             "Text should NOT contain 'ct count <=' syntax"
         );
     }
+
+    /// Tests that mixed IPv4/IPv6 sources generate separate nftables rules.
+    ///
+    /// nftables requires separate rules for IPv4 (ip saddr) and IPv6 (ip6 saddr).
+    /// When a DRFW rule has both IPv4 and IPv6 sources, it must generate 2 nft rules.
+    #[test]
+    fn test_mixed_ipv4_ipv6_sources_generates_two_rules() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Mixed IPs", Some(22));
+        rule.sources = vec![
+            "192.168.1.0/24".parse().unwrap(), // IPv4
+            "10.0.0.0/8".parse().unwrap(),     // IPv4
+            "fd00::/8".parse().unwrap(),       // IPv6
+        ];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        // Count user rules (rules with comments)
+        let user_rules: Vec<_> = nft_array
+            .iter()
+            .filter(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "Mixed IPs")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Should have 2 rules: one for IPv4 sources, one for IPv6 source
+        assert_eq!(
+            user_rules.len(),
+            2,
+            "Mixed IPv4/IPv6 sources should generate 2 nft rules"
+        );
+
+        // Verify one rule uses "ip" protocol (IPv4) and one uses "ip6" (IPv6)
+        let json_str = serde_json::to_string_pretty(&json).unwrap();
+        assert!(
+            json_str.contains(r#""protocol": "ip""#),
+            "Should have IPv4 rule with 'ip' protocol"
+        );
+        assert!(
+            json_str.contains(r#""protocol": "ip6""#),
+            "Should have IPv6 rule with 'ip6' protocol"
+        );
+    }
+
+    /// Tests that IPv4-only sources generate a single rule.
+    #[test]
+    fn test_ipv4_only_sources_generates_one_rule() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("IPv4 Only", Some(80));
+        rule.sources = vec![
+            "192.168.1.0/24".parse().unwrap(),
+            "10.0.0.0/8".parse().unwrap(),
+        ];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rules: Vec<_> = nft_array
+            .iter()
+            .filter(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "IPv4 Only")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        assert_eq!(
+            user_rules.len(),
+            1,
+            "IPv4-only sources should generate 1 nft rule"
+        );
+
+        // Verify it uses anonymous set for multiple sources
+        let json_str = serde_json::to_string(&json).unwrap();
+        assert!(
+            json_str.contains(r#""set""#),
+            "Multiple sources should use anonymous set"
+        );
+    }
+
+    /// Tests that empty sources/destinations generate a single rule.
+    #[test]
+    fn test_no_ip_filtering_generates_one_rule() {
+        let mut ruleset = FirewallRuleset::new();
+        let rule = create_test_rule("No IP Filter", Some(443));
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let nft_array = json["nftables"].as_array().unwrap();
+
+        let user_rules: Vec<_> = nft_array
+            .iter()
+            .filter(|obj| {
+                obj.get("add")
+                    .and_then(|a| a.get("rule"))
+                    .and_then(|r| r.get("comment"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s == "No IP Filter")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        assert_eq!(
+            user_rules.len(),
+            1,
+            "No IP filtering should generate 1 nft rule"
+        );
+    }
+
+    /// Tests rate limit with burst generates correct JSON.
+    #[test]
+    fn test_rate_limit_with_burst_json() {
+        use crate::core::firewall::RateLimit;
+
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Rate Limited", Some(22));
+        rule.rate_limit = Some(RateLimit {
+            count: 5,
+            unit: crate::core::firewall::TimeUnit::Minute,
+            burst: Some(10),
+        });
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let json_str = serde_json::to_string_pretty(&json).unwrap();
+
+        assert!(json_str.contains(r#""rate": 5"#), "Should have rate: 5");
+        assert!(
+            json_str.contains(r#""per": "minute""#),
+            "Should have per: minute"
+        );
+        assert!(json_str.contains(r#""burst": 10"#), "Should have burst: 10");
+    }
+
+    /// Tests reject types generate correct JSON.
+    #[test]
+    fn test_reject_types_json() {
+        use crate::core::firewall::{Action, RejectType};
+
+        let mut ruleset = FirewallRuleset::new();
+
+        // TCP Reset
+        let mut rule1 = create_test_rule("TCP Reset", Some(23));
+        rule1.action = Action::Reject;
+        rule1.reject_type = RejectType::TcpReset;
+        rule1.rebuild_caches();
+        ruleset.rules.push(rule1);
+
+        // Admin Prohibited
+        let mut rule2 = create_test_rule("Admin Prohibited", Some(25));
+        rule2.action = Action::Reject;
+        rule2.reject_type = RejectType::AdminProhibited;
+        rule2.rebuild_caches();
+        ruleset.rules.push(rule2);
+
+        let json = ruleset.to_nftables_json();
+        let json_str = serde_json::to_string_pretty(&json).unwrap();
+
+        assert!(
+            json_str.contains(r#""type": "tcp reset""#),
+            "Should have TCP reset reject type"
+        );
+        assert!(
+            json_str.contains(r#""type": "icmpx""#),
+            "Should have icmpx reject type"
+        );
+        assert!(
+            json_str.contains(r#""expr": "admin-prohibited""#),
+            "Should have admin-prohibited expression"
+        );
+    }
+
+    /// Tests per-rule logging generates correct JSON.
+    #[test]
+    fn test_per_rule_logging_json() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Logged Rule", Some(22));
+        rule.log_enabled = true;
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let json_str = serde_json::to_string_pretty(&json).unwrap();
+
+        assert!(json_str.contains(r#""log""#), "Should have log statement");
+        assert!(
+            json_str.contains(r#""prefix": "DRFW-LoggedRule: ""#),
+            "Should have sanitized log prefix (spaces removed)"
+        );
+        assert!(
+            json_str.contains(r#""level": "info""#),
+            "Should have info log level"
+        );
+    }
+
+    /// Tests multiple ports generate correct JSON with anonymous set.
+    #[test]
+    fn test_multiple_ports_json() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Multi Port", None);
+        rule.ports = vec![
+            PortEntry::Single(22),
+            PortEntry::Single(80),
+            PortEntry::Single(443),
+            PortEntry::Range {
+                start: 8000,
+                end: 8080,
+            },
+        ];
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let json_str = serde_json::to_string(&json).unwrap();
+
+        // Should use anonymous set
+        assert!(
+            json_str.contains(r#""set""#),
+            "Multiple ports should use set"
+        );
+        // Should have range syntax
+        assert!(
+            json_str.contains(r#""range""#),
+            "Port range should use range syntax"
+        );
+        assert!(
+            json_str.contains("8000") && json_str.contains("8080"),
+            "Should have port range values"
+        );
+    }
+
+    /// Tests output interface generates correct JSON.
+    #[test]
+    fn test_output_interface_json() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Output Iface", Some(443));
+        rule.output_interface = Some("eth0".to_string());
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+
+        let json = ruleset.to_nftables_json();
+        let json_str = serde_json::to_string_pretty(&json).unwrap();
+
+        assert!(
+            json_str.contains(r#""key": "oifname""#),
+            "Should have oifname meta key"
+        );
+        assert!(
+            json_str.contains(r#""right": "eth0""#),
+            "Should match eth0 interface"
+        );
+    }
 }

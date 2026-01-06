@@ -1284,8 +1284,12 @@ impl FirewallRuleset {
             let port_val = if rule.ports.len() == 1 {
                 rule.ports[0].to_nft_json()
             } else {
-                let port_set: Vec<serde_json::Value> =
-                    rule.ports.iter().copied().map(PortEntry::to_nft_json).collect();
+                let port_set: Vec<serde_json::Value> = rule
+                    .ports
+                    .iter()
+                    .copied()
+                    .map(PortEntry::to_nft_json)
+                    .collect();
                 json!({ "set": port_set })
             };
 
