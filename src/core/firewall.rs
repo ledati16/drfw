@@ -913,6 +913,31 @@ impl FirewallRuleset {
         serde_json::json!({ "limit": { "rate": rate, "per": per } })
     }
 
+    /// Converts an IpNetwork to nftables JSON format.
+    ///
+    /// Per libnftables-json(5):
+    /// - Single host (/32 IPv4, /128 IPv6): Plain IP string expression
+    /// - Network prefix (any other CIDR): `{ "prefix": { "addr": "...", "len": N } }`
+    fn ip_to_nft_json(ip: &ipnetwork::IpNetwork) -> serde_json::Value {
+        let is_single_host = match ip {
+            ipnetwork::IpNetwork::V4(v4) => v4.prefix() == 32,
+            ipnetwork::IpNetwork::V6(v6) => v6.prefix() == 128,
+        };
+
+        if is_single_host {
+            // Single host - just the IP address string
+            serde_json::json!(ip.ip().to_string())
+        } else {
+            // Network prefix - use prefix object
+            serde_json::json!({
+                "prefix": {
+                    "addr": ip.ip().to_string(),
+                    "len": ip.prefix()
+                }
+            })
+        }
+    }
+
     /// Creates a rule add wrapper with the standard drfw table structure
     fn rule_add(chain: &str, expr: &[serde_json::Value], comment: &str) -> serde_json::Value {
         serde_json::json!({
@@ -1249,9 +1274,10 @@ impl FirewallRuleset {
             let protocol = if is_ipv6 { "ip6" } else { "ip" };
 
             let src_val = if sources.len() == 1 {
-                json!(sources[0].to_string())
+                Self::ip_to_nft_json(sources[0])
             } else {
-                let src_set: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+                let src_set: Vec<serde_json::Value> =
+                    sources.iter().map(|ip| Self::ip_to_nft_json(ip)).collect();
                 json!({ "set": src_set })
             };
 
@@ -1314,9 +1340,10 @@ impl FirewallRuleset {
             let protocol = if is_ipv6 { "ip6" } else { "ip" };
 
             let dest_val = if destinations.len() == 1 {
-                json!(destinations[0].to_string())
+                Self::ip_to_nft_json(destinations[0])
             } else {
-                let dest_set: Vec<String> = destinations.iter().map(|d| d.to_string()).collect();
+                let dest_set: Vec<serde_json::Value> =
+                    destinations.iter().map(|ip| Self::ip_to_nft_json(ip)).collect();
                 json!({ "set": dest_set })
             };
 

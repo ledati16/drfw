@@ -120,9 +120,11 @@ mod tests_impl {
         // Protocol match and port match should be absent
         assert_eq!(expr.len(), 2);
 
-        // Check source match
+        // Check source match - should use prefix object format per libnftables-json(5)
         let src_match = &expr[0]["match"];
-        assert_eq!(src_match["right"], "192.168.1.0/24");
+        let right = &src_match["right"];
+        assert_eq!(right["prefix"]["addr"], "192.168.1.0");
+        assert_eq!(right["prefix"]["len"], 24);
 
         // Check for absence of meta l4proto
         let json_str = serde_json::to_string(user_rule).unwrap();
