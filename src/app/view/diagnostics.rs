@@ -180,6 +180,20 @@ pub fn format_audit_event<'a>(
                 event.details["path"].as_str().unwrap_or("")
             ),
         ),
+        (EventType::SaveToSystem, true) => (
+            theme.success,
+            format!(
+                "Saved to {}",
+                event.details["target_path"].as_str().unwrap_or("")
+            ),
+        ),
+        (EventType::SaveToSystem, false) => (
+            theme.danger,
+            format!(
+                "Failed to save: {}",
+                event.error.as_deref().unwrap_or("Unknown error")
+            ),
+        ),
     };
 
     row![

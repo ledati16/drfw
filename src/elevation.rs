@@ -1,22 +1,25 @@
-//! Privilege elevation for nftables operations
+//! Privilege elevation for system operations
 //!
-//! This module provides controlled privilege escalation to execute nftables commands
+//! This module provides controlled privilege escalation to execute commands
 //! with root privileges. DRFW runs as an unprivileged user and only elevates for
-//! specific firewall modification operations.
+//! specific operations:
+//!
+//! - **nft**: Firewall rule verification and application
+//! - **install**: Writing configuration to system locations
 //!
 //! # Elevation Strategy
 //!
 //! - **Preferred (all modes)**: Uses `run0` when available (systemd v256+, no SUID, better security)
-//! - **CLI fallback**: Uses `sudo` for standard CLI workflow
+//! - **CLI fallback**: Uses `sudo` for terminal environments
 //! - **GUI fallback**: Uses `pkexec` for graphical authentication
 //!
 //! # Security
 //!
-//! - Uses `pkexec` (GUI) or `sudo` (CLI) for proper privilege escalation
+//! - Only specific binaries can be elevated (nft, install)
 //! - All inputs are validated before elevation
 //! - Commands are constructed safely without shell interpolation
 //! - Audit logging tracks all privileged operations (via caller)
-//! - Binaries (pkexec/sudo, nft) are checked for availability
+//! - Binaries (pkexec/sudo, target program) are checked for availability
 //!
 //! # Example
 //!
@@ -116,6 +119,58 @@ fn binary_exists(name: &str) -> bool {
         .is_some()
 }
 
+/// Internal helper to build an elevated command for a specific program.
+///
+/// This is not exposed publicly - callers must use the specific functions
+/// (`create_elevated_nft_command`, `create_elevated_install_command`) to ensure
+/// only approved binaries can be elevated.
+fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, ElevationError> {
+    use std::os::fd::AsFd;
+
+    // 1. Strict Test Mode Override (Highest Priority)
+    if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        return Ok(cmd);
+    }
+
+    // 2. Direct Root Execution (No prompt needed)
+    let is_root = nix::unistd::getuid().is_root();
+    if is_root {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        return Ok(cmd);
+    }
+
+    // 3. Elevation required - prefer run0 (modern, no SUID), fallback to sudo/pkexec
+
+    // Prefer run0 everywhere when available (better security, no SUID bit)
+    if binary_exists("run0") {
+        let mut cmd = Command::new("run0");
+        cmd.arg(program).args(args);
+        return Ok(cmd);
+    }
+
+    // Fall back based on environment when run0 not available
+    let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
+
+    if is_atty {
+        // CLI: Standard sudo elevation
+        let mut cmd = Command::new("sudo");
+        cmd.arg(program).args(args);
+        Ok(cmd)
+    } else {
+        // GUI: pkexec elevation
+        if !binary_exists("pkexec") {
+            return Err(ElevationError::PkexecNotFound);
+        }
+
+        let mut cmd = Command::new("pkexec");
+        cmd.arg(program).args(args);
+        Ok(cmd)
+    }
+}
+
 /// Creates an elevated `nft` command with the specified arguments
 ///
 /// This function constructs a command that will execute `nft` with root privileges.
@@ -166,50 +221,46 @@ fn binary_exists(name: &str) -> bool {
 /// and run nft directly (requires nft to already have necessary permissions,
 /// or tests to run as root).
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
-    use std::os::fd::AsFd;
+    build_elevated_command("nft", args)
+}
 
-    // 1. Strict Test Mode Override (Highest Priority)
-    if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
-        let mut cmd = Command::new("nft");
-        cmd.args(args);
-        return Ok(cmd);
-    }
-
-    // 2. Direct Root Execution (No prompt needed)
-    let is_root = nix::unistd::getuid().is_root();
-    if is_root {
-        let mut cmd = Command::new("nft");
-        cmd.args(args);
-        return Ok(cmd);
-    }
-
-    // 3. Elevation required - prefer run0 (modern, no SUID), fallback to sudo/pkexec
-
-    // Prefer run0 everywhere when available (better security, no SUID bit)
-    if binary_exists("run0") {
-        let mut cmd = Command::new("run0");
-        cmd.arg("nft").args(args);
-        return Ok(cmd);
-    }
-
-    // Fall back based on environment when run0 not available
-    let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
-
-    if is_atty {
-        // CLI: Standard sudo elevation
-        let mut cmd = Command::new("sudo");
-        cmd.arg("nft").args(args);
-        Ok(cmd)
-    } else {
-        // GUI: pkexec elevation
-        if !binary_exists("pkexec") {
-            return Err(ElevationError::PkexecNotFound);
-        }
-
-        let mut cmd = Command::new("pkexec");
-        cmd.arg("nft").args(args);
-        Ok(cmd)
-    }
+/// Creates an elevated `install` command with the specified arguments
+///
+/// This function constructs a command that will execute `install` with root privileges.
+/// Used for writing configuration files to system locations like `/etc/nftables.conf`.
+///
+/// # Elevation Strategy
+///
+/// Same as [`create_elevated_nft_command`] - prefers run0, falls back to sudo/pkexec.
+///
+/// # Arguments
+///
+/// * `args` - Command-line arguments to pass to `install`
+///
+/// # Returns
+///
+/// - `Ok(Command)` - Configured tokio Command ready to spawn
+/// - `Err(ElevationError)` - If pkexec/sudo are not available
+///
+/// # Example
+///
+/// ```no_run
+/// use drfw::elevation::create_elevated_install_command;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// // Install a config file with mode 644
+/// let mut cmd = create_elevated_install_command(&["-m", "644", "/tmp/config", "/etc/nftables.conf"])?;
+/// let status = cmd.status().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Security
+///
+/// Arguments are passed directly to `install` without shell interpretation.
+/// Callers must ensure file paths are properly validated before calling this function.
+pub fn create_elevated_install_command(args: &[&str]) -> Result<Command, ElevationError> {
+    build_elevated_command("install", args)
 }
 
 #[cfg(test)]
@@ -225,13 +276,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_command_test_mode() {
+    async fn test_create_nft_command_test_mode() {
         // Set test mode
         unsafe {
             std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
         }
 
         let cmd = create_elevated_nft_command(&["list", "ruleset"]);
+        assert!(cmd.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_install_command_test_mode() {
+        // Set test mode
+        unsafe {
+            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+        }
+
+        let cmd = create_elevated_install_command(&["-m", "644", "/tmp/test", "/etc/test"]);
         assert!(cmd.is_ok());
     }
 }

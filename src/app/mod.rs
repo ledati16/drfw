@@ -243,8 +243,11 @@ pub enum AppStatus {
         deadline: chrono::DateTime<Utc>,
         snapshot: serde_json::Value,
     },
-    Confirmed,
     Reverting,
+    /// Waiting for user to confirm Save to System operation
+    AwaitingSaveToSystem,
+    /// Save to System operation in progress
+    SavingToSystem,
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +282,9 @@ pub enum Message {
     TabChanged(WorkspaceTab),
     ToggleExportModal(bool),
     SaveToSystemClicked,
+    SaveToSystemVerifyResult(Result<crate::core::verify::VerifyResult, String>),
+    SaveToSystemConfirmed,
+    SaveToSystemCancelled,
     SaveToSystemResult(Result<(), String>),
     EventOccurred(iced::Event),
     ToggleDiff(bool),
@@ -633,6 +639,19 @@ impl State {
         })
     }
 
+    /// Returns true if any operation is in progress that should block new operations
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.status,
+            AppStatus::Verifying
+                | AppStatus::Applying
+                | AppStatus::PendingConfirmation { .. }
+                | AppStatus::Reverting
+                | AppStatus::AwaitingSaveToSystem
+                | AppStatus::SavingToSystem
+        )
+    }
+
     fn save_config(&self) -> Task<Message> {
         let config = crate::config::AppConfig {
             active_profile: self.active_profile_name.clone(),
@@ -738,9 +757,18 @@ impl State {
             Message::RevertClicked => return handlers::handle_revert_clicked(self),
             Message::RevertResult(result) => handlers::handle_revert_result(self, result),
             Message::CountdownTick => return handlers::handle_countdown_tick(self),
-            Message::SaveToSystemClicked => return handlers::handle_save_to_system(self),
+            Message::SaveToSystemClicked => return handlers::handle_save_to_system_clicked(self),
+            Message::SaveToSystemVerifyResult(result) => {
+                return handlers::handle_save_to_system_verify_result(self, result);
+            }
+            Message::SaveToSystemConfirmed => {
+                return handlers::handle_save_to_system_confirmed(self);
+            }
+            Message::SaveToSystemCancelled => {
+                handlers::handle_save_to_system_cancelled(self);
+            }
             Message::SaveToSystemResult(result) => {
-                handlers::handle_save_to_system_result(self, result);
+                return handlers::handle_save_to_system_result(self, result);
             }
 
             // Export domain

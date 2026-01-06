@@ -386,3 +386,58 @@ pub fn view_apply_flow_modal<'a>(
     .style(move |_| card_container(theme))
     .into()
 }
+
+// ============================================================================
+// Save to System Modal
+// ============================================================================
+
+/// Modal for confirming the Save to System operation.
+/// Shows when `AppStatus::AwaitingSaveToSystem` is active.
+pub fn view_save_to_system_modal<'a>(
+    theme: &'a crate::theme::AppTheme,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    let body = column![
+        text(format!("Save current configuration to {}?", drfw::SYSTEM_NFT_PATH))
+            .size(14)
+            .font(font)
+            .color(theme.fg_primary)
+            .width(400)
+            .align_x(Alignment::Center),
+        text("This will overwrite the system default configuration.")
+            .size(12)
+            .font(font)
+            .color(theme.fg_muted)
+            .width(400)
+            .align_x(Alignment::Center),
+    ]
+    .spacing(8);
+
+    let buttons = row![
+        button(text("Cancel").size(14).font(font))
+            .on_press(Message::SaveToSystemCancelled)
+            .padding([10, 20])
+            .style(move |_, status| secondary_button(theme, status)),
+        button(text("Save").size(14).font(font))
+            .on_press(Message::SaveToSystemConfirmed)
+            .padding([10, 24])
+            .style(move |_, status| primary_button(theme, status)),
+    ]
+    .spacing(16);
+
+    container(
+        column![
+            text("💾").size(36),
+            container(text("Save to System").size(24).font(font).color(theme.fg_primary))
+                .padding([4, 8])
+                .style(move |_| section_header_container(theme)),
+            body,
+            buttons,
+        ]
+        .spacing(20)
+        .padding(32)
+        .align_x(Alignment::Center),
+    )
+    .style(move |_| card_container(theme))
+    .into()
+}

@@ -43,6 +43,9 @@ pub enum EventType {
 
     // Data export
     ExportCompleted,
+
+    // System configuration
+    SaveToSystem,
 }
 
 /// A single audit log entry
@@ -693,6 +696,40 @@ pub async fn log_redone(enable_event_log: bool, description: &str) {
                 "description": description,
             }),
             None,
+        );
+
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+/// Logs a save to system operation
+///
+/// # Arguments
+///
+/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
+/// * `success` - Whether the operation succeeded
+/// * `target_path` - Path where config was saved
+/// * `error` - Error message if operation failed
+pub async fn log_save_to_system(
+    enable_event_log: bool,
+    success: bool,
+    target_path: &str,
+    error: Option<String>,
+) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(
+            EventType::SaveToSystem,
+            success,
+            serde_json::json!({
+                "target_path": target_path,
+            }),
+            error,
         );
 
         if let Err(e) = audit.log(event).await {

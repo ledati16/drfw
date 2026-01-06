@@ -14,23 +14,67 @@ use iced::Task;
 use std::time::Duration;
 use tracing::warn;
 
-/// Handles apply button click (starts verification)
-pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
-    if matches!(
-        state.status,
-        AppStatus::Verifying | AppStatus::Applying | AppStatus::PendingConfirmation { .. }
-    ) {
-        return Task::none();
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Truncates an error message to fit within a maximum length, adding ellipsis if needed.
+/// The prefix is always included, and the message is truncated to fit.
+fn truncate_error_message(prefix: &str, message: &str, max_total_len: usize) -> String {
+    let available = max_total_len.saturating_sub(prefix.len()).saturating_sub(3); // 3 for "..."
+    if message.len() > available {
+        format!("{prefix}{}...", &message[..available])
+    } else {
+        format!("{prefix}{message}")
+    }
+}
+
+/// Interprets the output of an elevated command and returns a user-friendly error message.
+/// Returns Ok(()) on success, or Err with a descriptive message on failure.
+fn interpret_elevated_command_output(output: &std::process::Output) -> Result<(), String> {
+    if output.status.success() {
+        return Ok(());
     }
 
-    // Check if polkit authentication agent is running
-    if !crate::elevation::is_polkit_agent_running() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    // Detect common error patterns from pkexec/sudo/run0
+    if exit_code == 126 {
+        Err("Authentication cancelled".into())
+    } else if exit_code == 127 {
+        Err("Authentication failed".into())
+    } else if stderr.contains("Permission denied") {
+        Err("Permission denied (check polkit configuration)".into())
+    } else if stderr.is_empty() {
+        Err(format!("Command failed (exit code {exit_code})"))
+    } else {
+        Err(format!("Command failed: {}", stderr.trim()))
+    }
+}
+
+/// Checks if a polkit agent is available. Returns an error task with banner if not.
+fn require_polkit_agent(state: &mut State) -> Result<(), Task<Message>> {
+    if crate::elevation::is_polkit_agent_running() {
+        Ok(())
+    } else {
         state.push_banner(
             "No polkit agent running. Install and start an authentication agent.",
             BannerSeverity::Error,
             10,
         );
+        Err(Task::none())
+    }
+}
+
+/// Handles apply button click (starts verification)
+pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
+    if state.is_busy() {
         return Task::none();
+    }
+
+    if let Err(task) = require_polkit_agent(state) {
+        return task;
     }
 
     state.status = AppStatus::Verifying;
@@ -86,17 +130,12 @@ pub(crate) fn handle_verify_completed(
         }
         Err(e) => {
             state.status = AppStatus::Idle;
-            let msg = if e.len() > 60 {
-                format!("Verification error: {}...", &e[..57])
-            } else {
-                format!("Verification error: {e}")
-            };
+            let msg = truncate_error_message("Verification error: ", &e, 80);
             state.push_banner(&msg, BannerSeverity::Error, 8);
             let enable_event_log = state.enable_event_log;
-            let error = e.clone();
             Task::perform(
                 async move {
-                    audit::log_verify(enable_event_log, false, 0, Some(error)).await;
+                    audit::log_verify(enable_event_log, false, 0, Some(e)).await;
                 },
                 |()| Message::AuditLogWritten,
             )
@@ -297,67 +336,135 @@ pub(crate) fn handle_revert_result(state: &mut State, result: Result<(), String>
         }
         Err(e) => {
             state.status = AppStatus::Idle;
-            let msg = if e.len() > 55 {
-                format!("Revert failed: {}...", &e[..52])
-            } else {
-                format!("Revert failed: {e}")
-            };
+            let msg = truncate_error_message("Revert failed: ", &e, 80);
             state.push_banner(&msg, BannerSeverity::Error, 10);
         }
     }
 }
 
-/// Handles save to system configuration file
-pub(crate) fn handle_save_to_system(state: &mut State) -> Task<Message> {
+/// Handles Save to System button click - starts verification
+pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> {
+    if state.is_busy() {
+        return Task::none();
+    }
+
+    if let Err(task) = require_polkit_agent(state) {
+        return task;
+    }
+
+    state.status = AppStatus::Verifying;
+    let nft_json = state.ruleset.to_nftables_json();
+
+    Task::perform(
+        async move {
+            crate::core::verify::verify_ruleset(nft_json)
+                .await
+                .map_err(|e| e.to_string())
+        },
+        Message::SaveToSystemVerifyResult,
+    )
+}
+
+/// Handles Save to System verification result
+pub(crate) fn handle_save_to_system_verify_result(
+    state: &mut State,
+    result: Result<crate::core::verify::VerifyResult, String>,
+) -> Task<Message> {
+    match result {
+        Ok(verify_result) if verify_result.success => {
+            // Verification passed - show confirmation modal
+            state.status = AppStatus::AwaitingSaveToSystem;
+            Task::none()
+        }
+        Ok(verify_result) => {
+            // Verification failed
+            state.status = AppStatus::Idle;
+            let error_summary = if verify_result.errors.is_empty() {
+                "Verification failed".to_string()
+            } else {
+                verify_result.errors.join("; ")
+            };
+            let msg = truncate_error_message("Cannot save - invalid config: ", &error_summary, 80);
+            state.push_banner(&msg, BannerSeverity::Error, 8);
+            Task::none()
+        }
+        Err(e) => {
+            // Verification error (e.g., nft command failed)
+            state.status = AppStatus::Idle;
+            let msg = truncate_error_message("Verification error: ", &e, 80);
+            state.push_banner(&msg, BannerSeverity::Error, 8);
+            Task::none()
+        }
+    }
+}
+
+/// Handles user confirming Save to System - proceeds with file write
+pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message> {
+    state.status = AppStatus::SavingToSystem;
+
     let text = state.ruleset.to_nft_text();
+
     Task::perform(
         async move {
             use std::io::Write;
             use tempfile::NamedTempFile;
+
+            // Create temp file with content
             let mut temp =
                 NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let perms = std::fs::Permissions::from_mode(0o600);
-                temp.as_file()
-                    .set_permissions(perms)
-                    .map_err(|e| format!("Failed to set permissions: {e}"))?;
-            }
             temp.write_all(text.as_bytes())
                 .map_err(|e| format!("Failed to write temp file: {e}"))?;
             temp.flush()
                 .map_err(|e| format!("Failed to flush temp file: {e}"))?;
+
             let temp_path_str = temp
                 .path()
                 .to_str()
                 .ok_or_else(|| "Invalid temp path".to_string())?
                 .to_string();
-            let status = tokio::process::Command::new("pkexec")
-                .args([
-                    "cp",
-                    "--preserve=mode",
-                    &temp_path_str,
-                    drfw::SYSTEM_NFT_PATH,
-                ])
-                .status()
-                .await
-                .map_err(|e| format!("Failed to execute pkexec: {e}"))?;
-            if status.success() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Failed to copy configuration to {}",
-                    drfw::SYSTEM_NFT_PATH
-                ))
-            }
+
+            // Use elevated install command with proper permissions (644)
+            let mut cmd = crate::elevation::create_elevated_install_command(&[
+                "-m",
+                "644",
+                &temp_path_str,
+                drfw::SYSTEM_NFT_PATH,
+            ])
+            .map_err(|e| format!("Elevation error: {e}"))?;
+
+            // Capture output for better error messages
+            let output = match tokio::time::timeout(
+                Duration::from_secs(120),
+                cmd.output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => return Err(format!("Failed to execute install: {e}")),
+                Err(_) => return Err("Install timed out (authentication dialog expired?)".into()),
+            };
+
+            // Use shared helper to interpret exit codes
+            interpret_elevated_command_output(&output)
         },
         Message::SaveToSystemResult,
     )
 }
 
+/// Handles user cancelling Save to System modal
+pub(crate) fn handle_save_to_system_cancelled(state: &mut State) {
+    state.status = AppStatus::Idle;
+}
+
 /// Handles save to system result
-pub(crate) fn handle_save_to_system_result(state: &mut State, result: Result<(), String>) {
+pub(crate) fn handle_save_to_system_result(
+    state: &mut State,
+    result: Result<(), String>,
+) -> Task<Message> {
+    state.status = AppStatus::Idle;
+    let enable_event_log = state.enable_event_log;
+    let target_path = drfw::SYSTEM_NFT_PATH.to_string();
+
     match result {
         Ok(()) => {
             state.push_banner(
@@ -365,14 +472,22 @@ pub(crate) fn handle_save_to_system_result(state: &mut State, result: Result<(),
                 BannerSeverity::Success,
                 5,
             );
+            Task::perform(
+                async move {
+                    audit::log_save_to_system(enable_event_log, true, &target_path, None).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
         Err(e) => {
-            let msg = if e.len() > 50 {
-                format!("Save failed: {}...", &e[..47])
-            } else {
-                format!("Save failed: {e}")
-            };
+            let msg = truncate_error_message("Save failed: ", &e, 80);
             state.push_banner(&msg, BannerSeverity::Error, 8);
+            Task::perform(
+                async move {
+                    audit::log_save_to_system(enable_event_log, false, &target_path, Some(e)).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
     }
 }
@@ -443,12 +558,8 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
         );
     }
 
-    // Generic error - show error message
-    let msg = if error.len() > 80 {
-        format!("{}...", &error[..77])
-    } else {
-        error.to_owned()
-    };
+    // Generic error - show error message (no prefix for generic errors)
+    let msg = truncate_error_message("", error, 80);
     state.push_banner(&msg, BannerSeverity::Error, 8);
 
     Task::none()

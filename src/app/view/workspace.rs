@@ -157,30 +157,21 @@ pub fn view_workspace<'a>(
     .spacing(12);
 
     // Zone: Commitment (Right)
-    let save_to_system = if state.status == AppStatus::Confirmed {
-        button(
-            text("Permanently Save to System")
-                .size(13)
-                .font(state.font_regular),
-        )
-        .style(move |_, status| primary_button(theme, status))
-        .padding([10, 20])
-        .on_press(Message::SaveToSystemClicked)
-    } else {
-        button(text("Save to System").size(13).font(state.font_regular))
+    let is_busy = state.is_busy();
+
+    let save_to_system = {
+        let mut btn = button(text("Save to System").size(13).font(state.font_regular))
             .padding([10, 20])
-            .style(move |_, status| secondary_button(theme, status))
+            .style(move |_, status| secondary_button(theme, status));
+
+        if !is_busy {
+            btn = btn.on_press(Message::SaveToSystemClicked);
+        }
+        btn
     };
 
     let is_dirty = state.is_dirty();
     let apply_button = {
-        let is_busy = matches!(
-            state.status,
-            AppStatus::Verifying
-                | AppStatus::Applying
-                | AppStatus::PendingConfirmation { .. }
-                | AppStatus::Reverting
-        );
         let button_text = if matches!(state.status, AppStatus::Verifying) {
             "Verifying..."
         } else if is_busy {

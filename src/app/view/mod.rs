@@ -133,6 +133,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 .center_x(Length::Fill)
                 .center_y(Length::Fill),
             ),
+            AppStatus::AwaitingSaveToSystem => Some(
+                container(confirmation::view_save_to_system_modal(
+                    theme,
+                    state.font_regular,
+                ))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
+            ),
             _ => None,
         }
     };
