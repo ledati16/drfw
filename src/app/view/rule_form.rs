@@ -482,8 +482,8 @@ fn view_advanced_section<'a>(
 
         // Reject type (only shown when action is Reject)
         if form.action == crate::core::firewall::Action::Reject {
-            // TCP Reset is only valid for TCP protocol
-            let is_tcp_protocol = matches!(form.protocol, Protocol::Tcp | Protocol::TcpAndUdp);
+            // TCP Reset is only valid for pure TCP protocol (not TCP+UDP, since UDP can't receive RST)
+            let is_tcp_protocol = form.protocol == Protocol::Tcp;
             let reject_options = if is_tcp_protocol {
                 vec![
                     RejectType::Default,

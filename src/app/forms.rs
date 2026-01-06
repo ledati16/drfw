@@ -123,6 +123,7 @@ impl RuleForm {
         self.validate_destinations(&mut errors, &mut has_errors);
         self.validate_interface(&mut errors, &mut has_errors);
         self.validate_output_interface(&mut errors, &mut has_errors);
+        self.validate_interface_chain_compat(&mut errors, &mut has_errors);
         self.validate_reject_type(&mut errors, &mut has_errors);
         self.validate_rate_limit(&mut errors, &mut has_errors);
         self.validate_connection_limit(&mut errors, &mut has_errors);
@@ -203,6 +204,30 @@ impl RuleForm {
             && let Err(msg) = crate::validators::validate_interface(&self.output_interface)
         {
             errors.output_interface = Some(msg.to_string());
+            *has_errors = true;
+        }
+    }
+
+    /// Validates interface/chain compatibility.
+    ///
+    /// nftables only sets certain meta keys for specific hooks:
+    /// - `iifname`: Only available in INPUT and FORWARD (not OUTPUT)
+    /// - `oifname`: Only available in OUTPUT and FORWARD (not INPUT)
+    ///
+    /// Using the wrong interface for a chain results in rules that never match.
+    fn validate_interface_chain_compat(&self, errors: &mut FormErrors, has_errors: &mut bool) {
+        use crate::core::firewall::Chain;
+
+        // Input interface on OUTPUT chain won't match (packets originate locally)
+        if !self.interface.is_empty() && self.chain == Chain::Output {
+            errors.interface = Some("Input interface not available for OUTPUT rules".to_string());
+            *has_errors = true;
+        }
+
+        // Output interface on INPUT chain won't match (packets not routed yet)
+        if !self.output_interface.is_empty() && self.chain == Chain::Input {
+            errors.output_interface =
+                Some("Output interface not available for INPUT rules".to_string());
             *has_errors = true;
         }
     }
