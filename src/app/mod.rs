@@ -65,6 +65,9 @@ pub struct State {
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>,
     pub cached_nft_width_px: f32,
     pub cached_diff_width_px: f32,
+    /// Version counter for lazy widget cache invalidation
+    /// Incremented whenever cached tokens change, enabling O(1) staleness checks
+    pub cache_version: u64,
     pub rule_search: String,
     pub rule_search_lowercase: String,
     pub cached_all_tags: Vec<Arc<String>>,
@@ -448,6 +451,7 @@ impl State {
             cached_diff_tokens: None,
             cached_nft_width_px: 800.0,
             cached_diff_width_px: 800.0,
+            cache_version: 0,
             rule_search: String::new(),
             rule_search_lowercase: String::new(),
             cached_all_tags: Vec::new(),
@@ -567,6 +571,9 @@ impl State {
         }
 
         self.update_filter_cache();
+
+        // Increment version for lazy widget cache invalidation
+        self.cache_version = self.cache_version.wrapping_add(1);
     }
 
     fn update_filter_cache(&mut self) {

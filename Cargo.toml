@@ -26,7 +26,7 @@ float_cmp = "allow"
 # ═══════════════════════════════════════════════════════════════════════════
 # GUI Framework
 # ═══════════════════════════════════════════════════════════════════════════
-iced = { version = "0.14", features = ["tokio"] }  # Core GUI framework with async support
+iced = { version = "0.14", features = ["tokio", "lazy"] }  # Core GUI framework with async support + lazy widget
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Async Runtime

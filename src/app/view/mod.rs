@@ -22,7 +22,10 @@ mod workspace;
 // Shared imports used by main view function
 use crate::app::ui_components::{main_container, modal_backdrop, notification_banner};
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
-use iced::widget::{column, container, stack};
+use iced::widget::{column, container, opaque, stack};
+// Note: `lazy` widget is available (feature enabled) but requires `'static` data ownership.
+// DRFW's tokens are borrowed from State, so `lazy` would need Arc<Vec<HighlightedLine>>
+// to work. See iced_improve.md for details on this trade-off.
 use iced::{Alignment, Element, Length, alignment};
 
 /// Main view entry point
@@ -153,9 +156,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .height(Length::Fill)
         .style(move |_| main_container(theme));
 
-    // Modal overlay layer (fades base content)
+    // Modal overlay layer (fades base content, blocks clicks with opaque)
     let with_overlay = if let Some(overlay) = overlay {
-        stack![base, overlay].into()
+        stack![base, opaque(overlay)].into()
     } else {
         base.into()
     };
@@ -166,18 +169,20 @@ pub fn view(state: &State) -> Element<'_, Message> {
             if helper.helper_type.is_some() {
                 stack![
                     with_overlay,
-                    container(helper_modals::view_helper_modal(
-                        form,
-                        helper,
-                        theme,
-                        state.font_regular,
-                        state.font_mono,
-                    ))
-                    .style(move |_| modal_backdrop(theme))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill)
+                    opaque(
+                        container(helper_modals::view_helper_modal(
+                            form,
+                            helper,
+                            theme,
+                            state.font_regular,
+                            state.font_mono,
+                        ))
+                        .style(move |_| modal_backdrop(theme))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill)
+                    )
                 ]
                 .into()
             } else {
@@ -219,17 +224,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_diagnostics = if state.show_diagnostics {
         stack![
             with_banners,
-            container(diagnostics::view_diagnostics_modal(
-                state,
-                theme,
-                state.font_regular,
-                state.font_mono
-            ))
-            .style(move |_| modal_backdrop(theme))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
+            opaque(
+                container(diagnostics::view_diagnostics_modal(
+                    state,
+                    theme,
+                    state.font_regular,
+                    state.font_mono
+                ))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
@@ -240,12 +247,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_export = if state.show_export_modal {
         stack![
             with_diagnostics,
-            container(modals::view_export_modal(theme, state.font_regular))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
+            opaque(
+                container(modals::view_export_modal(theme, state.font_regular))
+                    .style(move |_| modal_backdrop(theme))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
@@ -256,12 +265,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_font_picker = if let Some(ref picker_state) = state.font_picker {
         stack![
             with_export,
-            container(pickers::view_font_picker(state, picker_state))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
+            opaque(
+                container(pickers::view_font_picker(state, picker_state))
+                    .style(move |_| modal_backdrop(theme))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
@@ -272,12 +283,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_theme_picker = if let Some(ref picker_state) = state.theme_picker {
         stack![
             with_font_picker,
-            container(pickers::view_theme_picker(state, picker_state))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
+            opaque(
+                container(pickers::view_theme_picker(state, picker_state))
+                    .style(move |_| modal_backdrop(theme))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
@@ -288,15 +301,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let with_profile_confirm = if state.pending_profile_switch.is_some() {
         stack![
             with_theme_picker,
-            container(profile::view_profile_switch_confirm(
-                theme,
-                state.font_regular
-            ))
-            .style(move |_| modal_backdrop(theme))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
+            opaque(
+                container(profile::view_profile_switch_confirm(
+                    theme,
+                    state.font_regular
+                ))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
@@ -309,12 +324,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
     {
         stack![
             with_profile_confirm,
-            container(profile::view_profile_manager(state, mgr_state))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
+            opaque(
+                container(profile::view_profile_manager(state, mgr_state))
+                    .style(move |_| modal_backdrop(theme))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
@@ -325,16 +342,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
     if state.show_shortcuts_help {
         stack![
             with_profile_manager,
-            container(shortcuts::view_shortcuts_help(
-                theme,
-                state.font_regular,
-                state.font_mono
-            ))
-            .style(move |_| modal_backdrop(theme))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
+            opaque(
+                container(shortcuts::view_shortcuts_help(
+                    theme,
+                    state.font_regular,
+                    state.font_mono
+                ))
+                .style(move |_| modal_backdrop(theme))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
+            )
         ]
         .into()
     } else {
