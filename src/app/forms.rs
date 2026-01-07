@@ -4,6 +4,9 @@
 //! Supports multi-value fields (ports, IPs) with helper modal editing pattern.
 
 use crate::core::firewall::{PortEntry, Protocol, RejectType};
+use crate::core::rule_constraints::{
+    ip_compatible_with_protocol, protocol_supports_ports, reject_type_valid_for_protocol,
+};
 use ipnetwork::IpNetwork;
 
 /// Form validation errors for individual fields
@@ -132,11 +135,8 @@ impl RuleForm {
     }
 
     fn validate_ports(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Ports are only relevant for TCP/UDP protocols
-        if !matches!(
-            self.protocol,
-            Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
-        ) {
+        // Use centralized constraint for port support
+        if !protocol_supports_ports(self.protocol) {
             return;
         }
 
@@ -160,14 +160,15 @@ impl RuleForm {
     }
 
     fn validate_sources(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Check protocol/IP version compatibility for ICMP
+        // Use centralized constraint for ICMP/IP version compatibility
         for ip in &self.sources {
-            if self.protocol == Protocol::Icmp && ip.is_ipv6() {
-                errors.source = Some("ICMP (v4) cannot be used with IPv6 addresses".to_string());
-                *has_errors = true;
-                return;
-            } else if self.protocol == Protocol::Icmpv6 && ip.is_ipv4() {
-                errors.source = Some("ICMPv6 cannot be used with IPv4 addresses".to_string());
+            if !ip_compatible_with_protocol(ip, self.protocol) {
+                let msg = if ip.is_ipv6() {
+                    "ICMP (v4) cannot be used with IPv6 addresses"
+                } else {
+                    "ICMPv6 cannot be used with IPv4 addresses"
+                };
+                errors.source = Some(msg.to_string());
                 *has_errors = true;
                 return;
             }
@@ -175,15 +176,15 @@ impl RuleForm {
     }
 
     fn validate_destinations(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Check protocol/IP version compatibility for ICMP
+        // Use centralized constraint for ICMP/IP version compatibility
         for ip in &self.destinations {
-            if self.protocol == Protocol::Icmp && ip.is_ipv6() {
-                errors.destination =
-                    Some("ICMP (v4) cannot be used with IPv6 addresses".to_string());
-                *has_errors = true;
-                return;
-            } else if self.protocol == Protocol::Icmpv6 && ip.is_ipv4() {
-                errors.destination = Some("ICMPv6 cannot be used with IPv4 addresses".to_string());
+            if !ip_compatible_with_protocol(ip, self.protocol) {
+                let msg = if ip.is_ipv6() {
+                    "ICMP (v4) cannot be used with IPv6 addresses"
+                } else {
+                    "ICMPv6 cannot be used with IPv4 addresses"
+                };
+                errors.destination = Some(msg.to_string());
                 *has_errors = true;
                 return;
             }
@@ -233,8 +234,8 @@ impl RuleForm {
     }
 
     fn validate_reject_type(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // TCP Reset is only valid for TCP protocol
-        if self.reject_type == RejectType::TcpReset && self.protocol != Protocol::Tcp {
+        // Use centralized constraint for reject type validity
+        if !reject_type_valid_for_protocol(self.reject_type, self.protocol) {
             errors.reject_type = Some("TCP Reset is only available for TCP protocol".to_string());
             *has_errors = true;
         }

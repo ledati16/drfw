@@ -40,7 +40,8 @@ use drfw::core::firewall::{
     RateLimit, RejectType, Rule, TimeUnit,
 };
 use drfw::core::rule_constraints::{
-    available_reject_types_for_protocol, chain_uses_input_interface, protocol_supports_ports,
+    available_reject_types_for_protocol, chain_uses_input_interface, protocol_requires_ipv4,
+    protocol_requires_ipv6, protocol_supports_ports,
 };
 use drfw::validators::{
     MAX_CONNECTION_LIMIT, MAX_LABEL_LENGTH, MAX_RATE_LIMIT_PER_MINUTE, MAX_RATE_LIMIT_PER_SECOND,
@@ -548,7 +549,7 @@ fn random_ipv6(rng: &mut impl Rng) -> IpNetwork {
     IpNetwork::new(std::net::IpAddr::V6(addr), prefix_len).unwrap()
 }
 
-fn random_sources(rng: &mut impl Rng) -> Vec<IpNetwork> {
+fn random_sources(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
     if rng.gen_bool(0.4) {
         return Vec::new(); // No source filter
     }
@@ -557,17 +558,26 @@ fn random_sources(rng: &mut impl Rng) -> Vec<IpNetwork> {
     let mut sources = Vec::with_capacity(count);
 
     for _ in 0..count {
-        if rng.gen_bool(0.7) {
-            sources.push(random_ipv4(rng));
+        // Use centralized constraint for IP version compatibility
+        let ip = if protocol_requires_ipv4(protocol) {
+            // ICMP (v4) only works with IPv4
+            random_ipv4(rng)
+        } else if protocol_requires_ipv6(protocol) {
+            // ICMPv6 only works with IPv6
+            random_ipv6(rng)
+        } else if rng.gen_bool(0.7) {
+            // Other protocols: prefer IPv4 but allow IPv6
+            random_ipv4(rng)
         } else {
-            sources.push(random_ipv6(rng));
-        }
+            random_ipv6(rng)
+        };
+        sources.push(ip);
     }
 
     sources
 }
 
-fn random_destinations(rng: &mut impl Rng) -> Vec<IpNetwork> {
+fn random_destinations(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
     if rng.gen_bool(0.6) {
         return Vec::new(); // Less common to have destination filters
     }
@@ -576,11 +586,20 @@ fn random_destinations(rng: &mut impl Rng) -> Vec<IpNetwork> {
     let mut dests = Vec::with_capacity(count);
 
     for _ in 0..count {
-        if rng.gen_bool(0.7) {
-            dests.push(random_ipv4(rng));
+        // Use centralized constraint for IP version compatibility
+        let ip = if protocol_requires_ipv4(protocol) {
+            // ICMP (v4) only works with IPv4
+            random_ipv4(rng)
+        } else if protocol_requires_ipv6(protocol) {
+            // ICMPv6 only works with IPv6
+            random_ipv6(rng)
+        } else if rng.gen_bool(0.7) {
+            // Other protocols: prefer IPv4 but allow IPv6
+            random_ipv4(rng)
         } else {
-            dests.push(random_ipv6(rng));
-        }
+            random_ipv6(rng)
+        };
+        dests.push(ip);
     }
 
     dests
@@ -765,32 +784,55 @@ fn edge_case_ports(rng: &mut impl Rng) -> Vec<PortEntry> {
     cases.choose(rng).unwrap().clone()
 }
 
-fn edge_case_sources(rng: &mut impl Rng) -> Vec<IpNetwork> {
-    let cases: Vec<Vec<IpNetwork>> = vec![
+fn edge_case_sources(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
+    // Use centralized constraint for IP version compatibility
+    let ipv4_cases: Vec<Vec<IpNetwork>> = vec![
         // Any IPv4 (0.0.0.0/0)
         vec!["0.0.0.0/0".parse().unwrap()],
-        // Any IPv6 (::/0)
-        vec!["::/0".parse().unwrap()],
         // Single host IPv4 (/32)
         vec!["192.168.1.1/32".parse().unwrap()],
-        // Single host IPv6 (/128)
-        vec!["2001:db8::1/128".parse().unwrap()],
         // Link-local IPv4
         vec!["169.254.0.0/16".parse().unwrap()],
-        // Link-local IPv6
-        vec!["fe80::/10".parse().unwrap()],
-        // Mix of any-IP and specific
-        vec![
-            "0.0.0.0/0".parse().unwrap(),
-            "192.168.1.0/24".parse().unwrap(),
-        ],
         // Loopback
         vec!["127.0.0.0/8".parse().unwrap()],
+        // Mix of specific networks
+        vec![
+            "10.0.0.0/8".parse().unwrap(),
+            "192.168.1.0/24".parse().unwrap(),
+        ],
+    ];
+
+    let ipv6_cases: Vec<Vec<IpNetwork>> = vec![
+        // Any IPv6 (::/0)
+        vec!["::/0".parse().unwrap()],
+        // Single host IPv6 (/128)
+        vec!["2001:db8::1/128".parse().unwrap()],
+        // Link-local IPv6
+        vec!["fe80::/10".parse().unwrap()],
         // IPv6 loopback
         vec!["::1/128".parse().unwrap()],
     ];
 
-    cases.choose(rng).unwrap().clone()
+    // Select appropriate cases based on protocol constraints
+    if protocol_requires_ipv4(protocol) {
+        ipv4_cases.choose(rng).unwrap().clone()
+    } else if protocol_requires_ipv6(protocol) {
+        ipv6_cases.choose(rng).unwrap().clone()
+    } else {
+        // Other protocols: mix of both (can include mixed cases)
+        let mixed_cases: Vec<Vec<IpNetwork>> = vec![
+            vec!["0.0.0.0/0".parse().unwrap()],
+            vec!["::/0".parse().unwrap()],
+            vec!["192.168.1.1/32".parse().unwrap()],
+            vec!["2001:db8::1/128".parse().unwrap()],
+            // Mix of any-IP and specific (valid for non-ICMP protocols)
+            vec![
+                "0.0.0.0/0".parse().unwrap(),
+                "192.168.1.0/24".parse().unwrap(),
+            ],
+        ];
+        mixed_cases.choose(rng).unwrap().clone()
+    }
 }
 
 fn edge_case_interface(rng: &mut impl Rng) -> Option<String> {
@@ -938,14 +980,14 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
         label: edge_case_label(rng, index),
         ports,
         sources: if rng.gen_bool(0.5) {
-            edge_case_sources(rng)
+            edge_case_sources(rng, protocol)
         } else {
-            random_sources(rng)
+            random_sources(rng, protocol)
         },
         destinations: if rng.gen_bool(0.4) {
-            edge_case_sources(rng) // Reuse edge case sources for destinations
+            edge_case_sources(rng, protocol) // Reuse edge case sources for destinations
         } else {
-            random_destinations(rng)
+            random_destinations(rng, protocol)
         },
         interface,
         output_interface,
@@ -986,8 +1028,8 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
         },
         label: random_label(rng, index),
         ports: random_ports(rng, protocol),
-        sources: random_sources(rng),
-        destinations: random_destinations(rng),
+        sources: random_sources(rng, protocol),
+        destinations: random_destinations(rng, protocol),
         interface,
         output_interface,
         rate_limit: random_rate_limit(rng),
@@ -1052,8 +1094,8 @@ fn generate_coverage_rule(
         reject_type: reject_type.unwrap_or(RejectType::Default),
         label: random_label(rng, index),
         ports,
-        sources: random_sources(rng),
-        destinations: random_destinations(rng),
+        sources: random_sources(rng, protocol),
+        destinations: random_destinations(rng, protocol),
         interface,
         output_interface,
         rate_limit,

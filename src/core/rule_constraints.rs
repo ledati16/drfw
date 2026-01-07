@@ -37,6 +37,7 @@
 #![allow(dead_code)]
 
 use super::firewall::{Chain, Protocol, RejectType};
+use ipnetwork::IpNetwork;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Protocol Constraints
@@ -86,6 +87,88 @@ pub fn protocol_is_icmp(protocol: Protocol) -> bool {
         protocol,
         Protocol::Icmp | Protocol::Icmpv6 | Protocol::IcmpBoth
     )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ICMP Protocol / IP Version Constraints
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Returns `true` if the IP address version is compatible with the protocol.
+///
+/// ICMP version-specific protocols have IP version requirements:
+/// - `Protocol::Icmp` (IPv4 ICMP) only works with IPv4 addresses
+/// - `Protocol::Icmpv6` (IPv6 ICMP) only works with IPv6 addresses
+/// - All other protocols (Tcp, Udp, TcpAndUdp, Any, IcmpBoth) work with either version
+///
+/// Using mismatched IP versions with ICMP protocols creates rules that will
+/// never match any traffic, since ICMP packets are IP version-specific.
+///
+/// # Examples
+///
+/// ```
+/// use drfw::core::firewall::Protocol;
+/// use drfw::core::rule_constraints::ip_compatible_with_protocol;
+/// use ipnetwork::IpNetwork;
+///
+/// let ipv4: IpNetwork = "192.168.1.0/24".parse().unwrap();
+/// let ipv6: IpNetwork = "2001:db8::/32".parse().unwrap();
+///
+/// // ICMP (v4) only works with IPv4
+/// assert!(ip_compatible_with_protocol(&ipv4, Protocol::Icmp));
+/// assert!(!ip_compatible_with_protocol(&ipv6, Protocol::Icmp));
+///
+/// // ICMPv6 only works with IPv6
+/// assert!(ip_compatible_with_protocol(&ipv6, Protocol::Icmpv6));
+/// assert!(!ip_compatible_with_protocol(&ipv4, Protocol::Icmpv6));
+///
+/// // Other protocols work with both
+/// assert!(ip_compatible_with_protocol(&ipv4, Protocol::Tcp));
+/// assert!(ip_compatible_with_protocol(&ipv6, Protocol::Tcp));
+/// assert!(ip_compatible_with_protocol(&ipv4, Protocol::IcmpBoth));
+/// assert!(ip_compatible_with_protocol(&ipv6, Protocol::IcmpBoth));
+/// ```
+#[inline]
+pub fn ip_compatible_with_protocol(ip: &IpNetwork, protocol: Protocol) -> bool {
+    match protocol {
+        Protocol::Icmp => ip.is_ipv4(),
+        Protocol::Icmpv6 => ip.is_ipv6(),
+        // Tcp, Udp, TcpAndUdp, Any, IcmpBoth all work with either IP version
+        _ => true,
+    }
+}
+
+/// Returns `true` if the protocol requires IPv4 addresses only.
+///
+/// # Examples
+///
+/// ```
+/// use drfw::core::firewall::Protocol;
+/// use drfw::core::rule_constraints::protocol_requires_ipv4;
+///
+/// assert!(protocol_requires_ipv4(Protocol::Icmp));
+/// assert!(!protocol_requires_ipv4(Protocol::Icmpv6));
+/// assert!(!protocol_requires_ipv4(Protocol::Tcp));
+/// ```
+#[inline]
+pub fn protocol_requires_ipv4(protocol: Protocol) -> bool {
+    protocol == Protocol::Icmp
+}
+
+/// Returns `true` if the protocol requires IPv6 addresses only.
+///
+/// # Examples
+///
+/// ```
+/// use drfw::core::firewall::Protocol;
+/// use drfw::core::rule_constraints::protocol_requires_ipv6;
+///
+/// assert!(protocol_requires_ipv6(Protocol::Icmpv6));
+/// assert!(!protocol_requires_ipv6(Protocol::Icmp));
+/// assert!(!protocol_requires_ipv6(Protocol::Tcp));
+/// ```
+#[inline]
+pub fn protocol_requires_ipv6(protocol: Protocol) -> bool {
+    protocol == Protocol::Icmpv6
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -362,5 +445,78 @@ mod tests {
     fn test_chain_interface_type() {
         assert_eq!(chain_interface_type(Chain::Input), InterfaceType::Input);
         assert_eq!(chain_interface_type(Chain::Output), InterfaceType::Output);
+    }
+
+    // ICMP Protocol / IP Version tests
+    #[test]
+    fn test_ip_compatible_with_icmp_v4() {
+        let ipv4: IpNetwork = "192.168.1.0/24".parse().unwrap();
+        let ipv6: IpNetwork = "2001:db8::/32".parse().unwrap();
+
+        // ICMP (v4) only works with IPv4
+        assert!(ip_compatible_with_protocol(&ipv4, Protocol::Icmp));
+        assert!(!ip_compatible_with_protocol(&ipv6, Protocol::Icmp));
+    }
+
+    #[test]
+    fn test_ip_compatible_with_icmpv6() {
+        let ipv4: IpNetwork = "192.168.1.0/24".parse().unwrap();
+        let ipv6: IpNetwork = "2001:db8::/32".parse().unwrap();
+
+        // ICMPv6 only works with IPv6
+        assert!(ip_compatible_with_protocol(&ipv6, Protocol::Icmpv6));
+        assert!(!ip_compatible_with_protocol(&ipv4, Protocol::Icmpv6));
+    }
+
+    #[test]
+    fn test_ip_compatible_with_other_protocols() {
+        let ipv4: IpNetwork = "192.168.1.0/24".parse().unwrap();
+        let ipv6: IpNetwork = "2001:db8::/32".parse().unwrap();
+
+        // All other protocols work with both IP versions
+        for protocol in [
+            Protocol::Any,
+            Protocol::Tcp,
+            Protocol::Udp,
+            Protocol::TcpAndUdp,
+            Protocol::IcmpBoth,
+        ] {
+            assert!(
+                ip_compatible_with_protocol(&ipv4, protocol),
+                "IPv4 should be compatible with {:?}",
+                protocol
+            );
+            assert!(
+                ip_compatible_with_protocol(&ipv6, protocol),
+                "IPv6 should be compatible with {:?}",
+                protocol
+            );
+        }
+    }
+
+    #[test]
+    fn test_protocol_requires_ipv4() {
+        assert!(protocol_requires_ipv4(Protocol::Icmp));
+
+        // All others should return false
+        assert!(!protocol_requires_ipv4(Protocol::Icmpv6));
+        assert!(!protocol_requires_ipv4(Protocol::IcmpBoth));
+        assert!(!protocol_requires_ipv4(Protocol::Any));
+        assert!(!protocol_requires_ipv4(Protocol::Tcp));
+        assert!(!protocol_requires_ipv4(Protocol::Udp));
+        assert!(!protocol_requires_ipv4(Protocol::TcpAndUdp));
+    }
+
+    #[test]
+    fn test_protocol_requires_ipv6() {
+        assert!(protocol_requires_ipv6(Protocol::Icmpv6));
+
+        // All others should return false
+        assert!(!protocol_requires_ipv6(Protocol::Icmp));
+        assert!(!protocol_requires_ipv6(Protocol::IcmpBoth));
+        assert!(!protocol_requires_ipv6(Protocol::Any));
+        assert!(!protocol_requires_ipv6(Protocol::Tcp));
+        assert!(!protocol_requires_ipv6(Protocol::Udp));
+        assert!(!protocol_requires_ipv6(Protocol::TcpAndUdp));
     }
 }
