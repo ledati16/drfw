@@ -599,6 +599,9 @@ impl Rule {
     /// Rebuilds all cached lowercase fields for search performance
     /// Must be called after deserialization or any field modification
     pub fn rebuild_caches(&mut self) {
+        // Sanitize label to remove control characters (newlines, tabs, etc.)
+        // that may have been introduced via JSON import or malformed data
+        self.label = crate::validators::sanitize_label(&self.label);
         self.label_lowercase = self.label.to_lowercase();
         self.interface_lowercase = self.interface.as_ref().map(|i| i.to_lowercase());
         self.output_interface_lowercase = self.output_interface.as_ref().map(|i| i.to_lowercase());

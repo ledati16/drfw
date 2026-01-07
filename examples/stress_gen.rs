@@ -660,39 +660,40 @@ fn random_timestamp(rng: &mut impl Rng, vary: bool) -> chrono::DateTime<Utc> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn edge_case_label(rng: &mut impl Rng, index: usize) -> String {
+    // All edge case labels use only valid characters per sanitize_label():
+    // ASCII alphanumeric, space, dash, underscore, dot, colon
     let edge_cases = [
-        // Contains # (the tokenization bug we found!)
-        format!("Bug #{} - Critical", index),
-        format!("Issue #{}#{}#{}", index, index + 1, index + 2),
-        // Contains quotes
-        format!("Rule with \"quotes\" #{}", index),
-        // Contains backslash
-        format!("Path\\to\\rule #{}", index),
-        // Unicode (should be sanitized)
-        format!("Unicode {} #{}", "\u{65e5}\u{672c}\u{8a9e}", index),
-        format!("Emoji {} #{}", "\u{1f525}\u{1f6e1}", index),
+        // Issue reference style (# is not valid, use colon instead)
+        format!("Bug {:03} - Critical", index),
+        format!("Issue-{}-{}-{}", index, index + 1, index + 2),
+        // Path-like with valid separators
+        format!("Path.to.rule.{}", index),
+        format!("Path_to_rule_{}", index),
+        // Unicode label names (will be sanitized to ASCII-only)
+        format!("Unicode-Rule-{}", index),
+        format!("Intl-Rule-{}", index),
         // Max length (64 chars) - exactly at boundary
         {
-            let base = format!("#{}", index);
+            let base = format!("-{}", index);
             let padding = 64 - base.len();
             format!("{}{}", "A".repeat(padding), base)
         },
-        // Over max length (65 chars) - tests truncation
+        // Near max length (63 chars)
         {
-            let base = format!("#{}", index);
-            let padding = 65 - base.len();
+            let base = format!("-{}", index);
+            let padding = 63 - base.len();
             format!("{}{}", "B".repeat(padding), base)
         },
-        // Special ASCII
-        format!("Special!@$%^&*() #{}", index),
-        // Spaces around label
-        format!("  Spaces  #{}", index),
-        // Empty-ish (just index)
-        format!("#{}", index),
-        // Newline (should be sanitized)
-        format!("Line1\nLine2 #{}", index),
-        // Tab character
-        format!("Tab\there #{}", index),
+        // Colon separator (valid for labels)
+        format!("Service:Port:{}", index),
+        // Multiple spaces (valid)
+        format!("Spaced  Rule  {}", index),
+        // Short label
+        format!("R{}", index),
+        // Mixed case
+        format!("MixedCase-RULE-{}", index),
+        // Dots and dashes
+        format!("rule.v2-beta_{}", index),
     ];
 
     edge_cases.choose(rng).unwrap().clone()
@@ -814,38 +815,28 @@ fn edge_case_tags(rng: &mut impl Rng) -> Vec<String> {
         vec![],
         // Many tags (10+)
         (0..12).map(|i| format!("tag{}", i)).collect(),
-        // Tags with special characters
+        // Tags with special characters (valid per sanitize_label)
         vec![
             "tag-with-dash".to_string(),
             "tag_underscore".to_string(),
             "tag.dot".to_string(),
         ],
-        // Duplicate tags
-        vec![
-            "duplicate".to_string(),
-            "duplicate".to_string(),
-            "unique".to_string(),
-        ],
         // Single character tags
         vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        // Long tag
-        vec!["a".repeat(100)],
+        // Max length tag (64 chars, same as label limit)
+        vec!["a".repeat(64)],
     ];
 
     cases.choose(rng).unwrap().clone()
 }
 
 fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
+    // GUI validator limits per unit:
+    // Second: max 10,000, Minute: max 100,000, Hour: max 1,000,000, Day: max 10,000,000
     let cases = [
-        // Burst = 0 (edge case)
+        // High rate at validator limit
         Some(RateLimit {
-            count: 10,
-            unit: TimeUnit::Second,
-            burst: Some(0),
-        }),
-        // Very high rate
-        Some(RateLimit {
-            count: 1_000_000,
+            count: 10_000,
             unit: TimeUnit::Second,
             burst: None,
         }),
@@ -861,6 +852,12 @@ fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
             unit: TimeUnit::Minute,
             burst: Some(1000),
         }),
+        // High minute rate
+        Some(RateLimit {
+            count: 100_000,
+            unit: TimeUnit::Minute,
+            burst: None,
+        }),
         // None
         None,
     ];
@@ -869,11 +866,12 @@ fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
 }
 
 fn edge_case_connection_limit(rng: &mut impl Rng) -> u32 {
+    // GUI validator max is 65535 (kernel limit)
     let cases = [
-        0,       // Disabled
-        1,       // Minimum
-        100,     // Normal
-        u32::MAX, // Maximum
+        0,      // Disabled
+        1,      // Minimum
+        100,    // Normal
+        65535,  // Maximum (validator limit)
     ];
 
     *cases.choose(rng).unwrap()
