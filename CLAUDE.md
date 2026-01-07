@@ -628,6 +628,20 @@ if self.config_dirty {
 3. Profile with `cargo flamegraph` to find actual bottlenecks
 4. Don't optimize cold paths (initialization code)
 
+### Stress Test Results (2025-01-07)
+
+The architecture has been validated with **700 rules** (varied protocols, ports, sources, destinations, tags):
+
+| Metric | Result |
+|--------|--------|
+| UI scrolling | Smooth, no lag |
+| Search/filter | Instant response |
+| Memory usage | No measurable increase |
+| Apply to kernel | Works correctly |
+| Save to System | Works correctly |
+
+**Key insight:** Widget allocation for 700 rule cards completes in milliseconds. The pre-tokenization caching (`cached_nft_tokens`) and `keyed_column` widget reconciliation handle large rulesets efficiently. **Virtual scrolling (`sensor` widget) is not needed** - it would add complexity and cause layout jumping due to variable card heights.
+
 ---
 
 ## 9. nftables Integration
