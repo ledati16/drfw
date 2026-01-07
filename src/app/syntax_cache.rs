@@ -200,6 +200,12 @@ enum NftToken {
     Th,
     #[token("count")]
     Count,
+    #[token("burst")]
+    Burst,
+    #[token("packets")]
+    Packets,
+    #[token("reset")]
+    Reset,
 
     // Strings and numbers
     #[regex(r#""([^"\\]|\\.)*""#)]
@@ -285,7 +291,7 @@ pub fn tokenize_nft(content: &str) -> Vec<HighlightedLine> {
         .map(|(i, line)| {
             let trimmed = line.trim_start();
             let indent = line.len().saturating_sub(trimmed.len()).min(32);
-            let tokens = parse_nft_line(trimmed);
+            let tokens = parse_nft_tokens(trimmed);
             let line_number = i + 1;
 
             HighlightedLine {
@@ -297,33 +303,6 @@ pub fn tokenize_nft(content: &str) -> Vec<HighlightedLine> {
             }
         })
         .collect()
-}
-
-fn parse_nft_line(line: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-
-    // Check for comment
-    if let Some(comment_start) = line.find('#') {
-        let before_comment = &line[..comment_start];
-        let comment_text = &line[comment_start..];
-
-        // Parse non-comment part
-        if !before_comment.is_empty() {
-            tokens.extend(parse_nft_tokens(before_comment));
-        }
-
-        // Add comment
-        tokens.push(Token {
-            text: Cow::Owned(comment_text.to_string()),
-            color: TokenColor::Comment,
-            bold: false,
-            italic: true,
-        });
-    } else {
-        tokens = parse_nft_tokens(line);
-    }
-
-    tokens
 }
 
 fn parse_nft_tokens(line: &str) -> Vec<Token> {
@@ -367,7 +346,7 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
             | Saddr | Daddr | Type | Hook | Priority | Policy | Fib | Iif | Oif | Eq | Protocol
             | Redirect | Ipv6Icmp | Icmpv6 | Limit | Rate | Second | Minute | Hour | Day | Week
             | Log | Prefix | Level | Info | Warn | Debug | Pkttype | Host | Counter | With
-            | Icmpx | Th | Count => {
+            | Icmpx | Th | Count | Burst | Packets | Reset => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Keyword,
