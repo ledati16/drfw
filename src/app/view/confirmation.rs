@@ -59,7 +59,7 @@ fn build_awaiting_body(
             .align_x(Alignment::Center),
         description_row,
     ]
-    .spacing(0)
+    .spacing(5)
     .into()
 }
 
@@ -398,6 +398,12 @@ pub fn view_save_to_system_modal<'a>(
     font: iced::Font,
 ) -> Element<'a, Message> {
     let body = column![
+        text("✓ Rules verified.")
+            .size(14)
+            .font(font)
+            .color(theme.success)
+            .width(400)
+            .align_x(Alignment::Center),
         text(format!("Save current configuration to {}?", drfw::SYSTEM_NFT_PATH))
             .size(14)
             .font(font)
@@ -411,7 +417,7 @@ pub fn view_save_to_system_modal<'a>(
             .width(400)
             .align_x(Alignment::Center),
     ]
-    .spacing(8);
+    .spacing(5);
 
     let buttons = row![
         button(text("Cancel").size(14).font(font))
