@@ -22,8 +22,8 @@ mod workspace;
 // Shared imports used by main view function
 use crate::app::ui_components::{main_container, modal_backdrop, notification_banner};
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
-use iced::widget::{column, container, opaque, stack};
-use iced::{Alignment, Element, Length, alignment};
+use iced::widget::{center, column, container, opaque, stack};
+use iced::{Element, Length, alignment};
 
 /// Main view entry point
 pub fn view(state: &State) -> Element<'_, Message> {
@@ -81,20 +81,16 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
     let overlay = if let Some(warning) = &state.pending_warning {
         Some(
-            container(modals::view_warning_modal(
+            center(modals::view_warning_modal(
                 warning,
                 theme,
                 state.font_regular,
             ))
-            .style(move |_| modal_backdrop(theme))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
+            .style(move |_| modal_backdrop(theme)),
         )
     } else if let Some(form) = &state.rule_form {
         Some(
-            container(rule_form::view_rule_form(
+            center(rule_form::view_rule_form(
                 form,
                 state.form_errors.as_ref(),
                 &state.interface_combo_state,
@@ -105,18 +101,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 state.ruleset.advanced_security.egress_profile
                     == crate::core::firewall::EgressProfile::Server,
             ))
-            .style(move |_| modal_backdrop(theme))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
+            .style(move |_| modal_backdrop(theme)),
         )
     } else {
         match &state.status {
             AppStatus::AwaitingApply
             | AppStatus::Applying
             | AppStatus::PendingConfirmation { .. } => Some(
-                container(confirmation::view_apply_flow_modal(
+                center(confirmation::view_apply_flow_modal(
                     &state.status,
                     state.auto_revert_enabled,
                     state.auto_revert_timeout_secs,
@@ -127,22 +119,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
                     theme,
                     state.font_regular,
                 ))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
+                .style(move |_| modal_backdrop(theme)),
             ),
             AppStatus::AwaitingSaveToSystem => Some(
-                container(confirmation::view_save_to_system_modal(
+                center(confirmation::view_save_to_system_modal(
                     theme,
                     state.font_regular,
                 ))
-                .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
+                .style(move |_| modal_backdrop(theme)),
             ),
             _ => None,
         }
@@ -167,7 +151,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 stack![
                     with_overlay,
                     opaque(
-                        container(helper_modals::view_helper_modal(
+                        center(helper_modals::view_helper_modal(
                             form,
                             helper,
                             theme,
@@ -175,10 +159,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
                             state.font_mono,
                         ))
                         .style(move |_| modal_backdrop(theme))
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .center_x(Length::Fill)
-                        .center_y(Length::Fill)
                     )
                 ]
                 .into()
@@ -222,17 +202,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_banners,
             opaque(
-                container(diagnostics::view_diagnostics_modal(
+                center(diagnostics::view_diagnostics_modal(
                     state,
                     theme,
                     state.font_regular,
                     state.font_mono
                 ))
                 .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
             )
         ]
         .into()
@@ -245,12 +221,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_diagnostics,
             opaque(
-                container(modals::view_export_modal(theme, state.font_regular))
+                center(modals::view_export_modal(theme, state.font_regular))
                     .style(move |_| modal_backdrop(theme))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
             )
         ]
         .into()
@@ -263,12 +235,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_export,
             opaque(
-                container(pickers::view_font_picker(state, picker_state))
+                center(pickers::view_font_picker(state, picker_state))
                     .style(move |_| modal_backdrop(theme))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
             )
         ]
         .into()
@@ -281,12 +249,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_font_picker,
             opaque(
-                container(pickers::view_theme_picker(state, picker_state))
+                center(pickers::view_theme_picker(state, picker_state))
                     .style(move |_| modal_backdrop(theme))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
             )
         ]
         .into()
@@ -299,15 +263,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_theme_picker,
             opaque(
-                container(profile::view_profile_switch_confirm(
+                center(profile::view_profile_switch_confirm(
                     theme,
                     state.font_regular
                 ))
                 .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
             )
         ]
         .into()
@@ -322,12 +282,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_profile_confirm,
             opaque(
-                container(profile::view_profile_manager(state, mgr_state))
+                center(profile::view_profile_manager(state, mgr_state))
                     .style(move |_| modal_backdrop(theme))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::Center)
-                    .align_y(Alignment::Center)
             )
         ]
         .into()
@@ -340,16 +296,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
         stack![
             with_profile_manager,
             opaque(
-                container(shortcuts::view_shortcuts_help(
+                center(shortcuts::view_shortcuts_help(
                     theme,
                     state.font_regular,
                     state.font_mono
                 ))
                 .style(move |_| modal_backdrop(theme))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
             )
         ]
         .into()
