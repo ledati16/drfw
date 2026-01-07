@@ -2,8 +2,9 @@
 //!
 //! Split into logical submodules for maintainability.
 
-// Text input IDs for focus management
+// Widget IDs for state preservation
 pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
+pub const SIDEBAR_SCROLLABLE_ID: &str = "sidebar-rule-list";
 
 // Submodule declarations
 mod confirmation;

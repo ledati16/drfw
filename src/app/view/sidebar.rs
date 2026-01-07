@@ -9,7 +9,7 @@ use crate::app::{Message, State};
 use iced::widget::text::Wrapping;
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
-    tooltip,
+    tooltip, Id,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use std::sync::Arc;
@@ -616,6 +616,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             column![
                 list_header,
                 scrollable(rule_list)
+                    .id(Id::new(super::SIDEBAR_SCROLLABLE_ID))
                     .height(Length::Fill)
                     .style(move |_, status| themed_scrollable(theme, status)),
             ]
