@@ -386,6 +386,8 @@ pub enum Message {
     DiskProfileLoaded(Option<FirewallRuleset>),
     /// No-op message for async operations that don't need a result
     Noop,
+    /// Copy a preview line to clipboard (right-click on line)
+    CopyPreviewLine(usize),
 }
 
 impl State {
@@ -938,6 +940,9 @@ impl State {
             }
             Message::Noop => {
                 // No-op for async operations that don't need handling
+            }
+            Message::CopyPreviewLine(line_number) => {
+                return handlers::handle_copy_preview_line(self, line_number);
             }
         }
         Task::none()

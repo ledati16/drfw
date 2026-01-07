@@ -5,9 +5,14 @@
 //! - JSON output
 //!
 //! All highlighting is pre-computed in State to avoid rendering loop overhead.
+//!
+//! Note: We use regular `column` instead of `keyed_column` because `mouse_area`
+//! is a stateful widget. When token caches change completely (profile switch,
+//! diff toggle), keyed_column's state reconciliation causes panics with MouseArea.
+//! Performance impact is minimal since tokens are pre-cached.
 
 use crate::app::Message;
-use iced::widget::{container, keyed_column, row, space, text};
+use iced::widget::{column, container, mouse_area, row, space, text, Column};
 use iced::{Color, Length};
 
 pub fn view_from_cached_diff_tokens<'a>(
@@ -19,14 +24,14 @@ pub fn view_from_cached_diff_tokens<'a>(
     mono_font: iced::Font,
     show_zebra_striping: bool,
     content_width_px: f32,
-) -> iced::widget::keyed::Column<'a, usize, Message> {
+) -> Column<'a, Message> {
     const SPACES: &str = "                                ";
 
     // Use pre-computed zebra stripe color from theme (computed once, not every frame)
     let even_stripe = theme.zebra_stripe;
 
-    // Issue #20: Pre-allocate with exact line count
-    let mut lines = keyed_column(Vec::with_capacity(diff_tokens.len())).spacing(1);
+    // Pre-allocate with exact line count
+    let mut lines = column![].spacing(1);
 
     for (diff_type, highlighted_line) in diff_tokens {
         let line_number = highlighted_line.line_number;
@@ -90,15 +95,15 @@ pub fn view_from_cached_diff_tokens<'a>(
             }
         };
 
-        lines = lines.push(
-            line_number,
+        lines = lines.push(mouse_area(
             container(row_content)
                 .width(Length::Fixed(content_width_px))
                 .style(move |_| container::Style {
                     background: bg_color.map(Into::into),
                     ..Default::default()
                 }),
-        );
+        )
+        .on_right_press(Message::CopyPreviewLine(line_number)));
     }
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
@@ -112,7 +117,6 @@ pub fn view_from_cached_diff_tokens<'a>(
     };
 
     lines = lines.push(
-        usize::MAX,
         container(space().height(Length::Fill))
             .width(Length::Fixed(content_width_px))
             .style(move |_| container::Style {
@@ -124,22 +128,20 @@ pub fn view_from_cached_diff_tokens<'a>(
     lines
 }
 
-/// Phase 1 Optimization: Build widgets from pre-tokenized NFT (cached in State)
-/// Uses `keyed_column` for efficient widget reconciliation during resize
+/// Build widgets from pre-tokenized NFT (cached in State)
 pub fn view_from_cached_nft_tokens<'a>(
     tokens: &'a [crate::app::syntax_cache::HighlightedLine],
     theme: &crate::theme::AppTheme,
     mono_font: iced::Font,
     show_zebra_striping: bool,
     content_width_px: f32,
-) -> iced::widget::keyed::Column<'a, usize, Message> {
+) -> Column<'a, Message> {
     const SPACES: &str = "                                ";
 
     // Use pre-computed zebra stripe color from theme (computed once, not every frame)
     let even_stripe = theme.zebra_stripe;
 
-    // Issue #20: Pre-allocate with exact line count
-    let mut lines = keyed_column(Vec::with_capacity(tokens.len())).spacing(1); // NFT uses tighter spacing than JSON
+    let mut lines = column![].spacing(1);
 
     for highlighted_line in tokens {
         let line_number = highlighted_line.line_number;
@@ -194,15 +196,15 @@ pub fn view_from_cached_nft_tokens<'a>(
             None
         };
 
-        lines = lines.push(
-            line_number,
+        lines = lines.push(mouse_area(
             container(row_content)
                 .width(Length::Fixed(content_width_px))
                 .style(move |_| container::Style {
                     background: bg.map(Into::into),
                     ..Default::default()
                 }),
-        );
+        )
+        .on_right_press(Message::CopyPreviewLine(line_number)));
     }
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
@@ -216,7 +218,6 @@ pub fn view_from_cached_nft_tokens<'a>(
     };
 
     lines = lines.push(
-        usize::MAX,
         container(space().height(Length::Fill))
             .width(Length::Fixed(content_width_px))
             .style(move |_| container::Style {

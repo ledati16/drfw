@@ -8,7 +8,9 @@
 //! - Undo/redo
 //! - Banner management
 
-use crate::app::{DiagnosticsFilter, FontPickerTarget, Message, State, ThemeFilter, WorkspaceTab};
+use crate::app::{
+    BannerSeverity, DiagnosticsFilter, FontPickerTarget, Message, State, ThemeFilter, WorkspaceTab,
+};
 use iced::Task;
 use strum::IntoEnumIterator;
 
@@ -175,6 +177,48 @@ pub(crate) fn handle_dismiss_banner(state: &mut State, index: usize) {
     if index < state.banners.len() {
         state.banners.remove(index);
     }
+}
+
+/// Handles copying a preview line to clipboard (right-click)
+///
+/// Reconstructs the line text from the cached tokens and copies to system clipboard.
+/// Works with both normal and diff view - uses whichever is currently active.
+pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) -> Task<Message> {
+    // Try diff view first if enabled, otherwise use normal tokens
+    let line_opt = if state.show_diff {
+        state
+            .cached_diff_tokens
+            .as_ref()
+            .and_then(|diff| diff.iter().find(|(_, hl)| hl.line_number == line_number))
+            .map(|(_, hl)| hl)
+    } else {
+        state
+            .cached_nft_tokens
+            .iter()
+            .find(|hl| hl.line_number == line_number)
+    };
+
+    let Some(line) = line_opt else {
+        tracing::warn!("Attempted to copy non-existent preview line {}", line_number);
+        return Task::none();
+    };
+
+    // Reconstruct line text: indentation + all token text concatenated
+    let mut text = String::with_capacity(line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>());
+    for _ in 0..line.indent {
+        text.push(' ');
+    }
+    for token in &line.tokens {
+        text.push_str(&token.text);
+    }
+
+    state.push_banner(
+        format!("Line {} copied to clipboard", line_number),
+        BannerSeverity::Info,
+        2,
+    );
+
+    iced::clipboard::write(text)
 }
 
 /// Handles deleting rule request (shows confirmation)
