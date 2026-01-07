@@ -23,9 +23,6 @@ mod workspace;
 use crate::app::ui_components::{main_container, modal_backdrop, notification_banner};
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
 use iced::widget::{column, container, opaque, stack};
-// Note: `lazy` widget is available (feature enabled) but requires `'static` data ownership.
-// DRFW's tokens are borrowed from State, so `lazy` would need Arc<Vec<HighlightedLine>>
-// to work. See iced_improve.md for details on this trade-off.
 use iced::{Alignment, Element, Length, alignment};
 
 /// Main view entry point
