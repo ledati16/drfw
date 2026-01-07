@@ -260,12 +260,6 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 return Err("Verification failed".into());
             }
 
-            // Elevation check
-            let is_root = nix::unistd::getuid().is_root();
-            if !is_root {
-                println!("Note: Not running as root. Will use run0/sudo/pkexec for apply.");
-            }
-
             println!();
             println!("Applying ruleset...");
             let snapshot = core::nft_json::apply_with_snapshot(nft_json).await?;
