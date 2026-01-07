@@ -2,6 +2,46 @@
 //!
 //! This module provides centralized validation for all user inputs to prevent
 //! injection attacks and ensure data integrity.
+//!
+//! # Exported Constants
+//!
+//! This module exports validation limit constants for use by other modules
+//! (e.g., stress test generator) to ensure consistency:
+//!
+//! - [`MAX_LABEL_LENGTH`]: Maximum characters in rule labels
+//! - [`MAX_CONNECTION_LIMIT`]: Kernel maximum for connection tracking
+//! - [`MAX_RATE_LIMIT_PER_SECOND`], etc.: Rate limit maximums per time unit
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Validation Constants
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Maximum length for rule labels (nftables comment limit)
+pub const MAX_LABEL_LENGTH: usize = 64;
+
+/// Maximum connection limit (kernel conntrack limit)
+pub const MAX_CONNECTION_LIMIT: u32 = 65_535;
+
+/// Maximum rate limit per second
+pub const MAX_RATE_LIMIT_PER_SECOND: u32 = 10_000;
+
+/// Maximum rate limit per minute
+pub const MAX_RATE_LIMIT_PER_MINUTE: u32 = 100_000;
+
+/// Maximum rate limit per hour
+pub const MAX_RATE_LIMIT_PER_HOUR: u32 = 1_000_000;
+
+/// Maximum rate limit per day
+pub const MAX_RATE_LIMIT_PER_DAY: u32 = 10_000_000;
+
+/// Maximum log rate per minute (prevents log flooding)
+pub const MAX_LOG_RATE_PER_MINUTE: u32 = 1_000;
+
+/// Maximum interface name length (Linux IFNAMSIZ - 1)
+pub const MAX_INTERFACE_LENGTH: usize = 15;
+
+/// Maximum interface name length with wildcard suffix
+pub const MAX_INTERFACE_LENGTH_WITH_WILDCARD: usize = 16;
 
 /// Sanitizes a label for safe use in nftables comments.
 ///
@@ -70,7 +110,7 @@ pub fn sanitize_label(input: &str) -> String {
             // SECURITY: Use ASCII-only to prevent Unicode bypasses and multi-byte issues
             c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ':')
         })
-        .take(64)
+        .take(MAX_LABEL_LENGTH)
         .collect()
 }
 
@@ -224,7 +264,11 @@ pub fn validate_interface(name: &str) -> Result<String, &'static str> {
     }
 
     // Max length: 15 for normal, but nftables accepts 16 with wildcard
-    let max_len = if has_wildcard { 16 } else { 15 };
+    let max_len = if has_wildcard {
+        MAX_INTERFACE_LENGTH_WITH_WILDCARD
+    } else {
+        MAX_INTERFACE_LENGTH
+    };
     if name.len() > max_len {
         return Err("Interface name too long (max 15 characters, or 16 with wildcard)");
     }
@@ -265,10 +309,10 @@ pub fn validate_rate_limit(
     use crate::core::firewall::TimeUnit;
 
     let (max, warn) = match unit {
-        TimeUnit::Second => (10_000, 1_000),
-        TimeUnit::Minute => (100_000, 10_000),
-        TimeUnit::Hour => (1_000_000, 100_000),
-        TimeUnit::Day => (10_000_000, 1_000_000),
+        TimeUnit::Second => (MAX_RATE_LIMIT_PER_SECOND, MAX_RATE_LIMIT_PER_SECOND / 10),
+        TimeUnit::Minute => (MAX_RATE_LIMIT_PER_MINUTE, MAX_RATE_LIMIT_PER_MINUTE / 10),
+        TimeUnit::Hour => (MAX_RATE_LIMIT_PER_HOUR, MAX_RATE_LIMIT_PER_HOUR / 10),
+        TimeUnit::Day => (MAX_RATE_LIMIT_PER_DAY, MAX_RATE_LIMIT_PER_DAY / 10),
     };
 
     if count > max {
@@ -300,8 +344,11 @@ pub fn validate_connection_limit(limit: u32) -> Result<Option<String>, String> {
         return Ok(None); // 0 = disabled
     }
 
-    if limit > 65_535 {
-        return Err("Connection limit exceeds kernel max (65535)".to_string());
+    if limit > MAX_CONNECTION_LIMIT {
+        return Err(format!(
+            "Connection limit exceeds kernel max ({})",
+            MAX_CONNECTION_LIMIT
+        ));
     }
 
     if limit > 10_000 {
@@ -327,8 +374,11 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
         return Err("Log rate must be at least 1/min".to_string());
     }
 
-    if rate > 1000 {
-        return Err("Log rate exceeds max (1000/min) - will flood logs".to_string());
+    if rate > MAX_LOG_RATE_PER_MINUTE {
+        return Err(format!(
+            "Log rate exceeds max ({}/min) - will flood logs",
+            MAX_LOG_RATE_PER_MINUTE
+        ));
     }
 
     if rate > 60 {

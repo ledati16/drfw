@@ -10,6 +10,7 @@ use crate::app::ui_components::{
 };
 use crate::app::{HelperType, Message, RuleForm};
 use crate::core::firewall::{Protocol, RejectType};
+use crate::core::rule_constraints::{available_reject_types_for_protocol, protocol_supports_ports};
 use iced::widget::{
     Space, button, checkbox, column, combo_box, container, pick_list, row, text, text_input,
 };
@@ -299,10 +300,8 @@ fn view_ports_summary<'a>(
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
 ) -> Element<'a, Message> {
-    if matches!(
-        form.protocol,
-        Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
-    ) {
+    // Use centralized constraint logic for port support
+    if protocol_supports_ports(form.protocol) {
         view_summary_button(
             summary,
             HelperType::Ports,
@@ -482,20 +481,11 @@ fn view_advanced_section<'a>(
 
         // Reject type (only shown when action is Reject)
         if form.action == crate::core::firewall::Action::Reject {
-            // TCP Reset is only valid for pure TCP protocol (not TCP+UDP, since UDP can't receive RST)
-            let is_tcp_protocol = form.protocol == Protocol::Tcp;
-            let reject_options = if is_tcp_protocol {
-                vec![
-                    RejectType::Default,
-                    RejectType::AdminProhibited,
-                    RejectType::TcpReset,
-                ]
-            } else {
-                vec![RejectType::Default, RejectType::AdminProhibited]
-            };
+            // Use centralized constraint logic for available reject types
+            let reject_options = available_reject_types_for_protocol(form.protocol);
 
-            // If TCP Reset was selected but protocol changed, reset to Default
-            let selected = if !is_tcp_protocol && form.reject_type == RejectType::TcpReset {
+            // If current reject type is not valid for protocol, reset to Default
+            let selected = if !reject_options.contains(&form.reject_type) {
                 RejectType::Default
             } else {
                 form.reject_type

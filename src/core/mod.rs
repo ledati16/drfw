@@ -8,11 +8,13 @@
 //! - [`verify`]: Ruleset validation and syntax checking
 //! - [`error`]: Error types for firewall operations
 //! - [`profiles`]: Firewall profile management
+//! - [`rule_constraints`]: Business rules for valid field combinations
 
 pub mod error;
 pub mod firewall;
 pub mod nft_json;
 pub mod profiles;
+pub mod rule_constraints;
 pub mod verify;
 
 #[cfg(test)]

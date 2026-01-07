@@ -39,6 +39,12 @@ use drfw::core::firewall::{
     Action, AdvancedSecuritySettings, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol,
     RateLimit, RejectType, Rule, TimeUnit,
 };
+use drfw::core::rule_constraints::{
+    available_reject_types_for_protocol, chain_uses_input_interface, protocol_supports_ports,
+};
+use drfw::validators::{
+    MAX_CONNECTION_LIMIT, MAX_LABEL_LENGTH, MAX_RATE_LIMIT_PER_MINUTE, MAX_RATE_LIMIT_PER_SECOND,
+};
 use ipnetwork::IpNetwork;
 use rand::prelude::*;
 use rand::seq::SliceRandom;
@@ -467,13 +473,9 @@ fn random_action(rng: &mut impl Rng) -> Action {
 }
 
 fn random_reject_type(rng: &mut impl Rng, protocol: Protocol) -> RejectType {
-    // TcpReset only valid for TCP
-    if matches!(protocol, Protocol::Tcp | Protocol::TcpAndUdp) {
-        *REJECT_TYPES.choose(rng).unwrap()
-    } else {
-        // Exclude TcpReset for non-TCP protocols
-        *REJECT_TYPES[..4].choose(rng).unwrap()
-    }
+    // Use centralized constraint logic for valid reject types
+    let valid_types = available_reject_types_for_protocol(protocol);
+    *valid_types.choose(rng).unwrap()
 }
 
 fn random_chain(rng: &mut impl Rng) -> Chain {
@@ -486,11 +488,8 @@ fn random_chain(rng: &mut impl Rng) -> Chain {
 }
 
 fn random_ports(rng: &mut impl Rng, protocol: Protocol) -> Vec<PortEntry> {
-    // ICMP protocols don't use ports
-    if matches!(
-        protocol,
-        Protocol::Icmp | Protocol::Icmpv6 | Protocol::IcmpBoth
-    ) {
+    // Use centralized constraint logic for port support
+    if !protocol_supports_ports(protocol) {
         return Vec::new();
     }
 
@@ -601,6 +600,7 @@ fn random_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
     }
 
     let unit = *TIME_UNITS.choose(rng).unwrap();
+    // Use typical values (well below validator maximums)
     let count = match unit {
         TimeUnit::Second => rng.gen_range(1..=100),
         TimeUnit::Minute => rng.gen_range(1..=1000),
@@ -672,16 +672,16 @@ fn edge_case_label(rng: &mut impl Rng, index: usize) -> String {
         // Unicode label names (will be sanitized to ASCII-only)
         format!("Unicode-Rule-{}", index),
         format!("Intl-Rule-{}", index),
-        // Max length (64 chars) - exactly at boundary
+        // Max length - exactly at boundary (use validator constant)
         {
             let base = format!("-{}", index);
-            let padding = 64 - base.len();
+            let padding = MAX_LABEL_LENGTH - base.len();
             format!("{}{}", "A".repeat(padding), base)
         },
-        // Near max length (63 chars)
+        // Near max length (one less than max)
         {
             let base = format!("-{}", index);
-            let padding = 63 - base.len();
+            let padding = MAX_LABEL_LENGTH - 1 - base.len();
             format!("{}{}", "B".repeat(padding), base)
         },
         // Colon separator (valid for labels)
@@ -823,20 +823,19 @@ fn edge_case_tags(rng: &mut impl Rng) -> Vec<String> {
         ],
         // Single character tags
         vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        // Max length tag (64 chars, same as label limit)
-        vec!["a".repeat(64)],
+        // Max length tag (same as label limit, use validator constant)
+        vec!["a".repeat(MAX_LABEL_LENGTH)],
     ];
 
     cases.choose(rng).unwrap().clone()
 }
 
 fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
-    // GUI validator limits per unit:
-    // Second: max 10,000, Minute: max 100,000, Hour: max 1,000,000, Day: max 10,000,000
+    // Use validator constants for edge case limits
     let cases = [
         // High rate at validator limit
         Some(RateLimit {
-            count: 10_000,
+            count: MAX_RATE_LIMIT_PER_SECOND,
             unit: TimeUnit::Second,
             burst: None,
         }),
@@ -852,9 +851,9 @@ fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
             unit: TimeUnit::Minute,
             burst: Some(1000),
         }),
-        // High minute rate
+        // High minute rate at validator limit
         Some(RateLimit {
-            count: 100_000,
+            count: MAX_RATE_LIMIT_PER_MINUTE,
             unit: TimeUnit::Minute,
             burst: None,
         }),
@@ -866,12 +865,12 @@ fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
 }
 
 fn edge_case_connection_limit(rng: &mut impl Rng) -> u32 {
-    // GUI validator max is 65535 (kernel limit)
+    // Use validator constant for kernel maximum
     let cases = [
-        0,      // Disabled
-        1,      // Minimum
-        100,    // Normal
-        65535,  // Maximum (validator limit)
+        0,                    // Disabled
+        1,                    // Minimum
+        100,                  // Normal
+        MAX_CONNECTION_LIMIT, // Maximum (kernel limit)
     ];
 
     *cases.choose(rng).unwrap()
@@ -897,10 +896,10 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
     let action = random_action(rng);
     let chain = random_chain(rng);
 
-    // Intentionally create some semantic mismatches
+    // Intentionally create some semantic mismatches for testing
     let (interface, output_interface) = if rng.gen_bool(0.3) {
-        // Semantic mismatch: INPUT chain with output_interface
-        if chain == Chain::Input {
+        // Semantic mismatch: opposite interface for chain (tests display/handling)
+        if chain_uses_input_interface(chain) {
             (None, edge_case_interface(rng))
         } else {
             // OUTPUT chain with input interface
@@ -908,21 +907,18 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
         }
     } else {
         // Normal: appropriate interface for chain
-        if chain == Chain::Input {
+        if chain_uses_input_interface(chain) {
             (edge_case_interface(rng), None)
         } else {
             (None, edge_case_interface(rng))
         }
     };
 
-    // Edge case ports (unless ICMP)
-    let ports = if matches!(
-        protocol,
-        Protocol::Icmp | Protocol::Icmpv6 | Protocol::IcmpBoth
-    ) {
-        // Edge case: ICMP with ports specified (should be ignored)
+    // Use centralized constraint for port support
+    let ports = if !protocol_supports_ports(protocol) {
+        // Edge case: non-port protocol with ports specified (should be ignored by nft)
         if rng.gen_bool(0.3) {
-            vec![PortEntry::Single(22)] // Should be ignored
+            vec![PortEntry::Single(22)] // Will be stripped when converting to nft
         } else {
             Vec::new()
         }
@@ -972,8 +968,8 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
     let action = random_action(rng);
     let chain = random_chain(rng);
 
-    // Appropriate interface for chain direction
-    let (interface, output_interface) = if chain == Chain::Input {
+    // Use centralized constraint logic for interface-chain relationship
+    let (interface, output_interface) = if chain_uses_input_interface(chain) {
         (random_interface(rng), None)
     } else {
         (None, random_interface(rng))
@@ -1014,18 +1010,15 @@ fn generate_coverage_rule(
     reject_type: Option<RejectType>,
     time_unit: Option<TimeUnit>,
 ) -> Rule {
-    // Appropriate interface for chain direction
-    let (interface, output_interface) = if chain == Chain::Input {
+    // Use centralized constraint logic for interface-chain relationship
+    let (interface, output_interface) = if chain_uses_input_interface(chain) {
         (random_interface(rng), None)
     } else {
         (None, random_interface(rng))
     };
 
-    // Force ports to empty for ICMP protocols
-    let ports = if matches!(
-        protocol,
-        Protocol::Icmp | Protocol::Icmpv6 | Protocol::IcmpBoth
-    ) {
+    // Use centralized constraint logic for port support
+    let ports = if !protocol_supports_ports(protocol) {
         Vec::new()
     } else {
         random_ports(rng, protocol)
