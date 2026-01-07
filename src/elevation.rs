@@ -13,6 +13,14 @@
 //! - **CLI fallback**: Uses `sudo` for terminal environments
 //! - **GUI fallback**: Uses `pkexec` for graphical authentication
 //!
+//! # Environment Variables
+//!
+//! - `DRFW_ELEVATION_METHOD`: Force a specific elevation method (`sudo`, `run0`, or `pkexec`).
+//!   Useful for scripts with sudoers NOPASSWD rules where you want to bypass run0/polkit.
+//!   Example: `DRFW_ELEVATION_METHOD=sudo drfw apply --no-confirm production`
+//!
+//! - `DRFW_TEST_NO_ELEVATION`: Bypass elevation entirely (for testing only).
+//!
 //! # Security
 //!
 //! - Only specific binaries can be elevated (nft, install)
@@ -42,6 +50,14 @@ pub enum ElevationError {
     /// pkexec binary not found in PATH
     #[error("pkexec not found - please install PolicyKit")]
     PkexecNotFound,
+
+    /// Requested elevation method is not available (binary not found)
+    #[error("Elevation method '{0}' is not available (binary not found)")]
+    MethodNotAvailable(String),
+
+    /// Invalid value for DRFW_ELEVATION_METHOD
+    #[error("Invalid DRFW_ELEVATION_METHOD '{0}'. Valid options: sudo, run0, pkexec")]
+    InvalidMethod(String),
 
     /// Generic I/O error
     #[error("I/O error: {0}")]
@@ -142,7 +158,41 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
         return Ok(cmd);
     }
 
-    // 3. Elevation required - prefer run0 (modern, no SUID), fallback to sudo/pkexec
+    // 3. Explicit elevation method override (for scripts with sudoers NOPASSWD, etc.)
+    if let Ok(method) = std::env::var("DRFW_ELEVATION_METHOD") {
+        let method = method.to_lowercase();
+        if !method.is_empty() {
+            return match method.as_str() {
+                "sudo" => {
+                    if !binary_exists("sudo") {
+                        return Err(ElevationError::MethodNotAvailable("sudo".into()));
+                    }
+                    let mut cmd = Command::new("sudo");
+                    cmd.arg(program).args(args);
+                    Ok(cmd)
+                }
+                "run0" => {
+                    if !binary_exists("run0") {
+                        return Err(ElevationError::MethodNotAvailable("run0".into()));
+                    }
+                    let mut cmd = Command::new("run0");
+                    cmd.arg(program).args(args);
+                    Ok(cmd)
+                }
+                "pkexec" => {
+                    if !binary_exists("pkexec") {
+                        return Err(ElevationError::MethodNotAvailable("pkexec".into()));
+                    }
+                    let mut cmd = Command::new("pkexec");
+                    cmd.arg(program).args(args);
+                    Ok(cmd)
+                }
+                _ => Err(ElevationError::InvalidMethod(method)),
+            };
+        }
+    }
+
+    // 4. Automatic detection - prefer run0 (modern, no SUID), fallback to sudo/pkexec
 
     // Prefer run0 everywhere when available (better security, no SUID bit)
     if binary_exists("run0") {
@@ -295,5 +345,45 @@ mod tests {
 
         let cmd = create_elevated_install_command(&["-m", "644", "/tmp/test", "/etc/test"]);
         assert!(cmd.is_ok());
+    }
+
+    #[test]
+    fn test_invalid_elevation_method() {
+        // Clear test mode and set invalid method
+        unsafe {
+            std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+            std::env::set_var("DRFW_ELEVATION_METHOD", "invalid_method");
+        }
+
+        let result = create_elevated_nft_command(&["list", "ruleset"]);
+
+        // Restore test mode for other tests
+        unsafe {
+            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+            std::env::remove_var("DRFW_ELEVATION_METHOD");
+        }
+
+        assert!(matches!(result, Err(ElevationError::InvalidMethod(_))));
+    }
+
+    #[test]
+    fn test_elevation_method_case_insensitive() {
+        // sudo should exist on most systems, so this tests case insensitivity
+        unsafe {
+            std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+            std::env::set_var("DRFW_ELEVATION_METHOD", "SUDO");
+        }
+
+        let result = create_elevated_nft_command(&["list", "ruleset"]);
+
+        // Restore test mode
+        unsafe {
+            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+            std::env::remove_var("DRFW_ELEVATION_METHOD");
+        }
+
+        // Should succeed (sudo exists) or fail with MethodNotAvailable (sudo doesn't exist)
+        // but NOT InvalidMethod
+        assert!(!matches!(result, Err(ElevationError::InvalidMethod(_))));
     }
 }

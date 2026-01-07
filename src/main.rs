@@ -100,6 +100,14 @@ enum ConfirmResult {
     Error(String),
 }
 
+/// Checks if we're running as root via sudo or run0.
+///
+/// This is detected by checking if we're root AND the SUDO_USER environment
+/// variable is set (both sudo and run0 v256+ set this variable).
+fn is_running_via_sudo() -> bool {
+    nix::unistd::getuid().is_root() && std::env::var("SUDO_USER").is_ok()
+}
+
 /// Interactive countdown with confirmation/revert controls
 ///
 /// Displays a countdown timer and polls for keypresses:
@@ -241,7 +249,20 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             confirm,
             no_confirm,
         } => {
-            let ruleset = core::profiles::load_profile(&name).await?;
+            let ruleset = match core::profiles::load_profile(&name).await {
+                Ok(r) => r,
+                Err(core::profiles::ProfileError::NotFound(_)) if is_running_via_sudo() => {
+                    eprintln!("Error: Profile '{name}' not found.");
+                    eprintln!();
+                    eprintln!("Hint: You're running as root via sudo/run0, which looks for");
+                    eprintln!("      profiles in /root/.local/share/drfw/profiles/");
+                    eprintln!();
+                    eprintln!("      drfw elevates automatically - you don't need sudo.");
+                    eprintln!("      Try: drfw apply {name}");
+                    return Err("Profile not found".into());
+                }
+                Err(e) => return Err(e.into()),
+            };
             let nft_json = ruleset.to_nftables_json();
 
             // Verify first
