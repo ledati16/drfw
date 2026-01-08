@@ -173,34 +173,18 @@ pub fn view_rule_form<'a>(
                     }
                     source_col
                 },
-                // Interface combo_box with autocomplete (supports wildcards like eth*, docker*)
-                column![
-                    container(
-                        text("INTERFACE")
-                            .size(10)
-                            .font(regular_font)
-                            .color(theme.fg_muted)
-                    )
-                    .padding([2, 6])
-                    .style(move |_| section_header_container(theme)),
-                    combo_box(
-                        interface_combo_state,
-                        "Any (type or select interface)",
-                        if form.interface.is_empty() {
-                            None
-                        } else {
-                            Some(&form.interface)
-                        },
-                        Message::RuleFormInterfaceChanged,
-                    )
-                    .on_input(Message::RuleFormInterfaceChanged)
-                    .padding(8)
-                    .font(regular_font)
-                    .width(Length::Fill)
-                    .input_style(move |_, status| themed_text_input(theme, status))
-                    .menu_style(move |_| themed_pick_list_menu(theme))
-                ]
-                .spacing(4),
+                // Interface combo_box(es) with autocomplete (supports wildcards like eth*, docker*)
+                // In server mode: Input + Output interface side by side
+                // Otherwise: just "INTERFACE" (input only)
+                view_interface_fields(
+                    form,
+                    interface_combo_state,
+                    output_interface_combo_state,
+                    output_interface_error,
+                    theme,
+                    regular_font,
+                    server_mode,
+                ),
             ]
             .spacing(6);
 
@@ -262,12 +246,9 @@ pub fn view_rule_form<'a>(
             rate_limit_error,
             connection_limit_error,
             reject_type_error,
-            output_interface_error,
-            output_interface_combo_state,
             theme,
             regular_font,
             mono_font,
-            server_mode,
         ),
         // Footer Actions
         row![
@@ -362,6 +343,94 @@ fn view_summary_button<'a>(
     .into()
 }
 
+/// Interface fields - single or side-by-side based on server mode
+fn view_interface_fields<'a>(
+    form: &'a RuleForm,
+    interface_combo_state: &'a combo_box::State<String>,
+    output_interface_combo_state: &'a combo_box::State<String>,
+    output_interface_error: Option<&'a String>,
+    theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+    server_mode: bool,
+) -> Element<'a, Message> {
+    let input_label = if server_mode {
+        "INPUT INTERFACE"
+    } else {
+        "INTERFACE"
+    };
+
+    let input_iface_col = column![
+        container(
+            text(input_label)
+                .size(10)
+                .font(regular_font)
+                .color(theme.fg_muted)
+        )
+        .padding([2, 6])
+        .style(move |_| section_header_container(theme)),
+        combo_box(
+            interface_combo_state,
+            "Any (type or select)",
+            if form.interface.is_empty() {
+                None
+            } else {
+                Some(&form.interface)
+            },
+            Message::RuleFormInterfaceChanged,
+        )
+        .on_input(Message::RuleFormInterfaceChanged)
+        .padding(8)
+        .font(regular_font)
+        .width(Length::Fill)
+        .input_style(move |_, status| themed_text_input(theme, status))
+        .menu_style(move |_| themed_pick_list_menu(theme))
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+
+    if server_mode {
+        let mut output_iface_col = column![
+            container(
+                text("OUTPUT INTERFACE")
+                    .size(10)
+                    .font(regular_font)
+                    .color(theme.fg_muted)
+            )
+            .padding([2, 6])
+            .style(move |_| section_header_container(theme)),
+            combo_box(
+                output_interface_combo_state,
+                "Any (type or select)",
+                if form.output_interface.is_empty() {
+                    None
+                } else {
+                    Some(&form.output_interface)
+                },
+                Message::RuleFormOutputInterfaceChanged,
+            )
+            .on_input(Message::RuleFormOutputInterfaceChanged)
+            .padding(8)
+            .font(regular_font)
+            .width(Length::Fill)
+            .input_style(move |_, status| themed_text_input(theme, status))
+            .menu_style(move |_| themed_pick_list_menu(theme))
+        ]
+        .spacing(4)
+        .width(Length::Fill);
+
+        if let Some(err) = output_interface_error {
+            output_iface_col =
+                output_iface_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+        }
+
+        row![input_iface_col, output_iface_col]
+            .spacing(12)
+            .into()
+    } else {
+        input_iface_col.into()
+    }
+}
+
 /// Advanced options section with destination, action, reject type, rate limiting, etc.
 fn view_advanced_section<'a>(
     form: &'a RuleForm,
@@ -370,12 +439,9 @@ fn view_advanced_section<'a>(
     rate_limit_error: Option<&'a String>,
     connection_limit_error: Option<&'a String>,
     reject_type_error: Option<&'a String>,
-    output_interface_error: Option<&'a String>,
-    output_interface_combo_state: &'a combo_box::State<String>,
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
     mono_font: iced::Font,
-    server_mode: bool,
 ) -> Element<'a, Message> {
     let mut adv_col = column![
         checkbox(form.show_advanced)
@@ -414,45 +480,9 @@ fn view_advanced_section<'a>(
         }
         adv_col = adv_col.push(dest_col);
 
-        // Output interface (Server Mode only) - combo_box for autocomplete with wildcard support
-        if server_mode {
-            let mut out_iface_col = column![
-                container(
-                    text("OUTPUT INTERFACE")
-                        .size(10)
-                        .font(regular_font)
-                        .color(theme.fg_muted)
-                )
-                .padding([2, 6])
-                .style(move |_| section_header_container(theme)),
-                combo_box(
-                    output_interface_combo_state,
-                    "Any (type or select interface)",
-                    if form.output_interface.is_empty() {
-                        None
-                    } else {
-                        Some(&form.output_interface)
-                    },
-                    Message::RuleFormOutputInterfaceChanged,
-                )
-                .on_input(Message::RuleFormOutputInterfaceChanged)
-                .padding(8)
-                .font(regular_font)
-                .width(Length::Fill)
-                .input_style(move |_, status| themed_text_input(theme, status))
-                .menu_style(move |_| themed_pick_list_menu(theme))
-            ]
-            .spacing(4);
-            if let Some(err) = output_interface_error {
-                out_iface_col =
-                    out_iface_col.push(text(err).size(11).font(regular_font).color(theme.danger));
-            }
-            adv_col = adv_col.push(out_iface_col);
-        }
-
-        // Action
-        adv_col = adv_col.push(
-            column![
+        // Action and Reject Type (side by side when Reject is selected)
+        {
+            let action_col = column![
                 container(
                     text("ACTION")
                         .size(10)
@@ -476,47 +506,52 @@ fn view_advanced_section<'a>(
                 .style(move |_, status| themed_pick_list(theme, status))
                 .menu_style(move |_| themed_pick_list_menu(theme))
             ]
-            .spacing(4),
-        );
+            .spacing(4)
+            .width(Length::Fill);
 
-        // Reject type (only shown when action is Reject)
-        if form.action == crate::core::firewall::Action::Reject {
-            // Use centralized constraint logic for available reject types
-            let reject_options = available_reject_types_for_protocol(form.protocol);
+            if form.action == crate::core::firewall::Action::Reject {
+                // Use centralized constraint logic for available reject types
+                let reject_options = available_reject_types_for_protocol(form.protocol);
 
-            // If current reject type is not valid for protocol, reset to Default
-            let selected = if !reject_options.contains(&form.reject_type) {
-                RejectType::Default
+                // If current reject type is not valid for protocol, reset to Default
+                let selected = if !reject_options.contains(&form.reject_type) {
+                    RejectType::Default
+                } else {
+                    form.reject_type
+                };
+
+                let mut reject_col = column![
+                    container(
+                        text("REJECT TYPE")
+                            .size(10)
+                            .font(regular_font)
+                            .color(theme.fg_muted)
+                    )
+                    .padding([2, 6])
+                    .style(move |_| section_header_container(theme)),
+                    pick_list(
+                        reject_options,
+                        Some(selected),
+                        Message::RuleFormRejectTypeChanged
+                    )
+                    .width(Length::Fill)
+                    .padding(8)
+                    .font(regular_font)
+                    .style(move |_, status| themed_pick_list(theme, status))
+                    .menu_style(move |_| themed_pick_list_menu(theme))
+                ]
+                .spacing(4)
+                .width(Length::Fill);
+
+                if let Some(err) = reject_type_error {
+                    reject_col =
+                        reject_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+                }
+
+                adv_col = adv_col.push(row![action_col, reject_col].spacing(12));
             } else {
-                form.reject_type
-            };
-
-            let mut reject_col = column![
-                container(
-                    text("REJECT TYPE")
-                        .size(10)
-                        .font(regular_font)
-                        .color(theme.fg_muted)
-                )
-                .padding([2, 6])
-                .style(move |_| section_header_container(theme)),
-                pick_list(
-                    reject_options,
-                    Some(selected),
-                    Message::RuleFormRejectTypeChanged
-                )
-                .width(Length::Fill)
-                .padding(8)
-                .font(regular_font)
-                .style(move |_, status| themed_pick_list(theme, status))
-                .menu_style(move |_| themed_pick_list_menu(theme))
-            ]
-            .spacing(4);
-            if let Some(err) = reject_type_error {
-                reject_col =
-                    reject_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+                adv_col = adv_col.push(action_col);
             }
-            adv_col = adv_col.push(reject_col);
         }
 
         // Rate Limiting
