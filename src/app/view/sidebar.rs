@@ -380,9 +380,15 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     }
                 };
                 for tag in &rule.tags {
+                    // Truncate long tags for display (same as tag cloud)
+                    let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
+                        format!("{}…", &tag[..15]).into()
+                    } else {
+                        tag.as_str().into()
+                    };
                     tag_items.push(
                         container(
-                            text(tag)
+                            text(display_tag)
                                 .size(8)
                                 .font(state.font_regular)
                                 .color(tag_text_color)

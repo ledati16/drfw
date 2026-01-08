@@ -339,9 +339,15 @@ fn view_tags_helper<'a>(
                             .into()
                     } else {
                         row(form.tags.iter().enumerate().map(|(i, tag)| {
+                            // Truncate long tags for display (same as tag cloud)
+                            let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
+                                format!("{}…", &tag[..15]).into()
+                            } else {
+                                tag.as_str().into()
+                            };
                             button(
                                 row![
-                                    text(tag).size(10).font(regular_font),
+                                    text(display_tag).size(10).font(regular_font),
                                     text("×").size(12).font(regular_font).color(theme.danger),
                                 ]
                                 .spacing(6)
@@ -444,7 +450,12 @@ pub fn tags_summary(tags: &[String]) -> String {
     if tags.is_empty() {
         "No tags".to_string()
     } else if tags.len() == 1 {
-        tags[0].clone()
+        // Truncate long tags for display (same as tag cloud)
+        if tags[0].len() > 16 {
+            format!("{}…", &tags[0][..15])
+        } else {
+            tags[0].clone()
+        }
     } else {
         format!("{} tags", tags.len())
     }
