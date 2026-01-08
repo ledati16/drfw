@@ -5,7 +5,7 @@ use crate::app::ui_components::{
     themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
-use iced::widget::{button, checkbox, column, container, row, scrollable, text};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, Id};
 use iced::{Alignment, Border, Element, Length, Shadow};
 
 pub fn view_workspace<'a>(
@@ -121,6 +121,7 @@ pub fn view_workspace<'a>(
                 .width(Length::Fill)
                 .height(Length::Fill),
         )
+        .id(Id::new(super::WORKSPACE_SCROLLABLE_ID))
         .direction(scroll_direction)
         .width(Length::Fill)
         .height(Length::Fill)

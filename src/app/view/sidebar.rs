@@ -139,6 +139,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         let scrollable_tags = scrollable(
             container(tags_row).width(Length::Fill),
         )
+        .id(Id::new(super::SIDEBAR_TAGS_SCROLLABLE_ID))
         .direction(scrollable::Direction::Vertical(
             scrollable::Scrollbar::new().spacing(8),
         ))

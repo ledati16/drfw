@@ -5,6 +5,8 @@
 // Widget IDs for state preservation
 pub const FONT_SEARCH_INPUT_ID: &str = "font-search-input";
 pub const SIDEBAR_SCROLLABLE_ID: &str = "sidebar-rule-list";
+pub const SIDEBAR_TAGS_SCROLLABLE_ID: &str = "sidebar-tags";
+pub const WORKSPACE_SCROLLABLE_ID: &str = "workspace-preview";
 
 // Submodule declarations
 mod confirmation;
@@ -139,13 +141,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .style(move |_| main_container(theme));
 
     // Modal overlay layer (fades base content, blocks clicks with opaque)
-    let with_overlay = if let Some(overlay) = overlay {
+    // IMPORTANT: Always use stack! to keep widget tree structure consistent (preserves scroll state)
+    let with_overlay: Element<'_, Message> = if let Some(overlay) = overlay {
         stack![base, opaque(overlay)].into()
     } else {
-        base.into()
+        stack![base, iced::widget::Space::new()].into()
     };
 
     // Helper modal layer (appears on top of rule form when editing multi-value fields)
+    // IMPORTANT: Always use stack! to keep widget tree structure consistent (preserves scroll state)
     let with_helper: Element<'_, Message> =
         if let (Some(form), Some(helper)) = (&state.rule_form, &state.rule_form_helper) {
             if helper.helper_type.is_some() {
@@ -164,15 +168,16 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 ]
                 .into()
             } else {
-                with_overlay
+                stack![with_overlay, iced::widget::Space::new()].into()
             }
         } else {
-            with_overlay
+            stack![with_overlay, iced::widget::Space::new()].into()
         };
 
     // Banner overlay layer (free-floating at top-right, ABOVE modal backdrop)
+    // IMPORTANT: Always use stack! to keep widget tree structure consistent (preserves scroll state)
     let with_banners: Element<'_, Message> = if state.banners.is_empty() {
-        with_helper
+        stack![with_helper, iced::widget::Space::new()].into()
     } else {
         let banner_column = column(
             state
@@ -199,7 +204,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     };
 
     // Diagnostics modal overlay (on top of everything)
-    let with_diagnostics = if state.show_diagnostics {
+    // IMPORTANT: Always use stack! to keep widget tree structure consistent (preserves scroll state)
+    let with_diagnostics: Element<'_, Message> = if state.show_diagnostics {
         stack![
             with_banners,
             opaque(
@@ -214,11 +220,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_banners
+        stack![with_banners, iced::widget::Space::new()].into()
     };
 
     // Export modal overlay
-    let with_export = if state.show_export_modal {
+    let with_export: Element<'_, Message> = if state.show_export_modal {
         stack![
             with_diagnostics,
             opaque(
@@ -228,11 +234,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_diagnostics
+        stack![with_diagnostics, iced::widget::Space::new()].into()
     };
 
     // Font picker modal overlay
-    let with_font_picker = if let Some(ref picker_state) = state.font_picker {
+    let with_font_picker: Element<'_, Message> = if let Some(ref picker_state) = state.font_picker {
         stack![
             with_export,
             opaque(
@@ -242,11 +248,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_export
+        stack![with_export, iced::widget::Space::new()].into()
     };
 
     // Theme picker modal overlay
-    let with_theme_picker = if let Some(ref picker_state) = state.theme_picker {
+    let with_theme_picker: Element<'_, Message> = if let Some(ref picker_state) = state.theme_picker {
         stack![
             with_font_picker,
             opaque(
@@ -256,11 +262,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_font_picker
+        stack![with_font_picker, iced::widget::Space::new()].into()
     };
 
     // Profile switch confirmation overlay
-    let with_profile_confirm = if state.pending_profile_switch.is_some() {
+    let with_profile_confirm: Element<'_, Message> = if state.pending_profile_switch.is_some() {
         stack![
             with_theme_picker,
             opaque(
@@ -273,11 +279,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_theme_picker
+        stack![with_theme_picker, iced::widget::Space::new()].into()
     };
 
     // Profile manager modal overlay (hide when profile switch confirmation is active)
-    let with_profile_manager = if let Some(ref mgr_state) = state.profile_manager
+    let with_profile_manager: Element<'_, Message> = if let Some(ref mgr_state) = state.profile_manager
         && state.pending_profile_switch.is_none()
     {
         stack![
@@ -289,7 +295,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_profile_confirm
+        stack![with_profile_confirm, iced::widget::Space::new()].into()
     };
 
     // Keyboard shortcuts help overlay
@@ -307,6 +313,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
         ]
         .into()
     } else {
-        with_profile_manager
+        stack![with_profile_manager, iced::widget::Space::new()].into()
     }
 }
