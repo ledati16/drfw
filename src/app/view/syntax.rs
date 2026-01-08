@@ -104,15 +104,18 @@ pub fn view_from_cached_diff_tokens<'a>(
             }
         };
 
-        lines = lines.push(mouse_area(
-            container(row_content)
-                .width(Length::Fixed(content_width_px))
-                .style(move |_| container::Style {
-                    background: bg_color.map(Into::into),
-                    ..Default::default()
-                }),
-        )
-        .on_right_press(Message::CopyPreviewLine(line_number)));
+        lines = lines.push(
+            mouse_area(
+                container(row_content)
+                    .width(Length::Fixed(content_width_px))
+                    .style(move |_| container::Style {
+                        background: bg_color.map(Into::into),
+                        ..Default::default()
+                    }),
+            )
+            .on_press(Message::ClickPreviewLine(line_number))
+            .on_right_press(Message::CopyPreviewLine(line_number)),
+        );
     }
 
     // Add a spacer at the end to fill remaining vertical space with zebra background
@@ -208,15 +211,18 @@ pub fn view_from_cached_nft_tokens<'a>(
             None
         };
 
-        lines = lines.push(mouse_area(
-            container(row_content)
-                .width(Length::Fixed(content_width_px))
-                .style(move |_| container::Style {
-                    background: bg.map(Into::into),
-                    ..Default::default()
-                }),
-        )
-        .on_right_press(Message::CopyPreviewLine(line_number)));
+        lines = lines.push(
+            mouse_area(
+                container(row_content)
+                    .width(Length::Fixed(content_width_px))
+                    .style(move |_| container::Style {
+                        background: bg.map(Into::into),
+                        ..Default::default()
+                    }),
+            )
+            .on_press(Message::ClickPreviewLine(line_number))
+            .on_right_press(Message::CopyPreviewLine(line_number)),
+        );
     }
 
     // Add a spacer at the end to fill remaining vertical space with zebra background

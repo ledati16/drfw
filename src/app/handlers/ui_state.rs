@@ -221,6 +221,91 @@ pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) ->
     iced::clipboard::write(text)
 }
 
+/// System-generated comments that don't correspond to user rule labels
+const SYSTEM_COMMENTS: &[&str] = &[
+    "allow from loopback",
+    "early drop of invalid connections",
+    "allow tracked connections",
+    "drop icmp redirects",
+    "drop icmpv6 redirects",
+    "drop packets with spoofed source addresses (RPF)",
+    "allow essential icmp (strict mode)",
+    "allow essential icmp (strict mode, rate limited)",
+    "allow essential icmpv6 (strict mode)",
+    "allow essential icmpv6 (strict mode, rate limited)",
+    "allow icmp",
+    "allow icmp (rate limited)",
+    "allow icmp v6",
+    "allow icmp v6 (rate limited)",
+    "log dropped packets (rate limited)",
+];
+
+/// Extracts user label from a line containing `comment "LABEL"` pattern.
+/// Returns None if no comment found or if it's a system comment.
+fn extract_user_label_from_line(line_text: &str) -> Option<String> {
+    // Find `comment "` marker
+    let marker = "comment \"";
+    let start = line_text.find(marker)? + marker.len();
+    let rest = &line_text[start..];
+
+    // Find closing quote
+    let end = rest.find('"')?;
+    let label = &rest[..end];
+
+    // Check if it's empty or a system comment
+    if label.is_empty() || SYSTEM_COMMENTS.contains(&label) {
+        return None;
+    }
+
+    Some(label.to_string())
+}
+
+/// Handles clicking on a preview line to filter sidebar by rule label (left-click)
+///
+/// Extracts the label from the line's `comment "LABEL"` and sets the sidebar search
+/// to filter to matching rules. Works with both normal and diff view.
+pub(crate) fn handle_click_preview_line(state: &mut State, line_number: usize) {
+    // Get line from either diff or normal view (same logic as copy handler)
+    let line_opt = if state.show_diff {
+        state
+            .cached_diff_tokens
+            .as_ref()
+            .and_then(|diff| diff.iter().find(|(_, hl)| hl.line_number == line_number))
+            .map(|(_, hl)| hl)
+    } else {
+        state
+            .cached_nft_tokens
+            .iter()
+            .find(|hl| hl.line_number == line_number)
+    };
+
+    let Some(line) = line_opt else {
+        return; // Line not found - silently ignore
+    };
+
+    // Reconstruct line text from tokens
+    let mut text =
+        String::with_capacity(line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>());
+    for _ in 0..line.indent {
+        text.push(' ');
+    }
+    for token in &line.tokens {
+        text.push_str(&token.text);
+    }
+
+    // Extract label from comment
+    let Some(label) = extract_user_label_from_line(&text) else {
+        // No user label found - could be system rule, header, or rule without label
+        // Silently ignore - user can use other methods to find the rule
+        return;
+    };
+
+    // Set the search filter to the extracted label
+    label.clone_into(&mut state.rule_search);
+    state.rule_search_lowercase = label.to_lowercase();
+    state.update_filter_cache();
+}
+
 /// Handles deleting rule request (shows confirmation)
 pub(crate) fn handle_delete_rule_requested(state: &mut State, id: uuid::Uuid) {
     state.deleting_id = Some(id);
@@ -365,5 +450,66 @@ mod tests {
         let mut state = create_test_state();
         let _task = handle_undo(&mut state);
         // Should not panic
+    }
+
+    #[test]
+    fn test_extract_user_label_normal() {
+        let line = r#"tcp dport 22 accept comment "Allow SSH""#;
+        assert_eq!(
+            extract_user_label_from_line(line),
+            Some("Allow SSH".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_user_label_with_special_chars() {
+        let line = r#"tcp dport 80 accept comment "Web Server - Port 80""#;
+        assert_eq!(
+            extract_user_label_from_line(line),
+            Some("Web Server - Port 80".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_user_label_empty() {
+        // Empty label should be treated as "no label" - silently ignored
+        let line = r#"tcp dport 22 accept comment """#;
+        assert_eq!(extract_user_label_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_user_label_no_comment() {
+        let line = r#"tcp dport 22 accept"#;
+        assert_eq!(extract_user_label_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_user_label_system_comment() {
+        let line = r#"iifname "lo" accept comment "allow from loopback""#;
+        assert_eq!(extract_user_label_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_user_label_system_icmp() {
+        let line = r#"icmp type { echo-reply, echo-request } accept comment "allow icmp""#;
+        assert_eq!(extract_user_label_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_user_label_header_line() {
+        let line = "# Chain input rules:";
+        assert_eq!(extract_user_label_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_user_label_empty_line() {
+        let line = "";
+        assert_eq!(extract_user_label_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_user_label_whitespace_only() {
+        let line = "    ";
+        assert_eq!(extract_user_label_from_line(line), None);
     }
 }

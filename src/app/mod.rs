@@ -401,6 +401,8 @@ pub enum Message {
     Noop,
     /// Copy a preview line to clipboard (right-click on line)
     CopyPreviewLine(usize),
+    /// Click on a preview line to filter sidebar by rule label (left-click on line)
+    ClickPreviewLine(usize),
 }
 
 impl State {
@@ -982,6 +984,9 @@ impl State {
             }
             Message::CopyPreviewLine(line_number) => {
                 return handlers::handle_copy_preview_line(self, line_number);
+            }
+            Message::ClickPreviewLine(line_number) => {
+                handlers::handle_click_preview_line(self, line_number);
             }
         }
         Task::none()
