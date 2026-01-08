@@ -77,7 +77,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         )
         .padding(iced::Padding::new(0.0).top(8.0)),
     ]
-    .spacing(8);
+    .spacing(8)
+    .padding(Padding::new(0.0).right(8.0));
 
     // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags, Phase 1: Use cached filtered indices)
     let all_tags = &state.cached_all_tags;
@@ -197,7 +198,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         .font(state.font_mono)
         .color(theme.fg_muted),
     ]
-    .align_y(Alignment::Center);
+    .align_y(Alignment::Center)
+    .padding(Padding::new(0.0).right(8.0));
 
     // 5. Rule List (Scrollable)
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
@@ -631,18 +633,15 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             .on_press(Message::AddRuleClicked)
         )
         .padding(iced::Padding::new(0.0).top(16.0))
-    ];
+    ]
+    .padding(Padding::new(0.0).right(8.0));
 
     container(
         column![
-            container(profile_header)
-                .width(Length::Fill)
-                .padding(Padding::new(0.0).right(8.0)),
+            profile_header,
             search_area,
             column![
-                container(list_header)
-                    .width(Length::Fill)
-                    .padding(Padding::new(0.0).right(8.0)),
+                list_header,
                 scrollable(
                     container(rule_list)
                         .width(Length::Fill)
@@ -650,14 +649,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 )
                 .id(Id::new(super::SIDEBAR_SCROLLABLE_ID))
                 .spacing(0) // Embedded mode - prevents scrollbar overlap
-                    .height(Length::Fill)
-                    .style(move |_, status| themed_scrollable(theme, status)),
+                .height(Length::Fill)
+                .style(move |_, status| themed_scrollable(theme, status)),
             ]
             .spacing(8)
             .height(Length::Fill),
-            container(footer)
-                .width(Length::Fill)
-                .padding(Padding::new(0.0).right(8.0)),
+            footer,
         ]
         .spacing(16)
         .padding(16),
