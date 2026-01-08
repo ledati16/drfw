@@ -589,37 +589,58 @@ let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
 
 ---
 
-## 17. Scrollbar Embedded Mode
+## 17. Scrollbar Patterns
 
 **Problem:** By default, scrollbars overlay content, potentially obscuring cards/list items.
 
-### Universal Pattern
+### Pattern 1: Borderless Scrollable (Preferred)
+Use when the scrollable area has **no visible border** (e.g., sidebar lists).
+
+```rust
+scrollable(container(content).width(Length::Fill))
+    .direction(scrollable::Direction::Vertical(
+        scrollable::Scrollbar::new().spacing(8),
+    ))
+    .style(move |_, status| themed_scrollable(theme, status))
+```
+
+**Key Details:**
+- **`Scrollbar::new().spacing(8)`** creates gap between content and scrollbar
+- **Scrollbar only appears when needed** - content stays symmetrical when no scrollbar
+- **No content padding required** - the spacing handles the gap automatically
+- **Result:** Clean, symmetrical layout that adapts to content size
+
+**Applied Locations:**
+- Sidebar tag cloud (sidebar.rs)
+- Sidebar rule list (sidebar.rs)
+
+### Pattern 2: Bordered Scrollable
+Use when the scrollable area has a **visible border** (e.g., modals with bordered containers).
+
 ```rust
 scrollable(
-    container(content).padding(Padding {
-        top: 8.0,
-        right: 8.0,
-        bottom: 8.0,
-        left: 8.0,
-    })
+    container(content)
+        .width(Length::Fill)
+        .padding(8),  // Symmetric padding for breathing room from border
 )
-.spacing(0)  // Embedded mode prevents overlap
+.direction(scrollable::Direction::Vertical(
+    scrollable::Scrollbar::new().spacing(0),
+))
 .style(move |_, status| themed_scrollable(theme, status))
 ```
 
-### Key Details
-- **`.spacing(0)` is critical:** Switches from overlay to embedded mode
-- **Symmetric padding:** Use 8px on all sides for visual balance with/without scrollbar
-- **Intrinsic space:** Embedded mode adds tiny imperceptible width for scrollbar rail (framework limitation)
-- **Result:** Content never overlaps, consistent appearance across scroll states
+**Key Details:**
+- **`Scrollbar::new().spacing(0)`** enables embedded mode with no extra gap
+- **Symmetric `.padding(8)`** keeps content away from border edges on all sides
+- **Required because:** Border creates visual boundary; content touching it looks cramped
+- **Result:** Content has consistent breathing room from bordered container
 
-### Applied Locations
+**Applied Locations:**
 - Profile Manager modal (profile.rs:196-208)
-- Font Picker modal (pickers.rs:133-177)
-- ❌ Theme Picker: Intentionally excluded (scrollbar always visible, custom optimized layout)
+- Font Picker modal (pickers.rs)
 
 ---
 
-**Last Updated:** 2026-01-05 (Audit review - no changes needed, documentation is comprehensive)
+**Last Updated:** 2026-01-07 (Section 17 rewritten with two scrollbar patterns)
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14
