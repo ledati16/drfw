@@ -317,6 +317,7 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
     if drag_id == dropped_id {
         state.dragged_rule_id = None;
         state.hovered_drop_target_id = None;
+        state.hover_pending = None;
         return Task::none();
     }
 
@@ -324,12 +325,14 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
     let Some(old_index) = state.ruleset.rules.iter().position(|r| r.id == drag_id) else {
         state.dragged_rule_id = None;
         state.hovered_drop_target_id = None;
+        state.hover_pending = None;
         return Task::none();
     };
 
     let Some(new_index) = state.ruleset.rules.iter().position(|r| r.id == dropped_id) else {
         state.dragged_rule_id = None;
         state.hovered_drop_target_id = None;
+        state.hover_pending = None;
         return Task::none();
     };
 
@@ -343,6 +346,7 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
 
     state.dragged_rule_id = None;
     state.hovered_drop_target_id = None;
+    state.hover_pending = None;
     state.mark_profile_dirty();
 
     // Audit log
@@ -533,11 +537,38 @@ pub(crate) fn handle_rule_drag_start(state: &mut State, id: Uuid) {
 }
 
 pub(crate) fn handle_rule_hover_start(state: &mut State, id: Uuid) {
-    state.hovered_drop_target_id = Some(id);
+    // Guard: Don't update if already hovering this target (prevents redundant rebuilds)
+    if state.hovered_drop_target_id == Some(id) {
+        return;
+    }
+
+    // Debounce: Set as pending instead of immediately updating
+    // This prevents rapid view rebuilds when mouse moves quickly across cards
+    // The pending hover is processed in the subscription tick (every 16ms)
+    state.hover_pending = Some((id, std::time::Instant::now()));
 }
 
 pub(crate) fn handle_rule_hover_end(state: &mut State) {
+    // Clear both pending and active hover state
+    state.hover_pending = None;
     state.hovered_drop_target_id = None;
+}
+
+/// Process pending hover target after debounce delay.
+/// This is called from the subscription tick (every 16ms) when hover_pending is Some.
+pub(crate) fn handle_check_hover_pending(state: &mut State) {
+    const HOVER_DEBOUNCE_MS: u128 = 16; // ~1 frame at 60 FPS
+
+    if let Some((pending_id, timestamp)) = state.hover_pending {
+        // Only update if enough time has passed since the hover started
+        if timestamp.elapsed().as_millis() >= HOVER_DEBOUNCE_MS {
+            // Guard: Only update if it's different from current hover target
+            if state.hovered_drop_target_id != Some(pending_id) {
+                state.hovered_drop_target_id = Some(pending_id);
+            }
+            state.hover_pending = None;
+        }
+    }
 }
 
 // ============================================================================

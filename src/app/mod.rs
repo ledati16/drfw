@@ -95,6 +95,9 @@ pub struct State {
     pub filter_tag: Option<Arc<String>>,
     pub dragged_rule_id: Option<uuid::Uuid>,
     pub hovered_drop_target_id: Option<uuid::Uuid>,
+    /// Pending hover target for debouncing (id, timestamp)
+    /// Prevents rapid view rebuilds during drag-and-drop on large rulesets
+    pub hover_pending: Option<(uuid::Uuid, std::time::Instant)>,
     pub regular_font_choice: crate::fonts::RegularFontChoice,
     pub mono_font_choice: crate::fonts::MonoFontChoice,
     pub font_regular: iced::Font,
@@ -306,6 +309,8 @@ pub enum Message {
     ToggleDroppedLogging(bool),
     LogRateChanged(u32),
     CheckSliderLog,
+    /// Process pending hover target (debounced drag-and-drop)
+    CheckHoverPending,
     LogPrefixChanged(String),
     ServerModeToggled(bool),
     ConfirmServerMode,
@@ -482,6 +487,7 @@ impl State {
             filter_tag: None,
             dragged_rule_id: None,
             hovered_drop_target_id: None,
+            hover_pending: None,
             regular_font_choice,
             mono_font_choice,
             font_regular,
@@ -842,6 +848,7 @@ impl State {
             }
             Message::LogRateChanged(rate) => handlers::handle_log_rate_changed(self, rate),
             Message::CheckSliderLog => return handlers::handle_check_slider_log(self),
+            Message::CheckHoverPending => handlers::handle_check_hover_pending(self),
             Message::LogPrefixChanged(prefix) => {
                 return handlers::handle_log_prefix_changed(self, &prefix);
             }
@@ -1012,6 +1019,13 @@ impl State {
             // Slider logging debounce subscription
             if self.pending_slider_log.is_some() {
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckSliderLog)
+            } else {
+                iced::Subscription::none()
+            },
+            // Drag-and-drop hover debounce subscription
+            // Runs at 60 FPS when there's a pending hover to process
+            if self.hover_pending.is_some() {
+                iced::time::every(Duration::from_millis(16)).map(|_| Message::CheckHoverPending)
             } else {
                 iced::Subscription::none()
             },
