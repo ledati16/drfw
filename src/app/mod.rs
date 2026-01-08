@@ -68,7 +68,13 @@ pub struct State {
     pub rule_search: String,
     pub rule_search_lowercase: String,
     pub cached_all_tags: Vec<Arc<String>>,
+    /// Cached truncated tag strings for tag cloud display (max 16 chars + ellipsis)
+    /// Avoids format!() allocation every frame in sidebar tag cloud
+    pub cached_all_tags_truncated: Vec<String>,
     pub cached_filtered_rule_indices: Vec<usize>,
+    /// Cached "{filtered}/{total}" display string for sidebar header
+    /// Avoids format!() allocation every frame
+    pub filter_count_display: String,
     pub deleting_id: Option<uuid::Uuid>,
     pub pending_warning: Option<PendingWarning>,
     pub show_diff: bool,
@@ -453,7 +459,9 @@ impl State {
             rule_search: String::new(),
             rule_search_lowercase: String::new(),
             cached_all_tags: Vec::new(),
+            cached_all_tags_truncated: Vec::new(),
             cached_filtered_rule_indices: Vec::new(),
+            filter_count_display: String::new(),
             deleting_id: None,
             pending_warning: None,
             show_diff,
@@ -554,7 +562,21 @@ impl State {
             .collect();
 
         // Clone once directly into Arc (no intermediate Vec allocation)
-        self.cached_all_tags = all_tags.into_iter().map(|s| Arc::new(s.clone())).collect();
+        // Also build truncated versions for tag cloud display (avoids format! every frame)
+        self.cached_all_tags = all_tags
+            .iter()
+            .map(|s| Arc::new((*s).clone()))
+            .collect();
+        self.cached_all_tags_truncated = all_tags
+            .into_iter()
+            .map(|s| {
+                if s.len() > 16 {
+                    format!("{}…", &s[..15])
+                } else {
+                    s.clone()
+                }
+            })
+            .collect();
 
         // Reset tag filter if the currently selected tag no longer exists
         if let Some(ref current_filter) = self.filter_tag
@@ -610,6 +632,13 @@ impl State {
         );
 
         self.cached_filtered_rule_indices = indices;
+
+        // Cache the filter count display string (avoids format! every frame)
+        self.filter_count_display = format!(
+            "{}/{}",
+            self.cached_filtered_rule_indices.len(),
+            self.ruleset.rules.len()
+        );
     }
 
     fn mark_config_dirty(&mut self) {

@@ -107,16 +107,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .into(),
         ];
 
-        for tag in all_tags {
+        // Performance: Use cached truncated tags (avoids format! every frame)
+        // Iterate both original tags (for filter message) and truncated (for display)
+        for (tag, truncated) in all_tags.iter().zip(&state.cached_all_tags_truncated) {
             let is_selected = state.filter_tag.as_ref() == Some(tag);
-            // Truncate long tags for display (full tag still used for filtering)
-            let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
-                format!("{}…", &tag[..15]).into()
-            } else {
-                tag.as_str().into()
-            };
             tag_elements.push(
-                button(text(display_tag).size(10).font(state.font_regular))
+                button(text(truncated).size(10).font(state.font_regular))
                     // Arc::clone just copies pointer (cheap!), not string data
                     .on_press(Message::FilterByTag(Some(Arc::clone(tag))))
                     .padding([4, 8])
@@ -213,14 +209,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         .padding([2, 6])
         .style(move |_| section_header_container(theme)),
         container(row![]).width(Length::Fill),
-        text(format!(
-            "{}/{}",
-            filtered_rules.len(),
-            state.ruleset.rules.len()
-        ))
-        .size(9)
-        .font(state.font_mono)
-        .color(theme.fg_muted),
+        // Performance: Use cached filter_count_display (avoids format! every frame)
+        text(&state.filter_count_display)
+            .size(9)
+            .font(state.font_mono)
+            .color(theme.fg_muted),
     ]
     .align_y(Alignment::Center);
 
