@@ -158,18 +158,26 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .max_height(120)
                 .padding(6)
                 .style(move |_| {
-                    // Darken more on light themes for visibility
-                    let factor = if theme.is_light() { 0.85 } else { 0.92 };
+                    // STYLE.md Section 10: Hybrid Darkening/Brightening
+                    // Light: darken with multiply only
+                    // Dark: brighten with multiply + additive boost (for near-black themes)
+                    let bg = if theme.is_light() {
+                        Color {
+                            r: theme.bg_surface.r * 0.92,
+                            g: theme.bg_surface.g * 0.92,
+                            b: theme.bg_surface.b * 0.92,
+                            ..theme.bg_surface
+                        }
+                    } else {
+                        Color {
+                            r: (theme.bg_surface.r * 1.15 + 0.02).min(1.0),
+                            g: (theme.bg_surface.g * 1.15 + 0.02).min(1.0),
+                            b: (theme.bg_surface.b * 1.15 + 0.02).min(1.0),
+                            ..theme.bg_surface
+                        }
+                    };
                     container::Style {
-                        background: Some(
-                            Color {
-                                r: theme.bg_surface.r * factor,
-                                g: theme.bg_surface.g * factor,
-                                b: theme.bg_surface.b * factor,
-                                ..theme.bg_surface
-                            }
-                            .into(),
-                        ),
+                        background: Some(bg.into()),
                         border: Border {
                             radius: 6.0.into(),
                             ..Default::default()
