@@ -207,6 +207,44 @@ impl ButtonStyleConfig {
         has_disabled_state: false,
         snap: false,
     };
+
+    /// Tag chip button (inactive) - minimal shadows to avoid clipping in scrollables
+    const TAG_INACTIVE: Self = Self {
+        base_color: ButtonColorSource::Surface,
+        text_color: ButtonTextColor::Primary,
+        border_width: 1.0,
+        border_radius: 4.0,
+        use_theme_border_color: true,
+        shadow_offset: (0.0, 0.5),
+        shadow_blur: 1.0,
+        hover_brightness: 1.08,
+        hover_shadow_offset: (0.0, 0.5),
+        hover_shadow_blur: 1.0,
+        pressed_brightness: 1.0,
+        pressed_shadow_offset: (0.0, 0.5),
+        pressed_shadow_blur: 1.0,
+        has_disabled_state: false,
+        snap: false,
+    };
+
+    /// Tag chip button (active/selected) - minimal shadows to avoid clipping in scrollables
+    const TAG_ACTIVE: Self = Self {
+        base_color: ButtonColorSource::AccentWithHoverColor,
+        text_color: ButtonTextColor::OnAccent,
+        border_width: 0.0,
+        border_radius: 4.0,
+        use_theme_border_color: false,
+        shadow_offset: (0.0, 0.5),
+        shadow_blur: 1.5,
+        hover_brightness: 1.0, // Uses accent_hover color instead
+        hover_shadow_offset: (0.0, 0.5),
+        hover_shadow_blur: 1.5,
+        pressed_brightness: 1.0,
+        pressed_shadow_offset: (0.0, 0.5),
+        pressed_shadow_blur: 1.0,
+        has_disabled_state: false,
+        snap: false,
+    };
 }
 
 /// Adjusts color brightness for hover/pressed states
@@ -630,6 +668,16 @@ pub fn inactive_tab_button(theme: &AppTheme, status: button::Status) -> button::
 
 pub fn secondary_button(theme: &AppTheme, status: button::Status) -> button::Style {
     build_button_style(theme, status, ButtonStyleConfig::SECONDARY)
+}
+
+/// Tag chip button (inactive) - minimal shadows for use in scrollable containers
+pub fn tag_button(theme: &AppTheme, status: button::Status) -> button::Style {
+    build_button_style(theme, status, ButtonStyleConfig::TAG_INACTIVE)
+}
+
+/// Tag chip button (active/selected) - minimal shadows for use in scrollable containers
+pub fn active_tag_button(theme: &AppTheme, status: button::Status) -> button::Style {
+    build_button_style(theme, status, ButtonStyleConfig::TAG_ACTIVE)
 }
 
 /// Text input styling with theme-aware colors

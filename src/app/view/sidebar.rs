@@ -1,9 +1,9 @@
 //! Sidebar with profile selector and rule list
 
 use crate::app::ui_components::{
-    active_card_container, active_tab_button, card_container, danger_button, popup_container,
-    primary_button, secondary_button, section_header_container, sidebar_container, themed_checkbox,
-    themed_scrollable, themed_text_input,
+    active_card_container, active_tag_button, card_container, danger_button, popup_container,
+    primary_button, secondary_button, section_header_container, sidebar_container, tag_button,
+    themed_checkbox, themed_scrollable, themed_text_input,
 };
 use crate::app::{Message, State};
 use iced::widget::text::Wrapping;
@@ -99,9 +99,9 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 .padding([4, 8])
                 .style(move |_, status| {
                     if state.filter_tag.is_none() {
-                        active_tab_button(theme, status)
+                        active_tag_button(theme, status)
                     } else {
-                        secondary_button(theme, status)
+                        tag_button(theme, status)
                     }
                 })
                 .into(),
@@ -122,9 +122,9 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .padding([4, 8])
                     .style(move |_, status| {
                         if is_selected {
-                            active_tab_button(theme, status)
+                            active_tag_button(theme, status)
                         } else {
-                            secondary_button(theme, status)
+                            tag_button(theme, status)
                         }
                     })
                     .into(),
@@ -634,7 +634,9 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             column![
                 list_header,
                 scrollable(
-                    container(rule_list).width(Length::Fill),
+                    container(rule_list)
+                        .width(Length::Fill)
+                        .padding(iced::Padding::new(0.0).bottom(4.0)),
                 )
                 .id(Id::new(super::SIDEBAR_SCROLLABLE_ID))
                 .direction(scrollable::Direction::Vertical(
