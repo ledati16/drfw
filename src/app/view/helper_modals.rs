@@ -6,12 +6,13 @@
 //! - Tags: Organizational labels
 
 use crate::app::ui_components::{
-    card_container, primary_button, section_header_container, themed_text_input,
+    card_container, primary_button, section_header_container, tag_button, themed_scrollable,
+    themed_text_input,
 };
 use crate::app::{HelperType, Message, RuleForm, RuleFormHelper};
 use crate::core::firewall::PortEntry;
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length};
 
 /// Renders the helper modal based on current helper type
 pub fn view_helper_modal<'a>(
@@ -88,31 +89,50 @@ fn view_ports_helper<'a>(
         )
         .padding([2, 6])
         .style(move |_| section_header_container(theme)),
-        scrollable(
-            column(form.ports.iter().enumerate().map(|(i, port)| {
-                let port_text = match port {
-                    PortEntry::Single(p) => p.to_string(),
-                    PortEntry::Range { start, end } => format!("{}-{}", start, end),
-                };
-                row![
-                    text(port_text)
-                        .size(13)
-                        .font(mono_font)
-                        .color(theme.fg_primary),
-                    Space::new().width(Length::Fill),
-                    button(text("×").size(14).font(regular_font).color(theme.danger))
-                        .on_press(Message::HelperRemoveValue(i))
-                        .padding(4)
-                        .style(button::text),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .into()
-            }))
-            .spacing(4)
-            .padding([4, 0]),
+        // STYLE.md Section 17, Pattern 2: Bordered scrollable
+        container(
+            scrollable(
+                container(
+                    column(form.ports.iter().enumerate().map(|(i, port)| {
+                        let port_text = match port {
+                            PortEntry::Single(p) => p.to_string(),
+                            PortEntry::Range { start, end } => format!("{}-{}", start, end),
+                        };
+                        row![
+                            text(port_text)
+                                .size(13)
+                                .font(mono_font)
+                                .color(theme.fg_primary),
+                            Space::new().width(Length::Fill),
+                            button(text("×").size(14).font(regular_font).color(theme.danger))
+                                .on_press(Message::HelperRemoveValue(i))
+                                .padding(4)
+                                .style(button::text),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .into()
+                    }))
+                    .spacing(4),
+                )
+                .width(Length::Fill)
+                .padding(8),
+            )
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(0),
+            ))
+            .style(move |_, status| themed_scrollable(theme, status)),
         )
-        .height(Length::Fixed(150.0)),
+        .height(Length::Fixed(150.0))
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            border: Border {
+                radius: 8.0.into(),
+                color: theme.border,
+                width: 1.0,
+            },
+            ..Default::default()
+        }),
         // Footer
         row![
             button(text("Done").size(14).font(regular_font))
@@ -197,27 +217,46 @@ fn view_addresses_helper<'a>(
         )
         .padding([2, 6])
         .style(move |_| section_header_container(theme)),
-        scrollable(
-            column(addresses.iter().enumerate().map(|(i, addr)| {
-                row![
-                    text(addr.to_string())
-                        .size(13)
-                        .font(mono_font)
-                        .color(theme.fg_primary),
-                    Space::new().width(Length::Fill),
-                    button(text("×").size(14).font(regular_font).color(theme.danger))
-                        .on_press(Message::HelperRemoveValue(i))
-                        .padding(4)
-                        .style(button::text),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .into()
-            }))
-            .spacing(4)
-            .padding([4, 0]),
+        // STYLE.md Section 17, Pattern 2: Bordered scrollable
+        container(
+            scrollable(
+                container(
+                    column(addresses.iter().enumerate().map(|(i, addr)| {
+                        row![
+                            text(addr.to_string())
+                                .size(13)
+                                .font(mono_font)
+                                .color(theme.fg_primary),
+                            Space::new().width(Length::Fill),
+                            button(text("×").size(14).font(regular_font).color(theme.danger))
+                                .on_press(Message::HelperRemoveValue(i))
+                                .padding(4)
+                                .style(button::text),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center)
+                        .into()
+                    }))
+                    .spacing(4),
+                )
+                .width(Length::Fill)
+                .padding(8),
+            )
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(0),
+            ))
+            .style(move |_, status| themed_scrollable(theme, status)),
         )
-        .height(Length::Fixed(150.0)),
+        .height(Length::Fixed(150.0))
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            border: Border {
+                radius: 8.0.into(),
+                color: theme.border,
+                width: 1.0,
+            },
+            ..Default::default()
+        }),
         // Footer
         row![
             button(text("Done").size(14).font(regular_font))
@@ -279,46 +318,83 @@ fn view_tags_helper<'a>(
                 container(Space::new())
             }
         },
-        // Current tags as pills
-        {
-            let accent_color = theme.accent;
-            let fg_on_accent = theme.fg_on_accent;
-            if form.tags.is_empty() {
-                container(
-                    text("No tags configured")
-                        .size(12)
-                        .font(regular_font)
-                        .color(theme.fg_muted),
-                )
-                .padding(8)
-            } else {
-                container(
-                    row(form.tags.iter().enumerate().map(|(i, tag)| {
-                        container(
-                            row![
-                                text(tag).size(12).font(regular_font).color(fg_on_accent),
-                                button(text("×").size(14).font(regular_font))
-                                    .on_press(Message::HelperRemoveValue(i))
-                                    .padding([2, 6])
-                                    .style(button::text),
-                            ]
-                            .spacing(6)
-                            .align_y(Alignment::Center),
-                        )
-                        .padding([4, 10])
-                        .style(move |t| {
-                            let mut style = container::rounded_box(t);
-                            style.background = Some(accent_color.into());
-                            style
-                        })
+        // Section header (matches ports/addresses helpers)
+        container(
+            text("CONFIGURED TAGS")
+                .size(9)
+                .font(regular_font)
+                .color(theme.fg_muted)
+        )
+        .padding([2, 6])
+        .style(move |_| section_header_container(theme)),
+        // Tag chips in scrollable container with background (matches sidebar tag cloud)
+        container(
+            scrollable(
+                container({
+                    let tag_content: Element<'_, Message> = if form.tags.is_empty() {
+                        text("No tags configured")
+                            .size(12)
+                            .font(regular_font)
+                            .color(theme.fg_muted)
+                            .into()
+                    } else {
+                        row(form.tags.iter().enumerate().map(|(i, tag)| {
+                            button(
+                                row![
+                                    text(tag).size(10).font(regular_font),
+                                    text("×").size(12).font(regular_font).color(theme.danger),
+                                ]
+                                .spacing(6)
+                                .align_y(Alignment::Center),
+                            )
+                            .on_press(Message::HelperRemoveValue(i))
+                            .padding([4, 8])
+                            .style(move |_, status| tag_button(theme, status))
+                            .into()
+                        }))
+                        .spacing(6)
+                        .wrap()
                         .into()
-                    }))
-                    .spacing(6)
-                    .wrap(),
-                )
-                .padding(8)
+                    };
+                    tag_content
+                })
+                .width(Length::Fill)
+                .padding(8),
+            )
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(0),
+            ))
+            .style(move |_, status| themed_scrollable(theme, status)),
+        )
+        .height(Length::Fixed(100.0))
+        .width(Length::Fill)
+        .style(move |_| {
+            // STYLE.md Section 10: Hybrid Darkening/Brightening for background
+            let bg = if theme.is_light() {
+                Color {
+                    r: theme.bg_surface.r * 0.92,
+                    g: theme.bg_surface.g * 0.92,
+                    b: theme.bg_surface.b * 0.92,
+                    ..theme.bg_surface
+                }
+            } else {
+                Color {
+                    r: (theme.bg_surface.r * 1.15 + 0.02).min(1.0),
+                    g: (theme.bg_surface.g * 1.15 + 0.02).min(1.0),
+                    b: (theme.bg_surface.b * 1.15 + 0.02).min(1.0),
+                    ..theme.bg_surface
+                }
+            };
+            container::Style {
+                background: Some(bg.into()),
+                border: Border {
+                    radius: 8.0.into(),
+                    color: theme.border,
+                    width: 1.0,
+                },
+                ..Default::default()
             }
-        },
+        }),
         // Footer
         row![
             button(text("Done").size(14).font(regular_font))
