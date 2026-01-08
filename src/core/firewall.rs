@@ -1740,10 +1740,10 @@ impl FirewallRuleset {
             match rule.protocol {
                 Protocol::Any => {} // No-op
                 Protocol::Tcp | Protocol::Udp => {
-                    let _ = write!(out, "{}", rule.protocol);
+                    let _ = write!(out, "{} ", rule.protocol);
                     if !rule.ports.is_empty() {
                         if rule.ports.len() == 1 {
-                            let _ = write!(out, " dport {} ", rule.ports[0]);
+                            let _ = write!(out, "dport {} ", rule.ports[0]);
                         } else {
                             // Multiple ports - use set syntax
                             let ports_str = rule
@@ -1752,15 +1752,15 @@ impl FirewallRuleset {
                                 .map(ToString::to_string)
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            let _ = write!(out, " dport {{ {ports_str} }} ");
+                            let _ = write!(out, "dport {{ {ports_str} }} ");
                         }
                     }
                 }
                 Protocol::TcpAndUdp => {
-                    let _ = write!(out, "meta l4proto {{ tcp, udp }}");
+                    let _ = write!(out, "meta l4proto {{ tcp, udp }} ");
                     if !rule.ports.is_empty() {
                         if rule.ports.len() == 1 {
-                            let _ = write!(out, " th dport {} ", rule.ports[0]);
+                            let _ = write!(out, "th dport {} ", rule.ports[0]);
                         } else {
                             let ports_str = rule
                                 .ports
@@ -1768,7 +1768,7 @@ impl FirewallRuleset {
                                 .map(ToString::to_string)
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            let _ = write!(out, " th dport {{ {ports_str} }} ");
+                            let _ = write!(out, "th dport {{ {ports_str} }} ");
                         }
                     }
                 }
