@@ -96,19 +96,38 @@ pub(crate) fn handle_toggle_event_log(state: &mut State, enabled: bool) -> Task<
     )
 }
 
-/// Handles toggling strict ICMP mode
-pub(crate) fn handle_toggle_strict_icmp(state: &mut State, enabled: bool) -> Task<Message> {
-    state.ruleset.advanced_security.strict_icmp = enabled;
+/// Handles strict ICMP toggle request (shows warning when enabling)
+pub(crate) fn handle_toggle_strict_icmp_requested(
+    state: &mut State,
+    enabled: bool,
+) -> Task<Message> {
+    if enabled {
+        state.pending_warning = Some(PendingWarning::EnableStrictIcmp);
+        Task::none()
+    } else {
+        state.ruleset.advanced_security.strict_icmp = false;
+        state.mark_profile_dirty();
+        let enable_event_log = state.enable_event_log;
+        Task::perform(
+            async move {
+                crate::audit::log_settings_saved(enable_event_log, "Strict ICMP filtering disabled")
+                    .await;
+            },
+            |()| Message::AuditLogWritten,
+        )
+    }
+}
+
+/// Handles confirming strict ICMP enable
+pub(crate) fn handle_confirm_strict_icmp(state: &mut State) -> Task<Message> {
+    state.pending_warning = None;
+    state.ruleset.advanced_security.strict_icmp = true;
     state.mark_profile_dirty();
     let enable_event_log = state.enable_event_log;
-    let desc = if enabled {
-        "Strict ICMP filtering enabled"
-    } else {
-        "Strict ICMP filtering disabled"
-    };
     Task::perform(
         async move {
-            crate::audit::log_settings_saved(enable_event_log, desc).await;
+            crate::audit::log_settings_saved(enable_event_log, "Strict ICMP filtering enabled")
+                .await;
         },
         |()| Message::AuditLogWritten,
     )

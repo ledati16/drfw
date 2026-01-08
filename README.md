@@ -23,19 +23,21 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 ### Core Functionality
 - **Add/edit/delete firewall rules** via clean GUI
 - **Protocol filtering**: TCP, UDP, TCP+UDP, ICMP (v4), ICMPv6, ICMP (both), or Any
-- **Port ranges**: Single port or range (e.g., `8000-8080`)
-- **Source/Destination IP filtering**: Allow traffic from/to specific networks (CIDR notation)
-- **Interface filtering**: Allow traffic on specific interfaces (eth0, tailscale0, docker0, etc.)
+- **Port matching**: Single port, range (`8000-8080`), or multiple (`22, 80, 443, 8000-8080`)
+- **Source/Destination IP filtering**: Allow traffic from/to specific networks (CIDR notation, multiple IPs per rule)
+- **Interface filtering**: Exact match (`eth0`) or wildcards (`docker*`, `veth*`)
 - **Rule reordering**: Drag-and-drop to change rule priority
 - **Enable/disable toggles**: Disable rules without deleting them
 - **Tag-based organization**: Add multiple tags per rule, filter by tag
 - **Search**: Real-time fuzzy search across all rule fields
 
 ### Advanced Rule Options
-- **Action types**: Accept, Drop, or Reject
-- **Rate limiting**: Per-rule rate limits (e.g., 5 connections/minute)
+- **Action types**: Accept, Drop, or Reject (with type: port-unreachable, host-unreachable, admin-prohibited, tcp-reset)
+- **Rate limiting**: Per-rule rate limits with optional burst (e.g., `5/minute burst 10`)
 - **Connection limiting**: Max simultaneous connections per rule
+- **Per-rule logging**: Toggle to log matched packets with auto-generated prefix
 - **Chain selection**: Input or Output (Output only in Server Mode)
+- **Output interface**: Filter outbound traffic by interface (Server Mode only)
 
 ### Safety Features
 - **Pre-apply verification**: `nft --check` validates syntax before applying
@@ -43,6 +45,20 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Dead-man switch**: Configurable countdown (5-120s) with auto-revert if not confirmed
 - **Manual revert**: One-click restore to previous snapshot
 - **Undo/Redo**: Full history for all rule modifications (Ctrl+Z / Ctrl+Shift+Z)
+
+### Default Protection (Always On)
+DRFW is a **stateful firewall** with sensible defaults that require no configuration:
+
+| Rule | Purpose |
+|------|---------|
+| Allow loopback | Local services always work (`127.0.0.1`) |
+| Drop invalid packets | Malformed connections rejected early |
+| Allow established/related | Return traffic for your connections works automatically |
+| Block ICMP redirects | Prevents classic MITM attacks |
+| Allow ICMP | Ping and network diagnostics work |
+| Default deny | Everything else is blocked (INPUT chain) |
+
+These base rules are **not configurable** — they represent security best practices that 99%+ of users need. Without stateful filtering, you'd need explicit rules for every connection's return traffic.
 
 ### Advanced Security Settings
 All disabled by default for maximum compatibility:
@@ -56,7 +72,7 @@ All disabled by default for maximum compatibility:
 | **Server Mode** | Block all outbound by default | Requires explicit egress rules |
 
 ### User Experience
-- **24 color themes**: Oxide, Dracula, Tokyo Night, Catppuccin, Nord, Gruvbox, and more
+- **27 color themes**: Oxide, Dracula, Tokyo Night, Catppuccin, Nord, Gruvbox, and more
 - **Custom fonts**: Select UI and monospace fonts from system fonts
 - **Live preview**: Syntax-highlighted nftables output
 - **Diff view**: See exactly what changes before applying
@@ -184,19 +200,25 @@ drfw
 ### Example Rules
 
 **Allow SSH:**
-- Protocol: TCP, Port: 22
+- Protocol: TCP, Port: `22`
 
-**Allow web server:**
-- Protocol: TCP, Port: 80 (add another for 443)
+**Allow web server (HTTP + HTTPS in one rule):**
+- Protocol: TCP, Port: `80, 443`
 
 **Allow Minecraft from LAN only:**
-- Protocol: TCP, Port: 25565, Source: `192.168.1.0/24`
+- Protocol: TCP, Port: `25565`, Source: `192.168.1.0/24`
 
 **Allow all Tailscale VPN traffic:**
 - Protocol: Any, Interface: `tailscale0`
 
-**Rate-limited SSH (prevent brute force):**
-- Protocol: TCP, Port: 22, Rate Limit: 3/minute
+**Allow all Docker container traffic:**
+- Protocol: Any, Interface: `docker*` (wildcard)
+
+**Rate-limited SSH with burst (prevent brute force):**
+- Protocol: TCP, Port: `22`, Rate Limit: `3/minute burst 5`
+
+**Block port scanners with admin-prohibited:**
+- Protocol: TCP, Port: `23`, Action: Reject (admin-prohibited)
 
 ### NetworkManager Integration
 
@@ -369,7 +391,7 @@ cargo fmt --check             # Format check
 ### Code Quality
 
 DRFW maintains strict standards:
-- 285+ tests (unit, integration, property-based)
+- 385+ tests (unit, integration, property-based)
 - Clippy pedantic with zero warnings
 - Security-first: no shell interpolation, allowlist validation, atomic writes
 - Performance: cached rendering, debounced saves, pre-computed display strings

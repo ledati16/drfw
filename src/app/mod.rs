@@ -191,6 +191,7 @@ pub struct ProfileManagerState {
 pub enum PendingWarning {
     EnableRpf,
     EnableServerMode,
+    EnableStrictIcmp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -301,7 +302,8 @@ pub enum Message {
     ToggleAutoRevert(bool),
     AutoRevertTimeoutChanged(u64),
     ToggleEventLog(bool),
-    ToggleStrictIcmp(bool),
+    ToggleStrictIcmpRequested(bool),
+    ConfirmStrictIcmp,
     IcmpRateLimitChanged(u32),
     ToggleRpfRequested(bool),
     ConfirmEnableRpf,
@@ -832,9 +834,10 @@ impl State {
             Message::ToggleEventLog(enabled) => {
                 return handlers::handle_toggle_event_log(self, enabled);
             }
-            Message::ToggleStrictIcmp(enabled) => {
-                return handlers::handle_toggle_strict_icmp(self, enabled);
+            Message::ToggleStrictIcmpRequested(enabled) => {
+                return handlers::handle_toggle_strict_icmp_requested(self, enabled);
             }
+            Message::ConfirmStrictIcmp => return handlers::handle_confirm_strict_icmp(self),
             Message::IcmpRateLimitChanged(rate) => {
                 handlers::handle_icmp_rate_limit_changed(self, rate);
             }

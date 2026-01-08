@@ -23,6 +23,11 @@ pub fn view_warning_modal<'a>(
             "This will BLOCK all outbound connections by default.\n\nYou'll need to explicitly allow:\n    • Web browsing (HTTP/HTTPS)\n    • DNS queries\n    • Software updates\n    • Any services your applications use\n\nThis mode is designed for servers, not desktop use.",
             Message::ConfirmServerMode,
         ),
+        PendingWarning::EnableStrictIcmp => (
+            "⚠️ Strict ICMP Mode",
+            "This restricts ICMP to essential types only:\n\n    ✓ Ping (echo-request/echo-reply)\n    ✓ MTU discovery (packet-too-big)\n    ✓ Error reporting (destination-unreachable, time-exceeded)\n    ✓ IPv6 neighbor discovery\n\nThis may break:\n\n    • Network diagnostic tools (traceroute variations)\n    • Some games and applications\n    • IPv6 SLAAC autoconfiguration (if your network uses it)\n\nMost home/office networks use DHCPv6, not SLAAC, so this is usually safe.",
+            Message::ConfirmStrictIcmp,
+        ),
     };
 
     container(

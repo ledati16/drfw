@@ -215,7 +215,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                     "Strict ICMP filtering",
                     "Only allow essential ICMP types (ping, MTU discovery)",
                     toggler(advanced.strict_icmp)
-                        .on_toggle(Message::ToggleStrictIcmp)
+                        .on_toggle(Message::ToggleStrictIcmpRequested)
                         .width(Length::Shrink)
                         .style(move |_, status| themed_toggler(theme, status))
                         .into(),
