@@ -48,8 +48,6 @@ enum ButtonColorSource {
     Accent,
     Danger,
     Surface,
-    /// Slightly darker surface for tag chips
-    DarkerSurface,
     /// For tabs: use pre-defined `accent_hover` on hover
     AccentWithHoverColor,
     /// For dirty button: pre-shift warning color
@@ -212,7 +210,7 @@ impl ButtonStyleConfig {
 
     /// Tag chip button (inactive) - minimal shadows to avoid clipping in scrollables
     const TAG_INACTIVE: Self = Self {
-        base_color: ButtonColorSource::DarkerSurface,
+        base_color: ButtonColorSource::Surface,
         text_color: ButtonTextColor::Primary,
         border_width: 1.0,
         border_radius: 4.0,
@@ -287,24 +285,6 @@ fn build_button_style(
         ButtonColorSource::Accent | ButtonColorSource::AccentWithHoverColor => theme.accent,
         ButtonColorSource::Danger => theme.danger,
         ButtonColorSource::Surface => theme.bg_surface,
-        ButtonColorSource::DarkerSurface => {
-            // Slightly darker surface for tag chips
-            if theme.is_light() {
-                Color {
-                    r: (theme.bg_surface.r * 0.95).max(0.0),
-                    g: (theme.bg_surface.g * 0.95).max(0.0),
-                    b: (theme.bg_surface.b * 0.95).max(0.0),
-                    ..theme.bg_surface
-                }
-            } else {
-                Color {
-                    r: (theme.bg_surface.r * 0.85).max(0.0),
-                    g: (theme.bg_surface.g * 0.85).max(0.0),
-                    b: (theme.bg_surface.b * 0.85).max(0.0),
-                    ..theme.bg_surface
-                }
-            }
-        }
         ButtonColorSource::ShiftedWarning => {
             // Special: shift warning color by 20% (dirty button)
             if theme.is_light() {
