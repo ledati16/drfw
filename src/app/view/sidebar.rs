@@ -11,7 +11,7 @@ use iced::widget::{
     button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
     tooltip, Id,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding};
+use iced::{Alignment, Border, Color, Element, Length};
 use std::sync::Arc;
 
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
@@ -77,8 +77,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         )
         .padding(iced::Padding::new(0.0).top(8.0)),
     ]
-    .spacing(8)
-    .padding(Padding::new(0.0).right(8.0));
+    .spacing(8);
 
     // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags, Phase 1: Use cached filtered indices)
     let all_tags = &state.cached_all_tags;
@@ -136,14 +135,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
         // Scrollable tag cloud with embedded scrollbar (STYLE.md Section 17)
         // Use Shrink height + max_height so it only takes needed space
+        // Scrollbar::spacing(8) creates gap between content and scrollbar
         let scrollable_tags = scrollable(
-            container(tags_row)
-                .width(Length::Fill)
-                .padding(Padding::new(0.0).right(8.0)),
+            container(tags_row).width(Length::Fill),
         )
-        .spacing(0) // Embedded mode - prevents scrollbar overlap
         .direction(scrollable::Direction::Vertical(
-            scrollable::Scrollbar::default(),
+            scrollable::Scrollbar::new().spacing(8),
         ))
         .height(Length::Shrink)
         .style(move |_, status| themed_scrollable(theme, status));
@@ -164,16 +161,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     };
 
     let search_area = column![
-        container(
-            text_input("Search rules...", &state.rule_search)
-                .on_input(Message::RuleSearchChanged)
-                .padding(10)
-                .size(13)
-                .font(state.font_regular)
-                .style(move |_, status| themed_text_input(theme, status)),
-        )
-        .width(Length::Fill)
-        .padding(Padding::new(0.0).right(8.0)),
+        text_input("Search rules...", &state.rule_search)
+            .on_input(Message::RuleSearchChanged)
+            .padding(10)
+            .size(13)
+            .font(state.font_regular)
+            .style(move |_, status| themed_text_input(theme, status)),
         tag_cloud,
     ]
     .spacing(16);
@@ -198,8 +191,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         .font(state.font_mono)
         .color(theme.fg_muted),
     ]
-    .align_y(Alignment::Center)
-    .padding(Padding::new(0.0).right(8.0));
+    .align_y(Alignment::Center);
 
     // 5. Rule List (Scrollable)
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
@@ -633,8 +625,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             .on_press(Message::AddRuleClicked)
         )
         .padding(iced::Padding::new(0.0).top(16.0))
-    ]
-    .padding(Padding::new(0.0).right(8.0));
+    ];
 
     container(
         column![
@@ -643,12 +634,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             column![
                 list_header,
                 scrollable(
-                    container(rule_list)
-                        .width(Length::Fill)
-                        .padding(Padding::new(0.0).right(8.0)),
+                    container(rule_list).width(Length::Fill),
                 )
                 .id(Id::new(super::SIDEBAR_SCROLLABLE_ID))
-                .spacing(0) // Embedded mode - prevents scrollbar overlap
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().spacing(8),
+                ))
                 .height(Length::Fill)
                 .style(move |_, status| themed_scrollable(theme, status)),
             ]
