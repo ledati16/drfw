@@ -154,7 +154,29 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             )
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
-            container(scrollable_tags).max_height(120)
+            container(scrollable_tags)
+                .max_height(120)
+                .padding(6)
+                .style(move |_| {
+                    // Darken more on light themes for visibility
+                    let factor = if theme.is_light() { 0.85 } else { 0.92 };
+                    container::Style {
+                        background: Some(
+                            Color {
+                                r: theme.bg_surface.r * factor,
+                                g: theme.bg_surface.g * factor,
+                                b: theme.bg_surface.b * factor,
+                                ..theme.bg_surface
+                            }
+                            .into(),
+                        ),
+                        border: Border {
+                            radius: 6.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                })
         ]
         .spacing(8)
         .into()
