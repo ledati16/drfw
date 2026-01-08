@@ -38,7 +38,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Chain selection**: Input or Output (Output only in Server Mode)
 
 ### Safety Features
-- **Pre-apply verification**: `nft --check` validates syntax before elevation
+- **Pre-apply verification**: `nft --check` validates syntax before applying
 - **Automatic snapshots**: Captures current ruleset before every apply
 - **Dead-man switch**: Configurable countdown (5-120s) with auto-revert if not confirmed
 - **Manual revert**: One-click restore to previous snapshot

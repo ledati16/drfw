@@ -279,7 +279,7 @@ fn create_elevated_command(args: &[&str]) -> Result<Command> {
 ```
 
 ### Security Requirements
-- **Validate before elevation:** Run `nft --check` before `pkexec nft -f`
+- **Verify before apply:** Run `nft --check` to validate syntax before applying rules
 - **Timeout protection:** 2-minute default maximum
 - **Error translation:** Map exit codes to user actions (126=cancelled, 127=auth failed)
 - **Audit logging:** Log all privileged operations with timestamps
@@ -656,7 +656,7 @@ Command::new("nft").args(["list", "ruleset"])
 ```
 
 ### Validation Workflow
-1. **Syntax check:** `nft --json --check -f -` (no elevation needed)
+1. **Syntax check:** `nft --json --check -f -` (requires elevation)
 2. **Capture snapshot:** Current state for rollback
 3. **Apply with elevation:** `run0/sudo/pkexec nft -f -`
 4. **Verify state:** Confirm rules applied correctly
