@@ -6,7 +6,7 @@ use crate::app::ui_components::{
 };
 use crate::app::{Message, ProfileManagerState, State};
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
-use iced::{Alignment, Border, Element, Length, Padding};
+use iced::{Alignment, Border, Element, Length};
 
 pub fn view_profile_switch_confirm(
     theme: &crate::theme::AppTheme,
@@ -194,13 +194,14 @@ pub fn view_profile_manager<'a>(
 
         // Wrap scrollable in bordered container
         container(
-            scrollable(container(list).padding(Padding {
-                top: 8.0,
-                right: 8.0,
-                bottom: 8.0,
-                left: 8.0,
-            }))
-            .spacing(0) // Embedded mode prevents overlap, but adds tiny intrinsic space
+            scrollable(
+                container(list)
+                    .width(Length::Fill)
+                    .padding(8),
+            )
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(0),
+            ))
             .style(move |_, status| {
                 use crate::app::ui_components::themed_scrollable;
                 themed_scrollable(theme, status)
