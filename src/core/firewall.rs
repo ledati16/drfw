@@ -57,6 +57,8 @@
 //!     action_display: String::new(),
 //!     interface_display: String::new(),
 //!     log_prefix: String::new(),
+//!     tags_truncated: Vec::new(),
+//!     badge_display: String::new(),
 //! };
 //! rule.rebuild_caches();
 //! ```
@@ -594,6 +596,17 @@ pub struct Rule {
     /// Format: "DRFW-{sanitized_label}: " (max 64 chars)
     #[serde(skip)]
     pub log_prefix: String,
+
+    /// Cached truncated tags for efficient view rendering (max 16 chars + ellipsis)
+    /// Avoids format!() allocation every frame in sidebar rule cards
+    #[serde(skip)]
+    pub tags_truncated: Vec<String>,
+
+    /// Cached badge display string for sidebar rule cards
+    /// Format: "{protocol}: {port_display}" (e.g., "TCP: 22" or "UDP: 53, 5353")
+    /// Avoids format!() allocation every frame
+    #[serde(skip)]
+    pub badge_display: String,
 }
 
 impl Rule {
@@ -681,6 +694,23 @@ impl Rule {
         };
         // Cache sanitized log prefix for nftables log expression
         self.log_prefix = Self::sanitize_log_prefix(&self.label);
+
+        // Cache truncated tags for efficient view rendering (avoids format! every frame)
+        self.tags_truncated = self
+            .tags
+            .iter()
+            .map(|t| {
+                if t.len() > 16 {
+                    format!("{}…", &t[..15])
+                } else {
+                    t.clone()
+                }
+            })
+            .collect();
+
+        // Cache badge display string for sidebar rule cards (avoids format! every frame)
+        // Format: "{protocol}: {port_display}"
+        self.badge_display = format!("{}: {}", self.protocol.display_name(), self.port_display);
     }
 
     /// Sanitizes a label for use as nftables log prefix.
@@ -786,6 +816,8 @@ impl Rule {
             action_display: String::new(),
             interface_display: String::new(),
             log_prefix: String::new(),
+            tags_truncated: Vec::new(),
+            badge_display: String::new(),
         };
         rule.rebuild_caches();
         rule

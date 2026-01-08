@@ -287,16 +287,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 };
 
                 // Protocol/Port badge with chain arrow in Server Mode
-                // Issue #16: Use display_name() method (no match expression)
-                let proto_text = rule.protocol.display_name();
-                // Issue #5: Use cached port display string - no allocation!
-                let port_text = &rule.port_display;
-
-                // Determine if we're in Server Mode
+                // Performance: Use cached badge_display string (avoids format! every frame)
+                // Chain arrow still computed since it depends on app-level state (egress profile)
                 let server_mode = state.ruleset.advanced_security.egress_profile
                     == crate::core::firewall::EgressProfile::Server;
 
-                // Chain arrow: only show in Server Mode
+                // Chain arrow: only show in Server Mode (static str, no allocation)
                 let chain_arrow = if server_mode {
                     match rule.chain {
                         crate::core::firewall::Chain::Input => "↓",
@@ -306,8 +302,16 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     ""
                 };
 
+                // Use cached badge_display when no chain arrow needed (most common case)
+                // Only allocate format string in Server Mode
+                let badge_text: std::borrow::Cow<'_, str> = if chain_arrow.is_empty() {
+                    std::borrow::Cow::Borrowed(&rule.badge_display)
+                } else {
+                    std::borrow::Cow::Owned(format!("{chain_arrow}{}", &rule.badge_display))
+                };
+
                 let badge = container(
-                    text(format!("{chain_arrow}{proto_text}: {port_text}"))
+                    text(badge_text)
                         .size(9)
                         .font(state.font_mono)
                         .color(if rule.enabled {
@@ -379,16 +383,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         ..theme.accent
                     }
                 };
-                for tag in &rule.tags {
-                    // Truncate long tags for display (same as tag cloud)
-                    let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
-                        format!("{}…", &tag[..15]).into()
-                    } else {
-                        tag.as_str().into()
-                    };
+                // Performance: Use cached tags_truncated (avoids format! every frame)
+                for truncated_tag in &rule.tags_truncated {
                     tag_items.push(
                         container(
-                            text(display_tag)
+                            text(truncated_tag)
                                 .size(8)
                                 .font(state.font_regular)
                                 .color(tag_text_color)

@@ -180,6 +180,8 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             action_display: String::new(),
             interface_display: String::new(),
             log_prefix: String::new(),
+            tags_truncated: Vec::new(),
+            badge_display: String::new(),
         };
         rule.rebuild_caches();
 

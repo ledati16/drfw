@@ -96,6 +96,8 @@ fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         action_display: String::new(),
         interface_display: String::new(),
         log_prefix: String::new(),
+        tags_truncated: Vec::new(),
+        badge_display: String::new(),
     };
     rule.rebuild_caches();
     rule
@@ -152,6 +154,8 @@ fn create_full_test_rule(
         action_display: String::new(),
         interface_display: String::new(),
         log_prefix: String::new(),
+        tags_truncated: Vec::new(),
+        badge_display: String::new(),
     };
     rule.rebuild_caches();
     rule
