@@ -69,8 +69,9 @@ use uuid::Uuid;
 /// Maximum number of rules allowed in a single ruleset
 ///
 /// Limit prevents memory exhaustion from malformed/malicious profiles.
-/// 1000 rules is well beyond typical use cases (most users have <50).
-pub const MAX_RULES: usize = 1000;
+/// 5000 rules allows stress testing while remaining practical.
+/// Most users have <50 rules; enterprise setups rarely exceed 500.
+pub const MAX_RULES: usize = 5000;
 
 /// Network protocol type for firewall rules
 ///
