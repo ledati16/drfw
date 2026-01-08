@@ -138,7 +138,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         let scrollable_tags = scrollable(
             container(tags_row)
                 .width(Length::Fill)
-                .padding(Padding::new(0.0).left(8.0).right(8.0)),
+                .padding(Padding::new(0.0).right(8.0)),
         )
         .spacing(0) // Embedded mode - prevents scrollbar overlap
         .direction(scrollable::Direction::Vertical(
@@ -163,12 +163,16 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     };
 
     let search_area = column![
-        text_input("Search rules...", &state.rule_search)
-            .on_input(Message::RuleSearchChanged)
-            .padding(10)
-            .size(13)
-            .font(state.font_regular)
-            .style(move |_, status| themed_text_input(theme, status)),
+        container(
+            text_input("Search rules...", &state.rule_search)
+                .on_input(Message::RuleSearchChanged)
+                .padding(10)
+                .size(13)
+                .font(state.font_regular)
+                .style(move |_, status| themed_text_input(theme, status)),
+        )
+        .width(Length::Fill)
+        .padding(Padding::new(0.0).right(8.0)),
         tag_cloud,
     ]
     .spacing(16);
@@ -631,14 +635,18 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
     container(
         column![
-            profile_header,
+            container(profile_header)
+                .width(Length::Fill)
+                .padding(Padding::new(0.0).right(8.0)),
             search_area,
             column![
-                list_header,
+                container(list_header)
+                    .width(Length::Fill)
+                    .padding(Padding::new(0.0).right(8.0)),
                 scrollable(
                     container(rule_list)
                         .width(Length::Fill)
-                        .padding(Padding::new(0.0).left(8.0).right(8.0)),
+                        .padding(Padding::new(0.0).right(8.0)),
                 )
                 .id(Id::new(super::SIDEBAR_SCROLLABLE_ID))
                 .spacing(0) // Embedded mode - prevents scrollbar overlap
@@ -647,10 +655,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             ]
             .spacing(8)
             .height(Length::Fill),
-            footer,
+            container(footer)
+                .width(Length::Fill)
+                .padding(Padding::new(0.0).right(8.0)),
         ]
         .spacing(16)
-        .padding(24),
+        .padding(16),
     )
     .width(Length::Fixed(330.0))
     .height(Length::Fill)
