@@ -2,6 +2,7 @@
 name = "drfw"
 version = "0.8.0"
 edition = "2024"
+default-run = "drfw"
 
 [lints.clippy]
 # UI view functions and parsers are naturally large - breaking them up reduces readability
@@ -85,3 +86,19 @@ shadow-rs = "1.5"
 [dev-dependencies]
 proptest = "1"
 rand = "0.8"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Development Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+[[bin]]
+name = "stress_gen"
+path = "tools/stress_gen.rs"
+required-features = ["stress_gen"]
+
+[dependencies.rand]
+version = "0.8"
+optional = true
+
+[features]
+stress_gen = ["rand"]

@@ -16,7 +16,8 @@ where
     const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
     const TRAILING_PADDING_PX: f32 = 60.0;
     const MIN_WIDTH_PX: f32 = 800.0;
-    const MAX_WIDTH_PX: f32 = 3000.0;
+    // Rules with multiple IPv4/IPv6 sources/destinations can exceed 400 chars
+    const MAX_WIDTH_PX: f32 = 8000.0;
 
     let max_char_count = tokens
         .into_iter()
@@ -28,7 +29,7 @@ where
         .max()
         .unwrap_or(0);
 
-    // Precision loss acceptable: max_char_count is bounded by line length (~200 chars max)
+    // Precision loss acceptable: char counts are bounded by practical line lengths
     #[allow(clippy::cast_precision_loss)]
     let content_width =
         LINE_NUMBER_WIDTH_PX + (max_char_count as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX;
@@ -107,10 +108,11 @@ mod tests {
 
     #[test]
     fn test_calculate_width_max_clamp() {
-        // Create a very long line that exceeds MAX_WIDTH_PX
+        // Create a very long line that exceeds MAX_WIDTH_PX (8000.0)
+        // 1000 chars * 8.4 + 50 + 60 = 8510, clamped to 8000
         let tokens = vec![create_test_line(0, 1000)];
         let width = calculate_max_content_width(&tokens);
-        assert_eq!(width, 3000.0); // MAX_WIDTH_PX
+        assert_eq!(width, 8000.0); // MAX_WIDTH_PX
     }
 
     #[test]

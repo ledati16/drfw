@@ -14,7 +14,7 @@
 //! # Note on Dead Code Warnings
 //!
 //! Some functions in this module may show as "unused" when compiling the binary
-//! target, but they ARE used by library consumers like `examples/stress_gen.rs`.
+//! target, but they ARE used by library consumers like `tools/stress_gen.rs`.
 //! These are intentionally public API for external use.
 //!
 //! # Examples
@@ -32,7 +32,7 @@
 //! assert!(!reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::Udp));
 //! ```
 
-// Allow dead_code for public API functions used by library consumers (e.g., stress_gen example)
+// Allow dead_code for public API functions used by library consumers (e.g., tools/stress_gen)
 // but not by the binary itself. These are intentionally exported for external use.
 #![allow(dead_code)]
 

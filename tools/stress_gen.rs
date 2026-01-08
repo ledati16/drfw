@@ -9,22 +9,22 @@
 //!
 //! ```bash
 //! # Generate 100 rules with good coverage
-//! cargo run --example stress_gen -- -o profiles/stress-test.json
+//! cargo run --bin stress_gen --features stress_gen -- -o profiles/stress-test.json
 //!
 //! # Generate 500 rules with edge cases
-//! cargo run --example stress_gen -- --count 500 --edge-cases -o profiles/edge-cases.json
+//! cargo run --bin stress_gen --features stress_gen -- --count 500 --edge-cases -o profiles/edge-cases.json
 //!
 //! # Reproducible generation for bug reports
-//! cargo run --example stress_gen -- --count 200 --seed 12345 -o /tmp/repro.json
+//! cargo run --bin stress_gen --features stress_gen -- --count 200 --seed 12345 -o /tmp/repro.json
 //!
 //! # Generate and verify with nft --check
-//! cargo run --example stress_gen -- --count 100 --verify -o /tmp/verified.json
+//! cargo run --bin stress_gen --features stress_gen -- --count 100 --verify -o /tmp/verified.json
 //!
 //! # Use predefined scenarios
-//! cargo run --example stress_gen -- --scenario chaos -o /tmp/chaos.json
+//! cargo run --bin stress_gen --features stress_gen -- --scenario chaos -o /tmp/chaos.json
 //!
 //! # Dry run to preview without writing files
-//! cargo run --example stress_gen -- --scenario enterprise --dry-run
+//! cargo run --bin stress_gen --features stress_gen -- --scenario enterprise --dry-run
 //! ```
 //!
 //! The generator automatically creates a `.sha256` checksum file alongside the JSON.

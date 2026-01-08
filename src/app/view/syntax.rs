@@ -12,6 +12,7 @@
 //! Performance impact is minimal since tokens are pre-cached.
 
 use crate::app::Message;
+use iced::widget::text::Wrapping;
 use iced::widget::{column, container, mouse_area, row, space, text, Column};
 use iced::{Color, Length};
 
@@ -43,6 +44,7 @@ pub fn view_from_cached_diff_tokens<'a>(
                 text(&highlighted_line.formatted_line_number_nft)
                     .font(mono_font)
                     .size(14)
+                    .wrapping(Wrapping::None)
                     .color(crate::app::syntax_cache::TokenColor::LineNumberNft.to_color(theme)),
             )
             .width(Length::Fixed(50.0))
@@ -52,7 +54,8 @@ pub fn view_from_cached_diff_tokens<'a>(
         // Indentation
         if highlighted_line.indent > 0 {
             let spaces = &SPACES[..highlighted_line.indent];
-            row_content = row_content.push(text(spaces).font(mono_font).size(14));
+            row_content =
+                row_content.push(text(spaces).font(mono_font).size(14).wrapping(Wrapping::None));
         }
 
         // Tokens (already parsed - just build widgets!)
@@ -71,7 +74,13 @@ pub fn view_from_cached_diff_tokens<'a>(
                 },
                 ..mono_font
             };
-            row_content = row_content.push(text(&token.text).font(font).size(14).color(color));
+            row_content = row_content.push(
+                text(&token.text)
+                    .font(font)
+                    .size(14)
+                    .wrapping(Wrapping::None)
+                    .color(color),
+            );
         }
 
         // Background colors: diff colors for added/removed, zebra stripes for unchanged
@@ -153,6 +162,7 @@ pub fn view_from_cached_nft_tokens<'a>(
                 text(&highlighted_line.formatted_line_number_nft)
                     .font(mono_font)
                     .size(14)
+                    .wrapping(Wrapping::None)
                     .color(crate::app::syntax_cache::TokenColor::LineNumberNft.to_color(theme)),
             )
             .width(iced::Length::Fixed(50.0))
@@ -162,7 +172,8 @@ pub fn view_from_cached_nft_tokens<'a>(
         // Indentation (NFT only uses actual indentation, no extra spacing)
         if highlighted_line.indent > 0 && !highlighted_line.tokens.is_empty() {
             let spaces = &SPACES[..highlighted_line.indent];
-            row_content = row_content.push(text(spaces).font(mono_font).size(14));
+            row_content =
+                row_content.push(text(spaces).font(mono_font).size(14).wrapping(Wrapping::None));
         }
 
         // Tokens (already parsed!)
@@ -184,6 +195,7 @@ pub fn view_from_cached_nft_tokens<'a>(
                 text(&token.text)
                     .font(font)
                     .size(14)
+                    .wrapping(Wrapping::None)
                     .color(token.color.to_color(theme)),
             );
         }
