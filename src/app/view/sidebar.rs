@@ -11,7 +11,7 @@ use iced::widget::{
     button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
     tooltip, Id,
 };
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length, Padding};
 use std::sync::Arc;
 
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
@@ -109,9 +109,15 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
         for tag in all_tags {
             let is_selected = state.filter_tag.as_ref() == Some(tag);
+            // Truncate long tags for display (full tag still used for filtering)
+            let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
+                format!("{}…", &tag[..15]).into()
+            } else {
+                tag.as_str().into()
+            };
             tag_elements.push(
-                button(text(tag.as_str()).size(10).font(state.font_regular))
-                    // Issue #2: Arc::clone just copies pointer (cheap!), not string data
+                button(text(display_tag).size(10).font(state.font_regular))
+                    // Arc::clone just copies pointer (cheap!), not string data
                     .on_press(Message::FilterByTag(Some(Arc::clone(tag))))
                     .padding([4, 8])
                     .style(move |_, status| {
@@ -127,6 +133,20 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
         let tags_row = row(tag_elements).spacing(6).wrap();
 
+        // Scrollable tag cloud with embedded scrollbar (STYLE.md Section 17)
+        // Use Shrink height + max_height so it only takes needed space
+        let scrollable_tags = scrollable(
+            container(tags_row)
+                .width(Length::Fill)
+                .padding(Padding::new(0.0).right(8.0)),
+        )
+        .spacing(0) // Embedded mode - prevents scrollbar overlap
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::default(),
+        ))
+        .height(Length::Shrink)
+        .style(move |_, status| themed_scrollable(theme, status));
+
         column![
             container(
                 text("FILTERS")
@@ -136,7 +156,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             )
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
-            container(tags_row).width(Length::Fill).max_height(120)
+            container(scrollable_tags).max_height(120)
         ]
         .spacing(8)
         .into()
