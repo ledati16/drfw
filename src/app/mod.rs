@@ -187,7 +187,11 @@ pub struct ProfileManagerState {
     pub new_name_input: String,
 }
 
+/// Warning dialogs shown when enabling potentially disruptive features.
+/// The "Enable" prefix is intentional - these are specifically warnings
+/// about turning ON features that could break connectivity.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub enum PendingWarning {
     EnableRpf,
     EnableServerMode,
