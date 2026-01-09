@@ -25,11 +25,37 @@
 use directories::ProjectDirs;
 use std::path::PathBuf;
 
+/// Returns the application data directory.
+///
+/// Normally returns `~/.local/share/drfw/` (XDG Base Directory spec).
+///
+/// # Test Override
+///
+/// Set `DRFW_TEST_DATA_DIR` environment variable to override the data directory
+/// for testing. This allows tests to use a temporary directory instead of
+/// the user's real data directory.
 pub fn get_data_dir() -> Option<PathBuf> {
+    // Allow tests to override data directory
+    if let Ok(test_dir) = std::env::var("DRFW_TEST_DATA_DIR") {
+        return Some(PathBuf::from(test_dir));
+    }
     ProjectDirs::from("com", "drfw", "drfw").map(|pd| pd.data_dir().to_path_buf())
 }
 
+/// Returns the application state directory.
+///
+/// Normally returns `~/.local/state/drfw/` (XDG Base Directory spec).
+///
+/// # Test Override
+///
+/// Set `DRFW_TEST_STATE_DIR` environment variable to override the state directory
+/// for testing. This allows tests to use a temporary directory instead of
+/// the user's real state directory.
 pub fn get_state_dir() -> Option<PathBuf> {
+    // Allow tests to override state directory
+    if let Ok(test_dir) = std::env::var("DRFW_TEST_STATE_DIR") {
+        return Some(PathBuf::from(test_dir));
+    }
     ProjectDirs::from("com", "drfw", "drfw")
         .and_then(|pd| pd.state_dir().map(std::path::Path::to_path_buf))
 }

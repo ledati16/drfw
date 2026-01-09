@@ -316,6 +316,7 @@ pub fn create_elevated_install_command(args: &[&str]) -> Result<Command, Elevati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_helpers::ENV_VAR_MUTEX;
 
     #[test]
     fn test_binary_exists() {
@@ -327,6 +328,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_nft_command_test_mode() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
         // Set test mode
         unsafe {
             std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
@@ -338,6 +341,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_install_command_test_mode() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
         // Set test mode
         unsafe {
             std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
@@ -349,6 +354,8 @@ mod tests {
 
     #[test]
     fn test_invalid_elevation_method() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
         // Clear test mode and set invalid method
         unsafe {
             std::env::remove_var("DRFW_TEST_NO_ELEVATION");
@@ -368,6 +375,8 @@ mod tests {
 
     #[test]
     fn test_elevation_method_case_insensitive() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
         // sudo should exist on most systems, so this tests case insensitivity
         unsafe {
             std::env::remove_var("DRFW_TEST_NO_ELEVATION");

@@ -625,7 +625,7 @@ mod integration_tests {
 
     use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
     use crate::core::test_helpers::{
-        create_test_rule, create_test_ruleset, setup_test_elevation_bypass,
+        create_test_rule, create_test_ruleset, setup_test_elevation_bypass_sync,
     };
     use crate::core::verify;
 
@@ -652,7 +652,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_valid_ruleset() {
-        setup_test_elevation_bypass();
+        let _guard = setup_test_elevation_bypass_sync();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -691,7 +691,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_invalid_port_range() {
-        setup_test_elevation_bypass();
+        let _guard = setup_test_elevation_bypass_sync();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -738,7 +738,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_empty_ruleset() {
-        setup_test_elevation_bypass();
+        let _guard = setup_test_elevation_bypass_sync();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -774,7 +774,7 @@ mod integration_tests {
     async fn test_verify_multiple_rules() {
         use crate::core::test_helpers::create_test_rule;
 
-        setup_test_elevation_bypass();
+        let _guard = setup_test_elevation_bypass_sync();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;

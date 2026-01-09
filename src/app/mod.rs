@@ -515,6 +515,94 @@ impl State {
         (state, Task::none())
     }
 
+    /// Creates a State instance for testing without filesystem access.
+    ///
+    /// This avoids the filesystem operations in `State::new()` that would:
+    /// - Read the user's config file
+    /// - Create/access the user's profiles directory
+    /// - Load the user's profile data
+    ///
+    /// # Safety
+    ///
+    /// This method is only available in test builds. It creates a minimal
+    /// State with default values suitable for unit testing handler functions.
+    #[cfg(test)]
+    pub fn new_for_testing() -> Self {
+        let ruleset = FirewallRuleset::default();
+        let current_theme = crate::theme::ThemeChoice::default();
+        let theme = current_theme.to_theme();
+        let regular_font_choice = crate::fonts::RegularFontChoice::default();
+        let mono_font_choice = crate::fonts::MonoFontChoice::default();
+        let font_regular = regular_font_choice.to_font();
+        let font_mono = mono_font_choice.to_font();
+        let available_fonts = crate::fonts::all_options();
+
+        let mut state = Self {
+            last_applied_ruleset: Some(ruleset.clone()),
+            cached_disk_profile: Some(ruleset.clone()),
+            ruleset,
+            status: AppStatus::Idle,
+            banners: std::collections::VecDeque::new(),
+            active_tab: WorkspaceTab::Nftables,
+            rule_form: None,
+            rule_form_helper: None,
+            interface_combo_state: iced::widget::combo_box::State::new(Vec::new()),
+            output_interface_combo_state: iced::widget::combo_box::State::new(Vec::new()),
+            countdown_remaining: 15,
+            progress_animation: Animation::new(1.0),
+            form_errors: None,
+            cached_nft_tokens: Vec::new(),
+            cached_diff_tokens: None,
+            cached_nft_width_px: 800.0,
+            cached_diff_width_px: 800.0,
+            rule_search: String::new(),
+            rule_search_lowercase: String::new(),
+            cached_all_tags: Vec::new(),
+            cached_all_tags_truncated: Vec::new(),
+            cached_filtered_rule_indices: Vec::new(),
+            filter_count_display: String::new(),
+            deleting_id: None,
+            pending_warning: None,
+            show_diff: false,
+            show_zebra_striping: true,
+            auto_revert_enabled: true,
+            auto_revert_timeout_secs: 15,
+            enable_event_log: false,
+            show_diagnostics: false,
+            diagnostics_filter: DiagnosticsFilter::default(),
+            show_export_modal: false,
+            show_shortcuts_help: false,
+            font_picker: None,
+            theme_picker: None,
+            profile_manager: None,
+            command_history: crate::command::CommandHistory::default(),
+            current_theme,
+            theme,
+            filter_tag: None,
+            dragged_rule_id: None,
+            hovered_drop_target_id: None,
+            hover_pending: None,
+            regular_font_choice,
+            mono_font_choice,
+            font_regular,
+            font_mono,
+            available_fonts,
+            config_dirty: false,
+            last_config_change: None,
+            profile_dirty: false,
+            last_profile_change: None,
+            pending_slider_log: None,
+            active_profile_name: "test".to_string(),
+            available_profiles: vec!["test".to_string()],
+            pending_profile_switch: None,
+            cached_audit_entries: Vec::new(),
+            audit_log_dirty: false,
+        };
+
+        state.update_cached_text();
+        state
+    }
+
     /// Add a banner to the notification queue (max 2 visible)
     pub fn push_banner(
         &mut self,

@@ -56,6 +56,19 @@ fn setup_mock_nft() {
     }
 }
 
+/// Set up a temp directory for tests that access profile/config directories.
+///
+/// This prevents tests from creating or modifying the user's real data.
+/// Returns a TempDir that will be automatically cleaned up when dropped.
+fn setup_temp_test_dirs() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    unsafe {
+        env::set_var("DRFW_TEST_DATA_DIR", temp_dir.path());
+        env::set_var("DRFW_TEST_STATE_DIR", temp_dir.path());
+    }
+    temp_dir
+}
+
 /// Create a basic test ruleset with one SSH rule
 fn create_test_ruleset() -> FirewallRuleset {
     let mut ruleset = FirewallRuleset::new();
@@ -444,18 +457,20 @@ fn test_mock_nft_script_exists() {
 #[tokio::test]
 async fn test_cli_list_profiles() {
     // Test the profile listing functionality used by `drfw list`
-    // This tests that list_profiles() can handle the actual profiles directory
+    // Uses temp directory to avoid touching user's real profile directory
     use drfw::core::profiles;
 
-    // Just verify that list_profiles() doesn't panic and returns a vec
+    let _temp_dir = setup_temp_test_dirs();
+
+    // With a fresh temp dir, should return empty list or handle gracefully
     let result = profiles::list_profiles().await;
     assert!(result.is_ok(), "list_profiles() should not fail");
 
     let profiles = result.unwrap();
-    // Should at least have default profile (created by app if missing)
+    // Empty temp dir should result in empty list (no default created by list)
     assert!(
-        profiles.iter().any(|p| p == "default") || profiles.is_empty(),
-        "Should handle profiles directory correctly"
+        profiles.is_empty(),
+        "Fresh temp dir should have no profiles"
     );
 }
 
@@ -579,6 +594,8 @@ fn test_cli_profile_load_and_rebuild_caches() {
 #[tokio::test]
 async fn test_cli_invalid_profile_name() {
     // Test profile name validation (CLI error handling)
+    // Note: Invalid names fail validation before any filesystem access,
+    // so no temp directory setup is needed here.
     use drfw::core::profiles;
 
     // These should fail validation
@@ -604,7 +621,10 @@ async fn test_cli_invalid_profile_name() {
 #[tokio::test]
 async fn test_cli_profile_not_found() {
     // Test CLI error handling for missing profiles
+    // Uses temp directory to avoid touching user's real profile directory
     use drfw::core::profiles;
+
+    let _temp_dir = setup_temp_test_dirs();
 
     // Use a short but valid profile name that doesn't exist
     let result = profiles::load_profile("nonexistent_abc").await;

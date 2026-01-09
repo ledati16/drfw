@@ -9,7 +9,37 @@ use crate::core::firewall::{
     Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
 };
 use chrono::Utc;
+use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
+
+/// Global mutex for tests that manipulate environment variables.
+///
+/// Environment variables are global state, so tests that modify them must be
+/// serialized to avoid race conditions. All tests that call `setup_test_elevation_bypass()`
+/// or directly manipulate `DRFW_TEST_*` env vars should acquire this mutex first.
+///
+/// # Example
+///
+/// ```ignore
+/// let _guard = ENV_VAR_MUTEX.lock().unwrap();
+/// setup_test_elevation_bypass();
+/// // ... run test ...
+/// ```
+pub static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Acquires the environment variable mutex and sets up elevation bypass.
+///
+/// This is the preferred way to set up tests that need elevation bypass,
+/// as it handles both synchronization and environment setup.
+///
+/// Returns a guard that must be held for the duration of the test.
+pub fn setup_test_elevation_bypass_sync() -> MutexGuard<'static, ()> {
+    let guard = ENV_VAR_MUTEX.lock().unwrap();
+    unsafe {
+        std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+    }
+    guard
+}
 
 /// Creates a basic test ruleset with one SSH rule.
 ///
