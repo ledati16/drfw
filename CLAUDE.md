@@ -60,6 +60,10 @@ pub fn blocking_wrapper_1() -> Type1 {
 - Pattern is trivial (1-2 lines)
 - Extraction would obscure intent
 - Pattern has subtle differences between uses
+- **Patterns that look similar but aren't:** Before extracting, verify the code paths
+  are actually identical. Example: Four "secure file write" locations appeared similar
+  but used different modes (append vs truncate) and APIs (sync vs async)—only 2 were
+  actually the same pattern. Extraction would have been wrong.
 
 **Real-world example: Button styling consolidation**
 ```rust
@@ -92,6 +96,41 @@ pub fn primary_button(theme, status) -> Style {
 }
 ```
 Result: 8 functions reduced to single-line delegations, unified logic in `build_button_style()`.
+
+**Real-world example: Audit logging consolidation**
+```rust
+// ❌ BEFORE: 20 functions × ~20 lines each = 400+ lines of duplication
+pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
+    if !enable_event_log { return; }
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(EventType::ApplyRules, success, json!({...}), error);
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+// ... 19 more nearly-identical functions
+
+// ✅ AFTER: Internal helper + single-line delegations
+async fn log_event_internal(
+    enable_event_log: bool, event_type: EventType, success: bool,
+    details: serde_json::Value, error: Option<String>,
+) {
+    if !enable_event_log { return; }
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(event_type, success, details, error);
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
+pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
+    log_event_internal(enable_event_log, EventType::ApplyRules, success,
+        json!({ "rule_count": rule_count, "enabled_count": enabled_count }), error).await;
+}
+```
+Result: `audit.rs` reduced from 782 → 481 lines (38% reduction), 20 functions now single-line delegations.
 
 ### File Size Guidelines
 
@@ -858,6 +897,6 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-01-05 (Audit review - added subprocess timeout pattern in Section 4)
+**Last Updated:** 2026-01-09 (Added audit logging consolidation example and pattern verification note to DRY section)
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14
