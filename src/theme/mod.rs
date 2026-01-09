@@ -277,7 +277,8 @@ pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     // ACCESSIBILITY
     // ═══════════════════════════════════════════════════
-    Monochrome, // Pure grayscale for reduced visual noise
+    Monochrome,      // Pure grayscale dark for reduced visual noise
+    MonochromeLight, // Pure grayscale light for reduced visual noise
 }
 
 impl ThemeChoice {
@@ -318,6 +319,7 @@ impl ThemeChoice {
             Self::SolarizedLight => "Solarized Light",
             // Accessibility
             Self::Monochrome => "Monochrome",
+            Self::MonochromeLight => "Monochrome Light",
         }
     }
 
@@ -358,6 +360,7 @@ impl ThemeChoice {
             Self::SolarizedLight => presets::solarized_light(),
             // Accessibility
             Self::Monochrome => presets::monochrome(),
+            Self::MonochromeLight => presets::monochrome_light(),
         }
     }
 }

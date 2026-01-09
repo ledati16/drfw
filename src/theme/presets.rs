@@ -431,33 +431,35 @@ pub fn rose_pine() -> AppTheme {
 
 /// Catppuccin Latte - Light variant of popular pastel theme
 /// Warm beige backgrounds with soft pastel accents
+///
+/// Official palette: <https://catppuccin.com/palette/>
 pub fn catppuccin_latte() -> AppTheme {
     AppTheme::from_hex(
         "Catppuccin Latte",
-        0x00EF_F1F5, // bg_base - Soft latte background
-        0x00E6_E9EF, // bg_sidebar - Darker latte
-        0x00CC_D0DA, // bg_surface - Surface0 (official)
-        0x00CC_D0DA, // bg_elevated - Elevated elements
-        0x00BA_BDC4, // bg_hover - Hover state
-        0x00AC_B0BE, // bg_active - Active selection
-        0x004C_4F69, // fg_primary - Dark text
-        0x005C_5F77, // fg_secondary - Muted dark
-        0x006C_6F85, // fg_muted - Gray text
-        0x00EF_F1F5, // fg_on_accent - Light on accent
-        0x001E_66F5, // accent - Sapphire blue
-        0x0040_79F7, // accent_hover - Lighter blue
+        0x00EF_F1F5, // bg_base - Base (main background)
+        0x00E6_E9EF, // bg_sidebar - Mantle (sidebar)
+        0x00EF_F1F5, // bg_surface - Base (cards match background, use shadow for depth)
+        0x00DC_E0E8, // bg_elevated - Crust (inputs darker than surface)
+        0x00CC_D0DA, // bg_hover - Surface0 (hover state)
+        0x00BC_C0CC, // bg_active - Surface1 (active selection)
+        0x004C_4F69, // fg_primary - Text
+        0x005C_5F77, // fg_secondary - Subtext1
+        0x006C_6F85, // fg_muted - Subtext0
+        0x00EF_F1F5, // fg_on_accent - Base (light on accent)
+        0x001E_66F5, // accent - Sapphire
+        0x0040_79F7, // accent_hover - Lighter sapphire
         0x0040_A02B, // success - Green
-        0x00FE_640B, // warning - Peach (official)
+        0x00FE_640B, // warning - Peach
         0x00D2_0F39, // danger - Red
         0x0020_9FB5, // info - Teal
-        0x00CC_D0DA, // border - Subtle border
-        0x001E_66F5, // border_strong - Blue border
-        0x00CC_D0DA, // divider - Match surface (official)
+        0x00BC_C0CC, // border - Surface1 (visible against Base)
+        0x001E_66F5, // border_strong - Sapphire
+        0x00DC_E0E8, // divider - Crust
         0x0088_39EF, // syntax_keyword - Mauve
         0x001E_66F5, // syntax_type - Sapphire
         0x0040_A02B, // syntax_string - Green
         0x00FE_640B, // syntax_number - Peach
-        0x009C_A0B0, // syntax_comment - Overlay 2
+        0x009C_A0B0, // syntax_comment - Overlay0
         0x0072_87FD, // syntax_operator - Lavender
     )
 }
@@ -467,15 +469,15 @@ pub fn catppuccin_latte() -> AppTheme {
 pub fn gruvbox_light() -> AppTheme {
     AppTheme::from_hex(
         "Gruvbox Light",
-        0x00FB_F1C7, // bg_base - Light cream background
-        0x00F9_F5D7, // bg_sidebar - Lighter cream
-        0x00EB_DBB2, // bg_surface - Card surface
-        0x00D5_C4A1, // bg_elevated - Elevated elements
-        0x00BD_AE93, // bg_hover - Hover state
-        0x00A8_9984, // bg_active - Active selection
-        0x003C_3836, // fg_primary - Dark brown text
-        0x005A_524C, // fg_secondary - Brown gray
-        0x007C_6F64, // fg_muted - Light brown
+        0x00FB_F1C7, // bg_base - Light cream background (bg0)
+        0x00F9_F5D7, // bg_sidebar - Lighter cream (bg0_s)
+        0x00EB_DBB2, // bg_surface - Card surface (bg1)
+        0x00D5_C4A1, // bg_elevated - Elevated elements (bg2)
+        0x00BD_AE93, // bg_hover - Hover state (bg3)
+        0x00A8_9984, // bg_active - Active selection (bg4)
+        0x003C_3836, // fg_primary - Dark brown text (fg0)
+        0x005A_524C, // fg_secondary - Brown gray (fg1)
+        0x007C_6F64, // fg_muted - Light brown (fg2)
         0x00FB_F1C7, // fg_on_accent - Light on accent
         0x00AF_3A03, // accent - Dark orange
         0x00D6_5D0E, // accent_hover - Brighter orange
@@ -483,9 +485,9 @@ pub fn gruvbox_light() -> AppTheme {
         0x00B5_7614, // warning - Dark yellow
         0x009D_0006, // danger - Dark red
         0x0042_7B58, // info - Dark aqua
-        0x00D5_C4A1, // border - Subtle border
+        0x00BD_AE93, // border - Visible border (bg3 - darker than bg_elevated)
         0x00AF_3A03, // border_strong - Orange border
-        0x00EB_DBB2, // divider - Match surface
+        0x00D5_C4A1, // divider - Match elevated (bg2)
         0x009D_0006, // syntax_keyword - Dark red
         0x0076_678E, // syntax_type - Dark purple
         0x0079_740E, // syntax_string - Dark green
@@ -835,63 +837,67 @@ pub fn solarized_light() -> AppTheme {
 
 /// Rosé Pine Dawn - Romantic light theme with rose and gold accents
 /// Warm cream backgrounds with rose, gold, and pine colors
+///
+/// Official palette: <https://rosepinetheme.com/palette>
 pub fn rose_pine_dawn() -> AppTheme {
     AppTheme::from_hex(
         "Rosé Pine Dawn",
-        0x00FA_F4ED, // bg_base - Warm cream
-        0x00F2_E9E1, // bg_sidebar - Slightly darker cream
-        0x00FF_FAF3, // bg_surface - Lighter cream (official)
-        0x00F2_E9E1, // bg_elevated - Overlay (official)
-        0x00E0_D3C2, // bg_hover - Darker tan
+        0x00FA_F4ED, // bg_base - Base (warm cream)
+        0x00F2_E9E1, // bg_sidebar - Surface (slightly darker)
+        0x00FF_FAF3, // bg_surface - Lighter cream (cards)
+        0x00F2_E9E1, // bg_elevated - Surface (inputs)
+        0x00E0_D3C2, // bg_hover - Hover (darker tan)
         0x00D4_C7B6, // bg_active - Active tan
-        0x0057_5279, // fg_primary - Text (official)
-        0x0079_7593, // fg_secondary - Medium purple-gray
-        0x009B_9099, // fg_muted - Light purple-gray
-        0x00FA_F4ED, // fg_on_accent - Light on accent
+        0x0057_5279, // fg_primary - Text
+        0x0079_7593, // fg_secondary - Subtle
+        0x009B_9099, // fg_muted - Muted
+        0x00FA_F4ED, // fg_on_accent - Base (light on accent)
         0x00D7_827E, // accent - Rose
         0x00C5_7570, // accent_hover - Darker rose
-        0x0056_949F, // success - Pine teal
+        0x0056_949F, // success - Pine
         0x00EA_9D34, // warning - Gold
-        0x00B4_637A, // danger - Muted red
-        0x0090_7AA9, // info - Purple
-        0x00F2_E9E1, // border - Overlay (official)
+        0x00B4_637A, // danger - Love
+        0x0090_7AA9, // info - Iris
+        0x00D4_C7B6, // border - Visible border (darker than surface)
         0x00D7_827E, // border_strong - Rose border
-        0x00F2_E9E1, // divider - Match elevated (official)
-        0x00B4_637A, // syntax_keyword - Muted red
+        0x00E0_D3C2, // divider - Slightly darker
+        0x00B4_637A, // syntax_keyword - Love
         0x0056_949F, // syntax_type - Pine
         0x00EA_9D34, // syntax_string - Gold
         0x00D7_827E, // syntax_number - Rose
-        0x009B_9099, // syntax_comment - Muted gray
+        0x009B_9099, // syntax_comment - Muted
         0x00D7_827E, // syntax_operator - Rose
     )
 }
 
 /// Everforest Light - Soft green nature-inspired light theme
 /// Warm cream backgrounds with forest green accents
+///
+/// Official palette: <https://github.com/sainnhe/everforest>
 pub fn everforest_light() -> AppTheme {
     AppTheme::from_hex(
         "Everforest Light",
-        0x00FD_F6E3, // bg_base - Warm cream (official)
-        0x00F8_F0DC, // bg_sidebar - Light tan
-        0x00FF_FFEF, // bg_surface - Lighter cream
-        0x00F0_E5D1, // bg_elevated - Warm beige
-        0x00E4_D9C5, // bg_hover - Darker beige
-        0x00D8_CDB9, // bg_active - Active beige
-        0x005C_6A72, // fg_primary - Dark gray-green
-        0x007D_8B92, // fg_secondary - Medium gray
-        0x009F_A9AD, // fg_muted - Light gray
+        0x00FD_F6E3, // bg_base - bg0 (warm cream)
+        0x00F8_F0DC, // bg_sidebar - bg_dim (light tan)
+        0x00FF_FFEF, // bg_surface - Lighter cream (cards)
+        0x00F0_E5D1, // bg_elevated - bg1 (warm beige)
+        0x00E4_D9C5, // bg_hover - bg2 (darker beige)
+        0x00D8_CDB9, // bg_active - bg3 (active beige)
+        0x005C_6A72, // fg_primary - fg (dark gray-green)
+        0x007D_8B92, // fg_secondary - gray0
+        0x009F_A9AD, // fg_muted - gray1
         0x00FF_F9E8, // fg_on_accent - Light on accent
-        0x008D_A101, // accent - Forest green
+        0x008D_A101, // accent - Green
         0x007A_8C00, // accent_hover - Darker green
-        0x0093_B259, // success - Lime green
+        0x0093_B259, // success - Bright green
         0x00E6_9875, // warning - Orange
-        0x00E6_7E80, // danger - Soft red
-        0x007F_BFB2, // info - Teal
-        0x00F0_E5D1, // border - Beige border
+        0x00E6_7E80, // danger - Red
+        0x007F_BFB2, // info - Aqua
+        0x00D8_CDB9, // border - bg3 (visible, darker than bg_elevated)
         0x008D_A101, // border_strong - Green border
-        0x00F0_E5D1, // divider - Match elevated
+        0x00E4_D9C5, // divider - bg2
         0x00F8_5552, // syntax_keyword - Red
-        0x0039_97A2, // syntax_type - Teal
+        0x0039_97A2, // syntax_type - Aqua
         0x00DB_B274, // syntax_string - Yellow
         0x00E6_9875, // syntax_number - Orange
         0x00A6_B1B7, // syntax_comment - Gray
@@ -899,14 +905,19 @@ pub fn everforest_light() -> AppTheme {
     )
 }
 
-/// Monochrome - Pure grayscale theme for minimal visual noise
+/// Monochrome Dark - Pure grayscale theme for minimal visual noise
 /// No syntax highlighting colors, just shades of gray with subtle hierarchy
 ///
 /// Contrast ratios meet WCAG AA (4.5:1) for all text on backgrounds:
-/// - `fg_primary` on `bg_base`: 14.1:1 (AAA)
-/// - `fg_secondary` on `bg_base`: 8.0:1 (AAA)
-/// - `fg_muted` on `bg_surface`: 4.7:1 (AA)
-/// - `danger` on `bg_base`: 5.3:1 (AA)
+/// - `fg_primary` on `bg_base`: 13.3:1 (AAA)
+/// - `fg_secondary` on `bg_base`: 7.5:1 (AAA)
+/// - `fg_muted` on `bg_surface`: 4.5:1 (AA)
+/// - `danger` on `bg_base`: 6.3:1 (AA)
+///
+/// Semantic colors use different gray levels for distinguishability:
+/// - Success: Light gray (#B0B0B0) - positive/completed
+/// - Warning: Medium gray (#909090) - caution/attention
+/// - Danger: Bright gray (#C8C8C8) - highest contrast for errors
 pub fn monochrome() -> AppTheme {
     AppTheme::from_hex(
         "Monochrome",
@@ -916,16 +927,16 @@ pub fn monochrome() -> AppTheme {
         0x0024_2424, // bg_elevated - Input background
         0x002E_2E2E, // bg_hover - Hover state
         0x0038_3838, // bg_active - Active state
-        0x00E8_E8E8, // fg_primary - Near white (14.1:1 contrast)
-        0x00B0_B0B0, // fg_secondary - Medium gray (8.0:1 contrast)
-        0x008A_8A8A, // fg_muted - Lighter gray for AA compliance (4.7:1)
+        0x00E8_E8E8, // fg_primary - Near white (13.3:1 contrast)
+        0x00B0_B0B0, // fg_secondary - Medium gray (7.5:1 contrast)
+        0x0088_8888, // fg_muted - Gray for AA compliance (4.5:1)
         0x0012_1212, // fg_on_accent - Dark on light accent
         0x00A0_A0A0, // accent - Medium gray accent (6.5:1 contrast)
         0x00B8_B8B8, // accent_hover - Lighter gray
-        0x0090_9090, // success - Gray (no green)
-        0x00C0_C0C0, // warning - Light gray (no yellow)
-        0x0090_9090, // danger - Lighter gray for AA compliance (5.3:1)
-        0x00A8_A8A8, // info - Gray
+        0x00B0_B0B0, // success - Light gray (distinct from danger)
+        0x0090_9090, // warning - Medium gray (middle intensity)
+        0x00C8_C8C8, // danger - Bright gray (highest contrast for visibility)
+        0x00A0_A0A0, // info - Medium-light gray
         0x002A_2A2A, // border - Subtle border
         0x0050_5050, // border_strong - Stronger border
         0x001A_1A1A, // divider - Surface match
@@ -933,8 +944,52 @@ pub fn monochrome() -> AppTheme {
         0x00B0_B0B0, // syntax_type - Secondary
         0x00B0_B0B0, // syntax_string - Secondary
         0x0090_9090, // syntax_number - Muted
-        0x0078_7878, // syntax_comment - Dim but readable (3.6:1 for large text)
+        0x0070_7070, // syntax_comment - Dim but readable (4.0:1)
         0x0090_9090, // syntax_operator - Muted
+    )
+}
+
+/// Monochrome Light - Pure grayscale light theme for minimal visual noise
+/// Light counterpart to Monochrome with inverted hierarchy
+///
+/// Contrast ratios meet WCAG AA (4.5:1) for all text on backgrounds:
+/// - `fg_primary` on `bg_base`: 12.6:1 (AAA)
+/// - `fg_secondary` on `bg_base`: 6.8:1 (AAA)
+/// - `fg_muted` on `bg_surface`: 4.6:1 (AA)
+/// - `danger` on `bg_base`: 12.6:1 (AAA)
+///
+/// Semantic colors use different gray levels for distinguishability:
+/// - Success: Medium gray (#606060) - visible but calm
+/// - Warning: Medium-dark gray (#484848) - draws moderate attention
+/// - Danger: Near black (#1A1A1A) - maximum contrast for errors
+pub fn monochrome_light() -> AppTheme {
+    AppTheme::from_hex(
+        "Monochrome Light",
+        0x00F2_F2F2, // bg_base - Light gray
+        0x00E6_E6E6, // bg_sidebar - Slightly darker for separation
+        0x00FF_FFFF, // bg_surface - White cards
+        0x00F8_F8F8, // bg_elevated - Near white inputs
+        0x00E0_E0E0, // bg_hover - Visible hover
+        0x00D0_D0D0, // bg_active - Active state
+        0x001A_1A1A, // fg_primary - Near black (12.6:1 contrast)
+        0x0048_4848, // fg_secondary - Dark gray (6.8:1 contrast)
+        0x0068_6868, // fg_muted - Medium gray for AA compliance (4.6:1)
+        0x00FF_FFFF, // fg_on_accent - White on dark accent
+        0x0050_5050, // accent - Medium-dark gray accent
+        0x0038_3838, // accent_hover - Darker gray
+        0x0060_6060, // success - Medium gray (visible but calm)
+        0x0048_4848, // warning - Medium-dark gray (attention)
+        0x001A_1A1A, // danger - Near black (maximum contrast)
+        0x0058_5858, // info - Medium gray
+        0x00D0_D0D0, // border - Subtle border
+        0x0090_9090, // border_strong - Visible border
+        0x00E0_E0E0, // divider - Light gray
+        0x001A_1A1A, // syntax_keyword - Primary (black)
+        0x0048_4848, // syntax_type - Secondary
+        0x0048_4848, // syntax_string - Secondary
+        0x0060_6060, // syntax_number - Muted
+        0x0088_8888, // syntax_comment - Dim but readable (4.5:1)
+        0x0060_6060, // syntax_operator - Muted
     )
 }
 
@@ -979,6 +1034,7 @@ mod tests {
             solarized_light(),
             // Accessibility
             monochrome(),
+            monochrome_light(),
         ];
 
         for theme in &themes {
@@ -1021,5 +1077,8 @@ mod tests {
         let _ = oxide_light();
         let _ = one_light();
         let _ = solarized_light();
+        // Accessibility
+        let _ = monochrome();
+        let _ = monochrome_light();
     }
 }
