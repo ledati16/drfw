@@ -134,10 +134,12 @@ Result: `audit.rs` reduced from 782 → 481 lines (38% reduction), 20 functions 
 
 ### File Size Guidelines
 
-- **Single file limit:** ~4000 lines (e.g., `app/view.rs` is at this threshold)
+- **Single file limit:** ~3000-4000 lines before considering a split
 - **When to split:** Consider submodules when a file exceeds 3000 lines with clear logical sections
 - **Module structure:** Group related functionality (`view/rules.rs`, `view/settings.rs`, `view/modals.rs`)
 - **Trade-off:** Balance between too many small files vs monolithic files
+
+**Example:** `app/view.rs` was split into `app/view/` module (~5000 lines across 15 files). `app/mod.rs` was split by extracting handlers into `app/handlers/` (~1100 lines remaining in mod.rs).
 
 **Note:** This is a soft guideline, not a hard rule. Prioritize logical cohesion over arbitrary line counts.
 
@@ -511,7 +513,7 @@ sudo -E DRFW_USE_REAL_NFT=1 cargo test
 - **Mark phase/completion:** `TODO (Phase 6): Wire up to diagnostics viewer`
 - **Update or remove:** Review all TODOs after completing phases
 - **Track separately:** Consider using GitHub Issues for long-term TODOs instead of code comments
-- **Outdated TODOs:** When features are implemented differently than planned, update comments to reflect actual implementation (see `audit.rs:138` for example of proper update)
+- **Outdated TODOs:** When features are implemented differently than planned, update or remove the TODO rather than leaving stale comments
 
 ---
 
@@ -733,23 +735,16 @@ Optimize for common traffic patterns:
 - Settings changes
 - Auto-revert events (confirmed/timed out)
 
-```rust
-pub async fn log_apply(
-    enable_event_log: bool,
-    rule_count: usize,
-    enabled_count: usize,
-    success: bool,
-    error: Option<String>,
-) {
-    if !enable_event_log { return; }
+All logging functions delegate to an internal helper (see DRY section for details):
 
-    let event = AuditEvent::new(
-        EventType::ApplyRules,
-        success,
-        json!({ "rule_count": rule_count, "enabled_count": enabled_count }),
-        error,
-    );
-    audit.log(event).await.ok();
+```rust
+// Internal helper handles: enable check, AuditLog creation, error warning
+async fn log_event_internal(enable_event_log: bool, event_type: EventType, ...) { ... }
+
+// Public functions are single-line delegations
+pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
+    log_event_internal(enable_event_log, EventType::ApplyRules, success,
+        json!({ "rule_count": rule_count, "enabled_count": enabled_count }), error).await;
 }
 ```
 
