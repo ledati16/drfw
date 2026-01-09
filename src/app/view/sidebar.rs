@@ -406,23 +406,35 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 // Row 1: Controls (Drag) + Label + Accent + Controls (Toggle, Delete)
                 let top_row = row![
                     // Drag Handle (Between Checkbox and Label)
-                    button(
-                        container(
-                            text(if is_being_dragged {
-                                "●"
-                            } else if any_drag_active {
-                                if is_hover_target { "◎" } else { "○" }
-                            } else {
-                                "⠿"
-                            })
-                            .size(14)
-                            .color(handle_color),
+                    tooltip(
+                        button(
+                            container(
+                                text(if is_being_dragged {
+                                    "●"
+                                } else if any_drag_active {
+                                    if is_hover_target { "◎" } else { "○" }
+                                } else {
+                                    "⠿"
+                                })
+                                .size(14)
+                                .color(handle_color),
+                            )
+                            .center_x(Length::Fixed(20.0))
                         )
-                        .center_x(Length::Fixed(20.0))
+                        .on_press(handle_action)
+                        .padding([0, 2])
+                        .style(button::text),
+                        container(
+                            text("Click to reorder")
+                                .size(12)
+                                .font(state.font_regular)
+                                .color(theme.fg_primary)
+                        )
+                        .padding([6, 10])
+                        .style(move |_| popup_container(theme)),
+                        tooltip::Position::Top
                     )
-                    .on_press(handle_action)
-                    .padding([0, 2])
-                    .style(button::text),
+                    .delay(std::time::Duration::from_millis(1000)),
                     // Label (Clickable area for editing with distinctive popup Tooltip)
                     button(
                         tooltip(

@@ -1,12 +1,13 @@
 //! Workspace tab bar and content area
 
 use crate::app::ui_components::{
-    active_tab_button, dirty_button, inactive_tab_button, primary_button, secondary_button,
-    themed_checkbox, themed_scrollable,
+    active_tab_button, dirty_button, inactive_tab_button, popup_container, primary_button,
+    secondary_button, themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, Id};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, tooltip, Id};
 use iced::{Alignment, Border, Element, Length, Shadow};
+use std::time::Duration;
 
 pub fn view_workspace<'a>(
     state: &'a State,
@@ -134,14 +135,38 @@ pub fn view_workspace<'a>(
 
     // Zone: History (Left)
     let history_actions = row![
-        button(text("↶").size(18))
-            .on_press_maybe(state.command_history.can_undo().then_some(Message::Undo))
-            .padding([10, 16])
-            .style(move |_, status| secondary_button(theme, status)),
-        button(text("↷").size(18))
-            .on_press_maybe(state.command_history.can_redo().then_some(Message::Redo))
-            .padding([10, 16])
-            .style(move |_, status| secondary_button(theme, status)),
+        tooltip(
+            button(text("↶").size(18))
+                .on_press_maybe(state.command_history.can_undo().then_some(Message::Undo))
+                .padding([10, 16])
+                .style(move |_, status| secondary_button(theme, status)),
+            container(
+                text("Undo (Ctrl+Z)")
+                    .size(12)
+                    .font(state.font_regular)
+                    .color(theme.fg_primary)
+            )
+            .padding([6, 10])
+            .style(move |_| popup_container(theme)),
+            tooltip::Position::Top
+        )
+        .delay(Duration::from_millis(1000)),
+        tooltip(
+            button(text("↷").size(18))
+                .on_press_maybe(state.command_history.can_redo().then_some(Message::Redo))
+                .padding([10, 16])
+                .style(move |_, status| secondary_button(theme, status)),
+            container(
+                text("Redo (Ctrl+Shift+Z)")
+                    .size(12)
+                    .font(state.font_regular)
+                    .color(theme.fg_primary)
+            )
+            .padding([6, 10])
+            .style(move |_| popup_container(theme)),
+            tooltip::Position::Top
+        )
+        .delay(Duration::from_millis(1000)),
     ]
     .spacing(12);
 
