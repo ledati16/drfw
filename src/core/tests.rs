@@ -717,15 +717,15 @@ mod integration_tests {
     #[tokio::test]
     async fn test_audit_logging_integration() {
         // This test verifies that audit logging doesn't panic
-        // We can't easily test the file contents without mocking
+        // We pass enable_event_log=false to avoid writing to the real user's audit log
         let ruleset = create_test_ruleset();
         let rule_count = ruleset.rules.len();
         let enabled_count = ruleset.rules.iter().filter(|r| r.enabled).count();
 
-        // These should not panic
-        crate::audit::log_apply(true, rule_count, enabled_count, true, None).await;
+        // These should not panic (enable_event_log=false so nothing is written)
+        crate::audit::log_apply(false, rule_count, enabled_count, true, None).await;
         crate::audit::log_apply(
-            true,
+            false,
             rule_count,
             enabled_count,
             false,

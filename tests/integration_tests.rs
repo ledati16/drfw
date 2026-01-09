@@ -309,12 +309,12 @@ fn test_json_generation_deterministic() {
 #[tokio::test]
 async fn test_audit_logging_doesnt_panic() {
     // Test that audit logging functions don't panic
-    // (we can't easily verify file contents without mocking filesystem)
+    // Pass enable_event_log=false to avoid writing to real user's audit log
 
-    drfw::audit::log_apply(true, 5, 3, true, None).await;
-    drfw::audit::log_apply(true, 5, 3, false, Some("Test error".to_string())).await;
-    drfw::audit::log_revert(true, true, None).await;
-    drfw::audit::log_revert(true, false, Some("Revert failed".to_string())).await;
+    drfw::audit::log_apply(false, 5, 3, true, None).await;
+    drfw::audit::log_apply(false, 5, 3, false, Some("Test error".to_string())).await;
+    drfw::audit::log_revert(false, true, None).await;
+    drfw::audit::log_revert(false, false, Some("Revert failed".to_string())).await;
 
     // If we reach here without panicking, test passes
 }
