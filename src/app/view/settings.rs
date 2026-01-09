@@ -1,13 +1,13 @@
 //! Settings tab UI
 
 use crate::app::ui_components::{
-    card_container, secondary_button, section_header_container, themed_horizontal_rule,
-    themed_slider, themed_text_input, themed_toggler,
+    card_container, secondary_button, section_header_container, themed_slider, themed_text_input,
+    themed_toggler,
 };
 use crate::app::{FontPickerTarget, Message, State};
 use crate::core::firewall::EgressProfile;
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, row, rule, slider, text, text_input, toggler};
+use iced::widget::{button, column, container, row, slider, text, text_input, toggler};
 use iced::{Alignment, Element, Length};
 
 pub fn view_settings(state: &State) -> Element<'_, Message> {
@@ -16,12 +16,10 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
 
     let appearance_card = container(column![
         container(
-            row![
-                text("🎨").size(18),
-                text("APPEARANCE").size(12).font(state.font_regular)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
+            text("APPEARANCE")
+                .size(12)
+                .font(state.font_regular)
+                .color(theme.fg_muted)
         )
         .padding([8, 12])
         .width(Length::Fill)
@@ -117,14 +115,12 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
     ])
     .style(move |_| card_container(theme));
 
-    let safety_card = container(column![
+    let behavior_card = container(column![
         container(
-            row![
-                text("⏱️").size(18),
-                text("APPLY SAFETY").size(12).font(state.font_regular)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
+            text("BEHAVIOR")
+                .size(12)
+                .font(state.font_regular)
+                .color(theme.fg_muted)
         )
         .padding([8, 12])
         .width(Length::Fill)
@@ -160,35 +156,18 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
             } else {
                 column![].into()
             },
+            render_settings_row(
+                "Event logging",
+                "Record firewall operations to the event log",
+                toggler(state.enable_event_log)
+                    .on_toggle(Message::ToggleEventLog)
+                    .width(Length::Shrink)
+                    .style(move |_, status| themed_toggler(theme, status))
+                    .into(),
+                theme,
+                state.font_regular,
+            ),
         ]
-        .spacing(16)
-        .padding(16)
-    ])
-    .style(move |_| card_container(theme));
-
-    let diagnostics_card = container(column![
-        container(
-            row![
-                text("📊").size(18),
-                text("DIAGNOSTICS").size(12).font(state.font_regular)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-        )
-        .padding([8, 12])
-        .width(Length::Fill)
-        .style(move |_| section_header_container(theme)),
-        column![render_settings_row(
-            "Enable event logging",
-            "Track firewall operations in the Diagnostics tab (opt-in for privacy)",
-            toggler(state.enable_event_log)
-                .on_toggle(Message::ToggleEventLog)
-                .width(Length::Shrink)
-                .style(move |_, status| themed_toggler(theme, status))
-                .into(),
-            theme,
-            state.font_regular,
-        ),]
         .spacing(16)
         .padding(16)
     ])
@@ -197,19 +176,20 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
     let security_card = container(
         column![
             container(
-                row![text("🛡️").size(18), text("ADVANCED SECURITY").size(12).font(state.font_regular)]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
+                text("ADVANCED SECURITY")
+                    .size(12)
+                    .font(state.font_regular)
+                    .color(theme.fg_muted)
             )
             .padding([8, 12])
             .width(Length::Fill)
             .style(move |_| section_header_container(theme)),
 
             column![
-                text("⚠️ These settings may break common applications. Defaults are suitable for most users.")
+                text("These settings may break common applications. Defaults are suitable for most users.")
                     .size(13)
                     .font(state.font_regular)
-                    .color(theme.syntax_string),
+                    .color(theme.warning),
 
                 render_settings_row(
                     "Strict ICMP filtering",
@@ -294,11 +274,6 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                     column![].into()
                 },
 
-                container(
-                    rule::horizontal(1).style(move |_| themed_horizontal_rule(theme))
-                )
-                .padding([8, 0]),
-
                 render_settings_row(
                     "Server Mode",
                     "Block all outbound connections by default (recommended for servers)",
@@ -315,15 +290,9 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
     )
         .style(move |_| card_container(theme));
 
-    column![
-        appearance_card,
-        safety_card,
-        diagnostics_card,
-        security_card,
-    ]
-    .spacing(24)
-    .padding(8)
-    .into()
+    column![appearance_card, behavior_card, security_card,]
+        .spacing(24)
+        .into()
 }
 
 pub fn render_settings_row<'a>(

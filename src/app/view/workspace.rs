@@ -21,26 +21,14 @@ pub fn view_workspace<'a>(
         view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
         container(row![]).width(Length::Fill),
         // Global Utility Tools
-        button(
-            row![
-                text("📤").size(14),
-                text("Export").size(13).font(state.font_regular)
-            ]
-            .spacing(8)
-        )
-        .on_press(Message::ToggleExportModal(true))
-        .padding([8, 16])
-        .style(move |_, status| secondary_button(theme, status)),
-        button(
-            row![
-                text("📊").size(14),
-                text("Diagnostics").size(13).font(state.font_regular)
-            ]
-            .spacing(8)
-        )
-        .on_press(Message::ToggleDiagnostics(true))
-        .padding([8, 16])
-        .style(move |_, status| secondary_button(theme, status)),
+        button(text("Export").size(13).font(state.font_regular))
+            .on_press(Message::ToggleExportModal(true))
+            .padding([8, 16])
+            .style(move |_, status| secondary_button(theme, status)),
+        button(text("Diagnostics").size(13).font(state.font_regular))
+            .on_press(Message::ToggleDiagnostics(true))
+            .padding([8, 16])
+            .style(move |_, status| secondary_button(theme, status)),
     ]
     .spacing(8)
     .align_y(Alignment::Center);

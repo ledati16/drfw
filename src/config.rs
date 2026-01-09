@@ -25,8 +25,8 @@ pub struct AppConfig {
     /// Clamped to 3600 seconds (1 hour) to prevent integer overflow in countdown calculations.
     #[serde(default = "default_auto_revert_timeout")]
     pub auto_revert_timeout_secs: u64,
-    /// Enable event logging for Diagnostics tab (opt-in, disabled by default)
-    #[serde(default)]
+    /// Enable event logging for Diagnostics tab
+    #[serde(default = "default_true")]
     pub enable_event_log: bool,
 }
 
@@ -41,7 +41,7 @@ impl Default for AppConfig {
             show_zebra_striping: true,
             auto_revert_enabled: false, // OFF by default for GUI (desktop context)
             auto_revert_timeout_secs: 15,
-            enable_event_log: false, // Opt-in only for privacy/disk space
+            enable_event_log: true, // Useful for troubleshooting, local-only so no privacy concern
         }
     }
 }
