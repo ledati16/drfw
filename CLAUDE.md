@@ -9,8 +9,9 @@
 ## 1. Code Quality
 
 ### Linting & Static Analysis
-- **Strict compliance:** Adhere to Clippy pedantic warnings
-- **No suppressions without rationale:** Every `#[allow(...)]` must have a documented reason
+- **Strict compliance:** Clippy pedantic lints enabled in `Cargo.toml`
+- **Centralized config:** All lint allows are in `[lints.clippy]` section with documented rationale
+- **No scattered suppressions:** Avoid per-function `#[allow(...)]` unless truly function-specific
 - **Refactor over suppress:** Fix warnings through better design, not suppression
 
 ### Documentation Standards
@@ -410,6 +411,7 @@ self.modify_state(cached_value);
 | `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI operations, profiles | Verification flow, CLI exports, profile operations |
 | `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
+| `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
 
 **Key principle:** Each test concept should exist in exactly ONE location. The "authoritative" location is closest to the implementation being tested.
 
@@ -510,6 +512,29 @@ PATH="tests:$PATH" cargo test
 # Run with real nftables (requires sudo)
 sudo -E DRFW_USE_REAL_NFT=1 cargo test
 ```
+
+### Stress Test Generator
+
+The `stress_gen` tool generates profiles with comprehensive rule variations for testing:
+
+```bash
+# Generate 100 rules with good coverage
+cargo run --bin stress_gen --features stress_gen -- -o profiles/stress-test.json
+
+# Generate 500 rules with edge cases (boundary values, special chars)
+cargo run --bin stress_gen --features stress_gen -- --count 500 --edge-cases -o profiles/edge-cases.json
+
+# Reproducible generation (for bug reports)
+cargo run --bin stress_gen --features stress_gen -- --count 200 --seed 12345 -o /tmp/repro.json
+
+# Generate and verify with nft --check
+cargo run --bin stress_gen --features stress_gen -- --count 100 --verify -o /tmp/verified.json
+
+# Predefined scenarios: minimal (10), typical (50), enterprise (200), chaos (1000)
+cargo run --bin stress_gen --features stress_gen -- --scenario chaos -o /tmp/chaos.json
+```
+
+**Coverage guarantees:** The generator ensures all protocol types, actions, chains, reject types, and rate limit time units are represented. Use `--report` to see distribution.
 
 ### TODO Comment Hygiene
 
@@ -759,14 +784,14 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - Protocol filtering (TCP, UDP, ICMP, ICMPv6, Any)
 - Port filtering (single or range)
 - Source IP/CIDR filtering
-- Interface matching
+- Interface matching (input/output)
 - Enable/disable without deletion
 - Rule ordering (drag-and-drop)
+- Per-rule logging (with configurable prefix)
 - Advanced: Destination IP, action (accept/drop/reject), rate limiting, connection limiting
 
 ### Not Implemented (Intentional)
 - **ICMP type filtering:** 99% of users don't understand 20+ ICMP types; ICMPv6 filtering is dangerous
-- **Per-rule logging:** Floods kernel logs; requires terminal access; not GUI-friendly
 - **Source port matching:** <1% use case
 - **TCP flags matching:** Too advanced for target audience
 - **MAC filtering:** LAN-only, easily spoofed
@@ -783,7 +808,7 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 ### Pre-Commit Checklist
 ```bash
 cargo fmt --check
-cargo clippy -- -D warnings
+cargo clippy --all-targets  # pedantic lints configured in Cargo.toml
 cargo test
 cargo build --release
 ```
@@ -895,6 +920,6 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-01-09 (Added audit logging consolidation example and pattern verification note to DRY section)
-**DRFW Version:** 0.1.0
+**Last Updated:** 2026-01-09 (Added stress_gen docs, enabled pedantic lints in Cargo.toml, updated feature list)
+**DRFW Version:** 0.8.0
 **Iced Version:** 0.14
