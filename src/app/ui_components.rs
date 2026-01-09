@@ -1083,9 +1083,11 @@ pub fn modal_backdrop(theme: &AppTheme) -> container::Style {
 }
 
 /// Themed horizontal rule (separator line)
+///
+/// Uses `bg_hover` for subtle but reliable visibility against sidebar backgrounds.
 pub fn themed_horizontal_rule(theme: &AppTheme) -> rule::Style {
     rule::Style {
-        color: theme.border,
+        color: theme.bg_hover,
         radius: 0.0.into(),
         fill_mode: rule::FillMode::Full,
         snap: true,

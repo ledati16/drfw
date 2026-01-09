@@ -15,21 +15,21 @@ pub fn oxide() -> AppTheme {
         0x00B8_ACA2, // fg_secondary - Muted clay text
         0x007A_6E67, // fg_muted - Darkened earth gray
         0x001D_1816, // fg_on_accent - Dark text on copper
-        0x00A7_5533, // accent - Burnt copper orange
-        0x00BD_6D4D, // accent_hover - Warm clay highlight
-        0x008F_A172, // success - Muted sage green
+        0x00B8_5A30, // accent - Burnt copper (saturated)
+        0x00C8_6D45, // accent_hover - Warm clay highlight
+        0x008B_9A5A, // success - Warm olive-moss
         0x00D8_A657, // warning - Warm gold
         0x00C2_5D4E, // danger - Terracotta red
-        0x007D_AEA3, // info - Muted teal
+        0x00C4_856A, // info - Warm muted copper
         0x003E_3532, // border - Subtle brown border
-        0x00A7_5533, // border_strong - Copper accent border
+        0x00B8_5A30, // border_strong - Copper accent border
         0x002E_2623, // divider - Surface match
         0x00D4_7761, // syntax_keyword - Oxide terracotta
-        0x00D6_99B6, // syntax_type - Muted orchid
+        0x00CC_8977, // syntax_type - Warm dusty clay-rose
         0x00DB_B98F, // syntax_string - Sandstone gold
-        0x00B8_ACA2, // syntax_number - Secondary text
+        0x00D4_A574, // syntax_number - Warm amber
         0x007A_6E67, // syntax_comment - Muted brown
-        0x00A7_5533, // syntax_operator - Burnt copper
+        0x00B8_5A30, // syntax_operator - Burnt copper
     )
 }
 
@@ -48,21 +48,21 @@ pub fn oxide_light() -> AppTheme {
         0x006A_5D51, // fg_secondary - Medium warm brown
         0x009B_8D7F, // fg_muted - Light brown for disabled
         0x00FF_FCF8, // fg_on_accent - Light cream on copper
-        0x00A7_5533, // accent - Burnt copper (same as dark)
-        0x0092_4A2E, // accent_hover - Darker copper for contrast
-        0x006B_8456, // success - Sage green
+        0x00B8_5A30, // accent - Burnt copper (matches dark Oxide)
+        0x00A0_4D28, // accent_hover - Darker copper for contrast
+        0x006B_8050, // success - Warm olive-moss (warmer than sage)
         0x00BD_8838, // warning - Warm amber
         0x00AD_4433, // danger - Warm terracotta
-        0x004D_8A7E, // info - Teal contrast
+        0x00A0_7058, // info - Warm muted copper (replaces cool teal)
         0x00D8_CCBA, // border - Warm border
-        0x00A7_5533, // border_strong - Copper border
+        0x00B8_5A30, // border_strong - Copper border (matches accent)
         0x00E3_D7C5, // divider - Warm divider
         0x00AD_4433, // syntax_keyword - Terracotta
-        0x008B_5A8E, // syntax_type - Muted purple (contrast)
+        0x009A_6860, // syntax_type - Dusty clay-rose (replaces cool purple)
         0x00BD_8838, // syntax_string - Warm amber
-        0x006A_5D51, // syntax_number - Medium brown
-        0x009B_8D7F, // syntax_comment - Muted brown
-        0x00A7_5533, // syntax_operator - Copper accent
+        0x00A0_7050, // syntax_number - Warm sienna-amber (unique)
+        0x008A_7A6C, // syntax_comment - Warm earth gray (unique)
+        0x00B8_5A30, // syntax_operator - Burnt copper (matches accent)
     )
 }
 
@@ -635,34 +635,36 @@ pub fn poimandres() -> AppTheme {
 
 /// Pnevma - High-contrast neutral theme with desaturated earth tones
 /// Pure neutral gray base with soft, muted colors for reduced visual fatigue
+///
+/// Official palette: <https://github.com/mbadolato/iTerm2-Color-Schemes/blob/master/xrdb/Pnevma.xrdb>
 pub fn pnevma() -> AppTheme {
     AppTheme::from_hex(
         "Pnevma",
-        0x001C_1C1C, // bg_base - Pure neutral dark gray (v2)
+        0x001C_1C1C, // bg_base - Background (official)
         0x0018_1818, // bg_sidebar - Slightly darker
         0x0024_2424, // bg_surface - Slightly lighter surface
-        0x002F_2E2D, // bg_elevated - Color0 (v2)
-        0x004A_4845, // bg_hover - Color8 bright black (v2)
-        0x004D_4D4D, // bg_active - Selection background (v2)
-        0x00D0_D0D0, // fg_primary - Foreground/Color7 (v2)
+        0x002F_2E2D, // bg_elevated - Color0 (official)
+        0x0038_3736, // bg_hover - Subtle hover (between Color0 and Color8)
+        0x004D_4D4D, // bg_active - Selection background (official)
+        0x00D0_D0D0, // fg_primary - Foreground (official)
         0x00B0_B0B0, // fg_secondary - Dimmed foreground
         0x006A_6866, // fg_muted - Muted gray
-        0x001C_1C1C, // fg_on_accent - Dark on light (v2)
-        0x007F_A5BD, // accent - Color4 blue (v2)
-        0x00A1_BDCE, // accent_hover - Color12 bright blue (v2)
-        0x0090_A57D, // success - Color2 green (v2)
-        0x00D7_AF87, // warning - Color3 orange (v2)
-        0x00A3_6666, // danger - Color1 red (v2)
-        0x007F_A5BD, // info - Color4 blue (v2)
-        0x002F_2E2D, // border - Color0 match
+        0x001C_1C1C, // fg_on_accent - Dark on light
+        0x007F_A5BD, // accent - Color4 blue (official)
+        0x00A1_BDCE, // accent_hover - Color12 bright blue (official)
+        0x0090_A57D, // success - Color2 green (official)
+        0x00D7_AF87, // warning - Color3 orange (official)
+        0x00A3_6666, // danger - Color1 red (official)
+        0x007F_A5BD, // info - Color4 blue (official)
+        0x0038_3736, // border - Match hover for consistency
         0x007F_A5BD, // border_strong - Accent blue
-        0x0024_2424, // divider - Surface match
-        0x00C7_9EC4, // syntax_keyword - Color5 magenta (v2)
-        0x007F_A5BD, // syntax_type - Color4 blue (v2)
-        0x0090_A57D, // syntax_string - Color2 green (v2)
-        0x00D7_AF87, // syntax_number - Color3 orange (v2)
-        0x004A_4845, // syntax_comment - Color8 muted (v2)
-        0x008A_DBB4, // syntax_operator - Color6 cyan (v2)
+        0x002F_2E2D, // divider - Color0
+        0x00C7_9EC4, // syntax_keyword - Color5 magenta (official)
+        0x007F_A5BD, // syntax_type - Color4 blue (official)
+        0x0090_A57D, // syntax_string - Color2 green (official)
+        0x00D7_AF87, // syntax_number - Color3 orange (official)
+        0x004A_4845, // syntax_comment - Color8 (official)
+        0x008A_DBB4, // syntax_operator - Color6 cyan (official)
     )
 }
 
@@ -687,9 +689,9 @@ pub fn night_owl() -> AppTheme {
         0x00F7_8C6C, // warning - Orange
         0x00EF_5350, // danger - Red (official, was pink)
         0x0082_AAFF, // info - Light blue
-        0x0011_2A42, // border - Match surface
+        0x0019_3549, // border - Elevated (visible against surface)
         0x00C7_92EA, // border_strong - Magenta border (official)
-        0x0011_2A42, // divider - Match surface
+        0x0019_3549, // divider - Elevated
         0x00C7_92EA, // syntax_keyword - Magenta
         0x0082_AAFF, // syntax_type - Light blue
         0x00EC_C48D, // syntax_string - Golden
@@ -720,9 +722,9 @@ pub fn synthwave_84() -> AppTheme {
         0x00FE_DE5D, // warning - Neon yellow (official)
         0x00FE_4450, // danger - Neon red
         0x0003_EDF9, // info - Bright cyan (official)
-        0x0034_294A, // border - Match surface
+        0x0041_3356, // border - Elevated (visible against surface)
         0x00FF_7EDB, // border_strong - Neon pink (official)
-        0x0034_294A, // divider - Match surface
+        0x0041_3356, // divider - Elevated
         0x00FF_7EDB, // syntax_keyword - Pink
         0x0003_EDF9, // syntax_type - Cyan (official)
         0x00FE_DE5D, // syntax_string - Yellow (official)
