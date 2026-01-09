@@ -66,39 +66,6 @@ pub fn oxide_light() -> AppTheme {
     )
 }
 
-/// Aethel - Atmospheric noble theme (Gemini's Masterpiece)
-/// Deep violet-tinted charcoal backgrounds with celestial indigo and mauve accents
-pub fn aethel() -> AppTheme {
-    AppTheme::from_hex(
-        "Aethel",
-        0x0016_161E, // bg_base - Midnight indigo-charcoal
-        0x000F_0F14, // bg_sidebar - Deepest ink
-        0x001A_1B26, // bg_surface - Polished slate
-        0x0024_283B, // bg_elevated - Muted graphite
-        0x002F_3549, // bg_hover - Subtle highlight
-        0x0041_4868, // bg_active - Active indigo
-        0x00DC_DFE4, // fg_primary - Silvered white
-        0x00A9_B1D6, // fg_secondary - Cool gray
-        0x0056_5F89, // fg_muted - Deep ash
-        0x0016_161E, // fg_on_accent - Dark text on celestial
-        0x0089_B4FA, // accent - Celestial indigo
-        0x00A3_C7FF, // accent_hover - Lighter frost
-        0x009E_CE6A, // success - Seafoam green
-        0x00E0_AF68, // warning - Ember gold
-        0x00F7_768E, // danger - Rose red
-        0x007D_CFFF, // info - Sky cyan
-        0x0024_283B, // border - Gutter gray
-        0x0089_B4FA, // border_strong - Indigo accent
-        0x001A_1B26, // divider - Surface match
-        0x00BB_9AF7, // syntax_keyword - Mauve purple
-        0x007D_CFFF, // syntax_type - Sky blue
-        0x009E_CE6A, // syntax_string - Seafoam green
-        0x00FF_9E64, // syntax_number - Terracotta orange
-        0x0056_5F89, // syntax_comment - Muted ash
-        0x0089_B4FA, // syntax_operator - Indigo
-    )
-}
-
 /// Nord - Professional arctic-inspired theme
 /// Clean, modern, excellent for professional tools
 pub fn nord() -> AppTheme {
@@ -1004,7 +971,6 @@ mod tests {
         let themes = [
             // Custom themes
             oxide(),
-            aethel(),
             // Popular dark themes
             github_dark(),
             dracula(),
@@ -1049,7 +1015,6 @@ mod tests {
         // Just verify themes can be created without panicking
         // Custom themes
         let _ = oxide();
-        let _ = aethel();
         // Popular dark themes
         let _ = github_dark();
         let _ = dracula();

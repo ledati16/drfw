@@ -231,7 +231,6 @@ pub enum ThemeChoice {
     // ═══════════════════════════════════════════════════
     #[default]
     Oxide,
-    Aethel,
 
     // ═══════════════════════════════════════════════════
     // POPULAR DARK THEMES (by downloads/rating)
@@ -287,7 +286,6 @@ impl ThemeChoice {
         match self {
             // Custom themes
             Self::Oxide => "Oxide",
-            Self::Aethel => "Aethel",
             // Popular dark themes
             Self::GitHubDark => "GitHub Dark",
             Self::Dracula => "Dracula",
@@ -328,7 +326,6 @@ impl ThemeChoice {
         match self {
             // Custom themes
             Self::Oxide => presets::oxide(),
-            Self::Aethel => presets::aethel(),
             // Popular dark themes
             Self::GitHubDark => presets::github_dark(),
             Self::Dracula => presets::dracula(),
