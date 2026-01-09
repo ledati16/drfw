@@ -6,8 +6,29 @@ use crate::app::ui_components::{
 };
 use crate::app::{DiagnosticsFilter, Message, State};
 use crate::audit::{AuditEvent, EventType};
+use crate::core::error::NftablesErrorPattern;
 use iced::widget::{button, column, container, pick_list, row, scrollable, space, text};
 use iced::{Alignment, Border, Element, Length, Padding};
+
+/// Formats a raw error message into a verbose, user-friendly description.
+/// Uses `NftablesErrorPattern` to provide helpful context and suggestions.
+fn format_error_for_display(error: Option<&str>) -> String {
+    match error {
+        Some(e) if !e.is_empty() => {
+            let translation = NftablesErrorPattern::match_error(e);
+            if translation.suggestions.is_empty() {
+                translation.user_message
+            } else {
+                format!(
+                    "{} — {}",
+                    translation.user_message,
+                    translation.suggestions.join("; ")
+                )
+            }
+        }
+        _ => "No error details available".to_string(),
+    }
+}
 
 /// Formats an audit event for display in the Diagnostics modal
 pub fn format_audit_event<'a>(
@@ -31,7 +52,7 @@ pub fn format_audit_event<'a>(
             theme.danger,
             format!(
                 "Failed to apply rules: {}",
-                event.error.as_deref().unwrap_or("Unknown error")
+                format_error_for_display(event.error.as_deref())
             ),
         ),
         (EventType::RevertRules, true) => {
@@ -41,7 +62,7 @@ pub fn format_audit_event<'a>(
             theme.danger,
             format!(
                 "Revert failed: {}",
-                event.error.as_deref().unwrap_or("Unknown error")
+                format_error_for_display(event.error.as_deref())
             ),
         ),
         (EventType::VerifyRules, true) => {
@@ -49,10 +70,17 @@ pub fn format_audit_event<'a>(
         }
         (EventType::VerifyRules, false) => (
             theme.danger,
-            format!(
-                "Verification failed: {} errors",
-                event.details["error_count"]
-            ),
+            if event.error.is_some() {
+                format!(
+                    "Verification failed: {}",
+                    format_error_for_display(event.error.as_deref())
+                )
+            } else {
+                format!(
+                    "Verification failed: {} errors",
+                    event.details["error_count"]
+                )
+            },
         ),
         (EventType::ProfileCreated, _) => (
             theme.accent,
@@ -102,7 +130,7 @@ pub fn format_audit_event<'a>(
             theme.danger,
             format!(
                 "Authentication failed: {}",
-                event.error.as_deref().unwrap_or("Unknown error")
+                format_error_for_display(event.error.as_deref())
             ),
         ),
         (EventType::RuleCreated, _) => (
@@ -191,7 +219,7 @@ pub fn format_audit_event<'a>(
             theme.danger,
             format!(
                 "Failed to save: {}",
-                event.error.as_deref().unwrap_or("Unknown error")
+                format_error_for_display(event.error.as_deref())
             ),
         ),
     };

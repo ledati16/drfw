@@ -180,7 +180,7 @@ pub enum ProfileError {
 - **Translate technical errors:** "Permission denied. Run with elevated privileges." not "EACCES: exit code 1"
 - **Provide solutions:** "Try installing nftables: `sudo apt install nftables`"
 - **No internal details:** Don't expose stack traces, paths, or system info to users
-- **Consistent format:** Use `Error::user_message()` method for translation layer
+- **Consistent format:** Use `NftablesErrorPattern::match_error()` to translate raw error strings at display time
 
 ### Error Propagation
 - **Public APIs:** Always return `Result` with specific error types

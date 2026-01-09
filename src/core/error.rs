@@ -61,17 +61,6 @@ pub enum SnapshotError {
     RestoreFailed(String),
 }
 
-impl Error {
-    /// Returns a user-friendly error message
-    ///
-    /// Translates technical errors into messages that end users can understand
-    /// and potentially act upon.
-    #[allow(dead_code)] // Used in tests to verify translation
-    pub fn user_message(&self) -> String {
-        ErrorTranslation::translate(self).user_message
-    }
-}
-
 /// Represents a translated error with helpful context
 #[derive(Debug, Clone)]
 pub struct ErrorTranslation {
@@ -98,122 +87,14 @@ impl ErrorTranslation {
         self.help_url = Some(url.into());
         self
     }
-
-    /// Translate an Error into user-friendly message with suggestions
-    pub fn translate(err: &Error) -> Self {
-        match err {
-            Error::Nftables { message, .. } => NftablesErrorPattern::match_error(message),
-
-            Error::Validation { field, message } => Self::new(format!("{field}: {message}"))
-                .with_suggestion(format!("Check the '{field}' field and correct the value"))
-                .with_help("https://nftables.org/manpage/nft.txt"),
-
-            Error::Elevation(msg) => Self::new(format!("Permission error: {msg}"))
-                .with_suggestion(
-                    "Ensure pkexec is installed and configured: sudo apt install policykit-1",
-                )
-                .with_suggestion("Check that your user is in the 'sudo' or 'wheel' group")
-                .with_suggestion("Try running: pkexec --version")
-                .with_help("https://wiki.archlinux.org/title/Polkit"),
-
-            Error::Snapshot(SnapshotError::Corrupted) => {
-                Self::new("Snapshot file is corrupted and cannot be restored")
-                    .with_suggestion("Revert manually: sudo nft flush ruleset")
-                    .with_suggestion("Apply a new configuration to replace the corrupted snapshot")
-                    .with_suggestion("Check disk space: df -h ~/.local/state/drfw/")
-            }
-
-            Error::Snapshot(SnapshotError::ChecksumMismatch { expected, actual }) => {
-                Self::new("Snapshot integrity check failed - possible tampering detected")
-                    .with_suggestion(format!("Expected checksum: {expected}"))
-                    .with_suggestion(format!("Actual checksum: {actual}"))
-                    .with_suggestion("The file may have been tampered with or corrupted")
-                    .with_suggestion(
-                        "Do not restore this snapshot - create a new configuration instead",
-                    )
-            }
-
-            Error::Snapshot(SnapshotError::NotFound(path)) => {
-                Self::new(format!("Snapshot not found: {path}"))
-                    .with_suggestion("The snapshot file may have been deleted or moved")
-                    .with_suggestion(
-                        "Check if the file exists: ls -la ~/.local/state/drfw/snapshots/",
-                    )
-                    .with_suggestion("Create a new snapshot by applying your current configuration")
-            }
-
-            Error::Snapshot(SnapshotError::VersionMismatch { found, expected }) => Self::new(
-                format!("Snapshot version mismatch (found v{found}, expected v{expected})"),
-            )
-            .with_suggestion("This snapshot was created by a different version of DRFW")
-            .with_suggestion("Update DRFW to the version that created this snapshot")
-            .with_suggestion("Or create a new snapshot with your current DRFW version"),
-
-            Error::Snapshot(SnapshotError::Empty) => {
-                Self::new("Snapshot is empty - no rules to restore")
-                    .with_suggestion("This snapshot contains no firewall rules")
-                    .with_suggestion("Create a new snapshot with actual rules configured")
-                    .with_suggestion("Or use the emergency default ruleset for basic protection")
-            }
-
-            Error::Snapshot(SnapshotError::RestoreFailed(msg)) => {
-                Self::new(format!("Failed to restore snapshot: {msg}"))
-                    .with_suggestion("Check nftables logs: sudo journalctl -u nftables")
-                    .with_suggestion(
-                        "Verify nftables service is running: sudo systemctl status nftables",
-                    )
-                    .with_suggestion("Try applying the emergency default ruleset instead")
-            }
-
-            Error::Serialization(e) => {
-                Self::new(format!("Failed to process configuration data: {e}"))
-                    .with_suggestion("The configuration file may be corrupted")
-                    .with_suggestion(
-                        "Delete the corrupted file: rm ~/.local/share/drfw/config.toml",
-                    )
-                    .with_suggestion("DRFW will create a new configuration on next launch")
-                    .with_suggestion("Check disk space: df -h")
-            }
-
-            Error::Internal(msg) => Self::new(format!("Internal error: {msg}"))
-                .with_suggestion("This is a bug in DRFW - please report it")
-                .with_suggestion("GitHub: https://github.com/anthropics/drfw/issues")
-                .with_suggestion("Include the error message and steps to reproduce"),
-
-            Error::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                Self::new("Permission denied - cannot access file or directory")
-                    .with_suggestion("Ensure you have the necessary privileges")
-                    .with_suggestion("Check file permissions: ls -la ~/.local/share/drfw/")
-                    .with_suggestion("Fix permissions: chmod 700 ~/.local/share/drfw/")
-                    .with_help("https://wiki.archlinux.org/title/File_permissions_and_attributes")
-            }
-
-            Error::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Self::new("Required file or command not found")
-                    .with_suggestion("Install nftables: sudo apt install nftables")
-                    .with_suggestion("Verify nftables is in PATH: which nft")
-                    .with_suggestion("Check if DRFW directories exist: ls ~/.local/share/drfw/")
-            }
-
-            Error::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Self::new("File or directory already exists")
-                    .with_suggestion("A file with this name already exists")
-                    .with_suggestion("Choose a different name or delete the existing file")
-            }
-
-            Error::Io(e) => Self::new(format!("File system error: {e}"))
-                .with_suggestion("Check disk space: df -h")
-                .with_suggestion("Verify file system is writable")
-                .with_suggestion("Check system logs: sudo journalctl -xe"),
-        }
-    }
 }
 
 /// Database of nftables error patterns and their translations
-struct NftablesErrorPattern;
+pub struct NftablesErrorPattern;
 
 impl NftablesErrorPattern {
-    fn match_error(msg: &str) -> ErrorTranslation {
+    /// Matches an error message against known patterns and returns a user-friendly translation.
+    pub fn match_error(msg: &str) -> ErrorTranslation {
         let lower = msg.to_lowercase();
 
         // Permission errors
@@ -379,63 +260,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nftables_error_translation() {
-        let err = Error::Nftables {
-            message: "Permission denied".to_string(),
-            stderr: None,
-            exit_code: Some(1),
-        };
-        let msg = err.user_message();
-        assert!(msg.contains("Insufficient permissions"));
-
-        // Test with full translation
-        let translation = ErrorTranslation::translate(&err);
-        assert!(!translation.suggestions.is_empty());
-        assert!(translation.suggestions.iter().any(|s| s.contains("pkexec")));
-    }
-
-    #[test]
-    fn test_validation_error_message() {
-        let err = Error::Validation {
-            field: "port".to_string(),
-            message: "must be between 1 and 65535".to_string(),
-        };
-        assert_eq!(err.user_message(), "port: must be between 1 and 65535");
-
-        // Test suggestions
-        let translation = ErrorTranslation::translate(&err);
-        assert!(!translation.suggestions.is_empty());
-    }
-
-    #[test]
-    fn test_snapshot_corrupted_message() {
-        let err = Error::Snapshot(SnapshotError::Corrupted);
-        let msg = err.user_message();
-        assert!(msg.contains("corrupted"));
-
-        // Check suggestions contain fix instructions
-        let translation = ErrorTranslation::translate(&err);
-        assert!(
-            translation
-                .suggestions
-                .iter()
-                .any(|s| s.contains("Revert manually"))
-        );
-    }
-
-    #[test]
-    fn test_elevation_error_message() {
-        let err = Error::Elevation("pkexec failed".to_string());
-        let msg = err.user_message();
-        assert!(msg.contains("Permission error"));
-        assert!(msg.contains("pkexec"));
-
-        // Check suggestions
-        let translation = ErrorTranslation::translate(&err);
-        assert!(!translation.suggestions.is_empty());
-    }
-
-    #[test]
     fn test_nftables_missing_command() {
         let translation = NftablesErrorPattern::match_error("command not found: nft");
         assert!(translation.user_message.contains("not installed"));
@@ -500,87 +324,5 @@ mod tests {
                 .any(|s| s.contains("modprobe"))
         );
         assert!(translation.help_url.is_some());
-    }
-
-    #[test]
-    fn test_serialization_error() {
-        use std::io;
-        let io_err = io::Error::new(io::ErrorKind::InvalidData, "bad json");
-        let json_err = serde_json::Error::io(io_err);
-        let err = Error::Serialization(json_err);
-
-        let translation = ErrorTranslation::translate(&err);
-        assert!(translation.user_message.contains("configuration data"));
-        assert!(
-            translation
-                .suggestions
-                .iter()
-                .any(|s| s.contains("corrupted"))
-        );
-    }
-
-    #[test]
-    fn test_internal_error() {
-        let err = Error::Internal("unexpected null pointer".to_string());
-        let translation = ErrorTranslation::translate(&err);
-        assert!(translation.user_message.contains("Internal error"));
-        assert!(translation.suggestions.iter().any(|s| s.contains("bug")));
-        assert!(translation.suggestions.iter().any(|s| s.contains("GitHub")));
-    }
-
-    #[test]
-    fn test_snapshot_not_found() {
-        let err = Error::Snapshot(SnapshotError::NotFound("/path/to/missing".to_string()));
-        let translation = ErrorTranslation::translate(&err);
-        assert!(translation.user_message.contains("not found"));
-        assert!(
-            translation
-                .suggestions
-                .iter()
-                .any(|s| s.contains("deleted"))
-        );
-    }
-
-    #[test]
-    fn test_snapshot_version_mismatch() {
-        let err = Error::Snapshot(SnapshotError::VersionMismatch {
-            found: 1,
-            expected: 2,
-        });
-        let translation = ErrorTranslation::translate(&err);
-        assert!(translation.user_message.contains("version mismatch"));
-        assert!(translation.user_message.contains("v1"));
-        assert!(translation.user_message.contains("v2"));
-    }
-
-    #[test]
-    fn test_io_already_exists() {
-        use std::io;
-        let io_err = io::Error::new(io::ErrorKind::AlreadyExists, "file exists");
-        let err = Error::Io(io_err);
-
-        let translation = ErrorTranslation::translate(&err);
-        assert!(translation.user_message.contains("already exists"));
-        assert!(
-            translation
-                .suggestions
-                .iter()
-                .any(|s| s.contains("different name"))
-        );
-    }
-
-    #[test]
-    fn test_help_urls_provided() {
-        // Test that important errors have help URLs
-        let err = Error::Validation {
-            field: "test".to_string(),
-            message: "invalid".to_string(),
-        };
-        let translation = ErrorTranslation::translate(&err);
-        assert!(translation.help_url.is_some());
-
-        let err2 = Error::Elevation("test".to_string());
-        let translation2 = ErrorTranslation::translate(&err2);
-        assert!(translation2.help_url.is_some());
     }
 }
