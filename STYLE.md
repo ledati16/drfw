@@ -38,7 +38,7 @@ pub struct AppTheme {
     syntax_number: Color, syntax_comment: Color, syntax_operator: Color,
 
     // Shadows
-    shadow_color: Color, shadow_strong: Color,
+    shadow_color: Color,  // Auto-calculated based on theme luminance
 
     // Zebra striping
     zebra_stripe: Color,  // Pre-calculated subtle background
@@ -54,18 +54,18 @@ pub struct AppTheme {
 
 ## 2. Shadow System
 
-**Location:** `src/theme/mod.rs:86-99`
+**Location:** `src/theme/mod.rs:94-99`
 
 ### Shadow Values
 ```rust
-// Light themes
+// Light themes: crisp and visible
 shadow_color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-shadow_strong: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
 
-// Dark themes
+// Dark themes: visible against dark backgrounds
 shadow_color: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
-shadow_strong: Color::from_rgba(0.0, 0.0, 0.0, 0.85),
 ```
+
+Shadow color is auto-calculated in `AppTheme::from_hex()` based on background luminance.
 
 ### Elevation Patterns
 **Buttons:**
@@ -75,7 +75,6 @@ shadow_strong: Color::from_rgba(0.0, 0.0, 0.0, 0.85),
 
 **Modals/Tooltips:**
 - Standard: `offset: (0.0, 2.0), blur: 3.0`
-- Use `shadow_color`, never `shadow_strong` for modals
 
 ### Critical Constraint
 **Gradients break shadows in Iced 0.14.** Interactive elements must choose one:
@@ -86,11 +85,11 @@ This is why tabs use solid backgrounds instead of gradients.
 
 ---
 
-## 3. Centralized Button Styles
+## 3. Centralized UI Styles
 
 **Location:** `src/app/ui_components.rs`
 
-### Style Functions
+### Button Style Functions
 ```rust
 primary_button(theme, status)       // Main actions (Apply, Save)
 secondary_button(theme, status)     // Supporting actions (Cancel, Export)
@@ -101,8 +100,21 @@ inactive_tab_button(theme, status)  // Unselected tabs
 dirty_button(theme, status)         // Unsaved changes indicator
 ```
 
-### Implementation Note
-All button functions use a unified `ButtonStyleConfig` system internally to avoid code duplication. Each button type is defined as a const configuration with specific colors, shadows, and interaction states. **Do not create new button functions**—modify existing configurations or add new const configs to the system.
+### Container Style Functions
+```rust
+card_container(theme)               // Standard cards with shadow
+active_card_container(theme)        // Selected cards with accent border
+popup_container(theme)              // Tooltips, floating menus
+inset_container(theme)              // Recessed areas (tag clouds, lists)
+inset_container_bordered(theme)     // Recessed areas with visible border
+section_header_container(theme)     // Subtle label backgrounds
+modal_backdrop(theme)               // Semi-transparent overlay
+```
+
+### Implementation Notes
+**Buttons:** All button functions use a unified `ButtonStyleConfig` system internally to avoid code duplication. Each button type is defined as a const configuration with specific colors, shadows, and interaction states. **Do not create new button functions**—modify existing configurations or add new const configs to the system.
+
+**Containers:** Use centralized container functions instead of inline styling. `inset_container()` handles theme-aware background calculations (hybrid darkening/brightening) automatically.
 
 ### Standard Padding/Sizing
 ```rust
@@ -410,13 +422,15 @@ Very dark themes need additive boost (multiplicative alone is imperceptible):
 
 ```rust
 if theme.is_light() {
-    Color { r: base.r * 0.8, .. }  // Darken: multiply only
+    Color { r: base.r * 0.92, .. }  // Darken: multiply only (8%)
 } else {
-    Color { r: (base.r * 1.4) + 0.03, .. }  // Brighten: multiply + boost
+    Color { r: (base.r * 1.15) + 0.02, .. }  // Brighten: multiply + boost
 }
 ```
 
 **Why:** Ayu Dark's near-black backgrounds require additive component for visibility.
+
+**Centralized:** Use `inset_container(theme)` from `ui_components.rs` instead of inline calculations. This pattern is used for recessed areas like tag clouds and list containers.
 
 ---
 
@@ -641,6 +655,6 @@ scrollable(
 
 ---
 
-**Last Updated:** 2026-01-07 (Section 17 rewritten with two scrollbar patterns)
+**Last Updated:** 2026-01-09 (Added container style functions, removed shadow_strong, updated hybrid calculations)
 **DRFW Version:** 0.1.0
 **Iced Version:** 0.14

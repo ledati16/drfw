@@ -5,6 +5,20 @@ use iced::widget::{
 use iced::{Border, Color, Gradient, Shadow, Vector};
 
 // =============================================================================
+// OPACITY CONSTANTS
+// =============================================================================
+// Consistent alpha values used throughout the UI for disabled/muted states
+
+/// Alpha for disabled element backgrounds (buttons, inputs, togglers)
+const DISABLED_ALPHA: f32 = 0.5;
+
+/// Alpha for disabled element borders
+const DISABLED_BORDER_ALPHA: f32 = 0.3;
+
+/// Alpha for modal backdrop overlay
+const MODAL_BACKDROP_ALPHA: f32 = 0.85;
+
+// =============================================================================
 // BUTTON STYLING SYSTEM (Phase 2.1-2.2 refactor)
 // =============================================================================
 
@@ -406,13 +420,13 @@ fn build_button_style(
                     // Secondary button has special disabled styling
                     (
                         Color {
-                            a: 0.5,
+                            a: DISABLED_ALPHA,
                             ..base_color
                         },
                         theme.fg_muted,
                         Border {
                             color: Color {
-                                a: 0.3,
+                                a: DISABLED_BORDER_ALPHA,
                                 ..theme.border
                             },
                             width: 1.0,
@@ -424,11 +438,11 @@ fn build_button_style(
                     // Standard disabled styling
                     (
                         Color {
-                            a: 0.5,
+                            a: DISABLED_ALPHA,
                             ..base_color
                         },
                         Color {
-                            a: 0.5,
+                            a: DISABLED_ALPHA,
                             ..text_color
                         },
                         border,
@@ -638,6 +652,53 @@ pub fn popup_container(theme: &AppTheme) -> container::Style {
     }
 }
 
+/// Inset/recessed container for elements that appear "pushed in"
+///
+/// Uses a slightly darker (light themes) or lighter (dark themes) background
+/// than the surface to create visual depth. Commonly used for tag clouds,
+/// list areas within modals, and other recessed content areas.
+///
+/// The border radius can be customized by the caller if needed.
+pub fn inset_container(theme: &AppTheme) -> container::Style {
+    let bg = if theme.is_light() {
+        // Light themes: 8% darker
+        Color {
+            r: theme.bg_surface.r * 0.92,
+            g: theme.bg_surface.g * 0.92,
+            b: theme.bg_surface.b * 0.92,
+            ..theme.bg_surface
+        }
+    } else {
+        // Dark themes: 15% brighter with additive boost for near-black themes
+        Color {
+            r: (theme.bg_surface.r * 1.15 + 0.02).min(1.0),
+            g: (theme.bg_surface.g * 1.15 + 0.02).min(1.0),
+            b: (theme.bg_surface.b * 1.15 + 0.02).min(1.0),
+            ..theme.bg_surface
+        }
+    };
+
+    container::Style {
+        background: Some(bg.into()),
+        border: Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Inset container with visible border (for bordered list areas)
+pub fn inset_container_bordered(theme: &AppTheme) -> container::Style {
+    let mut style = inset_container(theme);
+    style.border = Border {
+        radius: 8.0.into(),
+        color: theme.border,
+        width: 1.0,
+    };
+    style
+}
+
 pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style {
     build_button_style(theme, status, ButtonStyleConfig::PRIMARY)
 }
@@ -721,13 +782,13 @@ pub fn themed_text_input(theme: &AppTheme, status: text_input::Status) -> text_i
         },
         text_input::Status::Disabled => text_input::Style {
             background: Color {
-                a: 0.5,
+                a: DISABLED_ALPHA,
                 ..theme.bg_elevated
             }
             .into(),
             border: Border {
                 color: Color {
-                    a: 0.3,
+                    a: DISABLED_BORDER_ALPHA,
                     ..theme.border
                 },
                 width: 1.0,
@@ -915,13 +976,13 @@ pub fn themed_checkbox(theme: &AppTheme, status: checkbox::Status) -> checkbox::
         }
         checkbox::Status::Disabled { .. } => checkbox::Style {
             background: Color {
-                a: 0.5,
+                a: DISABLED_ALPHA,
                 ..theme.bg_elevated
             }
             .into(),
             border: Border {
                 color: Color {
-                    a: 0.3,
+                    a: DISABLED_BORDER_ALPHA,
                     ..theme.border
                 },
                 width: 1.0,
@@ -978,12 +1039,12 @@ pub fn themed_toggler(theme: &AppTheme, status: toggler::Status) -> toggler::Sty
         }
         toggler::Status::Disabled { .. } => toggler::Style {
             background: Color {
-                a: 0.5,
+                a: DISABLED_ALPHA,
                 ..theme.bg_elevated
             }
             .into(),
             background_border_color: Color {
-                a: 0.3,
+                a: DISABLED_BORDER_ALPHA,
                 ..theme.border
             },
             foreground: theme.fg_muted.into(),
@@ -997,7 +1058,7 @@ pub fn modal_backdrop(theme: &AppTheme) -> container::Style {
     container::Style {
         background: Some(
             Color {
-                a: 0.85,
+                a: MODAL_BACKDROP_ALPHA,
                 ..theme.bg_base
             }
             .into(),

@@ -6,13 +6,13 @@
 //! - Tags: Organizational labels
 
 use crate::app::ui_components::{
-    card_container, primary_button, section_header_container, tag_button, themed_scrollable,
-    themed_text_input,
+    card_container, inset_container_bordered, primary_button, section_header_container, tag_button,
+    themed_scrollable, themed_text_input,
 };
 use crate::app::{HelperType, Message, RuleForm, RuleFormHelper};
 use crate::core::firewall::PortEntry;
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Border, Color, Element, Length};
+use iced::{Alignment, Border, Element, Length};
 
 /// Renders the helper modal based on current helper type
 pub fn view_helper_modal<'a>(
@@ -374,33 +374,7 @@ fn view_tags_helper<'a>(
         )
         .height(Length::Fixed(100.0))
         .width(Length::Fill)
-        .style(move |_| {
-            // STYLE.md Section 10: Hybrid Darkening/Brightening for background
-            let bg = if theme.is_light() {
-                Color {
-                    r: theme.bg_surface.r * 0.92,
-                    g: theme.bg_surface.g * 0.92,
-                    b: theme.bg_surface.b * 0.92,
-                    ..theme.bg_surface
-                }
-            } else {
-                Color {
-                    r: (theme.bg_surface.r * 1.15 + 0.02).min(1.0),
-                    g: (theme.bg_surface.g * 1.15 + 0.02).min(1.0),
-                    b: (theme.bg_surface.b * 1.15 + 0.02).min(1.0),
-                    ..theme.bg_surface
-                }
-            };
-            container::Style {
-                background: Some(bg.into()),
-                border: Border {
-                    radius: 8.0.into(),
-                    color: theme.border,
-                    width: 1.0,
-                },
-                ..Default::default()
-            }
-        }),
+        .style(move |_| inset_container_bordered(theme)),
         // Footer
         row![
             button(text("Done").size(14).font(regular_font))

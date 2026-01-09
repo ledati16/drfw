@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 // Shadow alpha values for depth perception
 // These constants define the opacity of drop shadows for different theme types
 const SHADOW_LIGHT_ALPHA: f32 = 0.35; // Light themes: crisp and visible
-const SHADOW_LIGHT_STRONG_ALPHA: f32 = 0.5; // Light themes: emphasized depth
 const SHADOW_DARK_ALPHA: f32 = 0.6; // Dark themes: visible against dark backgrounds
-const SHADOW_DARK_STRONG_ALPHA: f32 = 0.85; // Dark themes: maximum depth
 
 /// Complete theme definition with semantic color naming
 #[derive(Debug, Clone, PartialEq)]
@@ -51,8 +49,7 @@ pub struct AppTheme {
     pub syntax_operator: Color, // Operators, punctuation
 
     // === Shadows ===
-    pub shadow_color: Color,  // Shadow color (transparent black usually)
-    pub shadow_strong: Color, // Stronger shadow for modals
+    pub shadow_color: Color, // Shadow color (transparent black usually)
 
     // === Zebra Striping ===
     /// Pre-calculated subtle background for even rows in code preview (1.5% difference from `bg_surface`)
@@ -94,17 +91,11 @@ impl AppTheme {
         // Calculate if theme is light based on background luminance
         let is_light = color_luminance(&bg_base_color) > 0.5;
 
-        // Set shadow colors appropriate for theme type
-        let (shadow_color, shadow_strong) = if is_light {
-            (
-                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_LIGHT_ALPHA),
-                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_LIGHT_STRONG_ALPHA),
-            )
+        // Set shadow color appropriate for theme type
+        let shadow_color = if is_light {
+            Color::from_rgba(0.0, 0.0, 0.0, SHADOW_LIGHT_ALPHA)
         } else {
-            (
-                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_DARK_ALPHA),
-                Color::from_rgba(0.0, 0.0, 0.0, SHADOW_DARK_STRONG_ALPHA),
-            )
+            Color::from_rgba(0.0, 0.0, 0.0, SHADOW_DARK_ALPHA)
         };
 
         // Calculate zebra stripe color (2-3% difference from bg_surface) once per theme
@@ -155,7 +146,6 @@ impl AppTheme {
             syntax_comment: hex_to_color(syntax_comment),
             syntax_operator: hex_to_color(syntax_operator),
             shadow_color,
-            shadow_strong,
             zebra_stripe,
         }
     }
