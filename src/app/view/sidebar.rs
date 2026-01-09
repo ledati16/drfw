@@ -3,7 +3,7 @@
 use crate::app::ui_components::{
     active_card_container, active_tag_button, card_container, danger_button, popup_container,
     primary_button, secondary_button, section_header_container, sidebar_container, tag_button,
-    themed_checkbox, themed_scrollable, themed_text_input,
+    themed_checkbox, themed_horizontal_rule, themed_scrollable, themed_text_input,
 };
 use crate::app::{Message, State};
 use iced::widget::text::Wrapping;
@@ -470,15 +470,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     .padding(0)
                     .style(button::text),
                     // Accent Line (Absorbs all remaining space)
-                    rule::horizontal(1).style(move |_| rule::Style {
-                        color: Color {
-                            a: 0.1,
-                            ..theme.fg_muted
-                        },
-                        fill_mode: rule::FillMode::Full,
-                        radius: 0.0.into(),
-                        snap: true,
-                    }),
+                    rule::horizontal(1).style(move |_| themed_horizontal_rule(theme)),
                     // Management Cluster (Always stays on far right)
                     {
                         // Checkbox: disable interaction during drag (clicks fall through to mouse_area)

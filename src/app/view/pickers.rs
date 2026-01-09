@@ -2,8 +2,8 @@
 
 use crate::app::ui_components::{
     active_card_button, active_tab_button, card_button, card_container, danger_button,
-    dirty_button, primary_button, secondary_button, section_header_container, themed_scrollable,
-    themed_text_input,
+    dirty_button, primary_button, secondary_button, section_header_container,
+    themed_horizontal_rule, themed_scrollable, themed_text_input,
 };
 use crate::app::{
     FontPickerState, FontPickerTarget, Message, State, ThemeFilter, ThemePickerState,
@@ -406,15 +406,7 @@ pub fn view_theme_picker<'a>(
                     .size(11)
                     .font(state.font_mono)
                     .color(theme.fg_muted),
-                rule::horizontal(1).style(move |_| rule::Style {
-                    color: Color {
-                        a: 0.1,
-                        ..theme.fg_muted
-                    },
-                    fill_mode: rule::FillMode::Full,
-                    radius: 0.0.into(),
-                    snap: true,
-                }),
+                rule::horizontal(1).style(move |_| themed_horizontal_rule(theme)),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
