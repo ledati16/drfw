@@ -382,6 +382,9 @@ use crate::core::test_helpers::{create_test_ruleset, create_test_rule, create_fu
 
 // For app handler tests (app state)
 use crate::app::handlers::test_utils::create_test_state;
+
+// For tests that manipulate environment variables (elevation, profiles)
+use crate::core::test_helpers::{setup_test_elevation_bypass_sync, ENV_VAR_MUTEX};
 ```
 
 ### Environment Variables
@@ -389,6 +392,8 @@ use crate::app::handlers::test_utils::create_test_state;
 | Variable | Purpose | When to Use |
 |----------|---------|-------------|
 | `DRFW_TEST_NO_ELEVATION` | Bypasses pkexec/sudo/run0 in `create_elevated_nft_command()` | Tests that call nft directly |
+| `DRFW_TEST_DATA_DIR` | Overrides data directory (`~/.local/share/drfw/`) | Tests that access profiles |
+| `DRFW_TEST_STATE_DIR` | Overrides state directory (`~/.local/state/drfw/`) | Tests that access audit logs/snapshots |
 | `DRFW_USE_REAL_NFT` | Uses real nft instead of mock script | Manual testing with actual nftables |
 | `MOCK_NFT_FAIL_PERMS` | Makes mock_nft.sh simulate permission errors | Testing error handling |
 | `MOCK_NFT_FAIL_APPLY` | Makes mock_nft.sh simulate apply failures | Testing error handling |
@@ -433,9 +438,10 @@ fn test_validator() {
 
 #[tokio::test]
 async fn test_elevated_operation() {
-    use crate::core::test_helpers::setup_test_elevation_bypass;
+    use crate::core::test_helpers::setup_test_elevation_bypass_sync;
 
-    setup_test_elevation_bypass();  // Sets DRFW_TEST_NO_ELEVATION=1
+    // Acquires ENV_VAR_MUTEX and sets DRFW_TEST_NO_ELEVATION=1
+    let _guard = setup_test_elevation_bypass_sync();
 
     let result = apply_rules().await;
     assert!(result.is_ok());

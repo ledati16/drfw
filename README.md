@@ -391,7 +391,7 @@ cargo fmt --check             # Format check
 ### Code Quality
 
 DRFW maintains strict standards:
-- 385+ tests (unit, integration, property-based)
+- 375+ tests (unit, integration, property-based)
 - Clippy pedantic with zero warnings
 - Security-first: no shell interpolation, allowlist validation, atomic writes
 - Performance: cached rendering, debounced saves, pre-computed display strings
