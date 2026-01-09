@@ -1201,26 +1201,22 @@ pub fn notification_banner<'a>(
     theme: &'a crate::theme::AppTheme,
     index: usize,
 ) -> iced::Element<'a, crate::app::Message> {
-    use iced::widget::{container, mouse_area, row, text};
+    use iced::widget::{container, mouse_area, text};
     use iced::{Background, Border, Shadow};
 
     // Determine colors based on severity
-    let (bg_color, fg_color, icon) = match banner.severity {
-        crate::app::BannerSeverity::Success => (theme.success, theme.fg_on_accent, "✓"),
-        crate::app::BannerSeverity::Info => (theme.info, theme.fg_on_accent, "ℹ"),
-        crate::app::BannerSeverity::Warning => (theme.warning, theme.fg_on_accent, "⚠"),
-        crate::app::BannerSeverity::Error => (theme.danger, theme.fg_on_accent, "✖"),
+    let (bg_color, fg_color) = match banner.severity {
+        crate::app::BannerSeverity::Success => (theme.success, theme.fg_on_accent),
+        crate::app::BannerSeverity::Info => (theme.info, theme.fg_on_accent),
+        crate::app::BannerSeverity::Warning => (theme.warning, theme.fg_on_accent),
+        crate::app::BannerSeverity::Error => (theme.danger, theme.fg_on_accent),
     };
 
-    let content = row![
-        text(icon).size(16).color(fg_color),
-        text(&banner.message).size(14).color(fg_color),
-    ]
-    .spacing(12)
-    .padding([8, 16]);
+    let content = text(&banner.message).size(14).color(fg_color);
 
     let styled_container =
         container(content)
+            .padding([8, 16])
             .max_width(450)
             .style(move |_theme| container::Style {
                 background: Some(Background::Color(bg_color)),

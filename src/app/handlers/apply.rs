@@ -61,7 +61,6 @@ fn require_polkit_agent(state: &mut State) -> Result<(), Task<Message>> {
         state.push_banner(
             "No polkit agent running. Install and start an authentication agent.",
             BannerSeverity::Error,
-            10,
         );
         Err(Task::none())
     }
@@ -117,7 +116,7 @@ pub(crate) fn handle_verify_completed(
                     verify_result.errors.len()
                 )
             };
-            state.push_banner(&error_summary, BannerSeverity::Error, 8);
+            state.push_banner(&error_summary, BannerSeverity::Error);
             let enable_event_log = state.enable_event_log;
             let error_count = verify_result.errors.len();
             let error = Some(verify_result.errors.join("; "));
@@ -131,7 +130,7 @@ pub(crate) fn handle_verify_completed(
         Err(e) => {
             state.status = AppStatus::Idle;
             let msg = truncate_error_message("Verification error: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
             let enable_event_log = state.enable_event_log;
             Task::perform(
                 async move {
@@ -182,7 +181,7 @@ pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value
         } else {
             format!("Warning: Failed to save snapshot: {e}")
         };
-        state.push_banner(&msg, BannerSeverity::Warning, 10);
+        state.push_banner(&msg, BannerSeverity::Warning);
     }
 
     if state.auto_revert_enabled {
@@ -203,16 +202,11 @@ pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value
                 state.auto_revert_timeout_secs.min(120)
             ),
             BannerSeverity::Info,
-            state.auto_revert_timeout_secs.min(120),
         );
     } else {
         // Auto-revert disabled: show success banner and return to idle
         state.status = AppStatus::Idle;
-        state.push_banner(
-            "Firewall rules applied successfully!",
-            BannerSeverity::Success,
-            5,
-        );
+        state.push_banner("Firewall rules applied successfully!", BannerSeverity::Success);
     }
 }
 
@@ -259,7 +253,6 @@ pub(crate) fn handle_countdown_tick(state: &mut State) -> Task<Message> {
             state.push_banner(
                 "Firewall rules automatically reverted due to timeout.",
                 BannerSeverity::Warning,
-                10,
             );
 
             // Spawn revert task with audit logging
@@ -298,7 +291,6 @@ pub(crate) fn handle_countdown_tick(state: &mut State) -> Task<Message> {
                 state.push_banner(
                     "Firewall will revert in 5 seconds! Click Confirm to keep changes.",
                     BannerSeverity::Warning,
-                    5,
                 );
             }
         }
@@ -310,7 +302,7 @@ pub(crate) fn handle_countdown_tick(state: &mut State) -> Task<Message> {
 pub(crate) fn handle_confirm_clicked(state: &mut State) -> Task<Message> {
     if matches!(state.status, AppStatus::PendingConfirmation { .. }) {
         state.status = AppStatus::Idle;
-        state.push_banner("Changes confirmed and saved!", BannerSeverity::Success, 5);
+        state.push_banner("Changes confirmed and saved!", BannerSeverity::Success);
         let enable_event_log = state.enable_event_log;
         let timeout_secs = state.auto_revert_timeout_secs;
         return Task::perform(
@@ -328,16 +320,12 @@ pub(crate) fn handle_revert_result(state: &mut State, result: Result<(), String>
     match result {
         Ok(()) => {
             state.status = AppStatus::Idle;
-            state.push_banner(
-                "Firewall rules reverted successfully",
-                BannerSeverity::Info,
-                5,
-            );
+            state.push_banner("Firewall rules reverted successfully", BannerSeverity::Info);
         }
         Err(e) => {
             state.status = AppStatus::Idle;
             let msg = truncate_error_message("Revert failed: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error, 10);
+            state.push_banner(&msg, BannerSeverity::Error);
         }
     }
 }
@@ -385,14 +373,14 @@ pub(crate) fn handle_save_to_system_verify_result(
                 verify_result.errors.join("; ")
             };
             let msg = truncate_error_message("Cannot save - invalid config: ", &error_summary, 80);
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
             Task::none()
         }
         Err(e) => {
             // Verification error (e.g., nft command failed)
             state.status = AppStatus::Idle;
             let msg = truncate_error_message("Verification error: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
             Task::none()
         }
     }
@@ -465,7 +453,6 @@ pub(crate) fn handle_save_to_system_result(
             state.push_banner(
                 format!("Configuration saved to {}", drfw::SYSTEM_NFT_PATH),
                 BannerSeverity::Success,
-                5,
             );
             Task::perform(
                 async move {
@@ -476,7 +463,7 @@ pub(crate) fn handle_save_to_system_result(
         }
         Err(e) => {
             let msg = truncate_error_message("Save failed: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
             Task::perform(
                 async move {
                     audit::log_save_to_system(enable_event_log, false, &target_path, Some(e)).await;
@@ -495,7 +482,7 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
 
     // Detect elevation-specific errors and handle accordingly
     if error.contains("Authentication cancelled") {
-        state.push_banner("Authentication was cancelled", BannerSeverity::Warning, 5);
+        state.push_banner("Authentication was cancelled", BannerSeverity::Warning);
         let enable_event_log = state.enable_event_log;
         return Task::perform(
             async move {
@@ -508,7 +495,7 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
             |()| Message::AuditLogWritten,
         );
     } else if error.contains("Authentication failed") {
-        state.push_banner("Authentication failed", BannerSeverity::Error, 5);
+        state.push_banner("Authentication failed", BannerSeverity::Error);
         let enable_event_log = state.enable_event_log;
         let error_msg = error.to_owned();
         return Task::perform(
@@ -518,7 +505,7 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
             |()| Message::AuditLogWritten,
         );
     } else if error.contains("timed out") || error.contains("Operation timed out") {
-        state.push_banner("Authentication timed out", BannerSeverity::Error, 5);
+        state.push_banner("Authentication timed out", BannerSeverity::Error);
         let enable_event_log = state.enable_event_log;
         let error_msg = error.to_owned();
         return Task::perform(
@@ -531,7 +518,6 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
         state.push_banner(
             "No authentication agent available. Install polkit.",
             BannerSeverity::Error,
-            8,
         );
         let enable_event_log = state.enable_event_log;
         let error_msg = error.to_owned();
@@ -542,7 +528,7 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
             |()| Message::AuditLogWritten,
         );
     } else if error.contains("nft binary not found") || error.contains("nftables") {
-        state.push_banner("nftables not installed", BannerSeverity::Error, 5);
+        state.push_banner("nftables not installed", BannerSeverity::Error);
         let enable_event_log = state.enable_event_log;
         let error_msg = error.to_owned();
         return Task::perform(
@@ -555,7 +541,7 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
 
     // Generic error - show error message (no prefix for generic errors)
     let msg = truncate_error_message("", error, 80);
-    state.push_banner(&msg, BannerSeverity::Error, 8);
+    state.push_banner(&msg, BannerSeverity::Error);
 
     Task::none()
 }

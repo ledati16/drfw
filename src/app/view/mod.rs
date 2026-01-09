@@ -190,7 +190,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
         )
         .spacing(8)
         .width(Length::Shrink)
-        .padding(16);
+        .padding(16)
+        .align_x(alignment::Horizontal::Right);
 
         stack![
             with_helper,

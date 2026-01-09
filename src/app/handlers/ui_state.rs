@@ -240,7 +240,6 @@ pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) ->
     state.push_banner(
         format!("Line {line_number} copied to clipboard"),
         BannerSeverity::Info,
-        2,
     );
 
     iced::clipboard::write(text)

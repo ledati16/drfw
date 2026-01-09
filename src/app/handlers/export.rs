@@ -66,7 +66,7 @@ pub(crate) fn handle_export_result(state: &mut State, result: Result<String, Str
     match result {
         Ok(path) => {
             let msg = crate::app::helpers::truncate_path_smart(&path, 60);
-            state.push_banner(format!("Exported to {msg}"), BannerSeverity::Success, 5);
+            state.push_banner(format!("Exported to {msg}"), BannerSeverity::Success);
         }
         Err(e) if e == "Export cancelled" => {
             // User cancelled - don't show error
@@ -77,7 +77,7 @@ pub(crate) fn handle_export_result(state: &mut State, result: Result<String, Str
             } else {
                 format!("Export failed: {e}")
             };
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
         }
     }
 }

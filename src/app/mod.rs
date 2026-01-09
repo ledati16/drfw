@@ -623,12 +623,20 @@ impl State {
     }
 
     /// Add a banner to the notification queue (max 2 visible)
-    pub fn push_banner(
-        &mut self,
-        message: impl Into<String>,
-        severity: BannerSeverity,
-        duration_secs: u64,
-    ) {
+    ///
+    /// Duration is automatically determined by severity:
+    /// - Success: 4 seconds (quick positive acknowledgment)
+    /// - Info: 5 seconds (neutral information)
+    /// - Warning: 7 seconds (needs attention)
+    /// - Error: 10 seconds (problem requiring action)
+    pub fn push_banner(&mut self, message: impl Into<String>, severity: BannerSeverity) {
+        let duration_secs = match severity {
+            BannerSeverity::Success => 4,
+            BannerSeverity::Info => 5,
+            BannerSeverity::Warning => 7,
+            BannerSeverity::Error => 10,
+        };
+
         // Remove oldest if at capacity
         while self.banners.len() >= 2 {
             self.banners.pop_front();

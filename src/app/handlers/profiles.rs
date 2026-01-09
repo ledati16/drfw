@@ -190,7 +190,7 @@ pub(crate) fn handle_confirm_delete_profile(state: &mut State) -> Task<Message> 
     {
         // Validation: ensure at least one profile remains
         if state.available_profiles.len() <= 1 {
-            state.push_banner("Cannot delete last profile", BannerSeverity::Error, 6);
+            state.push_banner("Cannot delete last profile", BannerSeverity::Error);
             return Task::none();
         }
 
@@ -199,7 +199,6 @@ pub(crate) fn handle_confirm_delete_profile(state: &mut State) -> Task<Message> 
             state.push_banner(
                 "Cannot delete active profile - switch to another profile first",
                 BannerSeverity::Error,
-                8,
             );
             return Task::none();
         }
@@ -249,7 +248,7 @@ pub(crate) fn handle_profile_deleted(
             } else {
                 format!("Failed to delete profile: {e}")
             };
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
             Task::none()
         }
     }
@@ -323,7 +322,7 @@ pub(crate) fn handle_profile_renamed(state: &mut State, result: Result<Vec<Strin
             } else {
                 format!("Failed to rename profile: {e}")
             };
-            state.push_banner(&msg, BannerSeverity::Error, 8);
+            state.push_banner(&msg, BannerSeverity::Error);
         }
     }
 }
