@@ -402,6 +402,8 @@ pub(crate) fn handle_event(state: &mut State, event: iced::Event) -> Task<Messag
                 }
                 if !state.rule_search.is_empty() {
                     state.rule_search.clear();
+                    state.rule_search_lowercase.clear();
+                    state.update_filter_cache();
                 }
             }
             iced::keyboard::Key::Named(iced::keyboard::key::Named::F1) => {
