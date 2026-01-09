@@ -241,7 +241,6 @@ pub enum ThemeChoice {
     Monokai,           // 2M+ - Classic warm
     MaterialPalenight, // 2.46M - Purple-blue professional
     NightOwl,          // 1.9M - Accessible dark navy
-    SynthWave84,       // 1.3M - Retro cyberpunk
     MinDark,           // 551K - Minimal aesthetic
 
     // ═══════════════════════════════════════════════════
@@ -293,7 +292,6 @@ impl ThemeChoice {
             Self::Monokai => "Monokai",
             Self::MaterialPalenight => "Material Palenight",
             Self::NightOwl => "Night Owl",
-            Self::SynthWave84 => "SynthWave '84",
             Self::MinDark => "Min Dark",
             // Modern dark themes
             Self::TokyoNight => "Tokyo Night",
@@ -333,7 +331,6 @@ impl ThemeChoice {
             Self::Monokai => presets::monokai(),
             Self::MaterialPalenight => presets::material_palenight(),
             Self::NightOwl => presets::night_owl(),
-            Self::SynthWave84 => presets::synthwave_84(),
             Self::MinDark => presets::min_dark(),
             // Modern dark themes
             Self::TokyoNight => presets::tokyo_night(),

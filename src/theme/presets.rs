@@ -668,39 +668,6 @@ pub fn night_owl() -> AppTheme {
     )
 }
 
-/// `SynthWave` '84 - Retro neon cyberpunk theme
-/// Dark background with vibrant neon pink, cyan, and purple
-pub fn synthwave_84() -> AppTheme {
-    AppTheme::from_hex(
-        "SynthWave '84",
-        0x0026_2335, // bg_base - Dark purple-black
-        0x0020_1B2D, // bg_sidebar - Darker purple
-        0x0034_294A, // bg_surface - Purple card
-        0x0041_3356, // bg_elevated - Lighter purple
-        0x004E_4061, // bg_hover - Hover purple
-        0x005B_4D6C, // bg_active - Active purple
-        0x00FF_FFFF, // fg_primary - White (official)
-        0x00C4_C0D0, // fg_secondary - Light purple-gray
-        0x008A_85A0, // fg_muted - Muted purple
-        0x0026_2335, // fg_on_accent - Dark on accent
-        0x00FF_7EDB, // accent - Neon pink/magenta (official)
-        0x00E0_0066, // accent_hover - Darker pink
-        0x0003_EDF9, // success - Neon cyan (official)
-        0x00FE_DE5D, // warning - Neon yellow (official)
-        0x00FE_4450, // danger - Neon red
-        0x0003_EDF9, // info - Bright cyan (official)
-        0x0041_3356, // border - Elevated (visible against surface)
-        0x00FF_7EDB, // border_strong - Neon pink (official)
-        0x0041_3356, // divider - Elevated
-        0x00FF_7EDB, // syntax_keyword - Pink
-        0x0003_EDF9, // syntax_type - Cyan (official)
-        0x00FE_DE5D, // syntax_string - Yellow (official)
-        0x00FF_8B39, // syntax_number - Orange (official)
-        0x006D_6D6D, // syntax_comment - Gray
-        0x00FF_7EDB, // syntax_operator - Pink
-    )
-}
-
 // ═══════════════════════════════════════════════════
 // LIGHT THEMES
 // ═══════════════════════════════════════════════════
@@ -977,7 +944,6 @@ mod tests {
             one_dark(),
             monokai(),
             night_owl(),
-            synthwave_84(),
             material_palenight(),
             min_dark(),
             // Modern dark themes
@@ -1021,7 +987,6 @@ mod tests {
         let _ = one_dark();
         let _ = monokai();
         let _ = night_owl();
-        let _ = synthwave_84();
         let _ = material_palenight();
         let _ = min_dark();
         // Modern dark themes
