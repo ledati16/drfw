@@ -56,8 +56,8 @@ pub struct State {
     pub active_tab: WorkspaceTab,
     pub rule_form: Option<RuleForm>,
     pub rule_form_helper: Option<RuleFormHelper>,
-    pub interface_combo_state: iced::widget::combo_box::State<String>,
-    pub output_interface_combo_state: iced::widget::combo_box::State<String>,
+    pub interface_combo: iced::widget::combo_box::State<String>,
+    pub output_interface_combo: iced::widget::combo_box::State<String>,
     pub countdown_remaining: u32,
     pub progress_animation: Animation<f32>,
     pub form_errors: Option<FormErrors>,
@@ -82,6 +82,7 @@ pub struct State {
     pub auto_revert_enabled: bool,
     pub auto_revert_timeout_secs: u64,
     pub enable_event_log: bool,
+    pub reduced_colors: bool,
     pub show_diagnostics: bool,
     pub diagnostics_filter: DiagnosticsFilter,
     pub show_export_modal: bool,
@@ -306,6 +307,7 @@ pub enum Message {
     ToggleAutoRevert(bool),
     AutoRevertTimeoutChanged(u64),
     ToggleEventLog(bool),
+    ToggleReducedColors(bool),
     ToggleStrictIcmpRequested(bool),
     ConfirmStrictIcmp,
     IcmpRateLimitChanged(u32),
@@ -425,6 +427,7 @@ impl State {
         // Clamp timeout to prevent integer overflow (max 1 hour = 3600 seconds)
         let auto_revert_timeout_secs = config.auto_revert_timeout_secs.min(3600);
         let enable_event_log = config.enable_event_log;
+        let reduced_colors = config.reduced_colors;
         let active_profile_name = config.active_profile;
 
         regular_font_choice.resolve(false);
@@ -447,7 +450,12 @@ impl State {
         let available_profiles = crate::core::profiles::list_profiles_blocking()
             .unwrap_or_else(|_| vec![crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()]);
 
-        let theme = current_theme.to_theme();
+        let base_theme = current_theme.to_theme();
+        let theme = if reduced_colors {
+            base_theme.with_reduced_colors()
+        } else {
+            base_theme
+        };
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
         let available_fonts = crate::fonts::all_options();
@@ -461,10 +469,10 @@ impl State {
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
             rule_form_helper: None,
-            interface_combo_state: iced::widget::combo_box::State::new(
+            interface_combo: iced::widget::combo_box::State::new(
                 crate::utils::build_interface_suggestions(),
             ),
-            output_interface_combo_state: iced::widget::combo_box::State::new(
+            output_interface_combo: iced::widget::combo_box::State::new(
                 crate::utils::build_interface_suggestions(),
             ),
             countdown_remaining: 15,
@@ -487,6 +495,7 @@ impl State {
             auto_revert_enabled,
             auto_revert_timeout_secs,
             enable_event_log,
+            reduced_colors,
             show_diagnostics: false,
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
@@ -555,8 +564,8 @@ impl State {
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
             rule_form_helper: None,
-            interface_combo_state: iced::widget::combo_box::State::new(Vec::new()),
-            output_interface_combo_state: iced::widget::combo_box::State::new(Vec::new()),
+            interface_combo: iced::widget::combo_box::State::new(Vec::new()),
+            output_interface_combo: iced::widget::combo_box::State::new(Vec::new()),
             countdown_remaining: 15,
             progress_animation: Animation::new(1.0),
             form_errors: None,
@@ -577,6 +586,7 @@ impl State {
             auto_revert_enabled: true,
             auto_revert_timeout_secs: 15,
             enable_event_log: false,
+            reduced_colors: false,
             show_diagnostics: false,
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
@@ -798,6 +808,7 @@ impl State {
             auto_revert_enabled: self.auto_revert_enabled,
             auto_revert_timeout_secs: self.auto_revert_timeout_secs,
             enable_event_log: self.enable_event_log,
+            reduced_colors: self.reduced_colors,
         };
 
         Task::perform(
@@ -929,6 +940,9 @@ impl State {
             }
             Message::ToggleEventLog(enabled) => {
                 return handlers::handle_toggle_event_log(self, enabled);
+            }
+            Message::ToggleReducedColors(enabled) => {
+                return handlers::handle_toggle_reduced_colors(self, enabled);
             }
             Message::ToggleStrictIcmpRequested(enabled) => {
                 return handlers::handle_toggle_strict_icmp_requested(self, enabled);

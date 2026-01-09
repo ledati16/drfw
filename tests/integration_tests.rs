@@ -59,7 +59,7 @@ fn setup_mock_nft() {
 /// Set up a temp directory for tests that access profile/config directories.
 ///
 /// This prevents tests from creating or modifying the user's real data.
-/// Returns a TempDir that will be automatically cleaned up when dropped.
+/// Returns a `TempDir` that will be automatically cleaned up when dropped.
 fn setup_temp_test_dirs() -> tempfile::TempDir {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     unsafe {

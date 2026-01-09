@@ -124,7 +124,12 @@ pub(crate) fn handle_theme_picker_filter_changed(state: &mut State, filter: Them
 /// Handles theme preview
 pub(crate) fn handle_theme_preview(state: &mut State, choice: crate::theme::ThemeChoice) {
     state.current_theme = choice;
-    state.theme = choice.to_theme();
+    let base_theme = choice.to_theme();
+    state.theme = if state.reduced_colors {
+        base_theme.with_reduced_colors()
+    } else {
+        base_theme
+    };
 }
 
 /// Handles theme preview button click (cycles preview)
@@ -150,7 +155,12 @@ pub(crate) fn handle_apply_theme(state: &mut State) -> Task<Message> {
 pub(crate) fn handle_cancel_theme_picker(state: &mut State) {
     if let Some(picker) = &state.theme_picker {
         state.current_theme = picker.original_theme;
-        state.theme = picker.original_theme.to_theme();
+        let base_theme = picker.original_theme.to_theme();
+        state.theme = if state.reduced_colors {
+            base_theme.with_reduced_colors()
+        } else {
+            base_theme
+        };
     }
     state.theme_picker = None;
 }
@@ -228,7 +238,7 @@ pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) ->
     }
 
     state.push_banner(
-        format!("Line {} copied to clipboard", line_number),
+        format!("Line {line_number} copied to clipboard"),
         BannerSeverity::Info,
         2,
     );
@@ -505,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_extract_user_label_no_comment() {
-        let line = r#"tcp dport 22 accept"#;
+        let line = r"tcp dport 22 accept";
         assert_eq!(extract_user_label_from_line(line), None);
     }
 

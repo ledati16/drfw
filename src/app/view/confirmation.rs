@@ -393,10 +393,10 @@ pub fn view_apply_flow_modal<'a>(
 
 /// Modal for confirming the Save to System operation.
 /// Shows when `AppStatus::AwaitingSaveToSystem` is active.
-pub fn view_save_to_system_modal<'a>(
-    theme: &'a crate::theme::AppTheme,
+pub fn view_save_to_system_modal(
+    theme: &crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     let body = column![
         text("✓ Rules verified.")
             .size(14)

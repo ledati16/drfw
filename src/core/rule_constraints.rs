@@ -9,7 +9,7 @@
 //! Extracting constraints from UI code provides:
 //! - Single source of truth for rule validation
 //! - Testable constraint logic independent of UI
-//! - Type-safe test data generation (stress_gen uses same rules as GUI)
+//! - Type-safe test data generation (`stress_gen` uses same rules as GUI)
 //!
 //! # Note on Dead Code Warnings
 //!
@@ -70,7 +70,7 @@ pub fn protocol_supports_ports(protocol: Protocol) -> bool {
 
 /// Returns `true` if the protocol is an ICMP variant.
 ///
-/// Groups ICMP, ICMPv6, and IcmpBoth for code that needs to handle
+/// Groups ICMP, `ICMPv6`, and `IcmpBoth` for code that needs to handle
 /// all ICMP-like protocols uniformly.
 ///
 /// # Examples
@@ -101,7 +101,7 @@ pub fn protocol_is_icmp(protocol: Protocol) -> bool {
 /// ICMP version-specific protocols have IP version requirements:
 /// - `Protocol::Icmp` (IPv4 ICMP) only works with IPv4 addresses
 /// - `Protocol::Icmpv6` (IPv6 ICMP) only works with IPv6 addresses
-/// - All other protocols (Tcp, Udp, TcpAndUdp, Any, IcmpBoth) work with either version
+/// - All other protocols (Tcp, Udp, `TcpAndUdp`, Any, `IcmpBoth`) work with either version
 ///
 /// Using mismatched IP versions with ICMP protocols creates rules that will
 /// never match any traffic, since ICMP packets are IP version-specific.
@@ -211,8 +211,8 @@ pub fn reject_type_valid_for_protocol(reject_type: RejectType, protocol: Protoco
 
 /// Returns the list of reject types available for a protocol.
 ///
-/// The GUI shows a simplified list (Default, AdminProhibited, and TcpReset for TCP).
-/// PortUnreachable and HostUnreachable are not shown in the GUI picker but may
+/// The GUI shows a simplified list (Default, `AdminProhibited`, and `TcpReset` for TCP).
+/// `PortUnreachable` and `HostUnreachable` are not shown in the GUI picker but may
 /// exist in imported rulesets.
 ///
 /// # Examples
@@ -396,9 +396,7 @@ mod tests {
             for protocol in protocols {
                 assert!(
                     reject_type_valid_for_protocol(reject_type, protocol),
-                    "{:?} should be valid for {:?}",
-                    reject_type,
-                    protocol
+                    "{reject_type:?} should be valid for {protocol:?}"
                 );
             }
         }
@@ -425,8 +423,7 @@ mod tests {
             assert!(types.contains(&RejectType::AdminProhibited));
             assert!(
                 !types.contains(&RejectType::TcpReset),
-                "TcpReset should not be in list for {:?}",
-                protocol
+                "TcpReset should not be in list for {protocol:?}"
             );
         }
     }
@@ -486,13 +483,11 @@ mod tests {
         ] {
             assert!(
                 ip_compatible_with_protocol(&ipv4, protocol),
-                "IPv4 should be compatible with {:?}",
-                protocol
+                "IPv4 should be compatible with {protocol:?}"
             );
             assert!(
                 ip_compatible_with_protocol(&ipv6, protocol),
-                "IPv6 should be compatible with {:?}",
-                protocol
+                "IPv6 should be compatible with {protocol:?}"
             );
         }
     }

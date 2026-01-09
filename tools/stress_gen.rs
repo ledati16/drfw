@@ -60,6 +60,7 @@ use uuid::Uuid;
 #[derive(Parser)]
 #[command(name = "stress_gen")]
 #[command(about = "Generate stress-test profiles for DRFW development and testing")]
+#[allow(clippy::struct_excessive_bools)] // CLI args naturally have boolean flags
 struct Args {
     /// Number of rules to generate (overridden by --scenario)
     #[arg(short, long, default_value = "100")]
@@ -231,26 +232,16 @@ impl CoverageTracker {
         println!("\n=== Coverage Report ===\n");
         println!("Generated {total} rules:\n");
 
-        // Helper to print sorted hashmap
-        fn print_sorted(name: &str, map: &HashMap<&'static str, usize>) {
-            println!("{name}:");
-            let mut items: Vec<_> = map.iter().collect();
-            items.sort_by_key(|(k, _)| *k);
-            for (key, count) in items {
-                println!("  {key}: {count}");
-            }
-        }
-
-        print_sorted("Protocols", &self.protocols);
-        print_sorted("\nActions", &self.actions);
-        print_sorted("\nChains", &self.chains);
+        print_sorted_map("Protocols", &self.protocols);
+        print_sorted_map("\nActions", &self.actions);
+        print_sorted_map("\nChains", &self.chains);
 
         if !self.reject_types.is_empty() {
-            print_sorted("\nReject Types", &self.reject_types);
+            print_sorted_map("\nReject Types", &self.reject_types);
         }
 
         if !self.time_units.is_empty() {
-            print_sorted("\nRate Limit Time Units", &self.time_units);
+            print_sorted_map("\nRate Limit Time Units", &self.time_units);
         }
 
         println!("\nFeature Usage:");
@@ -273,14 +264,14 @@ impl CoverageTracker {
         // Check protocols
         for proto in PROTOCOLS {
             if !self.protocols.contains_key(proto.as_str()) {
-                missing.push(format!("Protocol::{:?}", proto));
+                missing.push(format!("Protocol::{proto:?}"));
             }
         }
 
         // Check actions
         for action in ACTIONS {
             if !self.actions.contains_key(action.as_str()) {
-                missing.push(format!("Action::{:?}", action));
+                missing.push(format!("Action::{action:?}"));
             }
         }
 
@@ -296,12 +287,22 @@ impl CoverageTracker {
         if self.actions.contains_key("reject") {
             for reject_type in REJECT_TYPES {
                 if !self.reject_types.contains_key(reject_type.display_name()) {
-                    missing.push(format!("RejectType::{:?}", reject_type));
+                    missing.push(format!("RejectType::{reject_type:?}"));
                 }
             }
         }
 
         missing
+    }
+}
+
+/// Helper to print a sorted hashmap for coverage reports
+fn print_sorted_map(name: &str, map: &HashMap<&'static str, usize>) {
+    println!("{name}:");
+    let mut items: Vec<_> = map.iter().collect();
+    items.sort_by_key(|(k, _)| *k);
+    for (key, count) in items {
+        println!("  {key}: {count}");
     }
 }
 
@@ -661,7 +662,7 @@ fn random_label(rng: &mut impl Rng, index: usize) -> String {
     let service = *SERVICE_NAMES.choose(rng).unwrap();
     let suffix = ["Rule", "Access", "Allow", "Block", "Filter"];
     let chosen_suffix = *suffix.choose(rng).unwrap();
-    format!("{} {} #{}", service, chosen_suffix, index)
+    format!("{service} {chosen_suffix} #{index}")
 }
 
 fn random_timestamp(rng: &mut impl Rng, vary: bool) -> chrono::DateTime<Utc> {
@@ -685,36 +686,36 @@ fn edge_case_label(rng: &mut impl Rng, index: usize) -> String {
     // ASCII alphanumeric, space, dash, underscore, dot, colon
     let edge_cases = [
         // Issue reference style (# is not valid, use colon instead)
-        format!("Bug {:03} - Critical", index),
-        format!("Issue-{}-{}-{}", index, index + 1, index + 2),
+        format!("Bug {index:03} - Critical"),
+        format!("Issue-{index}-{}-{}", index + 1, index + 2),
         // Path-like with valid separators
-        format!("Path.to.rule.{}", index),
-        format!("Path_to_rule_{}", index),
+        format!("Path.to.rule.{index}"),
+        format!("Path_to_rule_{index}"),
         // Unicode label names (will be sanitized to ASCII-only)
-        format!("Unicode-Rule-{}", index),
-        format!("Intl-Rule-{}", index),
+        format!("Unicode-Rule-{index}"),
+        format!("Intl-Rule-{index}"),
         // Max length - exactly at boundary (use validator constant)
         {
-            let base = format!("-{}", index);
+            let base = format!("-{index}");
             let padding = MAX_LABEL_LENGTH - base.len();
-            format!("{}{}", "A".repeat(padding), base)
+            format!("{}{base}", "A".repeat(padding))
         },
         // Near max length (one less than max)
         {
-            let base = format!("-{}", index);
+            let base = format!("-{index}");
             let padding = MAX_LABEL_LENGTH - 1 - base.len();
-            format!("{}{}", "B".repeat(padding), base)
+            format!("{}{base}", "B".repeat(padding))
         },
         // Colon separator (valid for labels)
-        format!("Service:Port:{}", index),
+        format!("Service:Port:{index}"),
         // Multiple spaces (valid)
-        format!("Spaced  Rule  {}", index),
+        format!("Spaced  Rule  {index}"),
         // Short label
-        format!("R{}", index),
+        format!("R{index}"),
         // Mixed case
-        format!("MixedCase-RULE-{}", index),
+        format!("MixedCase-RULE-{index}"),
         // Dots and dashes
-        format!("rule.v2-beta_{}", index),
+        format!("rule.v2-beta_{index}"),
     ];
 
     edge_cases.choose(rng).unwrap().clone()
@@ -846,7 +847,7 @@ fn edge_case_tags(rng: &mut impl Rng) -> Vec<String> {
         // Empty
         vec![],
         // Many tags (10+)
-        (0..12).map(|i| format!("tag{}", i)).collect(),
+        (0..12).map(|i| format!("tag{i}")).collect(),
         // Tags with special characters (valid per sanitize_label)
         vec![
             "tag-with-dash".to_string(),
@@ -947,6 +948,8 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
     };
 
     // Use centralized constraint for port support
+    // Note: Negative check reads naturally here - "if protocol doesn't support ports"
+    #[allow(clippy::if_not_else)]
     let ports = if !protocol_supports_ports(protocol) {
         // Edge case: non-port protocol with ports specified (should be ignored by nft)
         if rng.gen_bool(0.3) {
@@ -1050,6 +1053,7 @@ fn generate_coverage_rule(
     };
 
     // Use centralized constraint logic for port support
+    #[allow(clippy::if_not_else)]
     let ports = if !protocol_supports_ports(protocol) {
         Vec::new()
     } else {
@@ -1098,6 +1102,17 @@ fn generate_coverage_rule(
     .into_rule()
 }
 
+/// Generates a complete ruleset with coverage guarantees.
+///
+/// This function is intentionally long (119 lines) because it handles multiple
+/// phases of generation in a clear, sequential manner:
+/// 1. Protocol coverage
+/// 2. Action coverage
+/// 3. Chain coverage
+/// 4. Reject type coverage
+/// 5. Time unit coverage
+/// 6. Random/edge case fill
+#[allow(clippy::too_many_lines)]
 fn generate_ruleset(
     rng: &mut impl Rng,
     count: usize,
@@ -1276,7 +1291,7 @@ fn verify_with_nft(ruleset: &FirewallRuleset) -> bool {
             }
         }
         Err(e) => {
-            println!("  nft --check: SKIPPED (nft not available: {})", e);
+            println!("  nft --check: SKIPPED (nft not available: {e})");
             true // Don't fail if nft isn't installed
         }
     }
@@ -1300,9 +1315,8 @@ fn main() {
     // Validate count
     if count < MIN_COVERAGE_COUNT {
         eprintln!(
-            "Warning: count {} is less than minimum for full coverage ({}). \
-             Not all enum variants may appear.",
-            count, MIN_COVERAGE_COUNT
+            "Warning: count {count} is less than minimum for full coverage ({MIN_COVERAGE_COUNT}). \
+             Not all enum variants may appear."
         );
     }
 
@@ -1315,7 +1329,7 @@ fn main() {
     // Initialize RNG
     let mut rng: Box<dyn RngCore> = match args.seed {
         Some(seed) => {
-            println!("Using seed: {}", seed);
+            println!("Using seed: {seed}");
             Box::new(rand::rngs::StdRng::seed_from_u64(seed))
         }
         None => Box::new(rand::thread_rng()),
@@ -1323,16 +1337,15 @@ fn main() {
 
     // Print generation info
     if let Some(name) = scenario_name {
-        println!("Scenario: {}", name);
+        println!("Scenario: {name}");
     }
     println!(
-        "Generating {} rules{}...",
-        count,
+        "Generating {count} rules{}...",
         if edge_cases {
-            format!(
-                " (with edge cases, {}% probability)",
-                (edge_case_prob * 100.0) as u32
-            )
+            // edge_case_prob is 0.0-1.0, so *100 gives 0-100 which fits in u32
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pct = (edge_case_prob * 100.0) as u32;
+            format!(" (with edge cases, {pct}% probability)")
         } else {
             String::new()
         }
@@ -1344,7 +1357,7 @@ fn main() {
     // Check coverage
     let missing = tracker.check_coverage();
     if !missing.is_empty() {
-        eprintln!("\nWarning: Missing coverage for: {:?}", missing);
+        eprintln!("\nWarning: Missing coverage for: {missing:?}");
     }
 
     // Dry run: just show stats
@@ -1373,7 +1386,8 @@ fn main() {
     let checksum = format!("{:x}", hasher.finalize());
 
     // Write JSON file
-    let output_path = args.output.as_ref().unwrap();
+    // Safe: validated at lines 1324-1327 (exits if output is None and not dry_run)
+    let output_path = args.output.as_ref().expect("output path validated above");
     std::fs::write(output_path, &json).expect("Failed to write JSON file");
     println!("Wrote: {}", output_path.display());
 

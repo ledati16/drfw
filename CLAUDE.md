@@ -424,8 +424,11 @@ use crate::core::test_helpers::{create_test_ruleset, create_test_rule, create_fu
 // For app handler tests (app state)
 use crate::app::handlers::test_utils::create_test_state;
 
-// For tests that manipulate environment variables (elevation, profiles)
-use crate::core::test_helpers::{setup_test_elevation_bypass_sync, ENV_VAR_MUTEX};
+// For tests that need elevation bypass (most common case)
+use crate::core::test_helpers::ensure_test_elevation_bypass;
+
+// For tests that need exclusive env var access (e.g., testing different elevation methods)
+use crate::core::test_helpers::ENV_VAR_MUTEX;
 ```
 
 ### Environment Variables
@@ -479,10 +482,10 @@ fn test_validator() {
 
 #[tokio::test]
 async fn test_elevated_operation() {
-    use crate::core::test_helpers::setup_test_elevation_bypass_sync;
+    use crate::core::test_helpers::ensure_test_elevation_bypass;
 
-    // Acquires ENV_VAR_MUTEX and sets DRFW_TEST_NO_ELEVATION=1
-    let _guard = setup_test_elevation_bypass_sync();
+    // One-time setup, safe to call before any .await
+    ensure_test_elevation_bypass();
 
     let result = apply_rules().await;
     assert!(result.is_ok());

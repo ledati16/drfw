@@ -28,6 +28,12 @@ pub struct AppConfig {
     /// Enable event logging for Diagnostics tab
     #[serde(default = "default_true")]
     pub enable_event_log: bool,
+    /// Reduce syntax highlighting colors (accessibility feature)
+    ///
+    /// When enabled, collapses syntax colors to 2 levels (primary/muted) instead of 6,
+    /// reducing visual noise while preserving the theme's overall feel.
+    #[serde(default)]
+    pub reduced_colors: bool,
 }
 
 impl Default for AppConfig {
@@ -42,6 +48,7 @@ impl Default for AppConfig {
             auto_revert_enabled: false, // OFF by default for GUI (desktop context)
             auto_revert_timeout_secs: 15,
             enable_event_log: true, // Useful for troubleshooting, local-only so no privacy concern
+            reduced_colors: false,  // Full syntax highlighting by default
         }
     }
 }

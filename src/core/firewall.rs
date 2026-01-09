@@ -223,7 +223,7 @@ impl PortEntry {
         Self::Range { start, end }
     }
 
-    /// Converts from legacy PortRange to PortEntry
+    /// Converts from legacy `PortRange` to `PortEntry`
     pub const fn from_port_range(pr: PortRange) -> Self {
         if pr.start == pr.end {
             Self::Single(pr.start)
@@ -603,7 +603,7 @@ pub struct Rule {
     pub tags_truncated: Vec<String>,
 
     /// Cached badge display string for sidebar rule cards
-    /// Format: "{protocol}: {port_display}" (e.g., "TCP: 22" or "UDP: 53, 5353")
+    /// Format: `"{protocol}: {port_display}"` (e.g., "TCP: 22" or "UDP: 53, 5353")
     /// Avoids format!() allocation every frame
     #[serde(skip)]
     pub badge_display: String,
@@ -949,7 +949,7 @@ impl FirewallRuleset {
         serde_json::json!({ "limit": { "rate": rate, "per": per } })
     }
 
-    /// Converts an IpNetwork to nftables JSON format.
+    /// Converts an `IpNetwork` to nftables JSON format.
     ///
     /// Per libnftables-json(5):
     /// - Single host (/32 IPv4, /128 IPv6): Plain IP string expression
@@ -1242,7 +1242,7 @@ impl FirewallRuleset {
         }
     }
 
-    /// Adds user rule(s) to the nft_rules vector.
+    /// Adds user rule(s) to the `nft_rules` vector.
     /// May generate multiple nftables rules if the DRFW rule has mixed IPv4/IPv6 addresses.
     ///
     /// nftables requires separate rules for IPv4 and IPv6:
@@ -1717,7 +1717,7 @@ impl FirewallRuleset {
                     } else {
                         let addrs = ipv4_sources
                             .iter()
-                            .map(|s| s.to_string())
+                            .map(ToString::to_string)
                             .collect::<Vec<_>>()
                             .join(", ");
                         let _ = write!(out, "ip saddr {{ {addrs} }} ");
@@ -1729,7 +1729,7 @@ impl FirewallRuleset {
                     } else {
                         let addrs = ipv6_sources
                             .iter()
-                            .map(|s| s.to_string())
+                            .map(ToString::to_string)
                             .collect::<Vec<_>>()
                             .join(", ");
                         let _ = write!(out, "ip6 saddr {{ {addrs} }} ");
@@ -1747,7 +1747,7 @@ impl FirewallRuleset {
                     } else {
                         let addrs = ipv4_dests
                             .iter()
-                            .map(|d| d.to_string())
+                            .map(ToString::to_string)
                             .collect::<Vec<_>>()
                             .join(", ");
                         let _ = write!(out, "ip daddr {{ {addrs} }} ");
@@ -1759,7 +1759,7 @@ impl FirewallRuleset {
                     } else {
                         let addrs = ipv6_dests
                             .iter()
-                            .map(|d| d.to_string())
+                            .map(ToString::to_string)
                             .collect::<Vec<_>>()
                             .join(", ");
                         let _ = write!(out, "ip6 daddr {{ {addrs} }} ");

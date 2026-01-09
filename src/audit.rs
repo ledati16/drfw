@@ -524,7 +524,9 @@ mod tests {
         assert!(!old_path.exists());
 
         // Create AuditLog pointing to our temp file
-        let audit = AuditLog { log_path: log_path.clone() };
+        let audit = AuditLog {
+            log_path: log_path.clone(),
+        };
         audit.rotate_if_needed();
 
         // Original should be gone, .old should exist
@@ -542,7 +544,9 @@ mod tests {
 
         assert!(log_path.exists());
 
-        let audit = AuditLog { log_path: log_path.clone() };
+        let audit = AuditLog {
+            log_path: log_path.clone(),
+        };
         audit.rotate_if_needed();
 
         // File should still exist (not rotated)

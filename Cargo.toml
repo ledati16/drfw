@@ -5,6 +5,9 @@ edition = "2024"
 default-run = "drfw"
 
 [lints.clippy]
+# Enable pedantic lints for thorough code quality checks
+pedantic = { level = "warn", priority = -1 }
+
 # UI view functions and parsers are naturally large - breaking them up reduces readability
 too_many_lines = "allow"
 
@@ -20,8 +23,11 @@ match_same_arms = "allow"
 # Theme creation requires many color parameters - this is unavoidable
 too_many_arguments = "allow"
 
-# Test-specific: float comparisons in tests for color validation
+# Float comparisons: used for exact constant comparisons (brightness factors, test assertions)
 float_cmp = "allow"
+
+# Small types (4-6 bytes) passed by reference for API consistency
+trivially_copy_pass_by_ref = "allow"
 
 [dependencies]
 # ═══════════════════════════════════════════════════════════════════════════

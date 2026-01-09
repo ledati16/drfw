@@ -243,14 +243,11 @@ mod tests_impl {
             if let Some(pos) = text.find(comment) {
                 assert!(
                     pos > last_pos,
-                    "Comment '{}' appears out of order in text output. Expected after position {}, found at {}",
-                    comment,
-                    last_pos,
-                    pos
+                    "Comment '{comment}' appears out of order in text output. Expected after position {last_pos}, found at {pos}"
                 );
                 last_pos = pos;
             } else {
-                panic!("Comment '{}' found in JSON but not in text output", comment);
+                panic!("Comment '{comment}' found in JSON but not in text output");
             }
         }
 
@@ -279,11 +276,9 @@ mod tests_impl {
         ];
 
         for (i, label) in rule_labels.iter().enumerate() {
-            let mut rule = test_rule(
-                label,
-                Protocol::Tcp,
-                vec![PortEntry::Single(8000 + i as u16)],
-            );
+            #[allow(clippy::cast_possible_truncation)] // i is 0..5, always fits in u16
+            let port = 8000 + i as u16;
+            let mut rule = test_rule(label, Protocol::Tcp, vec![PortEntry::Single(port)]);
             rule.id = Uuid::new_v4();
             ruleset.rules.push(rule);
         }
@@ -313,12 +308,11 @@ mod tests_impl {
         let mut last_pos = 0;
         for label in &rule_labels {
             let pos = text.find(label).unwrap_or_else(|| {
-                panic!("User rule '{}' not found in text output", label);
+                panic!("User rule '{label}' not found in text output");
             });
             assert!(
                 pos > last_pos,
-                "User rule '{}' appears out of order in text",
-                label
+                "User rule '{label}' appears out of order in text"
             );
             last_pos = pos;
         }
@@ -625,7 +619,7 @@ mod integration_tests {
 
     use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
     use crate::core::test_helpers::{
-        create_test_rule, create_test_ruleset, setup_test_elevation_bypass_sync,
+        create_test_rule, create_test_ruleset, ensure_test_elevation_bypass,
     };
     use crate::core::verify;
 
@@ -652,7 +646,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_valid_ruleset() {
-        let _guard = setup_test_elevation_bypass_sync();
+        ensure_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -691,7 +685,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_invalid_port_range() {
-        let _guard = setup_test_elevation_bypass_sync();
+        ensure_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -738,7 +732,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_empty_ruleset() {
-        let _guard = setup_test_elevation_bypass_sync();
+        ensure_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -774,7 +768,7 @@ mod integration_tests {
     async fn test_verify_multiple_rules() {
         use crate::core::test_helpers::create_test_rule;
 
-        let _guard = setup_test_elevation_bypass_sync();
+        ensure_test_elevation_bypass();
         if !is_nft_available().await {
             eprintln!("Skipping test: nft not available");
             return;
@@ -870,13 +864,11 @@ mod integration_tests {
         // Verify the JSON contains the correct ct count syntax
         assert!(
             json_str.contains(r#""ct count""#),
-            "JSON should contain 'ct count' key, got: {}",
-            json_str
+            "JSON should contain 'ct count' key, got: {json_str}"
         );
         assert!(
             json_str.contains(r#""val": 5"#),
-            "JSON should contain 'val': 5, got: {}",
-            json_str
+            "JSON should contain 'val': 5, got: {json_str}"
         );
         // Verify it does NOT contain the old wrong syntax
         assert!(
@@ -898,8 +890,7 @@ mod integration_tests {
         // Verify the text contains correct ct count syntax (no <= operator)
         assert!(
             text.contains("ct count 3"),
-            "Text should contain 'ct count 3', got: {}",
-            text
+            "Text should contain 'ct count 3', got: {text}"
         );
         // Verify it does NOT contain the old wrong syntax
         assert!(
@@ -935,8 +926,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "Mixed IPs")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "Mixed IPs")
             })
             .collect();
 
@@ -981,8 +971,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "IPv4 Only")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "IPv4 Only")
             })
             .collect();
 
@@ -1024,8 +1013,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "Single IPv4 Host")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "Single IPv4 Host")
             })
             .expect("Should find user rule");
 
@@ -1039,8 +1027,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1070,8 +1057,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "Single IPv6 Host")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "Single IPv6 Host")
             })
             .expect("Should find user rule");
 
@@ -1084,8 +1070,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1114,8 +1099,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "IPv4 Network")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "IPv4 Network")
             })
             .expect("Should find user rule");
 
@@ -1128,8 +1112,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1160,8 +1143,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "IPv6 Network")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "IPv6 Network")
             })
             .expect("Should find user rule");
 
@@ -1174,8 +1156,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1208,8 +1189,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "Non-Canonical CIDR")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "Non-Canonical CIDR")
             })
             .expect("Should find user rule");
 
@@ -1222,8 +1202,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1256,8 +1235,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "Any IPv4")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "Any IPv4")
             })
             .expect("Should find user rule");
 
@@ -1270,8 +1248,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1307,8 +1284,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "Mixed IP Types")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "Mixed IP Types")
             })
             .expect("Should find user rule");
 
@@ -1321,8 +1297,7 @@ mod integration_tests {
                     .get("payload")
                     .and_then(|p| p.get("field"))
                     .and_then(|f| f.as_str())
-                    .map(|s| s == "saddr")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "saddr")
             })
             .and_then(|e| e.get("match"))
             .expect("Should have saddr match");
@@ -1359,8 +1334,7 @@ mod integration_tests {
                     .and_then(|a| a.get("rule"))
                     .and_then(|r| r.get("comment"))
                     .and_then(|c| c.as_str())
-                    .map(|s| s == "No IP Filter")
-                    .unwrap_or(false)
+                    .is_some_and(|s| s == "No IP Filter")
             })
             .collect();
 

@@ -154,6 +154,27 @@ impl AppTheme {
     pub fn is_light(&self) -> bool {
         color_luminance(&self.bg_base) > 0.5
     }
+
+    /// Returns a copy of this theme with reduced syntax highlighting colors.
+    ///
+    /// Collapses the 6 syntax colors down to just 2 levels (primary and muted),
+    /// reducing visual noise while preserving the theme's background, accent,
+    /// and status colors.
+    ///
+    /// This is an accessibility feature for users who find syntax highlighting distracting.
+    pub fn with_reduced_colors(&self) -> Self {
+        Self {
+            // Collapse syntax colors to 2 levels
+            syntax_keyword: self.fg_primary,  // Important: primary
+            syntax_type: self.fg_secondary,   // Types: secondary
+            syntax_string: self.fg_secondary, // Strings: secondary
+            syntax_number: self.fg_muted,     // Numbers: muted
+            syntax_comment: self.fg_muted,    // Comments: muted
+            syntax_operator: self.fg_muted,   // Operators: muted
+            // Keep everything else intact
+            ..*self
+        }
+    }
 }
 
 /// Converts hex color (0xRRGGBB) to iced Color
@@ -252,6 +273,11 @@ pub enum ThemeChoice {
     OxideLight,
     OneLight,
     SolarizedLight,
+
+    // ═══════════════════════════════════════════════════
+    // ACCESSIBILITY
+    // ═══════════════════════════════════════════════════
+    Monochrome, // Pure grayscale for reduced visual noise
 }
 
 impl ThemeChoice {
@@ -290,6 +316,8 @@ impl ThemeChoice {
             Self::OxideLight => "Oxide Light",
             Self::OneLight => "One Light",
             Self::SolarizedLight => "Solarized Light",
+            // Accessibility
+            Self::Monochrome => "Monochrome",
         }
     }
 
@@ -328,6 +356,8 @@ impl ThemeChoice {
             Self::OxideLight => presets::oxide_light(),
             Self::OneLight => presets::one_light(),
             Self::SolarizedLight => presets::solarized_light(),
+            // Accessibility
+            Self::Monochrome => presets::monochrome(),
         }
     }
 }

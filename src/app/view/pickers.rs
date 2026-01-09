@@ -249,7 +249,7 @@ pub fn view_theme_picker<'a>(
                 .iter()
                 .find(|(c, _)| *c == choice)
                 .map(|(_, t)| t.clone())
-                .unwrap(); // Safe: we just filtered from cached_themes
+                .expect("filtered theme must exist in cache");
             (choice, theme_instance)
         })
         .collect();

@@ -565,7 +565,7 @@ pub(crate) fn handle_rule_hover_end(state: &mut State) {
 }
 
 /// Process pending hover target after debounce delay.
-/// This is called from the subscription tick (every 16ms) when hover_pending is Some.
+/// This is called from the subscription tick (every 16ms) when `hover_pending` is Some.
 pub(crate) fn handle_check_hover_pending(state: &mut State) {
     const HOVER_DEBOUNCE_MS: u128 = 16; // ~1 frame at 60 FPS
 
@@ -631,11 +631,11 @@ pub(crate) fn handle_helper_add_value(state: &mut State) {
                 let mut duplicates = 0;
 
                 for entry in entries {
-                    if !form.ports.contains(&entry) {
+                    if form.ports.contains(&entry) {
+                        duplicates += 1;
+                    } else {
                         form.ports.push(entry);
                         added += 1;
-                    } else {
-                        duplicates += 1;
                     }
                 }
 
@@ -648,8 +648,7 @@ pub(crate) fn handle_helper_add_value(state: &mut State) {
                     ));
                 } else if duplicates > 0 {
                     helper.error = Some(format!(
-                        "Added {} ports ({} duplicates skipped)",
-                        added, duplicates
+                        "Added {added} ports ({duplicates} duplicates skipped)"
                     ));
                 } else if added > 0 {
                     helper.input.clear();
@@ -659,12 +658,12 @@ pub(crate) fn handle_helper_add_value(state: &mut State) {
                 // Single port or range
                 match validators::validate_port_entry(input) {
                     Ok(entry) => {
-                        if !form.ports.contains(&entry) {
+                        if form.ports.contains(&entry) {
+                            helper.error = Some("Port already added".to_string());
+                        } else {
                             form.ports.push(entry);
                             helper.input.clear();
                             helper.error = None;
-                        } else {
-                            helper.error = Some("Port already added".to_string());
                         }
                     }
                     Err(e) => {
@@ -675,11 +674,11 @@ pub(crate) fn handle_helper_add_value(state: &mut State) {
         }
         HelperType::SourceAddresses => match input.parse::<ipnetwork::IpNetwork>() {
             Ok(ip) => {
-                if !form.sources.contains(&ip) {
+                if form.sources.contains(&ip) {
+                    helper.error = Some("Address already added".to_string());
+                } else {
                     form.sources.push(ip);
                     helper.input.clear();
-                } else {
-                    helper.error = Some("Address already added".to_string());
                 }
             }
             Err(_) => {
@@ -688,11 +687,11 @@ pub(crate) fn handle_helper_add_value(state: &mut State) {
         },
         HelperType::DestinationAddresses => match input.parse::<ipnetwork::IpNetwork>() {
             Ok(ip) => {
-                if !form.destinations.contains(&ip) {
+                if form.destinations.contains(&ip) {
+                    helper.error = Some("Address already added".to_string());
+                } else {
                     form.destinations.push(ip);
                     helper.input.clear();
-                } else {
-                    helper.error = Some("Address already added".to_string());
                 }
             }
             Err(_) => {

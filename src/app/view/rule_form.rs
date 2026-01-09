@@ -19,8 +19,8 @@ use iced::{Alignment, Element, Length};
 pub fn view_rule_form<'a>(
     form: &'a RuleForm,
     errors: Option<&'a crate::app::FormErrors>,
-    interface_combo_state: &'a combo_box::State<String>,
-    output_interface_combo_state: &'a combo_box::State<String>,
+    interface_combo: &'a combo_box::State<String>,
+    output_interface_combo: &'a combo_box::State<String>,
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
     mono_font: iced::Font,
@@ -178,8 +178,8 @@ pub fn view_rule_form<'a>(
                 // Otherwise: just "INTERFACE" (input only)
                 view_interface_fields(
                     form,
-                    interface_combo_state,
-                    output_interface_combo_state,
+                    interface_combo,
+                    output_interface_combo,
                     output_interface_error,
                     theme,
                     regular_font,
@@ -309,13 +309,13 @@ fn view_ports_summary<'a>(
 ///
 /// Takes ownership of `summary` String to avoid lifetime issues -
 /// the string becomes part of the Element and is dropped with it.
-fn view_summary_button<'a>(
+fn view_summary_button(
     summary: String,
     helper_type: HelperType,
     has_values: bool,
-    theme: &'a crate::theme::AppTheme,
+    theme: &crate::theme::AppTheme,
     regular_font: iced::Font,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     let text_color = if has_values {
         theme.fg_primary
     } else {
@@ -346,8 +346,8 @@ fn view_summary_button<'a>(
 /// Interface fields - single or side-by-side based on server mode
 fn view_interface_fields<'a>(
     form: &'a RuleForm,
-    interface_combo_state: &'a combo_box::State<String>,
-    output_interface_combo_state: &'a combo_box::State<String>,
+    interface_combo: &'a combo_box::State<String>,
+    output_interface_combo: &'a combo_box::State<String>,
     output_interface_error: Option<&'a String>,
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
@@ -369,7 +369,7 @@ fn view_interface_fields<'a>(
         .padding([2, 6])
         .style(move |_| section_header_container(theme)),
         combo_box(
-            interface_combo_state,
+            interface_combo,
             "Any (type or select)",
             if form.interface.is_empty() {
                 None
@@ -399,7 +399,7 @@ fn view_interface_fields<'a>(
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
             combo_box(
-                output_interface_combo_state,
+                output_interface_combo,
                 "Any (type or select)",
                 if form.output_interface.is_empty() {
                     None
@@ -512,10 +512,10 @@ fn view_advanced_section<'a>(
                 let reject_options = available_reject_types_for_protocol(form.protocol);
 
                 // If current reject type is not valid for protocol, reset to Default
-                let selected = if !reject_options.contains(&form.reject_type) {
-                    RejectType::Default
-                } else {
+                let selected = if reject_options.contains(&form.reject_type) {
                     form.reject_type
+                } else {
+                    RejectType::Default
                 };
 
                 let mut reject_col = column![

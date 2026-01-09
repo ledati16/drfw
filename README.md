@@ -72,7 +72,8 @@ All disabled by default for maximum compatibility:
 | **Server Mode** | Block all outbound by default | Requires explicit egress rules |
 
 ### User Experience
-- **27 color themes**: Oxide, Dracula, Tokyo Night, Catppuccin, Nord, Gruvbox, and more
+- **28 color themes**: Oxide, Dracula, Tokyo Night, Catppuccin, Nord, Gruvbox, Monochrome, and more
+- **Accessibility options**: Monochrome theme and reduced syntax colors mode (2-level highlighting)
 - **Custom fonts**: Select UI and monospace fonts from system fonts
 - **Live preview**: Syntax-highlighted nftables output
 - **Diff view**: See exactly what changes before applying
@@ -372,7 +373,7 @@ src/
 │   ├── nft_json.rs     # nftables JSON API
 │   ├── verify.rs       # Pre-apply verification
 │   └── profiles.rs     # Profile persistence
-├── theme/              # 24 color themes
+├── theme/              # 28 color themes + accessibility
 ├── config.rs           # Application configuration
 ├── validators.rs       # Input validation
 ├── audit.rs            # Audit logging

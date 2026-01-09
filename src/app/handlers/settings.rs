@@ -96,6 +96,31 @@ pub(crate) fn handle_toggle_event_log(state: &mut State, enabled: bool) -> Task<
     )
 }
 
+/// Handles toggling reduced syntax colors (accessibility feature)
+pub(crate) fn handle_toggle_reduced_colors(state: &mut State, enabled: bool) -> Task<Message> {
+    state.reduced_colors = enabled;
+    // Reapply theme with or without reduced colors
+    let base_theme = state.current_theme.to_theme();
+    state.theme = if enabled {
+        base_theme.with_reduced_colors()
+    } else {
+        base_theme
+    };
+    state.mark_config_dirty();
+    let enable_event_log = state.enable_event_log;
+    let desc = if enabled {
+        "Reduced syntax colors enabled"
+    } else {
+        "Reduced syntax colors disabled"
+    };
+    Task::perform(
+        async move {
+            crate::audit::log_settings_saved(enable_event_log, desc).await;
+        },
+        |()| Message::AuditLogWritten,
+    )
+}
+
 /// Handles strict ICMP toggle request (shows warning when enabling)
 pub(crate) fn handle_toggle_strict_icmp_requested(
     state: &mut State,

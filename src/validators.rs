@@ -346,8 +346,7 @@ pub fn validate_connection_limit(limit: u32) -> Result<Option<String>, String> {
 
     if limit > MAX_CONNECTION_LIMIT {
         return Err(format!(
-            "Connection limit exceeds kernel max ({})",
-            MAX_CONNECTION_LIMIT
+            "Connection limit exceeds kernel max ({MAX_CONNECTION_LIMIT})"
         ));
     }
 
@@ -376,8 +375,7 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
 
     if rate > MAX_LOG_RATE_PER_MINUTE {
         return Err(format!(
-            "Log rate exceeds max ({}/min) - will flood logs",
-            MAX_LOG_RATE_PER_MINUTE
+            "Log rate exceeds max ({MAX_LOG_RATE_PER_MINUTE}/min) - will flood logs"
         ));
     }
 
@@ -573,8 +571,8 @@ mod tests {
     fn test_validate_rate_limit_exceeds_max() {
         use crate::core::firewall::TimeUnit;
 
-        assert!(validate_rate_limit(99999, TimeUnit::Second).is_err());
-        assert!(validate_rate_limit(999999, TimeUnit::Minute).is_err());
+        assert!(validate_rate_limit(99_999, TimeUnit::Second).is_err());
+        assert!(validate_rate_limit(999_999, TimeUnit::Minute).is_err());
     }
 
     // Connection limit tests
@@ -598,8 +596,8 @@ mod tests {
 
     #[test]
     fn test_validate_connection_limit_exceeds_max() {
-        assert!(validate_connection_limit(99999).is_err());
-        assert!(validate_connection_limit(234234234).is_err());
+        assert!(validate_connection_limit(99_999).is_err());
+        assert!(validate_connection_limit(234_234_234).is_err());
     }
 
     // Log rate tests

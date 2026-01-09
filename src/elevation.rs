@@ -55,7 +55,7 @@ pub enum ElevationError {
     #[error("Elevation method '{0}' is not available (binary not found)")]
     MethodNotAvailable(String),
 
-    /// Invalid value for DRFW_ELEVATION_METHOD
+    /// Invalid value for `DRFW_ELEVATION_METHOD`
     #[error("Invalid DRFW_ELEVATION_METHOD '{0}'. Valid options: sudo, run0, pkexec")]
     InvalidMethod(String),
 

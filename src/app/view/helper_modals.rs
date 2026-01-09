@@ -2,7 +2,7 @@
 //!
 //! Provides reusable modal components for editing Vec fields in rule forms:
 //! - Ports: Single ports or ranges (e.g., "22", "8000-8080")
-//! - Addresses: IP/CIDR addresses (e.g., "192.168.1.0/24", "fd00::1")
+//! - Addresses: IP/CIDR addresses (e.g., "192.168.1.0/24", "`fd00::1`")
 //! - Tags: Organizational labels
 
 use crate::app::ui_components::{
@@ -96,7 +96,7 @@ fn view_ports_helper<'a>(
                     column(form.ports.iter().enumerate().map(|(i, port)| {
                         let port_text = match port {
                             PortEntry::Single(p) => p.to_string(),
-                            PortEntry::Range { start, end } => format!("{}-{}", start, end),
+                            PortEntry::Range { start, end } => format!("{start}-{end}"),
                         };
                         row![
                             text(port_text)
@@ -386,8 +386,8 @@ pub fn ports_summary(ports: &[PortEntry]) -> String {
         "All ports".to_string()
     } else if ports.len() == 1 {
         match &ports[0] {
-            PortEntry::Single(p) => format!("Port {}", p),
-            PortEntry::Range { start, end } => format!("Ports {}-{}", start, end),
+            PortEntry::Single(p) => format!("Port {p}"),
+            PortEntry::Range { start, end } => format!("Ports {start}-{end}"),
         }
     } else {
         format!("{} ports configured", ports.len())

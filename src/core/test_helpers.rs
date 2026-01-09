@@ -3,42 +3,73 @@
 //! Provides common test helpers to avoid duplication across test suites.
 //! This module is only compiled in test mode.
 
-#![cfg(test)]
-
 use crate::core::firewall::{
     Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
 };
 use chrono::Utc;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, Once};
 use uuid::Uuid;
 
-/// Global mutex for tests that manipulate environment variables.
+/// Mutex for tests that need exclusive access to environment variables.
 ///
-/// Environment variables are global state, so tests that modify them must be
-/// serialized to avoid race conditions. All tests that call `setup_test_elevation_bypass()`
-/// or directly manipulate `DRFW_TEST_*` env vars should acquire this mutex first.
+/// Use this when your test needs to:
+/// 1. Temporarily change env vars to different values
+/// 2. Restore env vars after the test
+/// 3. Test behavior when env vars are absent
+///
+/// For tests that just need `DRFW_TEST_NO_ELEVATION=1` set, use
+/// `ensure_test_elevation_bypass()` instead - it's simpler and doesn't
+/// require holding a guard.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let _guard = ENV_VAR_MUTEX.lock().unwrap();
-/// setup_test_elevation_bypass();
-/// // ... run test ...
+/// unsafe {
+///     std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+///     std::env::set_var("DRFW_ELEVATION_METHOD", "sudo");
+/// }
+/// // ... test with custom env state ...
+/// unsafe {
+///     std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+///     std::env::remove_var("DRFW_ELEVATION_METHOD");
+/// }
 /// ```
 pub static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
 
-/// Acquires the environment variable mutex and sets up elevation bypass.
+/// One-time initialization flag for elevation bypass
+static ELEVATION_BYPASS_INIT: Once = Once::new();
+
+/// Ensures the elevation bypass environment is set up.
 ///
-/// This is the preferred way to set up tests that need elevation bypass,
-/// as it handles both synchronization and environment setup.
+/// Sets `DRFW_TEST_NO_ELEVATION=1` which causes elevation functions to skip
+/// pkexec/sudo/run0 and call nft directly.
 ///
-/// Returns a guard that must be held for the duration of the test.
-pub fn setup_test_elevation_bypass_sync() -> MutexGuard<'static, ()> {
-    let guard = ENV_VAR_MUTEX.lock().unwrap();
-    unsafe {
-        std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
-    }
-    guard
+/// This is the preferred way to enable elevation bypass for tests:
+/// - Thread-safe and can be called multiple times (initialization happens once)
+/// - No guard to hold, so no `await_holding_lock` issues in async tests
+/// - Simple one-liner at the start of your test
+///
+/// For tests that need to temporarily disable elevation bypass or test
+/// different elevation methods, use `ENV_VAR_MUTEX` directly instead.
+///
+/// # Example
+///
+/// ```ignore
+/// #[tokio::test]
+/// async fn test_something() {
+///     ensure_test_elevation_bypass();
+///     // ... test code, can use .await freely ...
+/// }
+/// ```
+pub fn ensure_test_elevation_bypass() {
+    ELEVATION_BYPASS_INIT.call_once(|| {
+        // SAFETY: This is only called once due to Once, and only in test code.
+        // Test binaries typically run before any concurrent test threads start.
+        unsafe {
+            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+        }
+    });
 }
 
 /// Creates a basic test ruleset with one SSH rule.
@@ -166,34 +197,4 @@ pub fn is_nft_installed() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-}
-
-/// Sets up the test environment for elevation bypass.
-///
-/// This sets `DRFW_TEST_NO_ELEVATION=1` which causes `create_elevated_nft_command()`
-/// to skip pkexec/sudo/run0 and call nft directly.
-///
-/// # Safety
-///
-/// Uses `unsafe` because `set_var` is not thread-safe. Tests using this should
-/// not run in parallel with other tests that depend on environment variables.
-pub fn setup_test_elevation_bypass() {
-    // SAFETY: Tests are typically run with --test-threads=1 or this env var
-    // is set before any concurrent test execution begins.
-    unsafe {
-        std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
-    }
-}
-
-/// Cleans up the test environment after elevation bypass tests.
-///
-/// # Safety
-///
-/// Uses `unsafe` because `remove_var` is not thread-safe.
-#[allow(dead_code)]
-pub fn cleanup_test_elevation_bypass() {
-    // SAFETY: Called at end of test, no concurrent access expected.
-    unsafe {
-        std::env::remove_var("DRFW_TEST_NO_ELEVATION");
-    }
 }

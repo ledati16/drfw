@@ -115,7 +115,7 @@ pub fn list_interfaces() -> Vec<String> {
     interfaces
 }
 
-/// Builds interface suggestions for combo_box autocomplete.
+/// Builds interface suggestions for `combo_box` autocomplete.
 ///
 /// Returns a list containing:
 /// 1. System interfaces (from `list_interfaces()`)

@@ -62,6 +62,7 @@ shadow_rs::shadow!(build);
 use clap::{Parser, Subcommand};
 
 /// Returns the version string with git info: "0.8.0 (a3f8c21)" or "0.8.0 (a3f8c21*)" if dirty
+#[must_use]
 pub fn version_string() -> String {
     let dirty_marker = if build::GIT_CLEAN { "" } else { "*" };
     format!(
@@ -103,7 +104,7 @@ enum ConfirmResult {
 
 /// Checks if we're running as root via sudo or run0.
 ///
-/// This is detected by checking if we're root AND the SUDO_USER environment
+/// This is detected by checking if we're root AND the `SUDO_USER` environment
 /// variable is set (both sudo and run0 v256+ set this variable).
 fn is_running_via_sudo() -> bool {
     nix::unistd::getuid().is_root() && std::env::var("SUDO_USER").is_ok()

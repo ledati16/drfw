@@ -96,8 +96,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
             center(rule_form::view_rule_form(
                 form,
                 state.form_errors.as_ref(),
-                &state.interface_combo_state,
-                &state.output_interface_combo_state,
+                &state.interface_combo,
+                &state.output_interface_combo,
                 theme,
                 state.font_regular,
                 state.font_mono,

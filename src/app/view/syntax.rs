@@ -8,7 +8,7 @@
 //!
 //! Note: We use regular `column` instead of `keyed_column` because `mouse_area`
 //! is a stateful widget. When token caches change completely (profile switch,
-//! diff toggle), keyed_column's state reconciliation causes panics with MouseArea.
+//! diff toggle), `keyed_column`'s state reconciliation causes panics with `MouseArea`.
 //! Performance impact is minimal since tokens are pre-cached.
 
 use crate::app::Message;

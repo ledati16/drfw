@@ -109,6 +109,17 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                 theme,
                 state.font_regular,
             ),
+            render_settings_row(
+                "Reduce syntax colors",
+                "Simplify code highlighting to 2 levels (accessibility)",
+                toggler(state.reduced_colors)
+                    .on_toggle(Message::ToggleReducedColors)
+                    .width(Length::Shrink)
+                    .style(move |_, status| themed_toggler(theme, status))
+                    .into(),
+                theme,
+                state.font_regular,
+            ),
         ]
         .spacing(16)
         .padding(16)

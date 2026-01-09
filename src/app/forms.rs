@@ -33,7 +33,7 @@ pub enum HelperType {
 
 /// Helper modal state for editing multi-value fields
 ///
-/// The helper operates directly on RuleForm's Vec fields.
+/// The helper operates directly on `RuleForm`'s Vec fields.
 /// This struct only holds UI state (input field, error message).
 #[derive(Debug, Clone, Default)]
 pub struct RuleFormHelper {
