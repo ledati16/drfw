@@ -91,6 +91,9 @@ pub struct AuditLog {
 }
 
 impl AuditLog {
+    /// Maximum audit log size before rotation (1 MB)
+    const MAX_SIZE_BYTES: u64 = 1024 * 1024;
+
     /// Creates a new audit log instance
     ///
     /// # Errors
@@ -103,6 +106,30 @@ impl AuditLog {
         log_path.push("audit.log");
 
         Ok(Self { log_path })
+    }
+
+    /// Rotates the audit log if it exceeds the size limit.
+    ///
+    /// If `audit.log` > 1MB, renames it to `audit.log.old` (overwriting any previous backup)
+    /// and starts fresh. Called once at application startup.
+    ///
+    /// This is a simple rotation scheme: at most one backup file exists at any time.
+    pub fn rotate_if_needed(&self) {
+        let Ok(metadata) = std::fs::metadata(&self.log_path) else {
+            return; // File doesn't exist, nothing to rotate
+        };
+
+        if metadata.len() > Self::MAX_SIZE_BYTES {
+            let mut old_path = self.log_path.clone();
+            old_path.set_extension("log.old");
+
+            // Rename current to .old (overwrites previous .old if it exists)
+            if let Err(e) = std::fs::rename(&self.log_path, &old_path) {
+                tracing::warn!("Failed to rotate audit log: {}", e);
+            } else {
+                tracing::info!("Rotated audit log (exceeded 1MB)");
+            }
+        }
     }
 
     /// Appends an event to the audit log
@@ -477,5 +504,48 @@ mod tests {
 
         assert!(event.success);
         assert!(matches!(event.event_type, EventType::ApplyRules));
+    }
+
+    #[test]
+    fn test_rotate_if_needed() {
+        use std::io::Write;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_path = temp_dir.path().join("audit.log");
+        let old_path = temp_dir.path().join("audit.log.old");
+
+        // Create a file larger than 1MB
+        let mut file = std::fs::File::create(&log_path).unwrap();
+        let data = vec![b'x'; 1024 * 1024 + 100]; // Just over 1MB
+        file.write_all(&data).unwrap();
+        drop(file);
+
+        assert!(log_path.exists());
+        assert!(!old_path.exists());
+
+        // Create AuditLog pointing to our temp file
+        let audit = AuditLog { log_path: log_path.clone() };
+        audit.rotate_if_needed();
+
+        // Original should be gone, .old should exist
+        assert!(!log_path.exists());
+        assert!(old_path.exists());
+    }
+
+    #[test]
+    fn test_rotate_if_needed_small_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_path = temp_dir.path().join("audit.log");
+
+        // Create a small file (under 1MB)
+        std::fs::write(&log_path, "small content").unwrap();
+
+        assert!(log_path.exists());
+
+        let audit = AuditLog { log_path: log_path.clone() };
+        audit.rotate_if_needed();
+
+        // File should still exist (not rotated)
+        assert!(log_path.exists());
     }
 }

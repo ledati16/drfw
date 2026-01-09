@@ -436,6 +436,11 @@ impl State {
             tracing::error!("Failed to ensure profile exists: {}", e);
         }
 
+        // Rotate audit log if it exceeds 1MB (keeps one .old backup)
+        if let Ok(audit) = crate::audit::AuditLog::new() {
+            audit.rotate_if_needed();
+        }
+
         let ruleset = crate::core::profiles::load_profile_blocking(&active_profile_name)
             .unwrap_or_else(|_| FirewallRuleset::default());
 

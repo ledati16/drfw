@@ -341,8 +341,11 @@ pub(crate) fn handle_check_audit_log_refresh(state: &mut State) -> Task<Message>
     Task::none()
 }
 
+/// Maximum number of audit entries to load for display
+const MAX_DISPLAY_ENTRIES: usize = 1000;
+
 /// Loads audit log entries asynchronously
-/// Returns parsed events, most recent first (reversed order)
+/// Returns parsed events, most recent first (reversed order), limited to 1000 entries
 pub(crate) async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
     use tokio::io::AsyncBufReadExt;
 
@@ -363,6 +366,11 @@ pub(crate) async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
         if let Ok(event) = serde_json::from_str::<crate::audit::AuditEvent>(&line) {
             events.push(event);
         }
+    }
+
+    // Keep only the most recent entries (file is oldest-first, so drain from front)
+    if events.len() > MAX_DISPLAY_ENTRIES {
+        events.drain(..events.len() - MAX_DISPLAY_ENTRIES);
     }
 
     // Most recent first
