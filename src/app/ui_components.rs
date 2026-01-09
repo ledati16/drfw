@@ -699,6 +699,21 @@ pub fn inset_container_bordered(theme: &AppTheme) -> container::Style {
     style
 }
 
+/// Keyboard badge container for shortcut help display
+///
+/// Uses elevated background with subtle rounded corners (4px) to
+/// display keyboard shortcuts like "Ctrl + S" or "F1".
+pub fn kbd_badge_container(theme: &AppTheme) -> container::Style {
+    container::Style {
+        background: Some(theme.bg_elevated.into()),
+        border: Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 pub fn primary_button(theme: &AppTheme, status: button::Status) -> button::Style {
     build_button_style(theme, status, ButtonStyleConfig::PRIMARY)
 }

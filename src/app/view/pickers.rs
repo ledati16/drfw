@@ -2,8 +2,8 @@
 
 use crate::app::ui_components::{
     active_card_button, active_tab_button, card_button, card_container, danger_button,
-    dirty_button, primary_button, secondary_button, section_header_container,
-    themed_horizontal_rule, themed_scrollable, themed_text_input,
+    dirty_button, inset_container_bordered, primary_button, secondary_button,
+    section_header_container, themed_horizontal_rule, themed_scrollable, themed_text_input,
 };
 use crate::app::{
     FontPickerState, FontPickerTarget, Message, State, ThemeFilter, ThemePickerState,
@@ -177,14 +177,7 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
             )
             .height(Length::Fixed(400.0))
             .width(Length::Fill)
-            .style(move |_| container::Style {
-                border: Border {
-                    radius: 8.0.into(),
-                    color: theme.border,
-                    width: 1.0,
-                },
-                ..Default::default()
-            }),
+            .style(move |_| inset_container_bordered(theme)),
             row![
                 container(
                     text(if filtered_count < state.available_fonts.len() {
@@ -604,14 +597,7 @@ pub fn view_theme_picker<'a>(
             )
             .height(Length::Fixed(320.0))
             .width(Length::Fill)
-            .style(move |_| container::Style {
-                border: Border {
-                    radius: 8.0.into(),
-                    color: theme.border,
-                    width: 1.0,
-                },
-                ..Default::default()
-            }),
+            .style(move |_| inset_container_bordered(theme)),
             preview_panel,
             row![
                 container(

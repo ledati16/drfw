@@ -1,8 +1,8 @@
 //! Profile management UI components
 
 use crate::app::ui_components::{
-    card_button, card_container, danger_button, primary_button, secondary_button,
-    section_header_container, themed_text_input,
+    card_button, card_container, danger_button, inset_container_bordered, primary_button,
+    secondary_button, section_header_container, themed_scrollable, themed_text_input,
 };
 use crate::app::{Message, ProfileManagerState, State};
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
@@ -202,21 +202,11 @@ pub fn view_profile_manager<'a>(
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new().spacing(0),
             ))
-            .style(move |_, status| {
-                use crate::app::ui_components::themed_scrollable;
-                themed_scrollable(theme, status)
-            }),
+            .style(move |_, status| themed_scrollable(theme, status)),
         )
         .height(Length::Fixed(300.0))
         .width(Length::Fill)
-        .style(move |_| container::Style {
-            border: Border {
-                radius: 8.0.into(),
-                color: theme.border,
-                width: 1.0,
-            },
-            ..Default::default()
-        })
+        .style(move |_| inset_container_bordered(theme))
         .into()
     };
 

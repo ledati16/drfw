@@ -1,9 +1,11 @@
 //! Keyboard shortcuts help modal
 
 use crate::app::Message;
-use crate::app::ui_components::{card_container, secondary_button, section_header_container};
+use crate::app::ui_components::{
+    card_container, kbd_badge_container, secondary_button, section_header_container,
+};
 use iced::widget::{button, column, container, row, text};
-use iced::{Border, Element};
+use iced::Element;
 
 pub fn view_shortcuts_help(
     theme: &crate::theme::AppTheme,
@@ -29,14 +31,7 @@ pub fn view_shortcuts_help(
                     container(text("F1").size(13).font(mono_font).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
-                        .style(move |_| container::Style {
-                            background: Some(theme.bg_elevated.into()),
-                            border: Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }),
+                        .style(move |_| kbd_badge_container(theme)),
                     text("Show this help")
                         .size(13)
                         .font(regular_font)
@@ -47,14 +42,7 @@ pub fn view_shortcuts_help(
                     container(text("Esc").size(13).font(mono_font).color(theme.warning))
                         .width(150)
                         .padding([4, 8])
-                        .style(move |_| container::Style {
-                            background: Some(theme.bg_elevated.into()),
-                            border: Border {
-                                radius: 4.0.into(),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }),
+                        .style(move |_| kbd_badge_container(theme)),
                     text("Close any modal or form")
                         .size(13)
                         .font(regular_font)
@@ -77,14 +65,7 @@ pub fn view_shortcuts_help(
                     )
                     .width(150)
                     .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    .style(move |_| kbd_badge_container(theme)),
                     text("Add new rule")
                         .size(13)
                         .font(regular_font)
@@ -100,14 +81,7 @@ pub fn view_shortcuts_help(
                     )
                     .width(150)
                     .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    .style(move |_| kbd_badge_container(theme)),
                     text("Apply changes")
                         .size(13)
                         .font(regular_font)
@@ -123,14 +97,7 @@ pub fn view_shortcuts_help(
                     )
                     .width(150)
                     .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    .style(move |_| kbd_badge_container(theme)),
                     text("Undo last modification")
                         .size(13)
                         .font(regular_font)
@@ -146,14 +113,7 @@ pub fn view_shortcuts_help(
                     )
                     .width(150)
                     .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    .style(move |_| kbd_badge_container(theme)),
                     text("Redo last undone modification")
                         .size(13)
                         .font(regular_font)
@@ -176,14 +136,7 @@ pub fn view_shortcuts_help(
                     )
                     .width(150)
                     .padding([4, 8])
-                    .style(move |_| container::Style {
-                        background: Some(theme.bg_elevated.into()),
-                        border: Border {
-                            radius: 4.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    .style(move |_| kbd_badge_container(theme)),
                     text("Export rules")
                         .size(13)
                         .font(regular_font)

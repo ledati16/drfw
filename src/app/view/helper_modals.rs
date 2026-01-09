@@ -12,7 +12,7 @@ use crate::app::ui_components::{
 use crate::app::{HelperType, Message, RuleForm, RuleFormHelper};
 use crate::core::firewall::PortEntry;
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Border, Element, Length};
+use iced::{Alignment, Element, Length};
 
 /// Renders the helper modal based on current helper type
 pub fn view_helper_modal<'a>(
@@ -125,14 +125,7 @@ fn view_ports_helper<'a>(
         )
         .height(Length::Fixed(150.0))
         .width(Length::Fill)
-        .style(move |_| container::Style {
-            border: Border {
-                radius: 8.0.into(),
-                color: theme.border,
-                width: 1.0,
-            },
-            ..Default::default()
-        }),
+        .style(move |_| inset_container_bordered(theme)),
         // Footer
         row![
             button(text("Done").size(14).font(regular_font))
@@ -249,14 +242,7 @@ fn view_addresses_helper<'a>(
         )
         .height(Length::Fixed(150.0))
         .width(Length::Fill)
-        .style(move |_| container::Style {
-            border: Border {
-                radius: 8.0.into(),
-                color: theme.border,
-                width: 1.0,
-            },
-            ..Default::default()
-        }),
+        .style(move |_| inset_container_bordered(theme)),
         // Footer
         row![
             button(text("Done").size(14).font(regular_font))

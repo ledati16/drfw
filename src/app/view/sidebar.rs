@@ -66,16 +66,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         .padding(8)
         .style(move |_, status| secondary_button(theme, status)),
         // Separator line after profile section
-        container(
-            container(row![])
-                .height(Length::Fixed(1.0))
-                .width(Length::Fill)
-                .style(move |_| container::Style {
-                    background: Some(theme.border.into()),
-                    ..Default::default()
-                })
-        )
-        .padding(iced::Padding::new(0.0).top(8.0)),
+        container(rule::horizontal(1).style(move |_| themed_horizontal_rule(theme)))
+            .padding(iced::Padding::new(0.0).top(8.0)),
     ]
     .spacing(8);
 
@@ -353,6 +345,9 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     }
                 };
                 // Performance: Use cached tags_truncated (avoids format! every frame)
+                // Note: Display-only tag badges use 3.0px radius (smaller than interactive
+                // tag_button's 4.0px) for visual hierarchy - badges are compact indicators,
+                // not clickable controls.
                 for truncated_tag in &rule.tags_truncated {
                     tag_items.push(
                         container(
@@ -635,13 +630,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
     // 6. Sidebar Footer (Pinned Action)
     let footer = column![
-        container(row![])
-            .height(Length::Fixed(1.0))
-            .width(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(theme.border.into()),
-                ..Default::default()
-            }),
+        rule::horizontal(1).style(move |_| themed_horizontal_rule(theme)),
         container(
             button(
                 row![
