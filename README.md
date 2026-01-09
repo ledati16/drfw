@@ -385,7 +385,7 @@ src/
 ```bash
 cargo test                    # All tests
 cargo test --test integration # Integration tests only
-cargo clippy -- -D warnings   # Lint
+cargo clippy --all-targets    # Lint (pedantic enabled in Cargo.toml)
 cargo fmt --check             # Format check
 ```
 
