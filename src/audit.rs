@@ -149,15 +149,30 @@ impl AuditLog {
     }
 }
 
+/// Internal helper that handles the common audit logging pattern.
+///
+/// All public `log_*` functions delegate to this helper, reducing code duplication
+/// from ~600 lines to ~200 lines across 20 logging functions.
+async fn log_event_internal(
+    enable_event_log: bool,
+    event_type: EventType,
+    success: bool,
+    details: serde_json::Value,
+    error: Option<String>,
+) {
+    if !enable_event_log {
+        return;
+    }
+
+    if let Ok(audit) = AuditLog::new() {
+        let event = AuditEvent::new(event_type, success, details, error);
+        if let Err(e) = audit.log(event).await {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
+    }
+}
+
 /// Logs an apply operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `rule_count` - Number of rules being applied
-/// * `enabled_count` - Number of enabled rules
-/// * `success` - Whether the operation succeeded
-/// * `error` - Error message if operation failed
 pub async fn log_apply(
     enable_event_log: bool,
     rule_count: usize,
@@ -165,577 +180,262 @@ pub async fn log_apply(
     success: bool,
     error: Option<String>,
 ) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ApplyRules,
-            success,
-            serde_json::json!({
-                "rule_count": rule_count,
-                "enabled_count": enabled_count,
-            }),
-            error,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ApplyRules,
+        success,
+        serde_json::json!({ "rule_count": rule_count, "enabled_count": enabled_count }),
+        error,
+    )
+    .await;
 }
 
 /// Logs a revert operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `success` - Whether the operation succeeded
-/// * `error` - Error message if operation failed
 pub async fn log_revert(enable_event_log: bool, success: bool, error: Option<String>) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::RevertRules,
-            success,
-            serde_json::json!({}),
-            error,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::RevertRules,
+        success,
+        serde_json::json!({}),
+        error,
+    )
+    .await;
 }
 
 /// Logs a verification operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `success` - Whether the operation succeeded
-/// * `error_count` - Number of validation errors
-/// * `error` - Error message if operation failed
 pub async fn log_verify(
     enable_event_log: bool,
     success: bool,
     error_count: usize,
     error: Option<String>,
 ) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::VerifyRules,
-            success,
-            serde_json::json!({
-                "error_count": error_count,
-            }),
-            error,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::VerifyRules,
+        success,
+        serde_json::json!({ "error_count": error_count }),
+        error,
+    )
+    .await;
 }
 
 /// Logs a profile creation event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `profile_name` - Name of the profile that was created
 pub async fn log_profile_created(enable_event_log: bool, profile_name: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ProfileCreated,
-            true,
-            serde_json::json!({
-                "profile_name": profile_name,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileCreated,
+        true,
+        serde_json::json!({ "profile_name": profile_name }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a profile deletion event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `profile_name` - Name of the profile that was deleted
 pub async fn log_profile_deleted(enable_event_log: bool, profile_name: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ProfileDeleted,
-            true,
-            serde_json::json!({
-                "profile_name": profile_name,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileDeleted,
+        true,
+        serde_json::json!({ "profile_name": profile_name }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a profile rename event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `old_name` - Original profile name
-/// * `new_name` - New profile name
 pub async fn log_profile_renamed(enable_event_log: bool, old_name: &str, new_name: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ProfileRenamed,
-            true,
-            serde_json::json!({
-                "old_name": old_name,
-                "new_name": new_name,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileRenamed,
+        true,
+        serde_json::json!({ "old_name": old_name, "new_name": new_name }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a profile switch event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `from_profile` - Profile being switched from
-/// * `to_profile` - Profile being switched to
 pub async fn log_profile_switched(enable_event_log: bool, from_profile: &str, to_profile: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ProfileSwitched,
-            true,
-            serde_json::json!({
-                "from": from_profile,
-                "to": to_profile,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileSwitched,
+        true,
+        serde_json::json!({ "from": from_profile, "to": to_profile }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a settings save event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `description` - Description of what setting changed
 pub async fn log_settings_saved(enable_event_log: bool, description: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::SettingsSaved,
-            true,
-            serde_json::json!({
-                "description": description,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::SettingsSaved,
+        true,
+        serde_json::json!({ "description": description }),
+        None,
+    )
+    .await;
 }
 
 /// Logs an auto-revert confirmation event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `timeout_secs` - The configured timeout that was used
 pub async fn log_auto_revert_confirmed(enable_event_log: bool, timeout_secs: u64) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::AutoRevertConfirmed,
-            true,
-            serde_json::json!({
-                "timeout_secs": timeout_secs,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::AutoRevertConfirmed,
+        true,
+        serde_json::json!({ "timeout_secs": timeout_secs }),
+        None,
+    )
+    .await;
 }
 
 /// Logs an auto-revert timeout event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `timeout_secs` - The configured timeout that expired
 pub async fn log_auto_revert_timed_out(enable_event_log: bool, timeout_secs: u64) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::AutoRevertTimedOut,
-            true,
-            serde_json::json!({
-                "timeout_secs": timeout_secs,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::AutoRevertTimedOut,
+        true,
+        serde_json::json!({ "timeout_secs": timeout_secs }),
+        None,
+    )
+    .await;
 }
 
 /// Logs an elevation cancellation event (user cancelled auth dialog)
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `error` - The error message from the elevation failure
 pub async fn log_elevation_cancelled(enable_event_log: bool, error: String) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ElevationCancelled,
-            false,
-            serde_json::json!({
-                "error": error,
-            }),
-            Some(error),
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ElevationCancelled,
+        false,
+        serde_json::json!({ "error": &error }),
+        Some(error),
+    )
+    .await;
 }
 
 /// Logs an elevation failure event (auth failed, timeout, no agent, etc.)
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `error` - The error message from the elevation failure
 pub async fn log_elevation_failed(enable_event_log: bool, error: String) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::ElevationFailed,
-            false,
-            serde_json::json!({
-                "error": error,
-            }),
-            Some(error),
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::ElevationFailed,
+        false,
+        serde_json::json!({ "error": &error }),
+        Some(error),
+    )
+    .await;
 }
 
 /// Logs a rule creation event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `label` - Rule label/name
-/// * `protocol` - Rule protocol
-/// * `ports` - Optional port range
 pub async fn log_rule_created(
     enable_event_log: bool,
     label: &str,
     protocol: &str,
     ports: Option<String>,
 ) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::RuleCreated,
-            true,
-            serde_json::json!({
-                "label": label,
-                "protocol": protocol,
-                "ports": ports,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::RuleCreated,
+        true,
+        serde_json::json!({ "label": label, "protocol": protocol, "ports": ports }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a rule deletion event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `label` - Rule label/name that was deleted
 pub async fn log_rule_deleted(enable_event_log: bool, label: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::RuleDeleted,
-            true,
-            serde_json::json!({
-                "label": label,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::RuleDeleted,
+        true,
+        serde_json::json!({ "label": label }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a rule modification event
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `label` - Rule label/name
-/// * `protocol` - Rule protocol
-/// * `ports` - Optional port range
 pub async fn log_rule_modified(
     enable_event_log: bool,
     label: &str,
     protocol: &str,
     ports: Option<String>,
 ) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::RuleModified,
-            true,
-            serde_json::json!({
-                "label": label,
-                "protocol": protocol,
-                "ports": ports,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::RuleModified,
+        true,
+        serde_json::json!({ "label": label, "protocol": protocol, "ports": ports }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a rule toggle event (enabled/disabled)
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `label` - Rule label/name
-/// * `enabled` - New enabled state
 pub async fn log_rule_toggled(enable_event_log: bool, label: &str, enabled: bool) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::RuleToggled,
-            true,
-            serde_json::json!({
-                "label": label,
-                "enabled": enabled,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::RuleToggled,
+        true,
+        serde_json::json!({ "label": label, "enabled": enabled }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a rule reordering event (moved up/down)
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `label` - Rule label/name
-/// * `direction` - "up" or "down"
 pub async fn log_rules_reordered(enable_event_log: bool, label: &str, direction: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::RulesReordered,
-            true,
-            serde_json::json!({
-                "label": label,
-                "direction": direction,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::RulesReordered,
+        true,
+        serde_json::json!({ "label": label, "direction": direction }),
+        None,
+    )
+    .await;
 }
 
 /// Logs an undo operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `description` - Description of what was undone
 pub async fn log_undone(enable_event_log: bool, description: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::Undone,
-            true,
-            serde_json::json!({
-                "description": description,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::Undone,
+        true,
+        serde_json::json!({ "description": description }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a redo operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled
-/// * `description` - Description of what was redone
 pub async fn log_redone(enable_event_log: bool, description: &str) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::Redone,
-            true,
-            serde_json::json!({
-                "description": description,
-            }),
-            None,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::Redone,
+        true,
+        serde_json::json!({ "description": description }),
+        None,
+    )
+    .await;
 }
 
 /// Logs a save to system operation
-///
-/// # Arguments
-///
-/// * `enable_event_log` - Whether event logging is enabled (opt-in via config)
-/// * `success` - Whether the operation succeeded
-/// * `target_path` - Path where config was saved
-/// * `error` - Error message if operation failed
 pub async fn log_save_to_system(
     enable_event_log: bool,
     success: bool,
     target_path: &str,
     error: Option<String>,
 ) {
-    if !enable_event_log {
-        return;
-    }
-
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(
-            EventType::SaveToSystem,
-            success,
-            serde_json::json!({
-                "target_path": target_path,
-            }),
-            error,
-        );
-
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
+    log_event_internal(
+        enable_event_log,
+        EventType::SaveToSystem,
+        success,
+        serde_json::json!({ "target_path": target_path }),
+        error,
+    )
+    .await;
 }
 
 #[cfg(test)]
