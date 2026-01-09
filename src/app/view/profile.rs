@@ -194,15 +194,11 @@ pub fn view_profile_manager<'a>(
 
         // Wrap scrollable in bordered container
         container(
-            scrollable(
-                container(list)
-                    .width(Length::Fill)
-                    .padding(8),
-            )
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new().spacing(0),
-            ))
-            .style(move |_, status| themed_scrollable(theme, status)),
+            scrollable(container(list).width(Length::Fill).padding(8))
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().spacing(0),
+                ))
+                .style(move |_, status| themed_scrollable(theme, status)),
         )
         .height(Length::Fixed(300.0))
         .width(Length::Fill)

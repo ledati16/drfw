@@ -110,8 +110,11 @@ pub(crate) fn handle_toggle_strict_icmp_requested(
         let enable_event_log = state.enable_event_log;
         Task::perform(
             async move {
-                crate::audit::log_settings_saved(enable_event_log, "Strict ICMP filtering disabled")
-                    .await;
+                crate::audit::log_settings_saved(
+                    enable_event_log,
+                    "Strict ICMP filtering disabled",
+                )
+                .await;
             },
             |()| Message::AuditLogWritten,
         )

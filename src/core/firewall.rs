@@ -1382,8 +1382,10 @@ impl FirewallRuleset {
             let dest_val = if destinations.len() == 1 {
                 Self::ip_to_nft_json(destinations[0])
             } else {
-                let dest_set: Vec<serde_json::Value> =
-                    destinations.iter().map(|ip| Self::ip_to_nft_json(ip)).collect();
+                let dest_set: Vec<serde_json::Value> = destinations
+                    .iter()
+                    .map(|ip| Self::ip_to_nft_json(ip))
+                    .collect();
                 json!({ "set": dest_set })
             };
 

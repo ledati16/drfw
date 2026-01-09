@@ -4,8 +4,8 @@ use crate::app::Message;
 use crate::app::ui_components::{
     card_container, kbd_badge_container, secondary_button, section_header_container,
 };
-use iced::widget::{button, column, container, row, text};
 use iced::Element;
+use iced::widget::{button, column, container, row, text};
 
 pub fn view_shortcuts_help(
     theme: &crate::theme::AppTheme,

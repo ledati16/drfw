@@ -404,12 +404,15 @@ pub fn view_save_to_system_modal<'a>(
             .color(theme.success)
             .width(400)
             .align_x(Alignment::Center),
-        text(format!("Save current configuration to {}?", drfw::SYSTEM_NFT_PATH))
-            .size(14)
-            .font(font)
-            .color(theme.fg_primary)
-            .width(400)
-            .align_x(Alignment::Center),
+        text(format!(
+            "Save current configuration to {}?",
+            drfw::SYSTEM_NFT_PATH
+        ))
+        .size(14)
+        .font(font)
+        .color(theme.fg_primary)
+        .width(400)
+        .align_x(Alignment::Center),
         text("This will overwrite the system default configuration.")
             .size(12)
             .font(font)
@@ -434,9 +437,14 @@ pub fn view_save_to_system_modal<'a>(
     container(
         column![
             text("💾").size(36),
-            container(text("Save to System").size(24).font(font).color(theme.fg_primary))
-                .padding([4, 8])
-                .style(move |_| section_header_container(theme)),
+            container(
+                text("Save to System")
+                    .size(24)
+                    .font(font)
+                    .color(theme.fg_primary)
+            )
+            .padding([4, 8])
+            .style(move |_| section_header_container(theme)),
             body,
             buttons,
         ]

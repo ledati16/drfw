@@ -661,10 +661,7 @@ impl State {
 
         // Clone once directly into Arc (no intermediate Vec allocation)
         // Also build truncated versions for tag cloud display (avoids format! every frame)
-        self.cached_all_tags = all_tags
-            .iter()
-            .map(|s| Arc::new((*s).clone()))
-            .collect();
+        self.cached_all_tags = all_tags.iter().map(|s| Arc::new((*s).clone())).collect();
         self.cached_all_tags_truncated = all_tags
             .into_iter()
             .map(|s| {

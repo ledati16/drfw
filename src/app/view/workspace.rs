@@ -5,7 +5,7 @@ use crate::app::ui_components::{
     secondary_button, themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, tooltip, Id};
+use iced::widget::{Id, button, checkbox, column, container, row, scrollable, text, tooltip};
 use iced::{Alignment, Border, Element, Length, Shadow};
 use std::time::Duration;
 

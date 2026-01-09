@@ -64,16 +64,17 @@ use clap::{Parser, Subcommand};
 /// Returns the version string with git info: "0.8.0 (a3f8c21)" or "0.8.0 (a3f8c21*)" if dirty
 pub fn version_string() -> String {
     let dirty_marker = if build::GIT_CLEAN { "" } else { "*" };
-    format!("{} ({}{})", build::PKG_VERSION, build::SHORT_COMMIT, dirty_marker)
+    format!(
+        "{} ({}{})",
+        build::PKG_VERSION,
+        build::SHORT_COMMIT,
+        dirty_marker
+    )
 }
 
 /// Short version for clap (must be &'static str)
 const fn short_version() -> &'static str {
-    shadow_rs::formatcp!(
-        "{} ({})",
-        build::PKG_VERSION,
-        build::SHORT_COMMIT
-    )
+    shadow_rs::formatcp!("{} ({})", build::PKG_VERSION, build::SHORT_COMMIT)
 }
 
 /// Returns a detailed version string for --version flag

@@ -742,17 +742,11 @@ fn edge_case_ports(rng: &mut impl Rng) -> Vec<PortEntry> {
         // Mixed ranges and singles
         vec![
             PortEntry::Single(22),
-            PortEntry::Range {
-                start: 80,
-                end: 90,
-            },
+            PortEntry::Range { start: 80, end: 90 },
             PortEntry::Single(443),
         ],
         // Single port as range (80-80)
-        vec![PortEntry::Range {
-            start: 80,
-            end: 80,
-        }],
+        vec![PortEntry::Range { start: 80, end: 80 }],
         // Duplicate ports
         vec![
             PortEntry::Single(80),
@@ -772,14 +766,8 @@ fn edge_case_ports(rng: &mut impl Rng) -> Vec<PortEntry> {
         ],
         // Adjacent ranges
         vec![
-            PortEntry::Range {
-                start: 80,
-                end: 89,
-            },
-            PortEntry::Range {
-                start: 90,
-                end: 99,
-            },
+            PortEntry::Range { start: 80, end: 89 },
+            PortEntry::Range { start: 90, end: 99 },
         ],
     ];
 
@@ -1128,15 +1116,7 @@ fn generate_ruleset(
         }
         let action = random_action(rng);
         let chain = random_chain(rng);
-        let rule = generate_coverage_rule(
-            rng,
-            rule_index + 1,
-            protocol,
-            action,
-            chain,
-            None,
-            None,
-        );
+        let rule = generate_coverage_rule(rng, rule_index + 1, protocol, action, chain, None, None);
         tracker.record_rule(&rule, false);
         rules.push(rule);
         rule_index += 1;
@@ -1157,15 +1137,7 @@ fn generate_ruleset(
             random_protocol(rng)
         };
         let chain = random_chain(rng);
-        let rule = generate_coverage_rule(
-            rng,
-            rule_index + 1,
-            protocol,
-            action,
-            chain,
-            None,
-            None,
-        );
+        let rule = generate_coverage_rule(rng, rule_index + 1, protocol, action, chain, None, None);
         tracker.record_rule(&rule, false);
         rules.push(rule);
         rule_index += 1;
@@ -1181,15 +1153,7 @@ fn generate_ruleset(
         }
         let protocol = random_protocol(rng);
         let action = random_action(rng);
-        let rule = generate_coverage_rule(
-            rng,
-            rule_index + 1,
-            protocol,
-            action,
-            chain,
-            None,
-            None,
-        );
+        let rule = generate_coverage_rule(rng, rule_index + 1, protocol, action, chain, None, None);
         tracker.record_rule(&rule, false);
         rules.push(rule);
         rule_index += 1;
@@ -1365,7 +1329,10 @@ fn main() {
         "Generating {} rules{}...",
         count,
         if edge_cases {
-            format!(" (with edge cases, {}% probability)", (edge_case_prob * 100.0) as u32)
+            format!(
+                " (with edge cases, {}% probability)",
+                (edge_case_prob * 100.0) as u32
+            )
         } else {
             String::new()
         }

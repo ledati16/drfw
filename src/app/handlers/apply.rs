@@ -433,12 +433,7 @@ pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message
             .map_err(|e| format!("Elevation error: {e}"))?;
 
             // Capture output for better error messages
-            let output = match tokio::time::timeout(
-                Duration::from_secs(120),
-                cmd.output(),
-            )
-            .await
-            {
+            let output = match tokio::time::timeout(Duration::from_secs(120), cmd.output()).await {
                 Ok(Ok(output)) => output,
                 Ok(Err(e)) => return Err(format!("Failed to execute install: {e}")),
                 Err(_) => return Err("Install timed out (authentication dialog expired?)".into()),

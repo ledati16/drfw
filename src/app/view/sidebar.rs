@@ -8,8 +8,8 @@ use crate::app::ui_components::{
 use crate::app::{Message, State};
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
-    tooltip, Id,
+    Id, button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
+    tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
 use std::sync::Arc;
@@ -124,15 +124,13 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         // Scrollable tag cloud with embedded scrollbar (STYLE.md Section 17)
         // Use Shrink height + max_height so it only takes needed space
         // Scrollbar::spacing(8) creates gap between content and scrollbar
-        let scrollable_tags = scrollable(
-            container(tags_row).width(Length::Fill),
-        )
-        .id(Id::new(super::SIDEBAR_TAGS_SCROLLABLE_ID))
-        .direction(scrollable::Direction::Vertical(
-            scrollable::Scrollbar::new().spacing(8),
-        ))
-        .height(Length::Shrink)
-        .style(move |_, status| themed_scrollable(theme, status));
+        let scrollable_tags = scrollable(container(tags_row).width(Length::Fill))
+            .id(Id::new(super::SIDEBAR_TAGS_SCROLLABLE_ID))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(8),
+            ))
+            .height(Length::Shrink)
+            .style(move |_, status| themed_scrollable(theme, status));
 
         column![
             container(
@@ -461,7 +459,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         let cb: Element<'_, Message> = if is_drop_target {
                             cb.into() // Non-interactive during drag
                         } else {
-                            cb.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id)).into()
+                            cb.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
+                                .into()
                         };
 
                         // Delete button: redirect to drop during drag
@@ -469,7 +468,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                             text("×")
                                 .size(14)
                                 .font(state.font_regular)
-                                .color(theme.fg_muted)
+                                .color(theme.fg_muted),
                         )
                         .on_press(if is_drop_target {
                             Message::RuleDropped(rule.id)
@@ -479,9 +478,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         .padding(6)
                         .style(button::text);
 
-                        row![cb, delete_btn]
-                            .spacing(8)
-                            .align_y(Alignment::Center)
+                        row![cb, delete_btn].spacing(8).align_y(Alignment::Center)
                     },
                 ]
                 .spacing(8)

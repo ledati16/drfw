@@ -209,12 +209,17 @@ pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) ->
     };
 
     let Some(line) = line_opt else {
-        tracing::warn!("Attempted to copy non-existent preview line {}", line_number);
+        tracing::warn!(
+            "Attempted to copy non-existent preview line {}",
+            line_number
+        );
         return Task::none();
     };
 
     // Reconstruct line text: indentation + all token text concatenated
-    let mut text = String::with_capacity(line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>());
+    let mut text = String::with_capacity(
+        line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>(),
+    );
     for _ in 0..line.indent {
         text.push(' ');
     }
@@ -294,8 +299,9 @@ pub(crate) fn handle_click_preview_line(state: &mut State, line_number: usize) {
     };
 
     // Reconstruct line text from tokens
-    let mut text =
-        String::with_capacity(line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>());
+    let mut text = String::with_capacity(
+        line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>(),
+    );
     for _ in 0..line.indent {
         text.push(' ');
     }

@@ -252,7 +252,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     };
 
     // Theme picker modal overlay
-    let with_theme_picker: Element<'_, Message> = if let Some(ref picker_state) = state.theme_picker {
+    let with_theme_picker: Element<'_, Message> = if let Some(ref picker_state) = state.theme_picker
+    {
         stack![
             with_font_picker,
             opaque(
@@ -283,7 +284,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     };
 
     // Profile manager modal overlay (hide when profile switch confirmation is active)
-    let with_profile_manager: Element<'_, Message> = if let Some(ref mgr_state) = state.profile_manager
+    let with_profile_manager: Element<'_, Message> = if let Some(ref mgr_state) =
+        state.profile_manager
         && state.pending_profile_switch.is_none()
     {
         stack![

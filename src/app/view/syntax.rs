@@ -13,7 +13,7 @@
 
 use crate::app::Message;
 use iced::widget::text::Wrapping;
-use iced::widget::{column, container, mouse_area, row, space, text, Column};
+use iced::widget::{Column, column, container, mouse_area, row, space, text};
 use iced::{Color, Length};
 
 pub fn view_from_cached_diff_tokens<'a>(
@@ -54,8 +54,12 @@ pub fn view_from_cached_diff_tokens<'a>(
         // Indentation
         if highlighted_line.indent > 0 {
             let spaces = &SPACES[..highlighted_line.indent];
-            row_content =
-                row_content.push(text(spaces).font(mono_font).size(14).wrapping(Wrapping::None));
+            row_content = row_content.push(
+                text(spaces)
+                    .font(mono_font)
+                    .size(14)
+                    .wrapping(Wrapping::None),
+            );
         }
 
         // Tokens (already parsed - just build widgets!)
@@ -175,8 +179,12 @@ pub fn view_from_cached_nft_tokens<'a>(
         // Indentation (NFT only uses actual indentation, no extra spacing)
         if highlighted_line.indent > 0 && !highlighted_line.tokens.is_empty() {
             let spaces = &SPACES[..highlighted_line.indent];
-            row_content =
-                row_content.push(text(spaces).font(mono_font).size(14).wrapping(Wrapping::None));
+            row_content = row_content.push(
+                text(spaces)
+                    .font(mono_font)
+                    .size(14)
+                    .wrapping(Wrapping::None),
+            );
         }
 
         // Tokens (already parsed!)

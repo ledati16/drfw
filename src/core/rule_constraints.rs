@@ -62,7 +62,10 @@ use ipnetwork::IpNetwork;
 /// ```
 #[inline]
 pub fn protocol_supports_ports(protocol: Protocol) -> bool {
-    matches!(protocol, Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp)
+    matches!(
+        protocol,
+        Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
+    )
 }
 
 /// Returns `true` if the protocol is an ICMP variant.

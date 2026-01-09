@@ -423,9 +423,7 @@ fn view_interface_fields<'a>(
                 output_iface_col.push(text(err).size(12).font(regular_font).color(theme.danger));
         }
 
-        row![input_iface_col, output_iface_col]
-            .spacing(12)
-            .into()
+        row![input_iface_col, output_iface_col].spacing(12).into()
     } else {
         input_iface_col.into()
     }
