@@ -286,6 +286,16 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
         return Task::none();
     };
 
+    // Clear drag state if it references the rule being deleted
+    if state.dragged_rule_id == Some(id)
+        || state.hovered_drop_target_id == Some(id)
+        || state.hover_pending.map(|(pid, _)| pid) == Some(id)
+    {
+        state.dragged_rule_id = None;
+        state.hovered_drop_target_id = None;
+        state.hover_pending = None;
+    }
+
     let rule_clone = rule.clone();
     let enable_event_log = state.enable_event_log;
 

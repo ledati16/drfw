@@ -243,6 +243,9 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             let is_being_dragged = state.dragged_rule_id == Some(rule.id);
             let any_drag_active = state.dragged_rule_id.is_some();
             let is_hover_target = state.hovered_drop_target_id == Some(rule.id);
+            // When drag is active and this card is a potential drop target,
+            // all click handlers should trigger RuleDropped instead of their normal action
+            let is_drop_target = any_drag_active && !is_being_dragged;
 
             let card_content: Element<'_, Message> = if is_deleting {
                 row![
@@ -459,7 +462,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         )
                         .delay(std::time::Duration::from_millis(1000)),
                     )
-                    .on_press(Message::EditRuleClicked(rule.id))
+                    .on_press(if is_drop_target {
+                        Message::RuleDropped(rule.id)
+                    } else {
+                        Message::EditRuleClicked(rule.id)
+                    })
                     .padding(0)
                     .style(button::text),
                     // Accent Line (Absorbs all remaining space)
@@ -473,26 +480,37 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         snap: true,
                     }),
                     // Management Cluster (Always stays on far right)
-                    row![
-                        // Checkbox
-                        checkbox(rule.enabled)
-                            .on_toggle(move |_| Message::ToggleRuleEnabled(rule.id))
+                    {
+                        // Checkbox: disable interaction during drag (clicks fall through to mouse_area)
+                        let cb = checkbox(rule.enabled)
                             .size(16)
                             .spacing(0)
-                            .style(move |_, status| themed_checkbox(theme, status)),
-                        // Delete
-                        button(
+                            .style(move |_, status| themed_checkbox(theme, status));
+                        let cb: Element<'_, Message> = if is_drop_target {
+                            cb.into() // Non-interactive during drag
+                        } else {
+                            cb.on_toggle(move |_| Message::ToggleRuleEnabled(rule.id)).into()
+                        };
+
+                        // Delete button: redirect to drop during drag
+                        let delete_btn = button(
                             text("×")
                                 .size(14)
                                 .font(state.font_regular)
                                 .color(theme.fg_muted)
                         )
-                        .on_press(Message::DeleteRuleRequested(rule.id))
+                        .on_press(if is_drop_target {
+                            Message::RuleDropped(rule.id)
+                        } else {
+                            Message::DeleteRuleRequested(rule.id)
+                        })
                         .padding(6)
-                        .style(button::text),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
+                        .style(button::text);
+
+                        row![cb, delete_btn]
+                            .spacing(8)
+                            .align_y(Alignment::Center)
+                    },
                 ]
                 .spacing(8)
                 .padding([0, 8]) // Add horizontal padding to match other rows
@@ -540,7 +558,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     container(row(detail_items).spacing(8).align_y(Alignment::Center))
                         .width(Length::Fill),
                 )
-                .on_press(Message::EditRuleClicked(rule.id))
+                .on_press(if is_drop_target {
+                    Message::RuleDropped(rule.id)
+                } else {
+                    Message::EditRuleClicked(rule.id)
+                })
                 .padding([0, 8]) // Match outer padding
                 .style(button::text)
                 .width(Length::Fill);
@@ -553,7 +575,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         container(row(tag_items).spacing(4).align_y(Alignment::Center))
                             .width(Length::Fill),
                     )
-                    .on_press(Message::EditRuleClicked(rule.id))
+                    .on_press(if is_drop_target {
+                        Message::RuleDropped(rule.id)
+                    } else {
+                        Message::EditRuleClicked(rule.id)
+                    })
                     .padding([0, 8])
                     .style(button::text)
                     .width(Length::Fill);

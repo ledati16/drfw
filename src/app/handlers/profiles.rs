@@ -49,6 +49,12 @@ pub(crate) fn handle_profile_switched(
     state.cached_disk_profile = Some(ruleset);
     state.active_profile_name.clone_from(&name);
     state.command_history = crate::command::CommandHistory::default();
+
+    // Clear any active drag state (rule IDs from old profile are invalid)
+    state.dragged_rule_id = None;
+    state.hovered_drop_target_id = None;
+    state.hover_pending = None;
+
     state.update_cached_text();
     state.mark_config_dirty();
 
