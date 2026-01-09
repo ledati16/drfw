@@ -75,7 +75,7 @@ fn view_ports_helper<'a>(
         // Error message
         {
             if let Some(err) = &helper.error {
-                container(text(err).size(11).font(regular_font).color(theme.danger))
+                container(text(err).size(12).font(regular_font).color(theme.danger))
             } else {
                 container(Space::new())
             }
@@ -203,7 +203,7 @@ fn view_addresses_helper<'a>(
         // Error message
         {
             if let Some(err) = &helper.error {
-                container(text(err).size(11).font(regular_font).color(theme.danger))
+                container(text(err).size(12).font(regular_font).color(theme.danger))
             } else {
                 container(Space::new())
             }
@@ -313,7 +313,7 @@ fn view_tags_helper<'a>(
         // Error message
         {
             if let Some(err) = &helper.error {
-                container(text(err).size(11).font(regular_font).color(theme.danger))
+                container(text(err).size(12).font(regular_font).color(theme.danger))
             } else {
                 container(Space::new())
             }

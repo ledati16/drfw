@@ -68,7 +68,7 @@ pub fn view_rule_form<'a>(
         // Basic Info Section
         column![
             text("DESCRIPTION")
-                .size(10)
+                .size(11)
                 .font(regular_font)
                 .color(theme.fg_muted),
             text_input("e.g. Local Web Server", &form.label)
@@ -84,7 +84,7 @@ pub fn view_rule_form<'a>(
                 column![
                     container(
                         text("PROTOCOL")
-                            .size(10)
+                            .size(11)
                             .font(regular_font)
                             .color(theme.fg_muted)
                     )
@@ -122,7 +122,7 @@ pub fn view_rule_form<'a>(
                     let mut port_col = column![
                         container(
                             text("PORTS")
-                                .size(10)
+                                .size(11)
                                 .font(regular_font)
                                 .color(theme.fg_muted)
                         )
@@ -135,7 +135,7 @@ pub fn view_rule_form<'a>(
 
                     if let Some(err) = port_error {
                         port_col = port_col
-                            .push(text(err).size(11).font(regular_font).color(theme.danger));
+                            .push(text(err).size(12).font(regular_font).color(theme.danger));
                     }
                     port_col
                 },
@@ -151,7 +151,7 @@ pub fn view_rule_form<'a>(
                     let mut source_col = column![
                         container(
                             text("SOURCE ADDRESS")
-                                .size(10)
+                                .size(11)
                                 .font(regular_font)
                                 .color(theme.fg_muted)
                         )
@@ -169,7 +169,7 @@ pub fn view_rule_form<'a>(
 
                     if let Some(err) = source_error {
                         source_col = source_col
-                            .push(text(err).size(11).font(regular_font).color(theme.danger));
+                            .push(text(err).size(12).font(regular_font).color(theme.danger));
                     }
                     source_col
                 },
@@ -194,7 +194,7 @@ pub fn view_rule_form<'a>(
                     column![
                         container(
                             text("CHAIN DIRECTION")
-                                .size(10)
+                                .size(11)
                                 .font(regular_font)
                                 .color(theme.fg_muted)
                         )
@@ -223,7 +223,7 @@ pub fn view_rule_form<'a>(
         column![
             container(
                 text("TAGS")
-                    .size(10)
+                    .size(11)
                     .font(regular_font)
                     .color(theme.fg_muted)
             )
@@ -362,7 +362,7 @@ fn view_interface_fields<'a>(
     let input_iface_col = column![
         container(
             text(input_label)
-                .size(10)
+                .size(11)
                 .font(regular_font)
                 .color(theme.fg_muted)
         )
@@ -392,7 +392,7 @@ fn view_interface_fields<'a>(
         let mut output_iface_col = column![
             container(
                 text("OUTPUT INTERFACE")
-                    .size(10)
+                    .size(11)
                     .font(regular_font)
                     .color(theme.fg_muted)
             )
@@ -420,7 +420,7 @@ fn view_interface_fields<'a>(
 
         if let Some(err) = output_interface_error {
             output_iface_col =
-                output_iface_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+                output_iface_col.push(text(err).size(12).font(regular_font).color(theme.danger));
         }
 
         row![input_iface_col, output_iface_col]
@@ -460,7 +460,7 @@ fn view_advanced_section<'a>(
         let mut dest_col = column![
             container(
                 text("DESTINATION ADDRESS")
-                    .size(10)
+                    .size(11)
                     .font(regular_font)
                     .color(theme.fg_muted)
             )
@@ -476,7 +476,7 @@ fn view_advanced_section<'a>(
         ]
         .spacing(4);
         if let Some(err) = destination_error {
-            dest_col = dest_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+            dest_col = dest_col.push(text(err).size(12).font(regular_font).color(theme.danger));
         }
         adv_col = adv_col.push(dest_col);
 
@@ -485,7 +485,7 @@ fn view_advanced_section<'a>(
             let action_col = column![
                 container(
                     text("ACTION")
-                        .size(10)
+                        .size(11)
                         .font(regular_font)
                         .color(theme.fg_muted)
                 )
@@ -523,7 +523,7 @@ fn view_advanced_section<'a>(
                 let mut reject_col = column![
                     container(
                         text("REJECT TYPE")
-                            .size(10)
+                            .size(11)
                             .font(regular_font)
                             .color(theme.fg_muted)
                     )
@@ -545,7 +545,7 @@ fn view_advanced_section<'a>(
 
                 if let Some(err) = reject_type_error {
                     reject_col =
-                        reject_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+                        reject_col.push(text(err).size(12).font(regular_font).color(theme.danger));
                 }
 
                 adv_col = adv_col.push(row![action_col, reject_col].spacing(12));
@@ -572,7 +572,7 @@ fn view_advanced_section<'a>(
                     column![
                         container(
                             text("COUNT")
-                                .size(10)
+                                .size(11)
                                 .font(regular_font)
                                 .color(theme.fg_muted)
                         )
@@ -589,7 +589,7 @@ fn view_advanced_section<'a>(
                     column![
                         container(
                             text("PER")
-                                .size(10)
+                                .size(11)
                                 .font(regular_font)
                                 .color(theme.fg_muted)
                         )
@@ -616,7 +616,7 @@ fn view_advanced_section<'a>(
                     column![
                         container(
                             text("BURST")
-                                .size(10)
+                                .size(11)
                                 .font(regular_font)
                                 .color(theme.fg_muted)
                         )
@@ -636,7 +636,7 @@ fn view_advanced_section<'a>(
         }
         if let Some(err) = rate_limit_error {
             rate_limit_col =
-                rate_limit_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+                rate_limit_col.push(text(err).size(12).font(regular_font).color(theme.danger));
         }
         adv_col = adv_col.push(rate_limit_col);
 
@@ -644,7 +644,7 @@ fn view_advanced_section<'a>(
         let mut conn_col = column![
             container(
                 text("CONNECTION LIMIT")
-                    .size(10)
+                    .size(11)
                     .font(regular_font)
                     .color(theme.fg_muted)
             )
@@ -658,7 +658,7 @@ fn view_advanced_section<'a>(
         ]
         .spacing(4);
         if let Some(err) = connection_limit_error {
-            conn_col = conn_col.push(text(err).size(11).font(regular_font).color(theme.danger));
+            conn_col = conn_col.push(text(err).size(12).font(regular_font).color(theme.danger));
         }
         adv_col = adv_col.push(conn_col);
 

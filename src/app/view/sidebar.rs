@@ -250,15 +250,15 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             let card_content: Element<'_, Message> = if is_deleting {
                 row![
                     text("Delete this rule?")
-                        .size(11)
+                        .size(12)
                         .font(state.font_regular)
                         .color(theme.danger)
                         .width(Length::Fill),
-                    button(text("Cancel").size(11).font(state.font_regular))
+                    button(text("Cancel").size(12).font(state.font_regular))
                         .on_press(Message::CancelDelete)
                         .padding([4, 10])
                         .style(move |_, status| secondary_button(theme, status)),
-                    button(text("Delete").size(11).font(state.font_regular))
+                    button(text("Delete").size(12).font(state.font_regular))
                         .on_press(Message::DeleteRule(rule.id))
                         .padding([4, 10])
                         .style(move |_, status| danger_button(theme, status)),
