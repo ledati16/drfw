@@ -40,7 +40,6 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
     // Limit visible items to improve rendering performance if there are many matches
     // 30 is enough for a searchable list and keeps layout fast (reduced from 100)
     let font_list = column(filtered_fonts.into_iter().take(display_limit).map(|f| {
-        // Performance: Don't clone until button press (use index instead)
         let name = f.name();
         let preview_font = f.to_font(); // Cheap: just returns handle from FontChoice
 
@@ -49,7 +48,7 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
             FontPickerTarget::Mono => &state.mono_font_choice == f,
         };
 
-        // Clone ONLY when button is pressed, not on every render
+        // Clone needed for on_press closure (cheap: just font name string)
         let f_for_message = f.clone();
 
         button(
@@ -132,12 +131,7 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
             container(
                 scrollable(
                     column![
-                        container(font_list).padding(Padding {
-                            top: 8.0,
-                            right: 8.0,
-                            bottom: 8.0,
-                            left: 8.0,
-                        }),
+                        container(font_list).padding(8),
                         if filtered_count == 0 {
                             container(
                                 text("No fonts found — try a different search")
@@ -172,7 +166,9 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                     ]
                     .spacing(0)
                 )
-                .spacing(0)  // Embedded mode prevents overlap
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().spacing(0),
+                ))
                 .style(move |_, status| themed_scrollable(theme, status))
             )
             .height(Length::Fixed(400.0))
@@ -213,9 +209,9 @@ pub fn view_theme_picker<'a>(
 ) -> Element<'a, Message> {
     // Theme picker layout constants
     const CARD_WIDTH: f32 = 150.0;
-    const CARD_SPACING: f32 = 16.0;
-    const GRID_PADDING: f32 = 8.0; // Clean symmetric padding
-    const MODAL_WIDTH: f32 = 556.0; // Fine-tuned for visual balance
+    const CARD_SPACING: f32 = 10.0;
+    const GRID_PADDING: f32 = 10.0; // Clean symmetric padding
+    const MODAL_WIDTH: f32 = 548.0; // Fine-tuned for visual balance
     const GRADIENT_BAR_HEIGHT: f32 = 24.0;
     const COLOR_DOT_SIZE: f32 = 12.0;
     const STATUS_COLOR_SIZE: f32 = 14.0;
@@ -593,6 +589,9 @@ pub fn view_theme_picker<'a>(
                     container(theme_grid).padding(GRID_PADDING) // Symmetric - simple and maintainable
                 }])
                 .width(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().spacing(0),
+                ))
                 .style(move |_, status| themed_scrollable(theme, status))
             )
             .height(Length::Fixed(320.0))
