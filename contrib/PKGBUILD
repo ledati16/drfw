@@ -14,28 +14,28 @@ optdepends=(
 )
 provides=('drfw')
 conflicts=('drfw')
-source=("git+${url}.git")
+source=("${pkgname%-git}::git+${url}.git")
 sha256sums=('SKIP')
 
 pkgver() {
-    cd drfw
+    cd "${pkgname%-git}"
     git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
     printf "%s.r%s.g%s" "$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)" \
         "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {
-    cd drfw
+    cd "${pkgname%-git}"
     cargo build --release --locked
 }
 
 check() {
-    cd drfw
+    cd "${pkgname%-git}"
     DRFW_TEST_NO_ELEVATION=1 cargo test --locked
 }
 
 package() {
-    cd drfw
+    cd "${pkgname%-git}"
     install -Dm755 target/release/drfw "$pkgdir/usr/bin/drfw"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 contrib/drfw.desktop "$pkgdir/usr/share/applications/drfw.desktop"
