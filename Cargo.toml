@@ -59,10 +59,10 @@ chrono = { version = "0.4", features = ["serde"] }  # Rule creation timestamps
 # UI Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 similar = "2"  # Diff algorithm for ruleset comparison (show changes)
-rfd = "0.15"  # Native OS file dialogs (save/export)
+rfd = "0.17"  # Native OS file dialogs (save/export)
 network-interface = "2.0"  # Cross-platform network interface discovery
-logos = "0.14"  # Declarative lexer generator (compile-time DFA)
-strum = { version = "0.26", features = ["derive"] }  # Enum boilerplate elimination (Display, iter, etc.)
+logos = "0.16"  # Declarative lexer generator (compile-time DFA)
+strum = { version = "0.27", features = ["derive"] }  # Enum boilerplate elimination (Display, iter, etc.)
 nucleo-matcher = "0.3"  # Fuzzy search for font and theme pickers
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -76,10 +76,10 @@ tracing-subscriber = "0.3"  # Logging configuration and output formatting
 # Security & System Integration
 # ═══════════════════════════════════════════════════════════════════════════
 sha2 = "0.10"  # Snapshot checksums for integrity verification
-fontdb = "0.21"  # System font enumeration for font picker
-clap = { version = "4.5.53", features = ["derive"] }  # CLI argument parsing
+fontdb = "0.23"  # System font enumeration for font picker
+clap = { version = "4.5.54", features = ["derive"] }  # CLI argument parsing
 nix = { version = "0.30.1", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
-crossterm = "0.28"  # Terminal control for CLI countdown timers
+crossterm = "0.29"  # Terminal control for CLI countdown timers
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Build Information
@@ -91,7 +91,7 @@ shadow-rs = "1.5"
 
 [dev-dependencies]
 proptest = "1"
-rand = "0.8"
+rand = "0.9"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Development Tools
@@ -103,7 +103,7 @@ path = "tools/stress_gen.rs"
 required-features = ["stress_gen"]
 
 [dependencies.rand]
-version = "0.8"
+version = "0.9"
 optional = true
 
 [features]

@@ -222,8 +222,8 @@ enum NftToken {
     #[regex(r"\d+")]
     Number,
 
-    // Comments
-    #[regex(r"#[^\n]*")]
+    // Comments (allow_greedy is safe here - bounded by newlines)
+    #[regex(r"#[^\n]*", allow_greedy = true)]
     CommentText,
 
     // Structural tokens
