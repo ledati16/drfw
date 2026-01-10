@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=DRFW
+Comment=A minimal, safe, stateful nftables GUI for desktop Linux
+Exec=drfw
+Icon=drfw
+Terminal=false
+Type=Application
+Categories=System;Security;Network;
+Keywords=firewall;nftables;network;security;
