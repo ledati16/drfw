@@ -16,7 +16,9 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 
 ## Screenshots
 
-*(Coming soon)*
+<p align="center">
+  <img src="assets/screenshot-oxide.png" width="600" alt="DRFW in Oxide theme">
+</p>
 
 ## Features
 
