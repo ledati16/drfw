@@ -77,6 +77,7 @@ pub fn setup_mock_nft() {
 ///
 /// This is the canonical helper for creating test rulesets.
 /// Use this instead of creating rulesets manually in tests.
+#[allow(dead_code)] // Available for library tests; integration_tests.rs has its own copy
 pub fn create_test_ruleset() -> FirewallRuleset {
     let mut ruleset = FirewallRuleset::new();
     ruleset.rules.push(create_test_rule("Test SSH", Some(22)));

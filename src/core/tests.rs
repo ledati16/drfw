@@ -599,56 +599,19 @@ mod property_tests {
 
 #[cfg(test)]
 mod integration_tests {
-    //! Integration tests for DRFW core functionality.
-    //!
-    //! **Note on privilege requirements:**
-    //! Some tests require nftables to verify rulesets, which needs elevated privileges
-    //! even with the `--check` flag. These tests will gracefully skip if:
-    //! - `nft` is not installed
-    //! - The test lacks necessary privileges
-    //!
-    //! To run the full integration test suite with verification:
-    //! ```bash
-    //! sudo -E cargo test integration_tests -- --nocapture
-    //! ```
+    //! Integration tests for DRFW core JSON generation.
     //!
     //! **Note on test organization:**
+    //! - Verification tests with mock nft are in `tests/integration_tests.rs` (authoritative)
     //! - Snapshot validation tests are in `nft_json.rs` (authoritative)
-    //! - Verification tests with mock nft are here
-    //! - Checksum tests are in `nft_json.rs` (close to implementation)
+    //! - JSON generation tests are here (close to implementation)
     //!
-    //! All tests use the mock nft script via `setup_mock_nft()`.
+    //! Tests that exercise the verification flow should be in `tests/integration_tests.rs`
+    //! to avoid duplication.
 
     use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
-    use crate::core::test_helpers::{create_test_rule, create_test_ruleset, setup_mock_nft};
+    use crate::core::test_helpers::{create_test_rule, setup_mock_nft};
     use crate::core::verify;
-
-    #[tokio::test]
-    async fn test_verify_valid_ruleset() {
-        setup_mock_nft();
-
-        let ruleset = create_test_ruleset();
-        let json = ruleset.to_nftables_json();
-        let result = verify::verify_ruleset(json).await;
-
-        assert!(
-            result.is_ok(),
-            "Valid ruleset should pass verification: {:?}",
-            result.err()
-        );
-        let verify_result = result.unwrap();
-
-        assert!(
-            verify_result.success,
-            "Verification should succeed. Errors: {:?}",
-            verify_result.errors
-        );
-        assert!(
-            verify_result.errors.is_empty(),
-            "Should have no errors: {:?}",
-            verify_result.errors
-        );
-    }
 
     #[tokio::test]
     async fn test_verify_port_range() {
@@ -675,80 +638,6 @@ mod integration_tests {
         assert!(
             verify_result.success,
             "Port range should be valid: {:?}",
-            verify_result.errors
-        );
-    }
-
-    #[tokio::test]
-    async fn test_audit_logging_integration() {
-        // This test verifies that audit logging doesn't panic
-        // We pass enable_event_log=false to avoid writing to the real user's audit log
-        let ruleset = create_test_ruleset();
-        let rule_count = ruleset.rules.len();
-        let enabled_count = ruleset.rules.iter().filter(|r| r.enabled).count();
-
-        // These should not panic (enable_event_log=false so nothing is written)
-        crate::audit::log_apply(false, rule_count, enabled_count, true, None).await;
-        crate::audit::log_apply(
-            false,
-            rule_count,
-            enabled_count,
-            false,
-            Some("Test error".to_string()),
-        )
-        .await;
-
-        // Success if we reach here without panicking
-    }
-
-    #[tokio::test]
-    async fn test_verify_empty_ruleset() {
-        setup_mock_nft();
-
-        let ruleset = FirewallRuleset::new();
-        let json = ruleset.to_nftables_json();
-        let result = verify::verify_ruleset(json).await;
-
-        assert!(
-            result.is_ok(),
-            "Empty ruleset should pass verification: {:?}",
-            result.err()
-        );
-        let verify_result = result.unwrap();
-
-        assert!(
-            verify_result.success,
-            "Empty ruleset verification should succeed. Errors: {:?}",
-            verify_result.errors
-        );
-    }
-
-    #[tokio::test]
-    async fn test_verify_multiple_rules() {
-        use crate::core::test_helpers::create_test_rule;
-
-        setup_mock_nft();
-
-        let mut ruleset = FirewallRuleset::new();
-        ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
-        ruleset.rules.push(create_test_rule("Test HTTP", Some(80)));
-        ruleset
-            .rules
-            .push(create_test_rule("Test HTTPS", Some(443)));
-
-        let json = ruleset.to_nftables_json();
-        let result = verify::verify_ruleset(json).await;
-
-        assert!(
-            result.is_ok(),
-            "Multiple rules should pass verification: {:?}",
-            result.err()
-        );
-        let verify_result = result.unwrap();
-
-        assert!(
-            verify_result.success,
-            "Multi-rule verification should succeed. Errors: {:?}",
             verify_result.errors
         );
     }

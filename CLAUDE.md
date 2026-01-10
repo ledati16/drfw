@@ -406,18 +406,21 @@ self.modify_state(cached_value);
 
 | File | Purpose | Authoritative For |
 |------|---------|-------------------|
-| `src/core/tests.rs` | Unit tests for firewall JSON generation, property tests, verification tests | JSON output structure, rule ordering, protocol handling |
+| `src/core/tests.rs` | Unit tests for JSON generation, property tests, JSON format details | JSON output structure, rule ordering, protocol handling, IP format compliance |
+| `src/core/verify.rs` | Unit tests for error parsing functions | `parse_nft_errors()`, `VerifyResult` constructors |
 | `src/core/nft_json.rs` | Module tests for snapshot and checksum functions | Snapshot validation, checksums, emergency ruleset |
-| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI operations, profiles | Verification flow, CLI exports, profile operations |
-| `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation) | - |
+| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI operations, profiles | **Verification flow** (valid/empty/multi-rule), CLI exports, profile operations, audit logging |
+| `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
 | `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
 
 **Key principle:** Each test concept should exist in exactly ONE location. The "authoritative" location is closest to the implementation being tested.
 
+**Verification tests belong in `tests/integration_tests.rs`**, not in `src/core/tests.rs`. The verification flow exercises the mock nft script, making it an integration test. JSON generation tests (which don't invoke nft) belong in `src/core/tests.rs`.
+
 ### Test Helper Modules
 
-Use the shared test helpers to avoid duplication:
+Use the shared test helpers to avoid duplication **within the library crate**:
 
 ```rust
 // For core tests (firewall rules, rulesets)
@@ -432,6 +435,8 @@ use crate::core::test_helpers::setup_mock_nft;
 // For tests that need exclusive env var access (e.g., testing different elevation methods)
 use crate::core::test_helpers::ENV_VAR_MUTEX;
 ```
+
+**Note:** Integration tests in `tests/` are compiled as a separate crate and **cannot access `#[cfg(test)]` modules** from the library. Therefore, `tests/integration_tests.rs` has its own copies of helper functions. This is unavoidable due to Rust's test architecture. When modifying Rule fields, update helpers in both locations.
 
 ### Environment Variables
 

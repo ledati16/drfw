@@ -5,9 +5,10 @@
 //!
 //! **Test Organization:**
 //! - Snapshot validation tests are in `src/core/nft_json.rs` (authoritative)
-//! - Verification tests with mock nft are here
+//! - Verification tests with mock nft are here (authoritative)
 //! - CLI command integration tests are here
 //! - Profile operations are here
+//! - JSON generation tests are in `src/core/tests.rs` (close to implementation)
 //!
 //! # Running Tests
 //!
@@ -17,6 +18,13 @@
 //! ```
 //!
 //! The mock script (`tests/mock_nft.sh`) simulates nft behavior for testing.
+//!
+//! # Note on Helper Functions
+//!
+//! This file has its own copies of helper functions (create_test_rule, etc.)
+//! because integration tests are compiled as a separate crate and cannot access
+//! `#[cfg(test)]` modules from the library. The library's `test_helpers` module
+//! is for unit tests within the library crate only.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -250,49 +258,8 @@ async fn test_audit_logging_doesnt_panic() {
     // If we reach here without panicking, test passes
 }
 
-#[test]
-fn test_all_protocol_types_generate_valid_json() {
-    let mut ruleset = FirewallRuleset::new();
-
-    ruleset.rules.push(create_full_test_rule(
-        "TCP",
-        Protocol::Tcp,
-        Some(80),
-        None,
-        None,
-    ));
-    ruleset.rules.push(create_full_test_rule(
-        "UDP",
-        Protocol::Udp,
-        Some(53),
-        None,
-        None,
-    ));
-    ruleset.rules.push(create_full_test_rule(
-        "ICMP",
-        Protocol::Icmp,
-        None,
-        None,
-        None,
-    ));
-    ruleset.rules.push(create_full_test_rule(
-        "Any",
-        Protocol::Any,
-        None,
-        Some("192.168.1.0/24"),
-        None,
-    ));
-
-    let json = ruleset.to_nftables_json();
-
-    // Should be valid and serializable
-    let json_str = serde_json::to_string(&json);
-    assert!(json_str.is_ok(), "JSON should serialize");
-
-    // Should validate
-    let validation = nft_json::validate_snapshot(&json);
-    assert!(validation.is_ok(), "All protocol types should validate");
-}
+// NOTE: test_all_protocol_types_generate_valid_json removed - see src/core/tests.rs
+// for the authoritative test_json_generation_with_all_protocol_types
 
 #[test]
 fn test_complex_rule_configurations() {
@@ -439,30 +406,7 @@ fn test_cli_export_json_format() {
     );
 }
 
-#[tokio::test]
-async fn test_cli_verify_before_apply() {
-    // Test the verification step used by `drfw apply`
-    setup_mock_nft();
-
-    let ruleset = create_test_ruleset();
-    let json = ruleset.to_nftables_json();
-
-    // Verify the ruleset before applying (as CLI does)
-    let result = verify::verify_ruleset(json).await;
-
-    assert!(result.is_ok(), "verify_ruleset should succeed with mock: {:?}", result.err());
-
-    let verify_result = result.unwrap();
-    assert!(
-        verify_result.success,
-        "Valid ruleset should verify successfully: {:?}",
-        verify_result.errors
-    );
-    assert!(
-        verify_result.errors.is_empty(),
-        "Valid ruleset should have no errors"
-    );
-}
+// NOTE: test_cli_verify_before_apply removed - exact duplicate of test_verify_with_mock
 
 #[test]
 fn test_cli_profile_load_and_rebuild_caches() {
