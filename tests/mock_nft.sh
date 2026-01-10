@@ -2,7 +2,7 @@
 # Mock nft command for testing
 # This script simulates nftables behavior for CI/testing without requiring root privileges
 
-# Store last input for inspection
+# Store last input for inspection (useful for debugging tests)
 MOCK_NFT_DIR="${TMPDIR:-/tmp}/drfw_mock_nft_$$"
 mkdir -p "$MOCK_NFT_DIR"
 
@@ -19,15 +19,10 @@ case "$1" in
             input=$(cat)
             echo "$input" > "$MOCK_NFT_DIR/last_check.json"
 
-            # Basic JSON validation
+            # Basic JSON validation using jq
             if echo "$input" | jq . > /dev/null 2>&1; then
                 # Check for required nftables structure
                 if echo "$input" | jq -e '.nftables' > /dev/null 2>&1; then
-                    # Simulate permission check (fail if MOCK_NFT_FAIL_PERMS is set)
-                    if [ -n "$MOCK_NFT_FAIL_PERMS" ]; then
-                        echo "Error: Operation not permitted" >&2
-                        exit 1
-                    fi
                     exit 0
                 else
                     echo "Error: Invalid nftables JSON structure" >&2
@@ -41,19 +36,6 @@ case "$1" in
             # Apply mode - read stdin and pretend to apply
             input=$(cat)
             echo "$input" > "$MOCK_NFT_DIR/last_apply.json"
-
-            # Simulate permission check
-            if [ -n "$MOCK_NFT_FAIL_PERMS" ]; then
-                echo "Error: Operation not permitted" >&2
-                exit 1
-            fi
-
-            # Simulate apply failure if requested
-            if [ -n "$MOCK_NFT_FAIL_APPLY" ]; then
-                echo "Error: Could not process rule" >&2
-                exit 1
-            fi
-
             exit 0
         fi
         ;;

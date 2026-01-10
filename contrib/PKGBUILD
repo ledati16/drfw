@@ -1,13 +1,13 @@
 # Maintainer: Your Name <your.email@example.com>
 pkgname=drfw-git
-pkgver=r330.2a880e1
+pkgver=r332.c148a24
 pkgrel=1
 pkgdesc="A minimal, safe, stateful nftables GUI for desktop Linux"
 arch=('x86_64')
 url="https://github.com/ledati16/drfw"
 license=('MIT')
 depends=('nftables' 'gcc-libs')
-makedepends=('git' 'cargo')
+makedepends=('git' 'cargo' 'jq')
 optdepends=(
     'polkit: for pkexec elevation in GUI environments'
     'sudo: for sudo elevation in terminal environments'
@@ -29,7 +29,7 @@ build() {
 
 check() {
     cd "${pkgname%-git}"
-    DRFW_TEST_NO_ELEVATION=1 cargo test --locked
+    DRFW_NFT_COMMAND="$PWD/tests/mock_nft.sh" cargo test --locked
 }
 
 package() {

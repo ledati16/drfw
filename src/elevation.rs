@@ -15,11 +15,13 @@
 //!
 //! # Environment Variables
 //!
+//! - `DRFW_NFT_COMMAND`: Path to nft binary or mock script. When set, uses this path
+//!   directly without elevation. Used for testing with mock nft.
+//!   Example: `DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test`
+//!
 //! - `DRFW_ELEVATION_METHOD`: Force a specific elevation method (`sudo`, `run0`, or `pkexec`).
 //!   Useful for scripts with sudoers NOPASSWD rules where you want to bypass run0/polkit.
 //!   Example: `DRFW_ELEVATION_METHOD=sudo drfw apply --no-confirm production`
-//!
-//! - `DRFW_TEST_NO_ELEVATION`: Bypass elevation entirely (for testing only).
 //!
 //! # Security
 //!
@@ -143,14 +145,7 @@ fn binary_exists(name: &str) -> bool {
 fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, ElevationError> {
     use std::os::fd::AsFd;
 
-    // 1. Strict Test Mode Override (Highest Priority)
-    if std::env::var("DRFW_TEST_NO_ELEVATION").is_ok() {
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-        return Ok(cmd);
-    }
-
-    // 2. Direct Root Execution (No prompt needed)
+    // 1. Direct Root Execution (No prompt needed)
     let is_root = nix::unistd::getuid().is_root();
     if is_root {
         let mut cmd = Command::new(program);
@@ -158,7 +153,7 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
         return Ok(cmd);
     }
 
-    // 3. Explicit elevation method override (for scripts with sudoers NOPASSWD, etc.)
+    // 2. Explicit elevation method override (for scripts with sudoers NOPASSWD, etc.)
     if let Ok(method) = std::env::var("DRFW_ELEVATION_METHOD") {
         let method = method.to_lowercase();
         if !method.is_empty() {
@@ -192,7 +187,7 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
         }
     }
 
-    // 4. Automatic detection - prefer run0 (modern, no SUID), fallback to sudo/pkexec
+    // 3. Automatic detection - prefer run0 (modern, no SUID), fallback to sudo/pkexec
 
     // Prefer run0 everywhere when available (better security, no SUID bit)
     if binary_exists("run0") {
@@ -229,9 +224,10 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
 ///
 /// # Elevation Strategy
 ///
-/// 1. **Preferred**: `run0 nft` when available (systemd v256+, better security, no SUID)
-/// 2. **CLI fallback**: `sudo nft` for terminal environments
-/// 3. **GUI fallback**: `pkexec nft` for graphical authentication
+/// 1. **Custom command**: If `DRFW_NFT_COMMAND` is set, uses that path directly (no elevation)
+/// 2. **Preferred**: `run0 nft` when available (systemd v256+, better security, no SUID)
+/// 3. **CLI fallback**: `sudo nft` for terminal environments
+/// 4. **GUI fallback**: `pkexec nft` for graphical authentication
 ///
 /// # Arguments
 ///
@@ -267,10 +263,18 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
 ///
 /// # Testing
 ///
-/// Set the environment variable `DRFW_TEST_NO_ELEVATION=1` to bypass pkexec/sudo
-/// and run nft directly (requires nft to already have necessary permissions,
-/// or tests to run as root).
+/// Set `DRFW_NFT_COMMAND` to a mock script path (e.g., `tests/mock_nft.sh`) to use
+/// a mock nft for testing without requiring root privileges.
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
+    // Check for explicit nft command override (for testing with mock)
+    if let Ok(nft_path) = std::env::var("DRFW_NFT_COMMAND") {
+        if !nft_path.is_empty() {
+            let mut cmd = Command::new(&nft_path);
+            cmd.args(args);
+            return Ok(cmd);
+        }
+    }
+
     build_elevated_command("nft", args)
 }
 
@@ -318,6 +322,12 @@ mod tests {
     use super::*;
     use crate::core::test_helpers::ENV_VAR_MUTEX;
 
+    /// Get absolute path to mock_nft.sh for testing
+    fn get_mock_nft_path() -> String {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        format!("{}/tests/mock_nft.sh", manifest_dir)
+    }
+
     #[test]
     fn test_binary_exists() {
         // sh should exist on all Unix systems
@@ -326,47 +336,59 @@ mod tests {
         assert!(!binary_exists("drfw_nonexistent_binary_xyz"));
     }
 
-    #[tokio::test]
-    async fn test_create_nft_command_test_mode() {
+    #[test]
+    fn test_create_nft_command_with_mock() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
-        // Set test mode
+        // Use DRFW_NFT_COMMAND to specify mock nft
+        let mock_path = get_mock_nft_path();
         unsafe {
-            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
         }
 
         let cmd = create_elevated_nft_command(&["list", "ruleset"]);
-        assert!(cmd.is_ok());
+        assert!(cmd.is_ok(), "Should create command with mock nft");
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("DRFW_NFT_COMMAND");
+        }
     }
 
-    #[tokio::test]
-    async fn test_create_install_command_test_mode() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+    #[test]
+    fn test_create_install_command_returns_ok() {
+        // In TTY mode (which cargo test uses), this should return Ok with sudo
+        // Even if sudo doesn't exist, Command::new("sudo") succeeds - it only
+        // fails when you try to spawn/run it.
+        //
+        // Note: This test may fail in non-TTY CI environments without pkexec.
+        // That's acceptable - the install command is only used in the GUI app.
+        let cmd = create_elevated_install_command(&["-m", "644", "/tmp/test", "/etc/test"]);
 
-        // Set test mode
-        unsafe {
-            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+        // If we're in a non-TTY environment without pkexec, this could fail
+        // with PkexecNotFound, which is expected behavior
+        if let Err(ElevationError::PkexecNotFound) = &cmd {
+            eprintln!("Skipping test: not in TTY and pkexec not available");
+            return;
         }
 
-        let cmd = create_elevated_install_command(&["-m", "644", "/tmp/test", "/etc/test"]);
-        assert!(cmd.is_ok());
+        assert!(cmd.is_ok(), "Should create install command: {:?}", cmd.err());
     }
 
     #[test]
     fn test_invalid_elevation_method() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
-        // Clear test mode and set invalid method
+        // Clear custom command and set invalid method
         unsafe {
-            std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+            std::env::remove_var("DRFW_NFT_COMMAND");
             std::env::set_var("DRFW_ELEVATION_METHOD", "invalid_method");
         }
 
         let result = create_elevated_nft_command(&["list", "ruleset"]);
 
-        // Restore test mode for other tests
+        // Clean up
         unsafe {
-            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
             std::env::remove_var("DRFW_ELEVATION_METHOD");
         }
 
@@ -377,22 +399,44 @@ mod tests {
     fn test_elevation_method_case_insensitive() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
-        // sudo should exist on most systems, so this tests case insensitivity
+        // Clear custom command and test case insensitivity with SUDO (uppercase)
         unsafe {
-            std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+            std::env::remove_var("DRFW_NFT_COMMAND");
             std::env::set_var("DRFW_ELEVATION_METHOD", "SUDO");
         }
 
         let result = create_elevated_nft_command(&["list", "ruleset"]);
 
-        // Restore test mode
+        // Clean up
         unsafe {
-            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
             std::env::remove_var("DRFW_ELEVATION_METHOD");
         }
 
         // Should succeed (sudo exists) or fail with MethodNotAvailable (sudo doesn't exist)
-        // but NOT InvalidMethod
+        // but NOT InvalidMethod - that would mean case sensitivity is broken
         assert!(!matches!(result, Err(ElevationError::InvalidMethod(_))));
+    }
+
+    #[test]
+    fn test_drfw_nft_command_takes_precedence() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
+        // Even with elevation method set, DRFW_NFT_COMMAND should take precedence
+        let mock_path = get_mock_nft_path();
+        unsafe {
+            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
+            std::env::set_var("DRFW_ELEVATION_METHOD", "invalid_method");
+        }
+
+        let result = create_elevated_nft_command(&["list", "ruleset"]);
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("DRFW_NFT_COMMAND");
+            std::env::remove_var("DRFW_ELEVATION_METHOD");
+        }
+
+        // Should succeed because DRFW_NFT_COMMAND bypasses elevation entirely
+        assert!(result.is_ok(), "DRFW_NFT_COMMAND should take precedence over DRFW_ELEVATION_METHOD");
     }
 }

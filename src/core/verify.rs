@@ -3,7 +3,11 @@
 /// This module provides validation of rulesets before they are applied,
 /// helping prevent broken firewall configurations.
 use crate::core::error::{Error, Result};
+use std::time::Duration;
 use tracing::{info, warn};
+
+/// Timeout for nft --check operations (syntax verification is fast)
+const NFT_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Result of a ruleset verification operation
 #[derive(Debug, Clone)]
@@ -61,7 +65,19 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
             .map_err(|e| Error::Internal(format!("Failed to write to nft stdin: {e}")))?;
     }
 
-    let output = child.wait_with_output().await?;
+    let output = match tokio::time::timeout(NFT_VERIFY_TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            return Err(Error::Internal(format!("Failed to read nft output: {e}")));
+        }
+        Err(_) => {
+            warn!("nft --check timed out after {} seconds", NFT_VERIFY_TIMEOUT.as_secs());
+            return Err(Error::Internal(format!(
+                "nft --check timed out after {} seconds",
+                NFT_VERIFY_TIMEOUT.as_secs()
+            )));
+        }
+    };
 
     if output.status.success() {
         info!("Ruleset verification passed");
@@ -137,6 +153,27 @@ mod tests {
 
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0], "syntax error");
+    }
+
+    #[test]
+    fn test_parse_nft_errors_permission_denied() {
+        // Test that permission errors are correctly parsed
+        let stderr = "Error: Operation not permitted\n";
+        let errors = parse_nft_errors(stderr);
+
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("Operation not permitted"));
+    }
+
+    #[test]
+    fn test_parse_nft_errors_permission_denied_verbose() {
+        // Test multi-line permission error output
+        let stderr = "nft: Operation not permitted\nError: Could not process rule: Permission denied\n";
+        let errors = parse_nft_errors(stderr);
+
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("Operation not permitted"));
+        assert!(errors[1].contains("Permission denied"));
     }
 
     #[test]

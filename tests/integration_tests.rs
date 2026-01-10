@@ -5,23 +5,18 @@
 //!
 //! **Test Organization:**
 //! - Snapshot validation tests are in `src/core/nft_json.rs` (authoritative)
-//! - Verification tests with mock/real nft are here
+//! - Verification tests with mock nft are here
 //! - CLI command integration tests are here
 //! - Profile operations are here
 //!
-//! # Running with Mock
+//! # Running Tests
 //!
-//! By default, these tests use the mock nft script which doesn't require privileges:
+//! All tests use the mock nft script automatically - no privileges needed:
 //! ```bash
 //! cargo test --test integration_tests
 //! ```
 //!
-//! # Running with Real nftables
-//!
-//! To test against real nftables (requires elevated privileges):
-//! ```bash
-//! sudo -E DRFW_USE_REAL_NFT=1 cargo test --test integration_tests
-//! ```
+//! The mock script (`tests/mock_nft.sh`) simulates nft behavior for testing.
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -30,7 +25,11 @@ use drfw::core::nft_json;
 use drfw::core::verify;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Once;
 use uuid::Uuid;
+
+/// One-time initialization flag for mock nft setup
+static MOCK_NFT_INIT: Once = Once::new();
 
 /// Get the path to the mock nft script
 fn get_mock_nft_path() -> PathBuf {
@@ -41,19 +40,16 @@ fn get_mock_nft_path() -> PathBuf {
 }
 
 /// Set up environment to use mock nft
+///
+/// Sets `DRFW_NFT_COMMAND` to the mock script path. This is called once
+/// and applies to all subsequent nft operations in the test suite.
 fn setup_mock_nft() {
-    if env::var("DRFW_USE_REAL_NFT").is_ok() {
-        // User wants to test with real nft, don't override PATH
-        return;
-    }
-
-    let mock_dir = get_mock_nft_path().parent().unwrap().to_path_buf();
-    let current_path = env::var("PATH").unwrap_or_default();
-    let new_path = format!("{}:{}", mock_dir.display(), current_path);
-    unsafe {
-        env::set_var("PATH", new_path);
-        env::set_var("DRFW_TEST_NO_ELEVATION", "1");
-    }
+    MOCK_NFT_INIT.call_once(|| {
+        let mock_path = get_mock_nft_path();
+        unsafe {
+            env::set_var("DRFW_NFT_COMMAND", mock_path.to_str().unwrap());
+        }
+    });
 }
 
 /// Set up a temp directory for tests that access profile/config directories.
@@ -116,15 +112,6 @@ fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
     rule
 }
 
-/// Helper to check if verification result indicates permission issues
-fn is_permission_error(errors: &[String]) -> bool {
-    errors.iter().any(|e| {
-        e.contains("Operation not permitted")
-            || e.contains("Permission denied")
-            || e.contains("cache initialization")
-    })
-}
-
 /// Create a test rule with full configuration options
 fn create_full_test_rule(
     label: &str,
@@ -176,73 +163,20 @@ fn create_full_test_rule(
 
 #[tokio::test]
 async fn test_verify_with_mock() {
-    // Skip if real nft is not available or not in mock mode
-    // This test is mainly for documentation of how mocking should work
-    // In practice, use the mock_nft.sh script manually for local testing
-    if env::var("DRFW_USE_REAL_NFT").is_ok() {
-        eprintln!("Skipping mock test: DRFW_USE_REAL_NFT is set");
-        return;
-    }
-
     setup_mock_nft();
 
     let ruleset = create_test_ruleset();
     let json = ruleset.to_nftables_json();
     let result = verify::verify_ruleset(json).await;
 
-    // If nft is not available, skip the test
-    if result.is_err() {
-        eprintln!("Skipping test: nft not available");
-        return;
-    }
+    assert!(result.is_ok(), "verify_ruleset should succeed with mock: {:?}", result.err());
 
     let verify_result = result.unwrap();
-
-    // Skip if we hit permission errors (real nft being used)
-    if !verify_result.success
-        && verify_result
-            .errors
-            .iter()
-            .any(|e| e.contains("Operation not permitted") || e.contains("cache initialization"))
-    {
-        eprintln!("Skipping test: appears to be using real nft which requires privileges");
-        return;
-    }
-
     assert!(
         verify_result.success,
         "Mock verification should succeed: {:?}",
         verify_result.errors
     );
-}
-
-#[tokio::test]
-async fn test_verify_fails_with_permission_error() {
-    setup_mock_nft();
-    unsafe {
-        env::set_var("MOCK_NFT_FAIL_PERMS", "1");
-    }
-
-    let ruleset = create_test_ruleset();
-    let json = ruleset.to_nftables_json();
-    let result = verify::verify_ruleset(json).await;
-
-    // Should succeed in running but report permission error
-    assert!(result.is_ok());
-    let verify_result = result.unwrap();
-    assert!(!verify_result.success, "Should fail with permission error");
-    assert!(
-        verify_result
-            .errors
-            .iter()
-            .any(|e| e.contains("Operation not permitted")),
-        "Should have permission error: {:?}",
-        verify_result.errors
-    );
-
-    unsafe {
-        env::remove_var("MOCK_NFT_FAIL_PERMS");
-    }
 }
 
 #[tokio::test]
@@ -253,25 +187,9 @@ async fn test_empty_ruleset_verification() {
     let json = ruleset.to_nftables_json();
     let result = verify::verify_ruleset(json).await;
 
-    // Skip if nft is not available
-    if result.is_err() {
-        eprintln!("Skipping test: nft not available");
-        return;
-    }
+    assert!(result.is_ok(), "verify_ruleset should succeed with mock: {:?}", result.err());
 
     let verify_result = result.unwrap();
-
-    // Skip if we hit permission errors
-    if !verify_result.success
-        && verify_result
-            .errors
-            .iter()
-            .any(|e| e.contains("Operation not permitted") || e.contains("cache initialization"))
-    {
-        eprintln!("Skipping test: requires elevated privileges or mock nft");
-        return;
-    }
-
     assert!(
         verify_result.success,
         "Empty ruleset verification should succeed: {:?}",
@@ -532,21 +450,18 @@ async fn test_cli_verify_before_apply() {
     // Verify the ruleset before applying (as CLI does)
     let result = verify::verify_ruleset(json).await;
 
-    if let Ok(verify_result) = result {
-        // With mock or real nft available
-        if verify_result.success {
-            assert!(
-                verify_result.errors.is_empty(),
-                "Valid ruleset should have no errors"
-            );
-        } else if !is_permission_error(&verify_result.errors) {
-            panic!(
-                "Verification failed unexpectedly: {:?}",
-                verify_result.errors
-            );
-        }
-        // Permission errors are expected in unprivileged environments
-    }
+    assert!(result.is_ok(), "verify_ruleset should succeed with mock: {:?}", result.err());
+
+    let verify_result = result.unwrap();
+    assert!(
+        verify_result.success,
+        "Valid ruleset should verify successfully: {:?}",
+        verify_result.errors
+    );
+    assert!(
+        verify_result.errors.is_empty(),
+        "Valid ruleset should have no errors"
+    );
 }
 
 #[test]

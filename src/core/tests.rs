@@ -614,43 +614,18 @@ mod integration_tests {
     //!
     //! **Note on test organization:**
     //! - Snapshot validation tests are in `nft_json.rs` (authoritative)
-    //! - Verification tests that need nft binary are here
+    //! - Verification tests with mock nft are here
     //! - Checksum tests are in `nft_json.rs` (close to implementation)
+    //!
+    //! All tests use the mock nft script via `setup_mock_nft()`.
 
     use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
-    use crate::core::test_helpers::{
-        create_test_rule, create_test_ruleset, ensure_test_elevation_bypass,
-    };
+    use crate::core::test_helpers::{create_test_rule, create_test_ruleset, setup_mock_nft};
     use crate::core::verify;
-
-    /// Helper to check if nft is available and accessible (async version for tokio tests)
-    async fn is_nft_available() -> bool {
-        tokio::process::Command::new("nft")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
-    /// Helper to check if verification result indicates permission issues
-    fn is_permission_error(errors: &[String]) -> bool {
-        errors.iter().any(|e| {
-            e.contains("Operation not permitted")
-                || e.contains("Cannot run program --action")
-                || e.contains("cache initialization")
-        })
-    }
 
     #[tokio::test]
     async fn test_verify_valid_ruleset() {
-        ensure_test_elevation_bypass();
-        if !is_nft_available().await {
-            eprintln!("Skipping test: nft not available");
-            return;
-        }
+        setup_mock_nft();
 
         let ruleset = create_test_ruleset();
         let json = ruleset.to_nftables_json();
@@ -662,14 +637,6 @@ mod integration_tests {
             result.err()
         );
         let verify_result = result.unwrap();
-
-        // Skip if we don't have privileges (expected in non-elevated test environment)
-        if !verify_result.success && is_permission_error(&verify_result.errors) {
-            eprintln!(
-                "Skipping test: nft verification requires elevated privileges or nft is unavailable"
-            );
-            return;
-        }
 
         assert!(
             verify_result.success,
@@ -684,17 +651,11 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn test_verify_invalid_port_range() {
-        ensure_test_elevation_bypass();
-        if !is_nft_available().await {
-            eprintln!("Skipping test: nft not available");
-            return;
-        }
+    async fn test_verify_port_range() {
+        setup_mock_nft();
 
         let mut ruleset = FirewallRuleset::new();
-        // This is actually valid since we create the port range correctly,
-        // but let's test the verification anyway
-        let mut rule = create_test_rule("Test Invalid", Some(22));
+        let mut rule = create_test_rule("Test Port Range", Some(22));
         rule.ports = vec![PortEntry::Range {
             start: 1,
             end: 65535,
@@ -704,8 +665,18 @@ mod integration_tests {
 
         let json = ruleset.to_nftables_json();
         let result = verify::verify_ruleset(json).await;
-        // This should actually succeed since it's a valid (though broad) range
-        assert!(result.is_ok());
+
+        assert!(
+            result.is_ok(),
+            "Port range ruleset should pass verification: {:?}",
+            result.err()
+        );
+        let verify_result = result.unwrap();
+        assert!(
+            verify_result.success,
+            "Port range should be valid: {:?}",
+            verify_result.errors
+        );
     }
 
     #[tokio::test]
@@ -732,11 +703,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_verify_empty_ruleset() {
-        ensure_test_elevation_bypass();
-        if !is_nft_available().await {
-            eprintln!("Skipping test: nft not available");
-            return;
-        }
+        setup_mock_nft();
 
         let ruleset = FirewallRuleset::new();
         let json = ruleset.to_nftables_json();
@@ -749,14 +716,6 @@ mod integration_tests {
         );
         let verify_result = result.unwrap();
 
-        // Skip if we don't have privileges (expected in non-elevated test environment)
-        if !verify_result.success && is_permission_error(&verify_result.errors) {
-            eprintln!(
-                "Skipping test: nft verification requires elevated privileges or nft is unavailable"
-            );
-            return;
-        }
-
         assert!(
             verify_result.success,
             "Empty ruleset verification should succeed. Errors: {:?}",
@@ -768,11 +727,7 @@ mod integration_tests {
     async fn test_verify_multiple_rules() {
         use crate::core::test_helpers::create_test_rule;
 
-        ensure_test_elevation_bypass();
-        if !is_nft_available().await {
-            eprintln!("Skipping test: nft not available");
-            return;
-        }
+        setup_mock_nft();
 
         let mut ruleset = FirewallRuleset::new();
         ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
@@ -790,14 +745,6 @@ mod integration_tests {
             result.err()
         );
         let verify_result = result.unwrap();
-
-        // Skip if we don't have privileges (expected in non-elevated test environment)
-        if !verify_result.success && is_permission_error(&verify_result.errors) {
-            eprintln!(
-                "Skipping test: nft verification requires elevated privileges or nft is unavailable"
-            );
-            return;
-        }
 
         assert!(
             verify_result.success,

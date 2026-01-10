@@ -22,7 +22,7 @@
   - Example usage for non-trivial cases
 - **Complex logic:** Document **why**, not what (code shows what)
 - **Error semantics:** Functions that can fail must document all failure modes
-- **Technical terms:** Use backticks for identifiers (`nft`, `pkexec`, `DRFW_TEST_NO_ELEVATION`)
+- **Technical terms:** Use backticks for identifiers (`nft`, `pkexec`, `DRFW_NFT_COMMAND`)
 
 ### Modern Rust Patterns
 - **Safety first:** No `unwrap()` in production paths; use `?` or `expect()` with context
@@ -325,7 +325,7 @@ fn create_elevated_command(args: &[&str]) -> Result<Command> {
 - **Timeout protection:** 2-minute default maximum
 - **Error translation:** Map exit codes to user actions (126=cancelled, 127=auth failed)
 - **Audit logging:** Log all privileged operations with timestamps
-- **Test bypass:** `DRFW_TEST_NO_ELEVATION=1` for unit tests
+- **Test bypass:** `DRFW_NFT_COMMAND=tests/mock_nft.sh` for tests with mock nft
 
 ### Subprocess Timeout Pattern
 **All subprocess calls should have timeouts** to prevent indefinite hangs:
@@ -400,7 +400,7 @@ self.modify_state(cached_value);
 - **Unit tests:** All validators, error paths, business logic
 - **Property tests:** Use `proptest` for fuzzing validators (catches Unicode bypasses, edge cases)
 - **Integration tests:** Full workflows with graceful privilege skipping
-- **Environment safety:** Never touch real user data; use temp dirs and `DRFW_TEST_NO_ELEVATION=1`
+- **Environment safety:** Never touch real user data; use temp dirs and `DRFW_NFT_COMMAND` for mock
 
 ### Test File Organization
 
@@ -426,8 +426,8 @@ use crate::core::test_helpers::{create_test_ruleset, create_test_rule, create_fu
 // For app handler tests (app state)
 use crate::app::handlers::test_utils::create_test_state;
 
-// For tests that need elevation bypass (most common case)
-use crate::core::test_helpers::ensure_test_elevation_bypass;
+// For tests that use nft operations (most common case)
+use crate::core::test_helpers::setup_mock_nft;
 
 // For tests that need exclusive env var access (e.g., testing different elevation methods)
 use crate::core::test_helpers::ENV_VAR_MUTEX;
@@ -437,12 +437,9 @@ use crate::core::test_helpers::ENV_VAR_MUTEX;
 
 | Variable | Purpose | When to Use |
 |----------|---------|-------------|
-| `DRFW_TEST_NO_ELEVATION` | Bypasses pkexec/sudo/run0 in `create_elevated_nft_command()` | Tests that call nft directly |
+| `DRFW_NFT_COMMAND` | Path to nft binary or mock script (skips elevation) | All tests that use nft operations |
 | `DRFW_TEST_DATA_DIR` | Overrides data directory (`~/.local/share/drfw/`) | Tests that access profiles |
 | `DRFW_TEST_STATE_DIR` | Overrides state directory (`~/.local/state/drfw/`) | Tests that access audit logs/snapshots |
-| `DRFW_USE_REAL_NFT` | Uses real nft instead of mock script | Manual testing with actual nftables |
-| `MOCK_NFT_FAIL_PERMS` | Makes mock_nft.sh simulate permission errors | Testing error handling |
-| `MOCK_NFT_FAIL_APPLY` | Makes mock_nft.sh simulate apply failures | Testing error handling |
 
 ### Async vs Sync Tests
 
@@ -483,35 +480,35 @@ fn test_validator() {
 }
 
 #[tokio::test]
-async fn test_elevated_operation() {
-    use crate::core::test_helpers::ensure_test_elevation_bypass;
+async fn test_nft_operation() {
+    use crate::core::test_helpers::setup_mock_nft;
 
     // One-time setup, safe to call before any .await
-    ensure_test_elevation_bypass();
+    // Sets DRFW_NFT_COMMAND to use the mock script
+    setup_mock_nft();
 
-    let result = apply_rules().await;
+    let result = verify_ruleset(json).await;
     assert!(result.is_ok());
 }
 ```
 
 ### CI/CD Compatibility
-- Tests must **skip** (not fail) when run without privileges
-- Check for "Operation not permitted" in stderr
-- Document privilege requirements in module-level docs
-- Tests using mock nft should always pass (no privilege required)
+- All tests use mock nft and require no privileges
+- Tests should never touch real nftables or require elevation
+- Document any special requirements in module-level docs
 
 ### Running Tests
 
 ```bash
-# Run all tests (some may skip without nft)
+# Standard test run - uses mock nft, no privileges needed
 cargo test
 
-# Run with mock nft script (no privileges needed)
-PATH="tests:$PATH" cargo test
-
-# Run with real nftables (requires sudo)
-sudo -E DRFW_USE_REAL_NFT=1 cargo test
+# Explicit mock path (equivalent to above, tests set this automatically)
+DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test
 ```
+
+**Note:** All tests automatically use the mock nft script via `setup_mock_nft()`.
+Tests never require root privileges or touch real nftables.
 
 ### Stress Test Generator
 

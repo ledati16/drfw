@@ -17,57 +17,58 @@ use uuid::Uuid;
 /// 2. Restore env vars after the test
 /// 3. Test behavior when env vars are absent
 ///
-/// For tests that just need `DRFW_TEST_NO_ELEVATION=1` set, use
-/// `ensure_test_elevation_bypass()` instead - it's simpler and doesn't
-/// require holding a guard.
+/// For tests that just need mock nft, use `setup_mock_nft()` instead -
+/// it's simpler and doesn't require holding a guard.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let _guard = ENV_VAR_MUTEX.lock().unwrap();
 /// unsafe {
-///     std::env::remove_var("DRFW_TEST_NO_ELEVATION");
+///     std::env::remove_var("DRFW_NFT_COMMAND");
 ///     std::env::set_var("DRFW_ELEVATION_METHOD", "sudo");
 /// }
 /// // ... test with custom env state ...
 /// unsafe {
-///     std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
 ///     std::env::remove_var("DRFW_ELEVATION_METHOD");
 /// }
 /// ```
 pub static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
 
-/// One-time initialization flag for elevation bypass
-static ELEVATION_BYPASS_INIT: Once = Once::new();
+/// One-time initialization flag for mock nft setup
+static MOCK_NFT_INIT: Once = Once::new();
 
-/// Ensures the elevation bypass environment is set up.
+/// Sets up the mock nft script for testing.
 ///
-/// Sets `DRFW_TEST_NO_ELEVATION=1` which causes elevation functions to skip
-/// pkexec/sudo/run0 and call nft directly.
+/// Sets `DRFW_NFT_COMMAND` to the mock script path (`tests/mock_nft.sh`),
+/// which causes all nft operations to use the mock instead of real nftables.
 ///
-/// This is the preferred way to enable elevation bypass for tests:
+/// This is the preferred way to set up testing:
 /// - Thread-safe and can be called multiple times (initialization happens once)
 /// - No guard to hold, so no `await_holding_lock` issues in async tests
 /// - Simple one-liner at the start of your test
+/// - Tests never touch real nftables or require elevation
 ///
-/// For tests that need to temporarily disable elevation bypass or test
-/// different elevation methods, use `ENV_VAR_MUTEX` directly instead.
+/// For tests that need to temporarily change env vars or test different
+/// elevation methods, use `ENV_VAR_MUTEX` directly instead.
 ///
 /// # Example
 ///
 /// ```ignore
 /// #[tokio::test]
 /// async fn test_something() {
-///     ensure_test_elevation_bypass();
+///     setup_mock_nft();
 ///     // ... test code, can use .await freely ...
+///     // All nft operations use the mock script
 /// }
 /// ```
-pub fn ensure_test_elevation_bypass() {
-    ELEVATION_BYPASS_INIT.call_once(|| {
+pub fn setup_mock_nft() {
+    MOCK_NFT_INIT.call_once(|| {
+        let mock_path = format!("{}/tests/mock_nft.sh", env!("CARGO_MANIFEST_DIR"));
         // SAFETY: This is only called once due to Once, and only in test code.
         // Test binaries typically run before any concurrent test threads start.
         unsafe {
-            std::env::set_var("DRFW_TEST_NO_ELEVATION", "1");
+            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
         }
     });
 }

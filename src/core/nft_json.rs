@@ -1,7 +1,11 @@
 use crate::core::error::{Error, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use tracing::{error, info, warn};
+
+/// Timeout for nft apply/restore operations
+const NFT_APPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Applies a ruleset and returns the PRE-APPLY snapshot in a single elevated operation.
 /// This reduces the number of password prompts to one.
@@ -58,7 +62,20 @@ pub async fn apply_with_snapshot(mut json_payload: Value) -> Result<Value> {
         stdin.write_all(json_string.as_bytes()).await?;
     }
 
-    let output = child.wait_with_output().await?;
+    let output = match tokio::time::timeout(NFT_APPLY_TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            error!("Failed to read nft output: {e}");
+            return Err(Error::Internal(format!("Failed to read nft output: {e}")));
+        }
+        Err(_) => {
+            error!("nft apply timed out after {} seconds", NFT_APPLY_TIMEOUT.as_secs());
+            return Err(Error::Internal(format!(
+                "nft apply timed out after {} seconds",
+                NFT_APPLY_TIMEOUT.as_secs()
+            )));
+        }
+    };
 
     if output.status.success() {
         info!("Combined apply successful");
@@ -204,7 +221,20 @@ pub async fn restore_snapshot(snapshot: &Value) -> Result<()> {
         stdin.write_all(json_string.as_bytes()).await?;
     }
 
-    let output = child.wait_with_output().await?;
+    let output = match tokio::time::timeout(NFT_APPLY_TIMEOUT, child.wait_with_output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            error!("Failed to read nft output during restore: {e}");
+            return Err(Error::Internal(format!("Failed to read nft output: {e}")));
+        }
+        Err(_) => {
+            error!("nft restore timed out after {} seconds", NFT_APPLY_TIMEOUT.as_secs());
+            return Err(Error::Internal(format!(
+                "nft restore timed out after {} seconds",
+                NFT_APPLY_TIMEOUT.as_secs()
+            )));
+        }
+    };
 
     if output.status.success() {
         info!("Restore successful");
