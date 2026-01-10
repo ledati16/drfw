@@ -69,7 +69,10 @@ pub async fn apply_with_snapshot(mut json_payload: Value) -> Result<Value> {
             return Err(Error::Internal(format!("Failed to read nft output: {e}")));
         }
         Err(_) => {
-            error!("nft apply timed out after {} seconds", NFT_APPLY_TIMEOUT.as_secs());
+            error!(
+                "nft apply timed out after {} seconds",
+                NFT_APPLY_TIMEOUT.as_secs()
+            );
             return Err(Error::Internal(format!(
                 "nft apply timed out after {} seconds",
                 NFT_APPLY_TIMEOUT.as_secs()
@@ -228,7 +231,10 @@ pub async fn restore_snapshot(snapshot: &Value) -> Result<()> {
             return Err(Error::Internal(format!("Failed to read nft output: {e}")));
         }
         Err(_) => {
-            error!("nft restore timed out after {} seconds", NFT_APPLY_TIMEOUT.as_secs());
+            error!(
+                "nft restore timed out after {} seconds",
+                NFT_APPLY_TIMEOUT.as_secs()
+            );
             return Err(Error::Internal(format!(
                 "nft restore timed out after {} seconds",
                 NFT_APPLY_TIMEOUT.as_secs()

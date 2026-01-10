@@ -71,7 +71,10 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
             return Err(Error::Internal(format!("Failed to read nft output: {e}")));
         }
         Err(_) => {
-            warn!("nft --check timed out after {} seconds", NFT_VERIFY_TIMEOUT.as_secs());
+            warn!(
+                "nft --check timed out after {} seconds",
+                NFT_VERIFY_TIMEOUT.as_secs()
+            );
             return Err(Error::Internal(format!(
                 "nft --check timed out after {} seconds",
                 NFT_VERIFY_TIMEOUT.as_secs()
@@ -168,7 +171,8 @@ mod tests {
     #[test]
     fn test_parse_nft_errors_permission_denied_verbose() {
         // Test multi-line permission error output
-        let stderr = "nft: Operation not permitted\nError: Could not process rule: Permission denied\n";
+        let stderr =
+            "nft: Operation not permitted\nError: Could not process rule: Permission denied\n";
         let errors = parse_nft_errors(stderr);
 
         assert_eq!(errors.len(), 2);

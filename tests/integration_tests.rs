@@ -21,7 +21,7 @@
 //!
 //! # Note on Helper Functions
 //!
-//! This file has its own copies of helper functions (create_test_rule, etc.)
+//! This file has its own copies of helper functions (`create_test_rule`, etc.)
 //! because integration tests are compiled as a separate crate and cannot access
 //! `#[cfg(test)]` modules from the library. The library's `test_helpers` module
 //! is for unit tests within the library crate only.
@@ -177,7 +177,11 @@ async fn test_verify_with_mock() {
     let json = ruleset.to_nftables_json();
     let result = verify::verify_ruleset(json).await;
 
-    assert!(result.is_ok(), "verify_ruleset should succeed with mock: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "verify_ruleset should succeed with mock: {:?}",
+        result.err()
+    );
 
     let verify_result = result.unwrap();
     assert!(
@@ -195,7 +199,11 @@ async fn test_empty_ruleset_verification() {
     let json = ruleset.to_nftables_json();
     let result = verify::verify_ruleset(json).await;
 
-    assert!(result.is_ok(), "verify_ruleset should succeed with mock: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "verify_ruleset should succeed with mock: {:?}",
+        result.err()
+    );
 
     let verify_result = result.unwrap();
     assert!(

@@ -267,12 +267,12 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
 /// a mock nft for testing without requiring root privileges.
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
     // Check for explicit nft command override (for testing with mock)
-    if let Ok(nft_path) = std::env::var("DRFW_NFT_COMMAND") {
-        if !nft_path.is_empty() {
-            let mut cmd = Command::new(&nft_path);
-            cmd.args(args);
-            return Ok(cmd);
-        }
+    if let Ok(nft_path) = std::env::var("DRFW_NFT_COMMAND")
+        && !nft_path.is_empty()
+    {
+        let mut cmd = Command::new(&nft_path);
+        cmd.args(args);
+        return Ok(cmd);
     }
 
     build_elevated_command("nft", args)
@@ -322,10 +322,10 @@ mod tests {
     use super::*;
     use crate::core::test_helpers::ENV_VAR_MUTEX;
 
-    /// Get absolute path to mock_nft.sh for testing
+    /// Get absolute path to `mock_nft.sh` for testing
     fn get_mock_nft_path() -> String {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        format!("{}/tests/mock_nft.sh", manifest_dir)
+        format!("{manifest_dir}/tests/mock_nft.sh")
     }
 
     #[test]
@@ -372,7 +372,11 @@ mod tests {
             return;
         }
 
-        assert!(cmd.is_ok(), "Should create install command: {:?}", cmd.err());
+        assert!(
+            cmd.is_ok(),
+            "Should create install command: {:?}",
+            cmd.err()
+        );
     }
 
     #[test]
@@ -437,6 +441,9 @@ mod tests {
         }
 
         // Should succeed because DRFW_NFT_COMMAND bypasses elevation entirely
-        assert!(result.is_ok(), "DRFW_NFT_COMMAND should take precedence over DRFW_ELEVATION_METHOD");
+        assert!(
+            result.is_ok(),
+            "DRFW_NFT_COMMAND should take precedence over DRFW_ELEVATION_METHOD"
+        );
     }
 }

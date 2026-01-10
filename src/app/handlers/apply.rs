@@ -596,6 +596,107 @@ mod tests {
     use super::*;
     use crate::app::handlers::test_utils::create_test_state;
 
+    // =========================================================================
+    // Pure helper function tests
+    // =========================================================================
+
+    #[test]
+    fn test_truncate_error_message_short() {
+        let result = truncate_error_message("Error: ", "short message", 80);
+        assert_eq!(result, "Error: short message");
+    }
+
+    #[test]
+    fn test_truncate_error_message_long() {
+        let result =
+            truncate_error_message("Error: ", "this is a very long message that exceeds", 30);
+        // prefix "Error: " = 7 chars, max 30, available = 30 - 7 - 3 = 20
+        assert!(result.len() <= 30);
+        assert!(result.ends_with("..."));
+        assert!(result.starts_with("Error: "));
+    }
+
+    #[test]
+    fn test_truncate_error_message_exact_fit() {
+        // Message fits within available space (max - prefix - 3 for "...")
+        let result = truncate_error_message("", "short", 10);
+        assert_eq!(result, "short"); // 5 chars < 10 - 0 - 3 = 7 available
+    }
+
+    #[test]
+    fn test_truncate_error_message_empty_prefix() {
+        let result = truncate_error_message("", "some error", 80);
+        assert_eq!(result, "some error");
+    }
+
+    // Helper to create Output with specific exit code and stderr (Unix only)
+    #[cfg(unix)]
+    fn make_output(exit_code: i32, stderr: &str) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(exit_code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interpret_elevated_command_success() {
+        let output = make_output(0, "");
+        assert!(interpret_elevated_command_output(&output).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interpret_elevated_command_auth_cancelled() {
+        let output = make_output(126, "");
+        let err = interpret_elevated_command_output(&output).unwrap_err();
+        assert!(err.contains("cancelled"), "Expected 'cancelled' in: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interpret_elevated_command_auth_failed() {
+        let output = make_output(127, "");
+        let err = interpret_elevated_command_output(&output).unwrap_err();
+        assert!(err.contains("failed"), "Expected 'failed' in: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interpret_elevated_command_permission_denied() {
+        let output = make_output(1, "Permission denied");
+        let err = interpret_elevated_command_output(&output).unwrap_err();
+        assert!(
+            err.contains("Permission denied"),
+            "Expected 'Permission denied' in: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interpret_elevated_command_generic_with_stderr() {
+        let output = make_output(1, "some specific error");
+        let err = interpret_elevated_command_output(&output).unwrap_err();
+        assert!(
+            err.contains("some specific error"),
+            "Expected stderr in: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interpret_elevated_command_generic_empty_stderr() {
+        let output = make_output(42, "");
+        let err = interpret_elevated_command_output(&output).unwrap_err();
+        assert!(err.contains("exit code 42"), "Expected exit code in: {err}");
+    }
+
+    // =========================================================================
+    // Handler tests
+    // =========================================================================
+
     #[test]
     fn test_handle_apply_clicked_idle() {
         let mut state = create_test_state();

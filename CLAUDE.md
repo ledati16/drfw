@@ -545,6 +545,31 @@ cargo run --bin stress_gen --features stress_gen -- --scenario chaos -o /tmp/cha
 - **Track separately:** Consider using GitHub Issues for long-term TODOs instead of code comments
 - **Outdated TODOs:** When features are implemented differently than planned, update or remove the TODO rather than leaving stale comments
 
+### Handler Test Coverage
+
+App handler tests (`src/app/handlers/*.rs`) intentionally have lower unit test coverage than core modules. Most handlers are thin orchestration code that:
+
+1. Check/update state
+2. Spawn async Tasks calling external services (polkit, file dialogs, nft)
+3. Return a `Task<Message>`
+
+**What IS tested:**
+- Pure helper functions (`truncate_error_message`, `interpret_elevated_command_output`)
+- Simple state mutations (form open/close, toggle flags)
+- Core business logic in `src/core/` and `src/validators.rs`
+
+**What is NOT unit tested (by design):**
+- Handlers that call `pkexec`/`sudo`/`run0` for elevation
+- Handlers that open file dialogs (`rfd::AsyncFileDialog`)
+- Handlers that spawn Tasks requiring external services
+
+**Rationale:** Adding mocking infrastructure for these handlers would increase maintenance burden without proportional bug-finding value. These code paths are exercised by:
+- Integration tests (`tests/integration_tests.rs`)
+- Manual GUI testing
+- Rust's type system (catches many bugs at compile time)
+
+**Policy:** If bugs appear in untested handlers, add targeted tests. Otherwise, accept current coverage as reasonable for orchestration code.
+
 ---
 
 ## 7. Iced GUI Framework
@@ -922,6 +947,6 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-01-09 (Added stress_gen docs, enabled pedantic lints in Cargo.toml, updated feature list)
+**Last Updated:** 2026-01-10 (Test audit: added handler test coverage policy, 10 new tests for apply.rs helper functions)
 **DRFW Version:** 0.9.0
 **Iced Version:** 0.14
