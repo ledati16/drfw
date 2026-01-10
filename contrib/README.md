@@ -1,36 +1,46 @@
-# DRFW systemd Service
+# DRFW Boot-Time Firewall
 
-This directory contains systemd service files for managing DRFW firewall rules at boot.
+This directory contains a systemd service file for applying DRFW firewall rules at boot.
 
-## Installation
+## Recommended Approach: Save to System
 
-### Automatic (via DRFW UI)
+The simplest way to apply firewall rules at boot is using DRFW's built-in export:
 
-The easiest way to enable DRFW at boot is through the UI:
-
-1. Open DRFW
-2. Navigate to Settings tab
-3. Click "Enable on Boot"  (Implemented in future UI update)
-
-### Manual Installation
-
-If you prefer to install manually:
+1. Configure your rules in DRFW
+2. Click **Save to System** (exports to `/etc/nftables.conf`)
+3. Enable the standard nftables service:
 
 ```bash
-# Copy the service file to systemd directory
+sudo systemctl enable nftables.service
+sudo systemctl start nftables.service
+```
+
+This integrates with the system's native nftables configuration.
+
+## Alternative: DRFW Service
+
+If you prefer a DRFW-managed approach, use the provided service file.
+
+### Setup
+
+1. Create a "boot" profile in DRFW with your desired rules
+2. Copy the profile to root's XDG directory:
+
+```bash
+sudo mkdir -p /root/.local/share/drfw/profiles
+sudo cp ~/.local/share/drfw/profiles/your-profile.json /root/.local/share/drfw/profiles/boot.json
+```
+
+3. Install and enable the service:
+
+```bash
 sudo cp contrib/drfw.service /etc/systemd/system/
-
-# Reload systemd to recognize the new service
 sudo systemctl daemon-reload
-
-# Enable DRFW to start at boot
 sudo systemctl enable drfw.service
-
-# Start DRFW immediately (optional)
 sudo systemctl start drfw.service
 ```
 
-## Usage
+### Usage
 
 ```bash
 # Check service status
@@ -49,41 +59,41 @@ sudo systemctl stop drfw.service
 sudo systemctl disable drfw.service
 ```
 
-## How It Works
+### How It Works
 
 The `drfw.service` unit:
 
-1. Runs `drfw apply --system-config` on boot
-2. Loads rules from `/etc/drfw/config.toml`
-3. Applies them using elevated privileges (via pkexec/polkit)
+1. Runs `drfw apply boot --no-confirm` at boot
+2. Loads the "boot" profile from `/root/.local/share/drfw/profiles/boot.json`
+3. Applies rules using the elevation layer (runs as root, so no pkexec needed)
 4. Logs all operations to systemd journal
 
-## Advantages Over nftables.service
+### Keeping Boot Rules Updated
 
-- **Clean separation**: DRFW owns its config, no conflicts with system nftables
-- **Easier rollback**: `systemctl disable drfw` to disable firewall
-- **Better logging**: Integrated with systemd journal
-- **GUI integration**: Enable/disable from DRFW UI
-- **Atomic updates**: Changes applied in one operation
+After modifying rules in DRFW, update the boot profile:
+
+```bash
+sudo cp ~/.local/share/drfw/profiles/your-profile.json /root/.local/share/drfw/profiles/boot.json
+sudo systemctl reload drfw.service
+```
 
 ## Prerequisites
 
-- DRFW installed at `/usr/bin/drfw`
-- Configuration saved at `/etc/drfw/config.toml`
-- Polkit configured for elevated privileges
+- DRFW installed at `/usr/local/bin/drfw` (or update the service file path)
+- A "boot" profile in root's XDG data directory
 
 ## Troubleshooting
 
 **Service fails to start:**
 ```bash
-# Check if config file exists
-ls -la /etc/drfw/config.toml
+# Check if boot profile exists
+sudo ls -la /root/.local/share/drfw/profiles/boot.json
 
 # Verify drfw binary location
 which drfw
 
-# Check polkit permissions
-pkexec drfw --version
+# Test manual apply as root
+sudo drfw apply boot --no-confirm
 ```
 
 **Firewall not applying:**
@@ -91,6 +101,15 @@ pkexec drfw --version
 # View detailed logs
 journalctl -u drfw.service -n 50
 
-# Test manual apply
-sudo drfw apply --system-config
+# List available profiles (as root)
+sudo drfw list
 ```
+
+## Comparison: nftables.service vs drfw.service
+
+| Feature | nftables.service | drfw.service |
+|---------|------------------|--------------|
+| Config format | nftables text | DRFW JSON profile |
+| Update method | Save to System | Copy profile to root |
+| Integration | System standard | DRFW-specific |
+| Recommended for | Most users | Advanced setups |

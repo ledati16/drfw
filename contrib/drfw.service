@@ -1,15 +1,17 @@
 [Unit]
 Description=DRFW Firewall Rules
-Documentation=https://github.com/yourusername/drfw
+Documentation=https://github.com/ledati16/drfw
 After=network-pre.target
 Before=network.target
 Wants=network-pre.target
-ConditionPathExists=/etc/drfw/config.toml
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/drfw apply --system-config
-ExecReload=/usr/bin/drfw apply --system-config
+# Apply a profile named "boot" with no confirmation prompt
+# The profile must exist in /root/.local/share/drfw/profiles/boot.json
+# Alternative: Use nftables.service with DRFW's "Save to System" export
+ExecStart=/usr/local/bin/drfw apply boot --no-confirm
+ExecReload=/usr/local/bin/drfw apply boot --no-confirm
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
