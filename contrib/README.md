@@ -2,6 +2,13 @@
 
 This directory contains distribution packaging and system integration files.
 
+## Contents
+
+- `PKGBUILD` - Arch Linux package build file
+- `drfw.service` - systemd service for boot-time firewall
+- `drfw.desktop` - Desktop entry for application menus
+- `drfw.svg` - Application icon
+
 ## Arch Linux (PKGBUILD)
 
 Build and install from source using the provided PKGBUILD:
@@ -13,15 +20,16 @@ makepkg -si
 
 This installs:
 - `/usr/bin/drfw` - the main binary
-- `/usr/lib/systemd/system/drfw.service` - optional boot service
-
-For AUR submission, update the maintainer line in `PKGBUILD`.
+- `/usr/share/applications/drfw.desktop` - desktop entry
+- `/usr/share/icons/hicolor/scalable/apps/drfw.svg` - application icon
+- `/usr/lib/systemd/system/drfw.service` - systemd service
+- `/usr/share/licenses/drfw-git/LICENSE` - license file
 
 ## Boot-Time Firewall
 
-### Recommended Approach: Save to System
+### Option 1: nftables.service (System Standard)
 
-The simplest way to apply firewall rules at boot is using DRFW's built-in export:
+Use the standard nftables service with DRFW's export feature:
 
 1. Configure your rules in DRFW
 2. Click **Save to System** (exports to `/etc/nftables.conf`)
@@ -32,32 +40,24 @@ sudo systemctl enable nftables.service
 sudo systemctl start nftables.service
 ```
 
-This integrates with the system's native nftables configuration.
+**Note:** `nftables.service` flushes the entire ruleset on stop, which may affect other tables (docker, libvirt, etc.).
 
-### Alternative: DRFW Service
+### Option 2: drfw.service (DRFW Alternative)
 
-If you prefer a DRFW-managed approach, use the provided service file.
+The `drfw.service` is an alternative to `nftables.service` that only manages the DRFW table:
 
-#### Setup
-
-1. Create a "boot" profile in DRFW with your desired rules
-2. Copy the profile to root's XDG directory:
-
-```bash
-sudo mkdir -p /root/.local/share/drfw/profiles
-sudo cp ~/.local/share/drfw/profiles/your-profile.json /root/.local/share/drfw/profiles/boot.json
-```
-
-3. Install and enable the service:
+1. Configure your rules in DRFW
+2. Click **Save to System** (exports to `/etc/nftables.conf`)
+3. Enable the DRFW service:
 
 ```bash
-sudo cp contrib/drfw.service /etc/systemd/system/
-sudo systemctl daemon-reload
 sudo systemctl enable drfw.service
 sudo systemctl start drfw.service
 ```
 
-#### Usage
+**Key difference:** On stop, `drfw.service` only deletes the `inet drfw` table, preserving other tables like docker or libvirt.
+
+### Service Commands
 
 ```bash
 # Check service status
@@ -66,51 +66,38 @@ systemctl status drfw.service
 # View service logs
 journalctl -u drfw.service
 
-# Reload firewall rules
+# Reload firewall rules (after Save to System)
 sudo systemctl reload drfw.service
 
-# Stop the firewall
+# Stop the firewall (removes drfw table only)
 sudo systemctl stop drfw.service
 
 # Disable boot-time loading
 sudo systemctl disable drfw.service
 ```
 
-#### How It Works
+## Comparison: nftables.service vs drfw.service
 
-The `drfw.service` unit:
-
-1. Runs `drfw apply boot --no-confirm` at boot
-2. Loads the "boot" profile from `/root/.local/share/drfw/profiles/boot.json`
-3. Applies rules using the elevation layer (runs as root, so no pkexec needed)
-4. Logs all operations to systemd journal
-
-#### Keeping Boot Rules Updated
-
-After modifying rules in DRFW, update the boot profile:
-
-```bash
-sudo cp ~/.local/share/drfw/profiles/your-profile.json /root/.local/share/drfw/profiles/boot.json
-sudo systemctl reload drfw.service
-```
-
-## Prerequisites
-
-- DRFW installed at `/usr/bin/drfw` (or update the service file path)
-- A "boot" profile in root's XDG data directory
+| Feature | nftables.service | drfw.service |
+|---------|------------------|--------------|
+| Config source | `/etc/nftables.conf` | `/etc/nftables.conf` |
+| On stop | Flushes entire ruleset | Deletes only `inet drfw` table |
+| Other tables | Removed on stop | Preserved on stop |
+| Conflicts with | drfw.service | nftables.service |
+| Recommended for | Single-purpose firewall | Systems with docker/libvirt/etc. |
 
 ## Troubleshooting
 
 **Service fails to start:**
 ```bash
-# Check if boot profile exists
-sudo ls -la /root/.local/share/drfw/profiles/boot.json
+# Check if nftables.conf exists
+sudo cat /etc/nftables.conf
 
-# Verify drfw binary location
-which drfw
+# Test loading manually
+sudo nft -f /etc/nftables.conf
 
-# Test manual apply as root
-sudo drfw apply boot --no-confirm
+# Check for syntax errors
+sudo nft -c -f /etc/nftables.conf
 ```
 
 **Firewall not applying:**
@@ -118,15 +105,9 @@ sudo drfw apply boot --no-confirm
 # View detailed logs
 journalctl -u drfw.service -n 50
 
-# List available profiles (as root)
-sudo drfw list
+# List current ruleset
+sudo nft list ruleset
+
+# Verify drfw table exists
+sudo nft list table inet drfw
 ```
-
-## Comparison: nftables.service vs drfw.service
-
-| Feature | nftables.service | drfw.service |
-|---------|------------------|--------------|
-| Config format | nftables text | DRFW JSON profile |
-| Update method | Save to System | Copy profile to root |
-| Integration | System standard | DRFW-specific |
-| Recommended for | Most users | Advanced setups |

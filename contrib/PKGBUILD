@@ -26,10 +26,6 @@ pkgver() {
 
 build() {
     cd drfw
-    # Compile-time configuration (these are the defaults, shown for reference)
-    # Fedora/RHEL would use: DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf
-    export DRFW_SYSTEM_NFT_PATH=/etc/nftables.conf
-    export DRFW_SYSTEM_NFT_SERVICE=nftables.service
     cargo build --release --locked
 }
 
@@ -43,5 +39,6 @@ package() {
     install -Dm755 target/release/drfw "$pkgdir/usr/bin/drfw"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 contrib/drfw.desktop "$pkgdir/usr/share/applications/drfw.desktop"
+    install -Dm644 contrib/drfw.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/drfw.svg"
     install -Dm644 contrib/drfw.service "$pkgdir/usr/lib/systemd/system/drfw.service"
 }

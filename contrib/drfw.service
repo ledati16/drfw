@@ -1,18 +1,19 @@
 [Unit]
-Description=DRFW Firewall Rules
+Description=DRFW Firewall Service
 Documentation=https://github.com/ledati16/drfw
 After=network-pre.target
 Before=network.target
 Wants=network-pre.target
+Conflicts=nftables.service
 
 [Service]
 Type=oneshot
-# Apply a profile named "boot" with no confirmation prompt
-# The profile must exist in /root/.local/share/drfw/profiles/boot.json
-# Alternative: Use nftables.service with DRFW's "Save to System" export
-ExecStart=/usr/bin/drfw apply boot --no-confirm
+# Load rules from /etc/nftables.conf (same as nftables.service)
+# Use DRFW's "Save to System" to export rules to this location
+ExecStart=/usr/bin/nft -f /etc/nftables.conf
+ExecReload=/usr/bin/nft -f /etc/nftables.conf
+# Only delete the drfw table on stop (preserves other tables like docker, libvirt)
 ExecStop=/usr/bin/nft delete table inet drfw
-ExecReload=/usr/bin/drfw apply boot --no-confirm
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
