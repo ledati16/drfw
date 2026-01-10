@@ -7,3 +7,4 @@ Terminal=false
 Type=Application
 Categories=System;Security;Network;
 Keywords=firewall;nftables;network;security;
+StartupWMClass=drfw

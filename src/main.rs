@@ -384,6 +384,10 @@ fn launch_gui() -> ExitCode {
         .subscription(app::State::subscription)
         .window(iced::window::Settings {
             size: Size::new(1000.0, 700.0),
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "drfw".to_string(),
+                ..Default::default()
+            },
             ..Default::default()
         })
         .title("Dumb Rust Firewall")
