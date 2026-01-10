@@ -10,9 +10,9 @@ Type=oneshot
 # Apply a profile named "boot" with no confirmation prompt
 # The profile must exist in /root/.local/share/drfw/profiles/boot.json
 # Alternative: Use nftables.service with DRFW's "Save to System" export
-ExecStart=/usr/local/bin/drfw apply boot --no-confirm
+ExecStart=/usr/bin/drfw apply boot --no-confirm
 ExecStop=/usr/bin/nft delete table inet drfw
-ExecReload=/usr/local/bin/drfw apply boot --no-confirm
+ExecReload=/usr/bin/drfw apply boot --no-confirm
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal

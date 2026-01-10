@@ -96,7 +96,7 @@ sudo systemctl reload drfw.service
 
 ## Prerequisites
 
-- DRFW installed at `/usr/local/bin/drfw` (or update the service file path)
+- DRFW installed at `/usr/bin/drfw` (or update the service file path)
 - A "boot" profile in root's XDG data directory
 
 ## Troubleshooting
