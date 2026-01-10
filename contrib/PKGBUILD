@@ -1,0 +1,46 @@
+# Maintainer: Your Name <your.email@example.com>
+pkgname=drfw-git
+pkgver=0.9.0.r0.g604a55f
+pkgrel=1
+pkgdesc="A minimal, safe, stateful nftables GUI for desktop Linux"
+arch=('x86_64')
+url="https://github.com/ledati16/drfw"
+license=('MIT')
+depends=('nftables' 'gcc-libs')
+makedepends=('git' 'cargo')
+optdepends=(
+    'polkit: for pkexec elevation in GUI environments'
+    'sudo: for sudo elevation in terminal environments'
+)
+provides=('drfw')
+conflicts=('drfw')
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd drfw
+    git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+    printf "%s.r%s.g%s" "$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd drfw
+    # Compile-time configuration (these are the defaults, shown for reference)
+    # Fedora/RHEL would use: DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf
+    export DRFW_SYSTEM_NFT_PATH=/etc/nftables.conf
+    export DRFW_SYSTEM_NFT_SERVICE=nftables.service
+    cargo build --release --locked
+}
+
+check() {
+    cd drfw
+    DRFW_TEST_NO_ELEVATION=1 cargo test --locked
+}
+
+package() {
+    cd drfw
+    install -Dm755 target/release/drfw "$pkgdir/usr/bin/drfw"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 contrib/drfw.service "$pkgdir/usr/lib/systemd/system/drfw.service"
+}

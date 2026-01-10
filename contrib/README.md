@@ -1,8 +1,25 @@
-# DRFW Boot-Time Firewall
+# DRFW Contrib Files
 
-This directory contains a systemd service file for applying DRFW firewall rules at boot.
+This directory contains distribution packaging and system integration files.
 
-## Recommended Approach: Save to System
+## Arch Linux (PKGBUILD)
+
+Build and install from source using the provided PKGBUILD:
+
+```bash
+cd contrib
+makepkg -si
+```
+
+This installs:
+- `/usr/bin/drfw` - the main binary
+- `/usr/lib/systemd/system/drfw.service` - optional boot service
+
+For AUR submission, update the maintainer line in `PKGBUILD`.
+
+## Boot-Time Firewall
+
+### Recommended Approach: Save to System
 
 The simplest way to apply firewall rules at boot is using DRFW's built-in export:
 
@@ -17,11 +34,11 @@ sudo systemctl start nftables.service
 
 This integrates with the system's native nftables configuration.
 
-## Alternative: DRFW Service
+### Alternative: DRFW Service
 
 If you prefer a DRFW-managed approach, use the provided service file.
 
-### Setup
+#### Setup
 
 1. Create a "boot" profile in DRFW with your desired rules
 2. Copy the profile to root's XDG directory:
@@ -40,7 +57,7 @@ sudo systemctl enable drfw.service
 sudo systemctl start drfw.service
 ```
 
-### Usage
+#### Usage
 
 ```bash
 # Check service status
@@ -59,7 +76,7 @@ sudo systemctl stop drfw.service
 sudo systemctl disable drfw.service
 ```
 
-### How It Works
+#### How It Works
 
 The `drfw.service` unit:
 
@@ -68,7 +85,7 @@ The `drfw.service` unit:
 3. Applies rules using the elevation layer (runs as root, so no pkexec needed)
 4. Logs all operations to systemd journal
 
-### Keeping Boot Rules Updated
+#### Keeping Boot Rules Updated
 
 After modifying rules in DRFW, update the boot profile:
 
