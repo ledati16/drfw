@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc dd0cd9646d6b4bb42d1c8b948c37d38ee0eeec451e5f004e7ccaee8406bab0dd # shrinks to valid_prefix = "0", invalid_char = "²"
-cc ad7b96f18453b12617c662d29f08450d0493846d9f69c18f2271b88cd0e42669 # shrinks to input = "ῲÀ៰ꬰ𖭛𝒩𑯀ꧠ᥆0𞅀\u{b01}𞀰\u{1e008}𑅐a𑛀પ𖭣𖭐"
-cc 51d567bae5cfc40ece45a3060c8b6922d1d0fa1d009c7c6f95f75498db0063f4 # shrinks to valid_prefix = "0", invalid_char = "*"

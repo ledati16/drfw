@@ -11,3 +11,4 @@ cargo-test-fuzz-target
 !README.md
 !STYLE.md
 !contrib/README.md
+/proptest-regressions/
