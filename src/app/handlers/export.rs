@@ -104,34 +104,6 @@ pub(crate) fn handle_clear_event_log(state: &mut State) {
     }
 }
 
-/// Handles opening logs folder
-pub(crate) fn handle_open_logs_folder() {
-    if let Some(state_dir) = crate::utils::get_state_dir()
-        && state_dir.exists()
-        && state_dir.is_dir()
-        && let Ok(canonical) = state_dir.canonicalize()
-    {
-        #[cfg(target_os = "linux")]
-        {
-            let _ = std::process::Command::new("xdg-open")
-                .arg(canonical.as_os_str())
-                .spawn();
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let _ = std::process::Command::new("open")
-                .arg(canonical.as_os_str())
-                .spawn();
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let _ = std::process::Command::new("explorer")
-                .arg(canonical.as_os_str())
-                .spawn();
-        }
-    }
-}
-
 /// Handles audit entries loaded
 pub(crate) fn handle_audit_entries_loaded(
     state: &mut State,

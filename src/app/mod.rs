@@ -331,7 +331,6 @@ pub enum Message {
     /// Audit log write completed (mark cache dirty)
     AuditLogWritten,
     ClearEventLog,
-    OpenLogsFolder,
     ExportAsJson,
     ExportAsNft,
     ExportResult(Result<String, String>),
@@ -1024,7 +1023,6 @@ impl State {
             }
             Message::CloseFontPicker => handlers::handle_close_font_picker(self),
             Message::FilterByTag(tag) => handlers::handle_filter_by_tag(self, tag),
-            Message::OpenLogsFolder => handlers::handle_open_logs_folder(),
             Message::RuleDragStart(id) => handlers::handle_rule_drag_start(self, id),
             Message::RuleDropped(target_id) => {
                 return handlers::handle_rule_dropped(self, target_id);

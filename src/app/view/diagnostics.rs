@@ -407,10 +407,6 @@ pub fn view_diagnostics_modal<'a>(
                     .on_press(Message::ClearEventLog)
                     .padding([10, 20])
                     .style(move |_, status| danger_button(theme, status)),
-                button(text("Open Logs Folder").size(14).font(regular_font))
-                    .on_press(Message::OpenLogsFolder)
-                    .padding([10, 20])
-                    .style(move |_, status| secondary_button(theme, status)),
                 button(text("Close").size(14).font(regular_font))
                     .on_press(Message::ToggleDiagnostics(false))
                     .padding([10, 20])
