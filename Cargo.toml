@@ -1,8 +1,9 @@
 [package]
 name = "drfw"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 default-run = "drfw"
+repository = "https://github.com/ledati16/drfw"
 
 [lints.clippy]
 # Enable pedantic lints for thorough code quality checks

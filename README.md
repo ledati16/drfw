@@ -175,7 +175,7 @@ sudo zypper install nftables
 ### Building from Source
 
 ```bash
-git clone https://github.com/yourusername/drfw.git
+git clone https://github.com/ledati16/drfw.git
 cd drfw
 cargo build --release
 ./target/release/drfw

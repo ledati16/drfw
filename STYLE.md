@@ -656,5 +656,5 @@ scrollable(
 ---
 
 **Last Updated:** 2026-01-09 (Added container style functions, removed shadow_strong, updated hybrid calculations)
-**DRFW Version:** 0.1.0
+**DRFW Version:** 0.9.0
 **Iced Version:** 0.14

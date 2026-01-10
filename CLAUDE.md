@@ -921,5 +921,5 @@ fn handle_message(&mut self) -> Task<Message> {
 ---
 
 **Last Updated:** 2026-01-09 (Added stress_gen docs, enabled pedantic lints in Cargo.toml, updated feature list)
-**DRFW Version:** 0.8.0
+**DRFW Version:** 0.9.0
 **Iced Version:** 0.14
