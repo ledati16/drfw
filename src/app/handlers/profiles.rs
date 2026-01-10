@@ -191,7 +191,19 @@ pub(crate) fn handle_confirm_delete_profile(state: &mut State) -> Task<Message> 
         // Validation: ensure at least one profile remains
         if state.available_profiles.len() <= 1 {
             state.push_banner("Cannot delete last profile", BannerSeverity::Error);
-            return Task::none();
+            let enable_event_log = state.enable_event_log;
+            let profile_name = name.clone();
+            return Task::perform(
+                async move {
+                    audit::log_profile_delete_failed(
+                        enable_event_log,
+                        &profile_name,
+                        "Cannot delete last profile".to_string(),
+                    )
+                    .await;
+                },
+                |()| Message::AuditLogWritten,
+            );
         }
 
         // Validation: cannot delete active profile
@@ -200,7 +212,19 @@ pub(crate) fn handle_confirm_delete_profile(state: &mut State) -> Task<Message> 
                 "Cannot delete active profile - switch to another profile first",
                 BannerSeverity::Error,
             );
-            return Task::none();
+            let enable_event_log = state.enable_event_log;
+            let profile_name = name.clone();
+            return Task::perform(
+                async move {
+                    audit::log_profile_delete_failed(
+                        enable_event_log,
+                        &profile_name,
+                        "Cannot delete active profile".to_string(),
+                    )
+                    .await;
+                },
+                |()| Message::AuditLogWritten,
+            );
         }
 
         let enable_event_log = state.enable_event_log;
@@ -249,7 +273,13 @@ pub(crate) fn handle_profile_deleted(
                 format!("Failed to delete profile: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error);
-            Task::none()
+            let enable_event_log = state.enable_event_log;
+            Task::perform(
+                async move {
+                    audit::log_profile_delete_failed(enable_event_log, "unknown", e).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
     }
 }
@@ -311,10 +341,14 @@ pub(crate) fn handle_confirm_rename_profile(state: &mut State) -> Task<Message> 
 }
 
 /// Handles profile rename result
-pub(crate) fn handle_profile_renamed(state: &mut State, result: Result<Vec<String>, String>) {
+pub(crate) fn handle_profile_renamed(
+    state: &mut State,
+    result: Result<Vec<String>, String>,
+) -> Task<Message> {
     match result {
         Ok(profiles) => {
             state.available_profiles = profiles;
+            Task::none()
         }
         Err(e) => {
             let msg = if e.len() > 55 {
@@ -323,6 +357,13 @@ pub(crate) fn handle_profile_renamed(state: &mut State, result: Result<Vec<Strin
                 format!("Failed to rename profile: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error);
+            let enable_event_log = state.enable_event_log;
+            Task::perform(
+                async move {
+                    audit::log_profile_rename_failed(enable_event_log, "unknown", e).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
     }
 }

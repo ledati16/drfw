@@ -222,6 +222,43 @@ pub fn format_audit_event<'a>(
                 format_error_for_display(event.error.as_deref())
             ),
         ),
+        (EventType::SnapshotFailed, _) => (
+            theme.warning,
+            format!(
+                "Snapshot failed: {}",
+                format_error_for_display(event.error.as_deref())
+            ),
+        ),
+        (EventType::ProfileDeleteFailed, _) => (
+            theme.danger,
+            format!(
+                "Failed to delete profile '{}': {}",
+                event.details["profile_name"].as_str().unwrap_or(""),
+                format_error_for_display(event.error.as_deref())
+            ),
+        ),
+        (EventType::ProfileRenameFailed, _) => (
+            theme.danger,
+            format!(
+                "Failed to rename profile '{}': {}",
+                event.details["profile_name"].as_str().unwrap_or(""),
+                format_error_for_display(event.error.as_deref())
+            ),
+        ),
+        (EventType::ExportFailed, _) => (
+            theme.danger,
+            format!(
+                "Export failed: {}",
+                format_error_for_display(event.error.as_deref())
+            ),
+        ),
+        (EventType::GenericError, _) => (
+            theme.danger,
+            format!(
+                "Error: {}",
+                format_error_for_display(event.error.as_deref())
+            ),
+        ),
     };
 
     row![

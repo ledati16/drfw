@@ -14,6 +14,7 @@ pub enum EventType {
     ApplyRules,
     RevertRules,
     VerifyRules,
+    SnapshotFailed,
 
     // Elevation/authentication events
     ElevationCancelled,
@@ -24,6 +25,8 @@ pub enum EventType {
     ProfileDeleted,
     ProfileRenamed,
     ProfileSwitched,
+    ProfileDeleteFailed,
+    ProfileRenameFailed,
 
     // Settings changes (user-facing)
     SettingsSaved,
@@ -43,9 +46,13 @@ pub enum EventType {
 
     // Data export
     ExportCompleted,
+    ExportFailed,
 
     // System configuration
     SaveToSystem,
+
+    // Generic errors (fallthrough cases)
+    GenericError,
 }
 
 /// A single audit log entry
@@ -461,6 +468,66 @@ pub async fn log_save_to_system(
         success,
         serde_json::json!({ "target_path": target_path }),
         error,
+    )
+    .await;
+}
+
+/// Logs a snapshot save failure
+pub async fn log_snapshot_failed(enable_event_log: bool, error: String) {
+    log_event_internal(
+        enable_event_log,
+        EventType::SnapshotFailed,
+        false,
+        serde_json::json!({ "error": &error }),
+        Some(error),
+    )
+    .await;
+}
+
+/// Logs a profile delete failure
+pub async fn log_profile_delete_failed(enable_event_log: bool, profile_name: &str, error: String) {
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileDeleteFailed,
+        false,
+        serde_json::json!({ "profile_name": profile_name, "error": &error }),
+        Some(error),
+    )
+    .await;
+}
+
+/// Logs a profile rename failure
+pub async fn log_profile_rename_failed(enable_event_log: bool, profile_name: &str, error: String) {
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileRenameFailed,
+        false,
+        serde_json::json!({ "profile_name": profile_name, "error": &error }),
+        Some(error),
+    )
+    .await;
+}
+
+/// Logs an export failure
+pub async fn log_export_failed(enable_event_log: bool, error: String) {
+    log_event_internal(
+        enable_event_log,
+        EventType::ExportFailed,
+        false,
+        serde_json::json!({ "error": &error }),
+        Some(error),
+    )
+    .await;
+}
+
+/// Logs a generic error (fallthrough cases)
+pub async fn log_generic_error(enable_event_log: bool, error: String) {
+    log_event_internal(
+        enable_event_log,
+        EventType::GenericError,
+        false,
+        serde_json::json!({ "error": &error }),
+        Some(error),
     )
     .await;
 }

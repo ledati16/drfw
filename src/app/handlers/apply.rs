@@ -53,7 +53,7 @@ fn interpret_elevated_command_output(output: &std::process::Output) -> Result<()
     }
 }
 
-/// Checks if a polkit agent is available. Returns an error task with banner if not.
+/// Checks if a polkit agent is available. Returns an error task with banner and audit log if not.
 fn require_polkit_agent(state: &mut State) -> Result<(), Task<Message>> {
     if crate::elevation::is_polkit_agent_running() {
         Ok(())
@@ -62,7 +62,17 @@ fn require_polkit_agent(state: &mut State) -> Result<(), Task<Message>> {
             "No polkit agent running. Install and start an authentication agent.",
             BannerSeverity::Error,
         );
-        Err(Task::none())
+        let enable_event_log = state.enable_event_log;
+        Err(Task::perform(
+            async move {
+                audit::log_elevation_failed(
+                    enable_event_log,
+                    "No polkit agent running".to_string(),
+                )
+                .await;
+            },
+            |()| Message::AuditLogWritten,
+        ))
     }
 }
 
@@ -171,18 +181,28 @@ pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
 }
 
 /// Handles apply result (success or failure)
-pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value) {
+pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value) -> Task<Message> {
     state.last_applied_ruleset = Some(state.ruleset.clone());
 
-    if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
+    let snapshot_task = if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
         warn!("Failed to save snapshot to disk: {e}");
-        let msg = if e.to_string().len() > 45 {
+        let error_str = e.to_string();
+        let msg = if error_str.len() > 45 {
             "Warning: Failed to save snapshot. Rollback may be unavailable.".to_string()
         } else {
             format!("Warning: Failed to save snapshot: {e}")
         };
         state.push_banner(&msg, BannerSeverity::Warning);
-    }
+        let enable_event_log = state.enable_event_log;
+        Some(Task::perform(
+            async move {
+                audit::log_snapshot_failed(enable_event_log, error_str).await;
+            },
+            |()| Message::AuditLogWritten,
+        ))
+    } else {
+        None
+    };
 
     if state.auto_revert_enabled {
         // Auto-revert enabled: show countdown modal
@@ -206,8 +226,13 @@ pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value
     } else {
         // Auto-revert disabled: show success banner and return to idle
         state.status = AppStatus::Idle;
-        state.push_banner("Firewall rules applied successfully!", BannerSeverity::Success);
+        state.push_banner(
+            "Firewall rules applied successfully!",
+            BannerSeverity::Success,
+        );
     }
+
+    snapshot_task.unwrap_or_else(Task::none)
 }
 
 /// Handles manual revert button click
@@ -374,14 +399,28 @@ pub(crate) fn handle_save_to_system_verify_result(
             };
             let msg = truncate_error_message("Cannot save - invalid config: ", &error_summary, 80);
             state.push_banner(&msg, BannerSeverity::Error);
-            Task::none()
+            let enable_event_log = state.enable_event_log;
+            let error_count = verify_result.errors.len();
+            let error = Some(error_summary);
+            Task::perform(
+                async move {
+                    audit::log_verify(enable_event_log, false, error_count, error).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
         Err(e) => {
             // Verification error (e.g., nft command failed)
             state.status = AppStatus::Idle;
             let msg = truncate_error_message("Verification error: ", &e, 80);
             state.push_banner(&msg, BannerSeverity::Error);
-            Task::none()
+            let enable_event_log = state.enable_event_log;
+            Task::perform(
+                async move {
+                    audit::log_verify(enable_event_log, false, 0, Some(e)).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
     }
 }
@@ -542,8 +581,14 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
     // Generic error - show error message (no prefix for generic errors)
     let msg = truncate_error_message("", error, 80);
     state.push_banner(&msg, BannerSeverity::Error);
-
-    Task::none()
+    let enable_event_log = state.enable_event_log;
+    let error_msg = error.to_owned();
+    Task::perform(
+        async move {
+            audit::log_generic_error(enable_event_log, error_msg).await;
+        },
+        |()| Message::AuditLogWritten,
+    )
 }
 
 #[cfg(test)]

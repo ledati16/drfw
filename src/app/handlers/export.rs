@@ -8,6 +8,7 @@
 //! - Loading audit entries
 
 use crate::app::{BannerSeverity, Message, State};
+use crate::audit;
 use iced::Task;
 
 /// Handles exporting as JSON
@@ -61,15 +62,20 @@ pub(crate) fn handle_export_as_nft(state: &State) -> Task<Message> {
 }
 
 /// Handles export result
-pub(crate) fn handle_export_result(state: &mut State, result: Result<String, String>) {
+pub(crate) fn handle_export_result(
+    state: &mut State,
+    result: Result<String, String>,
+) -> Task<Message> {
     state.show_export_modal = false;
     match result {
         Ok(path) => {
             let msg = crate::app::helpers::truncate_path_smart(&path, 60);
             state.push_banner(format!("Exported to {msg}"), BannerSeverity::Success);
+            Task::none()
         }
         Err(e) if e == "Export cancelled" => {
-            // User cancelled - don't show error
+            // User cancelled - don't show error or log
+            Task::none()
         }
         Err(e) => {
             let msg = if e.len() > 50 {
@@ -78,6 +84,13 @@ pub(crate) fn handle_export_result(state: &mut State, result: Result<String, Str
                 format!("Export failed: {e}")
             };
             state.push_banner(&msg, BannerSeverity::Error);
+            let enable_event_log = state.enable_event_log;
+            Task::perform(
+                async move {
+                    audit::log_export_failed(enable_event_log, e).await;
+                },
+                |()| Message::AuditLogWritten,
+            )
         }
     }
 }
@@ -143,7 +156,7 @@ mod tests {
     #[test]
     fn test_handle_export_result_success() {
         let mut state = create_test_state();
-        handle_export_result(&mut state, Ok("/path/to/file.json".to_string()));
+        let _ = handle_export_result(&mut state, Ok("/path/to/file.json".to_string()));
         assert!(!state.show_export_modal);
         assert!(!state.banners.is_empty());
     }

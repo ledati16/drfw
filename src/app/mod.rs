@@ -906,7 +906,9 @@ impl State {
             Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
                 return handlers::handle_apply_or_revert_error(self, &e);
             }
-            Message::ApplyResult(Ok(snapshot)) => handlers::handle_apply_result(self, snapshot),
+            Message::ApplyResult(Ok(snapshot)) => {
+                return handlers::handle_apply_result(self, snapshot);
+            }
             Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),
             Message::RevertClicked => return handlers::handle_revert_clicked(self),
             Message::RevertResult(result) => handlers::handle_revert_result(self, result),
@@ -929,7 +931,9 @@ impl State {
             Message::ToggleExportModal(show) => handlers::handle_toggle_export_modal(self, show),
             Message::ExportAsJson => return handlers::handle_export_as_json(self),
             Message::ExportAsNft => return handlers::handle_export_as_nft(self),
-            Message::ExportResult(result) => handlers::handle_export_result(self, result),
+            Message::ExportResult(result) => {
+                return handlers::handle_export_result(self, result);
+            }
 
             // UI state domain
             Message::TabChanged(tab) => handlers::handle_tab_changed(self, tab),
@@ -1080,7 +1084,9 @@ impl State {
                 handlers::handle_profile_new_name_changed(self, new_name);
             }
             Message::ConfirmRenameProfile => return handlers::handle_confirm_rename_profile(self),
-            Message::ProfileRenamed(result) => handlers::handle_profile_renamed(self, result),
+            Message::ProfileRenamed(result) => {
+                return handlers::handle_profile_renamed(self, result);
+            }
             Message::CancelRenameProfile => handlers::handle_cancel_rename_profile(self),
             Message::ConfirmProfileSwitch => return handlers::handle_confirm_profile_switch(self),
             Message::DiscardProfileSwitch => return handlers::handle_discard_profile_switch(self),
