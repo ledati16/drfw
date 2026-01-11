@@ -11,7 +11,7 @@
       </feMerge>
     </filter>
     <clipPath id="roundedClip">
-      <rect x="14" y="24" width="100" height="80" rx="8" ry="8"/>
+      <rect x="9" y="20" width="110" height="88" rx="8" ry="8"/>
     </clipPath>
     <!-- Left fade: background to transparent -->
     <linearGradient id="fadeLeft" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -26,23 +26,24 @@
   </defs>
 
   <!-- Rounded container with shadow -->
-  <rect x="14" y="24" width="100" height="80" rx="8" ry="8"
+  <rect x="9" y="20" width="110" height="88" rx="8" ry="8"
         fill="#2E2623"
         filter="url(#shadow)"/>
 
   <!-- Text content clipped to rounded rect -->
   <g clip-path="url(#roundedClip)" font-family="M+1Code Nerd Font" font-size="11">
-    <text x="-30" y="38" fill="#D47761">table inet drfw { chain input type filter</text>
-    <text x="-20" y="50" fill="#7A6E67">chain input { type filter hook input priority</text>
-    <text x="-10" y="62" fill="#B85A30">tcp dport 22 accept comment "SSH access"</text>
-    <text x="0" y="74" fill="#DBB98F">tcp dport { 80, 443 } accept comment "Web"</text>
-    <text x="-15" y="86" fill="#8B9A5A">udp dport 53 accept comment "DNS resolver"</text>
-    <text x="9" y="98" fill="#D4A574">icmp type echo-reque</text>
+    <text x="-23" y="32" fill="#D47761">table inet drfw { chain input type filter</text>
+    <text x="-15" y="44" fill="#7A6E67">chain input { type filter hook input priority</text>
+    <text x="-5" y="56" fill="#B85A30">tcp dport 22 accept comment "SSH access"</text>
+    <text x="5" y="68" fill="#DBB98F">tcp dport { 80, 443 } accept comment "Web"</text>
+    <text x="-10" y="80" fill="#8B9A5A">udp dport 53 accept comment "DNS resolver"</text>
+    <text x="14" y="92" fill="#D4A574">icmp type echo-request accept</text>
+    <text x="9" y="104" fill="#C25D4E">log prefix "blocked: " drop</text>
   </g>
 
   <!-- Fade overlays (clipped to rounded rect) -->
   <g clip-path="url(#roundedClip)">
-    <rect x="14" y="24" width="20" height="80" fill="url(#fadeLeft)"/>
-    <rect x="94" y="24" width="20" height="80" fill="url(#fadeRight)"/>
+    <rect x="9" y="20" width="20" height="88" fill="url(#fadeLeft)"/>
+    <rect x="99" y="20" width="20" height="88" fill="url(#fadeRight)"/>
   </g>
 </svg>
