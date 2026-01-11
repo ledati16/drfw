@@ -1,13 +1,13 @@
 # Maintainer: Your Name <your.email@example.com>
 pkgname=drfw-git
-pkgver=r335.bec6230
+pkgver=r336.76fd4fc
 pkgrel=1
 pkgdesc="A minimal, safe, stateful nftables GUI for desktop Linux"
 arch=('x86_64')
 url="https://github.com/ledati16/drfw"
 license=('MIT')
-depends=('nftables' 'gcc-libs')
-makedepends=('git' 'cargo' 'jq')
+depends=('nftables' 'gcc-libs' 'glibc')
+makedepends=('git' 'cargo')
 optdepends=(
     'polkit: for pkexec elevation in GUI environments'
     'sudo: for sudo elevation in terminal environments'
@@ -22,14 +22,24 @@ pkgver() {
     printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
+prepare() {
+    cd "${pkgname%-git}"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
 build() {
     cd "${pkgname%-git}"
-    cargo build --release --locked
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
 }
 
 check() {
     cd "${pkgname%-git}"
-    DRFW_NFT_COMMAND="$PWD/tests/mock_nft.sh" cargo test --locked
+    export RUSTUP_TOOLCHAIN=stable
+    # Debug mode intentional: catches overflow checks and debug_assert!() failures
+    DRFW_NFT_COMMAND="$PWD/tests/mock_nft.sh" cargo test --frozen
 }
 
 package() {
@@ -41,4 +51,5 @@ package() {
         install -Dm644 "contrib/icons/drfw-${size}.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/drfw.png"
     done
     install -Dm644 contrib/drfw.service "$pkgdir/usr/lib/systemd/system/drfw.service"
+    install -Dm644 contrib/50-drfw.rules "$pkgdir/usr/share/polkit-1/rules.d/50-drfw.rules"
 }

@@ -1,0 +1,26 @@
+// DRFW polkit rules - credential caching for elevated firewall commands
+//
+// When DRFW is launched from a desktop entry (no TTY), it uses pkexec for
+// elevation. This rule enables AUTH_ADMIN_KEEP so users authenticate once
+// per application session rather than for every nft/install operation.
+//
+// CACHING BEHAVIOR:
+// - AUTH_ADMIN_KEEP caches per-process (PID), not per-desktop-session
+// - Once DRFW authenticates, all pkexec calls from that process are cached
+// - Cache expires after ~5 minutes OR when DRFW closes (whichever first)
+// - Restarting DRFW requires reauthentication (new PID = new subject)
+//
+// SECURITY:
+// - subject.active: Only active sessions (not background/locked)
+// - subject.local: Only local console sessions (not SSH/VNC)
+// - Full paths prevent PATH manipulation attacks
+//
+// Install to: /usr/share/polkit-1/rules.d/50-drfw.rules
+
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.policykit.exec" &&
+        action.lookup("program") == "/usr/bin/nft" &&
+        subject.active && subject.local) {
+        return polkit.Result.AUTH_ADMIN_KEEP;
+    }
+});

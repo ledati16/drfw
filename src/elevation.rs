@@ -9,9 +9,24 @@
 //!
 //! # Elevation Strategy
 //!
-//! - **Preferred (all modes)**: Uses `run0` when available (systemd v256+, no SUID, better security)
-//! - **CLI fallback**: Uses `sudo` for terminal environments
-//! - **GUI fallback**: Uses `pkexec` for graphical authentication
+//! Elevation method is chosen based on environment:
+//!
+//! - **CLI (TTY present)**: Prefers `run0` (systemd v256+, no SUID), falls back to `sudo`
+//! - **GUI (no TTY)**: Prefers `pkexec` (proper credential caching), falls back to `run0`
+//!
+//! This distinction matters because `run0` uses TTY-based session binding for credential
+//! caching. When launched from a GUI without a TTY, `run0` creates a new PTY for each
+//! invocation, breaking caching.
+//!
+//! # Credential Caching (pkexec)
+//!
+//! With the polkit rules file (`contrib/50-drfw.rules`), pkexec enables `AUTH_ADMIN_KEEP`
+//! which caches credentials **per-process (PID)**, not per-desktop-session:
+//!
+//! - Once DRFW authenticates for nft, all subsequent pkexec calls from that process
+//!   are authorized (including install) without re-prompting
+//! - Cache expires after ~5 minutes OR when DRFW exits (whichever comes first)
+//! - Restarting DRFW requires reauthentication (new PID = new polkit subject)
 //!
 //! # Environment Variables
 //!
@@ -187,32 +202,37 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
         }
     }
 
-    // 3. Automatic detection - prefer run0 (modern, no SUID), fallback to sudo/pkexec
-
-    // Prefer run0 everywhere when available (better security, no SUID bit)
-    if binary_exists("run0") {
-        let mut cmd = Command::new("run0");
-        cmd.arg(program).args(args);
-        return Ok(cmd);
-    }
-
-    // Fall back based on environment when run0 not available
+    // 3. Automatic detection based on environment
+    //
+    // Run0 uses TTY-based session binding for credential caching. When launched
+    // from a GUI (no TTY), run0 creates a new PTY for each invocation, breaking
+    // caching. Pkexec uses D-Bus/XDG session identification which persists across
+    // the desktop session, making it better suited for GUI applications.
     let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
 
     if is_atty {
-        // CLI: Standard sudo elevation
+        // CLI environment: prefer run0 (modern, no SUID), fallback to sudo
+        if binary_exists("run0") {
+            let mut cmd = Command::new("run0");
+            cmd.arg(program).args(args);
+            return Ok(cmd);
+        }
         let mut cmd = Command::new("sudo");
         cmd.arg(program).args(args);
         Ok(cmd)
     } else {
-        // GUI: pkexec elevation
-        if !binary_exists("pkexec") {
-            return Err(ElevationError::PkexecNotFound);
+        // GUI environment: prefer pkexec (proper session caching), fallback to run0
+        if binary_exists("pkexec") {
+            let mut cmd = Command::new("pkexec");
+            cmd.arg(program).args(args);
+            return Ok(cmd);
         }
-
-        let mut cmd = Command::new("pkexec");
-        cmd.arg(program).args(args);
-        Ok(cmd)
+        if binary_exists("run0") {
+            let mut cmd = Command::new("run0");
+            cmd.arg(program).args(args);
+            return Ok(cmd);
+        }
+        Err(ElevationError::PkexecNotFound)
     }
 }
 
@@ -225,9 +245,8 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
 /// # Elevation Strategy
 ///
 /// 1. **Custom command**: If `DRFW_NFT_COMMAND` is set, uses that path directly (no elevation)
-/// 2. **Preferred**: `run0 nft` when available (systemd v256+, better security, no SUID)
-/// 3. **CLI fallback**: `sudo nft` for terminal environments
-/// 4. **GUI fallback**: `pkexec nft` for graphical authentication
+/// 2. **CLI (TTY present)**: `run0 nft` preferred, falls back to `sudo nft`
+/// 3. **GUI (no TTY)**: `pkexec nft` preferred (proper session caching), falls back to `run0 nft`
 ///
 /// # Arguments
 ///
