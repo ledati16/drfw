@@ -67,10 +67,14 @@ pub fn view_rule_form<'a>(
         .spacing(4),
         // Basic Info Section
         column![
-            text("DESCRIPTION")
-                .size(11)
-                .font(regular_font)
-                .color(theme.fg_muted),
+            container(
+                text("DESCRIPTION")
+                    .size(11)
+                    .font(regular_font)
+                    .color(theme.fg_muted)
+            )
+            .padding([2, 6])
+            .style(move |_| section_header_container(theme)),
             text_input("e.g. Local Web Server", &form.label)
                 .on_input(Message::RuleFormLabelChanged)
                 .padding(8)
