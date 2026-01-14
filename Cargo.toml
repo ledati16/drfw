@@ -2,6 +2,7 @@
 name = "drfw"
 version = "0.9.0"
 edition = "2024"
+rust-version = "1.92"
 default-run = "drfw"
 repository = "https://github.com/ledati16/drfw"
 
@@ -29,6 +30,8 @@ float_cmp = "allow"
 
 # Small types (4-6 bytes) passed by reference for API consistency
 trivially_copy_pass_by_ref = "allow"
+
+# Total: 40 pedantic warnings suppressed across 7 lint types
 
 [dependencies]
 # ═══════════════════════════════════════════════════════════════════════════
