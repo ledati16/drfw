@@ -376,6 +376,8 @@ mod tests {
 
     #[test]
     fn test_create_install_command_returns_ok() {
+        let _guard = ENV_VAR_MUTEX.lock().unwrap();
+
         // In TTY mode (which cargo test uses), this should return Ok with sudo
         // Even if sudo doesn't exist, Command::new("sudo") succeeds - it only
         // fails when you try to spawn/run it.
