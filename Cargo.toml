@@ -66,7 +66,7 @@ similar = "2"  # Diff algorithm for ruleset comparison (show changes)
 rfd = "0.17"  # Native OS file dialogs (save/export)
 network-interface = "2.0"  # Cross-platform network interface discovery
 logos = "0.16"  # Declarative lexer generator (compile-time DFA)
-strum = { version = "0.27", features = ["derive"] }  # Enum boilerplate elimination (Display, iter, etc.)
+strum = { version = "0.28", features = ["derive"] }  # Enum boilerplate elimination (Display, iter, etc.)
 nucleo-matcher = "0.3"  # Fuzzy search for font and theme pickers
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -82,16 +82,16 @@ tracing-subscriber = "0.3"  # Logging configuration and output formatting
 sha2 = "0.10"  # Snapshot checksums for integrity verification
 fontdb = "0.23"  # System font enumeration for font picker
 clap = { version = "4.5.54", features = ["derive"] }  # CLI argument parsing
-nix = { version = "0.30.1", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
+nix = { version = "0.31", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
 crossterm = "0.29"  # Terminal control for CLI countdown timers
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Build Information
 # ═══════════════════════════════════════════════════════════════════════════
-shadow-rs = "1.5"  # Embed git commit, build time, dirty status at compile time
+shadow-rs = "1.7"  # Embed git commit, build time, dirty status at compile time
 
 [build-dependencies]
-shadow-rs = "1.5"
+shadow-rs = "1.7"
 
 [dev-dependencies]
 proptest = "1"

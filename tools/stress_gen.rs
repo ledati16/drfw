@@ -48,7 +48,6 @@ use drfw::validators::{
 };
 use ipnetwork::IpNetwork;
 use rand::prelude::*;
-use rand::seq::SliceRandom;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -472,7 +471,7 @@ fn random_protocol(rng: &mut impl Rng) -> Protocol {
 fn random_action(rng: &mut impl Rng) -> Action {
     // Weight towards Accept (more common in real rulesets)
     let weights = [60, 25, 15]; // Accept, Drop, Reject
-    let dist = rand::distributions::WeightedIndex::new(weights).unwrap();
+    let dist = rand::distr::weighted::WeightedIndex::new(weights).unwrap();
     ACTIONS[dist.sample(rng)]
 }
 
@@ -484,7 +483,7 @@ fn random_reject_type(rng: &mut impl Rng, protocol: Protocol) -> RejectType {
 
 fn random_chain(rng: &mut impl Rng) -> Chain {
     // Weight towards Input (more common)
-    if rng.gen_bool(0.7) {
+    if rng.random_bool(0.7) {
         Chain::Input
     } else {
         Chain::Output
@@ -498,28 +497,28 @@ fn random_ports(rng: &mut impl Rng, protocol: Protocol) -> Vec<PortEntry> {
     }
 
     // Sometimes no port filter (all ports)
-    if rng.gen_bool(0.15) {
+    if rng.random_bool(0.15) {
         return Vec::new();
     }
 
-    let count = rng.gen_range(1..=3);
+    let count = rng.random_range(1..=3);
     let mut ports = Vec::with_capacity(count);
 
     for _ in 0..count {
-        if rng.gen_bool(0.8) {
+        if rng.random_bool(0.8) {
             // Single port (more common)
-            let port = if rng.gen_bool(0.7) {
+            let port = if rng.random_bool(0.7) {
                 // Common port
                 *COMMON_PORTS.choose(rng).unwrap()
             } else {
                 // Random port
-                rng.gen_range(1..=65535)
+                rng.random_range(1..=65535)
             };
             ports.push(PortEntry::Single(port));
         } else {
             // Port range
-            let start = rng.gen_range(1..=65000);
-            let end = rng.gen_range(start..=65535);
+            let start = rng.random_range(1..=65000);
+            let end = rng.random_range(start..=65535);
             ports.push(PortEntry::Range { start, end });
         }
     }
@@ -529,10 +528,10 @@ fn random_ports(rng: &mut impl Rng, protocol: Protocol) -> Vec<PortEntry> {
 
 fn random_ipv4(rng: &mut impl Rng) -> IpNetwork {
     let ip = std::net::Ipv4Addr::new(
-        rng.gen_range(1..=223),
-        rng.gen_range(0..=255),
-        rng.gen_range(0..=255),
-        rng.gen_range(1..=254),
+        rng.random_range(1..=223),
+        rng.random_range(0..=255),
+        rng.random_range(0..=255),
+        rng.random_range(1..=254),
     );
     let prefix = *[8, 16, 24, 32].choose(rng).unwrap();
     IpNetwork::new(std::net::IpAddr::V4(ip), prefix).unwrap()
@@ -542,22 +541,22 @@ fn random_ipv6(rng: &mut impl Rng) -> IpNetwork {
     // Generate realistic IPv6 prefixes
     let prefixes = ["2001:db8::", "fd00::", "fe80::", "2607:f8b0::"];
     let prefix_str = *prefixes.choose(rng).unwrap();
-    let suffix: u16 = rng.gen_range(0..=65535);
+    let suffix: u16 = rng.random_range(0..=65535);
     let addr_str = format!("{prefix_str}{suffix:x}");
     let addr: std::net::Ipv6Addr = addr_str.parse().unwrap_or_else(|_| {
         // Fallback to simple address
-        std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, rng.gen_range(0..=65535))
+        std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, rng.random_range(0..=65535))
     });
     let prefix_len = *[48, 64, 128].choose(rng).unwrap();
     IpNetwork::new(std::net::IpAddr::V6(addr), prefix_len).unwrap()
 }
 
 fn random_sources(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
-    if rng.gen_bool(0.4) {
+    if rng.random_bool(0.4) {
         return Vec::new(); // No source filter
     }
 
-    let count = rng.gen_range(1..=4);
+    let count = rng.random_range(1..=4);
     let mut sources = Vec::with_capacity(count);
 
     for _ in 0..count {
@@ -568,7 +567,7 @@ fn random_sources(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
         } else if protocol_requires_ipv6(protocol) {
             // ICMPv6 only works with IPv6
             random_ipv6(rng)
-        } else if rng.gen_bool(0.7) {
+        } else if rng.random_bool(0.7) {
             // Other protocols: prefer IPv4 but allow IPv6
             random_ipv4(rng)
         } else {
@@ -581,11 +580,11 @@ fn random_sources(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
 }
 
 fn random_destinations(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
-    if rng.gen_bool(0.6) {
+    if rng.random_bool(0.6) {
         return Vec::new(); // Less common to have destination filters
     }
 
-    let count = rng.gen_range(1..=3);
+    let count = rng.random_range(1..=3);
     let mut dests = Vec::with_capacity(count);
 
     for _ in 0..count {
@@ -596,7 +595,7 @@ fn random_destinations(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork>
         } else if protocol_requires_ipv6(protocol) {
             // ICMPv6 only works with IPv6
             random_ipv6(rng)
-        } else if rng.gen_bool(0.7) {
+        } else if rng.random_bool(0.7) {
             // Other protocols: prefer IPv4 but allow IPv6
             random_ipv4(rng)
         } else {
@@ -609,7 +608,7 @@ fn random_destinations(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork>
 }
 
 fn random_interface(rng: &mut impl Rng) -> Option<String> {
-    if rng.gen_bool(0.7) {
+    if rng.random_bool(0.7) {
         None
     } else {
         Some(INTERFACE_NAMES.choose(rng).unwrap().to_string())
@@ -617,21 +616,21 @@ fn random_interface(rng: &mut impl Rng) -> Option<String> {
 }
 
 fn random_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
-    if rng.gen_bool(0.75) {
+    if rng.random_bool(0.75) {
         return None;
     }
 
     let unit = *TIME_UNITS.choose(rng).unwrap();
     // Use typical values (well below validator maximums)
     let count = match unit {
-        TimeUnit::Second => rng.gen_range(1..=100),
-        TimeUnit::Minute => rng.gen_range(1..=1000),
-        TimeUnit::Hour => rng.gen_range(1..=5000),
-        TimeUnit::Day => rng.gen_range(1..=10000),
+        TimeUnit::Second => rng.random_range(1..=100),
+        TimeUnit::Minute => rng.random_range(1..=1000),
+        TimeUnit::Hour => rng.random_range(1..=5000),
+        TimeUnit::Day => rng.random_range(1..=10000),
     };
 
-    let burst = if rng.gen_bool(0.5) {
-        Some(rng.gen_range(count..=count * 3))
+    let burst = if rng.random_bool(0.5) {
+        Some(rng.random_range(count..=count * 3))
     } else {
         None
     };
@@ -640,19 +639,19 @@ fn random_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
 }
 
 fn random_connection_limit(rng: &mut impl Rng) -> u32 {
-    if rng.gen_bool(0.8) {
+    if rng.random_bool(0.8) {
         0 // Disabled
     } else {
-        rng.gen_range(1..=100)
+        rng.random_range(1..=100)
     }
 }
 
 fn random_tags(rng: &mut impl Rng) -> Vec<String> {
-    if rng.gen_bool(0.5) {
+    if rng.random_bool(0.5) {
         return Vec::new();
     }
 
-    let count = rng.gen_range(1..=3);
+    let count = rng.random_range(1..=3);
     TAGS.choose_multiple(rng, count)
         .map(|s| (*s).to_string())
         .collect()
@@ -670,7 +669,7 @@ fn random_timestamp(rng: &mut impl Rng, vary: bool) -> chrono::DateTime<Utc> {
         // Vary timestamps: past year to now
         let now = Utc::now().timestamp();
         let year_ago = now - 365 * 24 * 3600;
-        let random_ts = rng.gen_range(year_ago..=now);
+        let random_ts = rng.random_range(year_ago..=now);
         Utc.timestamp_opt(random_ts, 0).unwrap()
     } else {
         Utc::now()
@@ -930,7 +929,7 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
     let chain = random_chain(rng);
 
     // Intentionally create some semantic mismatches for testing
-    let (interface, output_interface) = if rng.gen_bool(0.3) {
+    let (interface, output_interface) = if rng.random_bool(0.3) {
         // Semantic mismatch: opposite interface for chain (tests display/handling)
         if chain_uses_input_interface(chain) {
             (None, edge_case_interface(rng))
@@ -952,7 +951,7 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
     #[allow(clippy::if_not_else)]
     let ports = if !protocol_supports_ports(protocol) {
         // Edge case: non-port protocol with ports specified (should be ignored by nft)
-        if rng.gen_bool(0.3) {
+        if rng.random_bool(0.3) {
             vec![PortEntry::Single(22)] // Will be stripped when converting to nft
         } else {
             Vec::new()
@@ -972,12 +971,12 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
         },
         label: edge_case_label(rng, index),
         ports,
-        sources: if rng.gen_bool(0.5) {
+        sources: if rng.random_bool(0.5) {
             edge_case_sources(rng, protocol)
         } else {
             random_sources(rng, protocol)
         },
-        destinations: if rng.gen_bool(0.4) {
+        destinations: if rng.random_bool(0.4) {
             edge_case_sources(rng, protocol) // Reuse edge case sources for destinations
         } else {
             random_destinations(rng, protocol)
@@ -986,8 +985,8 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
         output_interface,
         rate_limit: edge_case_rate_limit(rng),
         connection_limit: edge_case_connection_limit(rng),
-        log_enabled: rng.gen_bool(0.3),
-        enabled: rng.gen_bool(0.85),
+        log_enabled: rng.random_bool(0.3),
+        enabled: rng.random_bool(0.85),
         tags: edge_case_tags(rng),
         timestamp: edge_case_timestamp(rng),
     }
@@ -1027,8 +1026,8 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
         output_interface,
         rate_limit: random_rate_limit(rng),
         connection_limit: random_connection_limit(rng),
-        log_enabled: rng.gen_bool(0.1),
-        enabled: rng.gen_bool(0.95),
+        log_enabled: rng.random_bool(0.1),
+        enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
         timestamp: random_timestamp(rng, vary_timestamps),
     }
@@ -1063,16 +1062,16 @@ fn generate_coverage_rule(
     // Force rate limit if time_unit is specified
     let rate_limit = if let Some(unit) = time_unit {
         let count = match unit {
-            TimeUnit::Second => rng.gen_range(1..=100),
-            TimeUnit::Minute => rng.gen_range(1..=1000),
-            TimeUnit::Hour => rng.gen_range(1..=5000),
-            TimeUnit::Day => rng.gen_range(1..=10000),
+            TimeUnit::Second => rng.random_range(1..=100),
+            TimeUnit::Minute => rng.random_range(1..=1000),
+            TimeUnit::Hour => rng.random_range(1..=5000),
+            TimeUnit::Day => rng.random_range(1..=10000),
         };
         Some(RateLimit {
             count,
             unit,
-            burst: if rng.gen_bool(0.5) {
-                Some(rng.gen_range(count..=count * 3))
+            burst: if rng.random_bool(0.5) {
+                Some(rng.random_range(count..=count * 3))
             } else {
                 None
             },
@@ -1094,8 +1093,8 @@ fn generate_coverage_rule(
         output_interface,
         rate_limit,
         connection_limit: random_connection_limit(rng),
-        log_enabled: rng.gen_bool(0.1),
-        enabled: rng.gen_bool(0.95),
+        log_enabled: rng.random_bool(0.1),
+        enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
         timestamp: Utc::now(),
     }
@@ -1221,7 +1220,7 @@ fn generate_ruleset(
     // Phase 2: Generate remaining rules randomly
     let vary_timestamps = edge_cases; // Vary timestamps when edge cases enabled
     for i in rule_index..count {
-        let (rule, is_edge_case) = if edge_cases && rng.gen_bool(edge_case_prob) {
+        let (rule, is_edge_case) = if edge_cases && rng.random_bool(edge_case_prob) {
             (generate_edge_case_rule(rng, i + 1), true)
         } else {
             (generate_rule(rng, i + 1, vary_timestamps), false)
@@ -1233,17 +1232,17 @@ fn generate_ruleset(
 
     // Randomize advanced security settings
     let advanced_security = AdvancedSecuritySettings {
-        strict_icmp: rng.gen_bool(0.3),
-        icmp_rate_limit: if rng.gen_bool(0.4) {
-            rng.gen_range(1..=50)
+        strict_icmp: rng.random_bool(0.3),
+        icmp_rate_limit: if rng.random_bool(0.4) {
+            rng.random_range(1..=50)
         } else {
             0
         },
-        enable_rpf: rng.gen_bool(0.2),
-        log_dropped: rng.gen_bool(0.3),
-        log_rate_per_minute: rng.gen_range(1..=20),
+        enable_rpf: rng.random_bool(0.2),
+        log_dropped: rng.random_bool(0.3),
+        log_rate_per_minute: rng.random_range(1..=20),
         log_prefix: "DRFW-DROP: ".to_string(),
-        egress_profile: if rng.gen_bool(0.7) {
+        egress_profile: if rng.random_bool(0.7) {
             EgressProfile::Desktop
         } else {
             EgressProfile::Server
@@ -1332,7 +1331,7 @@ fn main() {
             println!("Using seed: {seed}");
             Box::new(rand::rngs::StdRng::seed_from_u64(seed))
         }
-        None => Box::new(rand::thread_rng()),
+        None => Box::new(rand::rng()),
     };
 
     // Print generation info
