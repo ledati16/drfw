@@ -72,13 +72,14 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
         }
         Err(_) => {
             warn!(
-                "nft --check timed out after {} seconds",
+                "nft --check timed out after {} seconds (likely no authentication agent)",
                 NFT_VERIFY_TIMEOUT.as_secs()
             );
-            return Err(Error::Internal(format!(
-                "nft --check timed out after {} seconds",
-                NFT_VERIFY_TIMEOUT.as_secs()
-            )));
+            // nft --check is near-instant; a timeout here means pkexec hung
+            // waiting for an authentication agent that never responded
+            return Err(Error::Internal(
+                "No authentication agent available. Install and start a polkit authentication agent.".to_string()
+            ));
         }
     };
 
@@ -87,6 +88,14 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
         Ok(VerifyResult::success())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Detect pkexec authentication failures before treating as nft errors
+        if stderr.contains("No authentication agent") || stderr.contains("No polkit") {
+            return Err(Error::Internal(
+                "No authentication agent available. Install and start a polkit authentication agent.".to_string()
+            ));
+        }
+
         warn!("Ruleset verification failed: {}", stderr);
 
         let errors = parse_nft_errors(&stderr);

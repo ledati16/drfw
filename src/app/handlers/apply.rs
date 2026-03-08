@@ -43,7 +43,12 @@ fn interpret_elevated_command_output(output: &std::process::Output) -> Result<()
     if exit_code == 126 {
         Err("Authentication cancelled".into())
     } else if exit_code == 127 {
-        Err("Authentication failed".into())
+        // Preserve stderr for specific error detection (e.g. "No authentication agent")
+        if stderr.is_empty() {
+            Err("Authentication failed".into())
+        } else {
+            Err(format!("Authentication failed: {}", stderr.trim()))
+        }
     } else if stderr.contains("Permission denied") {
         Err("Permission denied (check polkit configuration)".into())
     } else if stderr.is_empty() {
@@ -53,37 +58,10 @@ fn interpret_elevated_command_output(output: &std::process::Output) -> Result<()
     }
 }
 
-/// Checks if a polkit agent is available. Returns an error task with banner and audit log if not.
-fn require_polkit_agent(state: &mut State) -> Result<(), Task<Message>> {
-    if crate::elevation::is_polkit_agent_running() {
-        Ok(())
-    } else {
-        state.push_banner(
-            "No polkit agent running. Install and start an authentication agent.",
-            BannerSeverity::Error,
-        );
-        let enable_event_log = state.enable_event_log;
-        Err(Task::perform(
-            async move {
-                audit::log_elevation_failed(
-                    enable_event_log,
-                    "No polkit agent running".to_string(),
-                )
-                .await;
-            },
-            |()| Message::AuditLogWritten,
-        ))
-    }
-}
-
 /// Handles apply button click (starts verification)
 pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
     if state.is_busy() {
         return Task::none();
-    }
-
-    if let Err(task) = require_polkit_agent(state) {
-        return task;
     }
 
     state.status = AppStatus::Verifying;
@@ -139,8 +117,13 @@ pub(crate) fn handle_verify_completed(
         }
         Err(e) => {
             state.status = AppStatus::Idle;
-            let msg = truncate_error_message("Verification error: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error);
+            // Detect authentication agent errors from verify timeout
+            let banner_msg = if e.contains("No authentication agent") || e.contains("No polkit") {
+                "No authentication agent available. Install and start a polkit agent.".to_string()
+            } else {
+                truncate_error_message("Verification error: ", &e, 80)
+            };
+            state.push_banner(&banner_msg, BannerSeverity::Error);
             let enable_event_log = state.enable_event_log;
             Task::perform(
                 async move {
@@ -361,10 +344,6 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
         return Task::none();
     }
 
-    if let Err(task) = require_polkit_agent(state) {
-        return task;
-    }
-
     state.status = AppStatus::Verifying;
     let nft_json = state.ruleset.to_nftables_json();
 
@@ -412,8 +391,12 @@ pub(crate) fn handle_save_to_system_verify_result(
         Err(e) => {
             // Verification error (e.g., nft command failed)
             state.status = AppStatus::Idle;
-            let msg = truncate_error_message("Verification error: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error);
+            let banner_msg = if e.contains("No authentication agent") || e.contains("No polkit") {
+                "No authentication agent available. Install and start a polkit agent.".to_string()
+            } else {
+                truncate_error_message("Verification error: ", &e, 80)
+            };
+            state.push_banner(&banner_msg, BannerSeverity::Error);
             let enable_event_log = state.enable_event_log;
             Task::perform(
                 async move {
@@ -520,7 +503,22 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
     state.status = AppStatus::Idle;
 
     // Detect elevation-specific errors and handle accordingly
-    if error.contains("Authentication cancelled") {
+    // Note: "No authentication agent" must be checked before "Authentication failed"
+    // because pkexec exit 127 produces "Authentication failed: No authentication agent..."
+    if error.contains("No authentication agent") || error.contains("No polkit") {
+        state.push_banner(
+            "No authentication agent available. Install polkit.",
+            BannerSeverity::Error,
+        );
+        let enable_event_log = state.enable_event_log;
+        let error_msg = error.to_owned();
+        return Task::perform(
+            async move {
+                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
+            },
+            |()| Message::AuditLogWritten,
+        );
+    } else if error.contains("Authentication cancelled") {
         state.push_banner("Authentication was cancelled", BannerSeverity::Warning);
         let enable_event_log = state.enable_event_log;
         return Task::perform(
@@ -545,19 +543,6 @@ pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Ta
         );
     } else if error.contains("timed out") || error.contains("Operation timed out") {
         state.push_banner("Authentication timed out", BannerSeverity::Error);
-        let enable_event_log = state.enable_event_log;
-        let error_msg = error.to_owned();
-        return Task::perform(
-            async move {
-                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    } else if error.contains("No authentication agent") || error.contains("No polkit") {
-        state.push_banner(
-            "No authentication agent available. Install polkit.",
-            BannerSeverity::Error,
-        );
         let enable_event_log = state.enable_event_log;
         let error_msg = error.to_owned();
         return Task::perform(
@@ -702,10 +687,6 @@ mod tests {
         let mut state = create_test_state();
         state.status = AppStatus::Idle;
         let _task = handle_apply_clicked(&mut state);
-        // Should transition to Verifying (or stay Idle if polkit agent not running)
-        assert!(matches!(
-            state.status,
-            AppStatus::Verifying | AppStatus::Idle
-        ));
+        assert_eq!(state.status, AppStatus::Verifying);
     }
 }

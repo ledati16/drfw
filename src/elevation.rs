@@ -81,53 +81,6 @@ pub enum ElevationError {
     Io(#[from] io::Error),
 }
 
-/// Checks if a polkit authentication agent is running
-///
-/// This function detects GUI authentication agents by searching for processes
-/// with "polkit" in their name, excluding the daemon and terminal-only agents.
-///
-/// # Returns
-///
-/// `true` if a GUI polkit agent is running, `false` otherwise
-///
-/// # Detected Agents
-///
-/// - polkit-gnome-authentication-agent-1
-/// - polkit-kde-authentication-agent-1
-/// - lxqt-policykit-agent
-/// - And all other standard GUI agents
-///
-/// # Performance
-///
-/// Uses `pgrep` which typically completes in <100ms. This is a synchronous call
-/// without an explicit timeout, but `pgrep` is a fast process enumeration that
-/// reads from `/proc` and returns quickly. Called once at startup to detect
-/// the GUI environment.
-// Used in app::handlers::apply (binary only, not in lib.rs)
-#[allow(dead_code)]
-pub(crate) fn is_polkit_agent_running() -> bool {
-    std::process::Command::new("pgrep")
-        .arg("-a") // Show full command line
-        .arg("polkit")
-        .output()
-        .map(|output| {
-            if !output.status.success() {
-                return false;
-            }
-
-            let output_str = String::from_utf8_lossy(&output.stdout);
-
-            for line in output_str.lines() {
-                // Skip daemon and terminal-only agent
-                if !line.contains("polkitd") && !line.contains("pkttyagent") {
-                    return true;
-                }
-            }
-            false
-        })
-        .unwrap_or(false)
-}
-
 /// Checks if a binary exists in PATH
 ///
 /// # Arguments
@@ -194,7 +147,7 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
                         return Err(ElevationError::MethodNotAvailable("pkexec".into()));
                     }
                     let mut cmd = Command::new("pkexec");
-                    cmd.arg(program).args(args);
+                    cmd.args(["--disable-internal-agent", program]).args(args);
                     Ok(cmd)
                 }
                 _ => Err(ElevationError::InvalidMethod(method)),
@@ -221,15 +174,10 @@ fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, Eleva
         cmd.arg(program).args(args);
         Ok(cmd)
     } else {
-        // GUI environment: prefer pkexec (proper session caching), fallback to run0
+        // GUI environment: pkexec only (run0/sudo use terminal auth which can't work in GUI)
         if binary_exists("pkexec") {
             let mut cmd = Command::new("pkexec");
-            cmd.arg(program).args(args);
-            return Ok(cmd);
-        }
-        if binary_exists("run0") {
-            let mut cmd = Command::new("run0");
-            cmd.arg(program).args(args);
+            cmd.args(["--disable-internal-agent", program]).args(args);
             return Ok(cmd);
         }
         Err(ElevationError::PkexecNotFound)
