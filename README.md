@@ -5,7 +5,7 @@ A minimal, safe, stateful nftables GUI for desktop Linux.
 <p align="center">
   <a href="https://github.com/ledati16/drfw/actions/workflows/ci.yml"><img src="https://github.com/ledati16/drfw/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.92-orange.svg" alt="Rust: 1.92"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.94-orange.svg" alt="Rust: 1.94"></a>
   <a href="Cargo.toml#L9-L34"><img src="https://img.shields.io/badge/Pedantic-40_allows-green?logo=rust&logoColor=white" alt="Clippy Pedantic: 40 allows"></a>
   <a href="https://github.com/iced-rs/iced"><img src="https://img.shields.io/badge/Iced-0.14-blue?logo=iced&logoColor=white" alt="Iced 0.14"></a>
   <a href="#appendix-llm-generated-code"><img src="https://img.shields.io/badge/Vibe-Coded-blueviolet" alt="Vibe Coded"></a>
@@ -117,7 +117,7 @@ drfw export <profile> --format json  # Export as JSON
 - Linux kernel 4.14+ with nftables support
 - `nftables` package installed
 - Privilege escalation: `run0` (systemd v256+), `sudo`, or `pkexec`
-- Rust 1.92 (2024 edition) — Install via [rustup](https://rustup.rs)
+- Rust 1.94 (2024 edition) — Install via [rustup](https://rustup.rs)
 
 **Check nftables:**
 ```bash
