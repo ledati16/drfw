@@ -50,9 +50,7 @@ pub(crate) fn handle_diagnostics_filter_changed(state: &mut State, filter: Diagn
 pub(crate) fn handle_undo(state: &mut State) -> Task<Message> {
     if let Some(description) = state.command_history.undo(&mut state.ruleset) {
         // Clear drag state (undo may add/remove rules, invalidating drag references)
-        state.dragged_rule_id = None;
-        state.hovered_drop_target_id = None;
-        state.hover_pending = None;
+        state.clear_drag_state();
 
         state.mark_profile_dirty();
         tracing::info!("Undid: {}", description);
@@ -72,9 +70,7 @@ pub(crate) fn handle_undo(state: &mut State) -> Task<Message> {
 pub(crate) fn handle_redo(state: &mut State) -> Task<Message> {
     if let Some(description) = state.command_history.redo(&mut state.ruleset) {
         // Clear drag state (redo may add/remove rules, invalidating drag references)
-        state.dragged_rule_id = None;
-        state.hovered_drop_target_id = None;
-        state.hover_pending = None;
+        state.clear_drag_state();
 
         state.mark_profile_dirty();
         tracing::info!("Redid: {}", description);

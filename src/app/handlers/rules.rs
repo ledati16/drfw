@@ -275,12 +275,13 @@ pub(crate) fn handle_toggle_rule(state: &mut State, id: Uuid) -> Task<Message> {
 
 /// Handles deleting a rule
 pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
-    let Some((index, rule)) = state
+    let Some((index, rule_clone)) = state
         .ruleset
         .rules
         .iter()
         .enumerate()
         .find(|(_, r)| r.id == id)
+        .map(|(i, r)| (i, r.clone()))
     else {
         state.deleting_id = None;
         return Task::none();
@@ -291,12 +292,8 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
         || state.hovered_drop_target_id == Some(id)
         || state.hover_pending.map(|(pid, _)| pid) == Some(id)
     {
-        state.dragged_rule_id = None;
-        state.hovered_drop_target_id = None;
-        state.hover_pending = None;
+        state.clear_drag_state();
     }
-
-    let rule_clone = rule.clone();
     let enable_event_log = state.enable_event_log;
 
     // Execute command
@@ -325,24 +322,18 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
     };
 
     if drag_id == dropped_id {
-        state.dragged_rule_id = None;
-        state.hovered_drop_target_id = None;
-        state.hover_pending = None;
+        state.clear_drag_state();
         return Task::none();
     }
 
     // Find indices
     let Some(old_index) = state.ruleset.rules.iter().position(|r| r.id == drag_id) else {
-        state.dragged_rule_id = None;
-        state.hovered_drop_target_id = None;
-        state.hover_pending = None;
+        state.clear_drag_state();
         return Task::none();
     };
 
     let Some(new_index) = state.ruleset.rules.iter().position(|r| r.id == dropped_id) else {
-        state.dragged_rule_id = None;
-        state.hovered_drop_target_id = None;
-        state.hover_pending = None;
+        state.clear_drag_state();
         return Task::none();
     };
 
@@ -354,9 +345,7 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
     });
     state.command_history.execute(cmd, &mut state.ruleset);
 
-    state.dragged_rule_id = None;
-    state.hovered_drop_target_id = None;
-    state.hover_pending = None;
+    state.clear_drag_state();
     state.mark_profile_dirty();
 
     // Audit log

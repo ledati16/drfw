@@ -81,7 +81,7 @@ tracing-subscriber = "0.3"  # Logging configuration and output formatting
 # ═══════════════════════════════════════════════════════════════════════════
 sha2 = "0.10"  # Snapshot checksums for integrity verification
 fontdb = "0.23"  # System font enumeration for font picker
-clap = { version = "4.5.54", features = ["derive"] }  # CLI argument parsing
+clap = { version = "4", features = ["derive"] }  # CLI argument parsing
 nix = { version = "0.31", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
 crossterm = "0.29"  # Terminal control for CLI countdown timers
 

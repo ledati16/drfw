@@ -762,6 +762,12 @@ impl State {
         );
     }
 
+    pub(crate) fn clear_drag_state(&mut self) {
+        self.dragged_rule_id = None;
+        self.hovered_drop_target_id = None;
+        self.hover_pending = None;
+    }
+
     fn mark_config_dirty(&mut self) {
         self.config_dirty = true;
         self.last_config_change = Some(std::time::Instant::now());
