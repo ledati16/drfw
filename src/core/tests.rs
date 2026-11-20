@@ -1596,6 +1596,8 @@ mod generation_semantics_tests {
                 "early drop of invalid outbound connections",
                 "allow outbound tracked connections",
                 "allow outbound ipv6 neighbor discovery",
+                "allow outbound dhcp client requests",
+                "allow outbound dhcpv6 client requests",
                 "Outbound HTTPS",
             ]
         );

@@ -536,9 +536,6 @@ fn test_save_config_script_with_real_nft() {
             target_str,
         ))
         .expect("run save script");
-    unsafe {
-        std::env::remove_var("DRFW_NFT_COMMAND");
-    }
     assert_eq!(output.status.code(), Some(3), "nft rejection exit code");
     assert_eq!(std::fs::read_to_string(&target).expect("read target"), text);
     assert_eq!(
@@ -546,6 +543,38 @@ fn test_save_config_script_with_real_nft() {
         "# old config\n"
     );
     assert!(!tmp.exists(), "temp file must be removed on failure");
+
+    // 3. A second valid save: .drfw-bak holds the previous save, while
+    //    .drfw-orig keeps the very first (pre-DRFW) config forever
+    let orig = dir.path().join("nftables.conf.drfw-orig");
+    let mut second = FirewallRuleset::new();
+    second.advanced_security.egress_profile = EgressProfile::Server;
+    let second_text = second.to_nft_text();
+    let output = runtime
+        .block_on(drfw::core::system_config::write_config_file(
+            &second_text,
+            target_str,
+        ))
+        .expect("run save script");
+    unsafe {
+        std::env::remove_var("DRFW_NFT_COMMAND");
+    }
+    assert!(
+        output.status.success(),
+        "second save failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read target"),
+        second_text
+    );
+    assert_eq!(std::fs::read_to_string(&backup).expect("read backup"), text);
+    assert_eq!(
+        std::fs::read_to_string(&orig).expect("read orig"),
+        "# old config\n",
+        ".drfw-orig must never be overwritten"
+    );
+    assert_eq!(mode_of(&orig), 0o600);
 }
 
 fn set_mode(path: &Path, mode: u32) {

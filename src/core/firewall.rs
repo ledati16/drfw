@@ -1298,6 +1298,24 @@ impl FirewallRuleset {
             ],
             "allow outbound ipv6 neighbor discovery",
         ));
+
+        // DHCP client traffic. Lease renewals go out from ordinary UDP sockets
+        // (unlike the initial raw-socket DISCOVER), so with an output drop policy a
+        // DHCP-configured server would silently lose its address at renewal time.
+        for (comment, sport, dport) in [
+            ("allow outbound dhcp client requests", 68, 67),
+            ("allow outbound dhcpv6 client requests", 546, 547),
+        ] {
+            cmds.push(Self::rule_add(
+                "output",
+                vec![
+                    Self::payload_match("udp", "sport", sport),
+                    Self::payload_match("udp", "dport", dport),
+                    json!({ "accept": null }),
+                ],
+                comment,
+            ));
+        }
     }
 
     fn add_icmp_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {

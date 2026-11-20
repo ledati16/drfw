@@ -261,7 +261,12 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
 /// 3. Copy the existing target (if any) to `<target>.drfw-bak`, preserving
 ///    mode/owner/timestamps. Done after the check so a rejected file never
 ///    overwrites a good backup.
-/// 4. `mv -f` the temp file over the target (atomic rename).
+///    The first time DRFW replaces a file, it is also copied once to
+///    `<target>.drfw-orig`, which is never overwritten, so the distribution's or
+///    user's original config can always be recovered (`.drfw-bak` only holds the
+///    previous save).
+/// 4. Flush the temp file to disk, then `mv -f` it over the target (atomic
+///    rename), so a crash cannot leave an empty or truncated config.
 ///
 /// Any failure removes the temp file and leaves the original untouched. On
 /// success, prints `backup=<path>` on stdout when a backup was made.
@@ -276,6 +281,7 @@ dir=$(dirname -- "$target") || exit 1
 name=$(basename -- "$target") || exit 1
 tmp="$dir/.$name.drfw-tmp"
 backup="$target.drfw-bak"
+orig="$target.drfw-orig"
 fail() {
     rm -f -- "$tmp"
     printf 'drfw: %s\n' "$1" >&2
@@ -287,11 +293,15 @@ if ! check_output=$("$nft" -c -f "$tmp" 2>&1); then
     fail "nft rejected the configuration; $target left unchanged: $check_output" 3
 fi
 if [ -e "$target" ]; then
+    if [ ! -e "$orig" ]; then
+        cp -p -- "$target" "$orig" || fail "cannot back up $target to $orig" 1
+    fi
     cp -p -- "$target" "$backup" || fail "cannot back up $target to $backup" 1
     made_backup=1
 else
     made_backup=0
 fi
+sync -- "$tmp" 2>/dev/null || sync
 mv -f -- "$tmp" "$target" || fail "cannot replace $target" 1
 if [ "$made_backup" = 1 ]; then
     printf 'backup=%s\n' "$backup"
