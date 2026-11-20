@@ -619,6 +619,14 @@ impl Rule {
         self.label_lowercase = self.label.to_lowercase();
         self.interface_lowercase = self.interface.as_ref().map(|i| i.to_lowercase());
         self.output_interface_lowercase = self.output_interface.as_ref().map(|i| i.to_lowercase());
+        // Tags get the same allowlist sanitization as the tag input form. Profiles
+        // imported from disk bypass the form, and later code (display truncation,
+        // tag cloud) relies on tags being short ASCII.
+        self.tags = std::mem::take(&mut self.tags)
+            .into_iter()
+            .map(|t| crate::validators::sanitize_label(&t))
+            .filter(|t| !t.is_empty())
+            .collect();
         self.tags_lowercase = self.tags.iter().map(|t| t.to_lowercase()).collect();
         self.protocol_lowercase = self.protocol.as_str();
         // Issue #5: Cache port display string for efficient view rendering
@@ -700,8 +708,11 @@ impl Rule {
             .tags
             .iter()
             .map(|t| {
-                if t.len() > 16 {
-                    format!("{}…", &t[..15])
+                // Count chars, not bytes: slicing a byte range can split a
+                // multi-byte character and panic.
+                if t.chars().count() > 16 {
+                    let head: String = t.chars().take(15).collect();
+                    format!("{head}…")
                 } else {
                     t.clone()
                 }
@@ -884,6 +895,15 @@ pub struct AdvancedSecuritySettings {
     /// Egress filtering profile (Desktop vs Server)
     #[serde(default)]
     pub egress_profile: EgressProfile,
+
+    /// Block forwarded (routed) traffic: forward chain policy drop.
+    ///
+    /// Off by default: the kernel does not forward unless IP forwarding is
+    /// enabled, and hosts that do forward (Docker, libvirt, `WireGuard`,
+    /// Tailscale) need it. Only routers that want a default-deny forward
+    /// policy should turn this on.
+    #[serde(default)]
+    pub block_forwarding: bool,
 }
 
 fn default_log_rate() -> u32 {
@@ -904,6 +924,7 @@ impl Default for AdvancedSecuritySettings {
             log_rate_per_minute: default_log_rate(),
             log_prefix: default_log_prefix(),
             egress_profile: EgressProfile::Desktop,
+            block_forwarding: false,
         }
     }
 }
@@ -929,24 +950,120 @@ impl FirewallRuleset {
         }
     }
 
+    /// Generates the nftables JSON command list for this ruleset.
+    ///
+    /// This is the authoritative representation: it is what gets verified and
+    /// applied. [`Self::to_nft_text`] renders the very same command list as
+    /// `nft -f` text, so preview, export and Save to System cannot diverge from
+    /// what is applied.
+    ///
+    /// Rule ordering (per chain):
+    /// 1. Base rules (optional RPF, loopback, invalid drop, established/related,
+    ///    `DHCPv6` client replies)
+    /// 2. ICMP redirect drops and ICMP allow rules
+    /// 3. User rules, in profile order
+    /// 4. End of input chain: optional drop logging, rate-limited reject, counter
+    pub fn to_nftables_json(&self) -> serde_json::Value {
+        let commands: Vec<serde_json::Value> = self
+            .build_commands()
+            .into_iter()
+            .map(|command| command.value)
+            .collect();
+        serde_json::json!({ "nftables": commands })
+    }
+
+    /// Renders the ruleset as a standalone `nft -f` file.
+    ///
+    /// The text is derived from [`Self::to_nftables_json`]'s command list (see
+    /// [`crate::core::nft_text`]), so it always describes exactly what is
+    /// applied. It starts with a shebang and the idempotent
+    /// `table … / delete table … / table … { … }` idiom, so loading it twice
+    /// replaces the table instead of duplicating rules. Section comments are
+    /// added for readability.
+    pub fn to_nft_text(&self) -> String {
+        crate::core::nft_text::render(&self.build_commands())
+    }
+
+    /// Builds the annotated command list shared by the JSON and text outputs.
+    pub(crate) fn build_commands(&self) -> Vec<NftCommand> {
+        use serde_json::json;
+
+        let advanced = &self.advanced_security;
+        // Base: table, flush, 3 chains, ~20 base rules; user rules: N (or 2N when dual-stack)
+        let mut cmds = CommandList::with_capacity(32 + self.rules.len());
+
+        cmds.push(json!({ "add": { "table": { "family": NFT_FAMILY, "name": NFT_TABLE } } }));
+        cmds.push(json!({ "flush": { "table": { "family": NFT_FAMILY, "name": NFT_TABLE } } }));
+
+        Self::add_base_chains(&mut cmds, advanced);
+        Self::add_base_rules(&mut cmds, advanced);
+
+        cmds.section = SECTION_USER;
+        for rule in &self.rules {
+            if !rule.enabled {
+                continue;
+            }
+            // OUTPUT rules only matter in Server Mode (Desktop output policy is accept)
+            if advanced.egress_profile == EgressProfile::Desktop && rule.chain == Chain::Output {
+                continue;
+            }
+            Self::add_user_rule(&mut cmds, rule);
+        }
+
+        Self::add_termination_rules(&mut cmds, advanced);
+
+        cmds.commands
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // JSON Helper Functions (DRY consolidation)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Creates a match expression for nft meta keys (l4proto, iifname, oifname, etc.)
-    fn meta_match(key: &str, value: impl serde::Serialize) -> serde_json::Value {
-        serde_json::json!({
-            "match": {
-                "left": { "meta": { "key": key } },
-                "op": "==",
-                "right": value
-            }
-        })
+    /// Creates an equality match expression `left == right`.
+    fn match_eq(left: serde_json::Value, right: impl Serialize) -> serde_json::Value {
+        let mut expr = serde_json::json!({ "match": { "op": "==", "right": right } });
+        expr["match"]["left"] = left;
+        expr
     }
 
-    /// Creates a rate limit expression
+    /// Creates a match on an nft meta key (`l4proto`, `iifname`, `oifname`, ...).
+    fn meta_match(key: &str, right: impl Serialize) -> serde_json::Value {
+        Self::match_eq(serde_json::json!({ "meta": { "key": key } }), right)
+    }
+
+    /// Creates a match on a conntrack key (`state`, ...).
+    fn ct_match(key: &str, right: impl Serialize) -> serde_json::Value {
+        Self::match_eq(serde_json::json!({ "ct": { "key": key } }), right)
+    }
+
+    /// Creates a match on a packet header field (`ip saddr`, `tcp dport`, ...).
+    fn payload_match(protocol: &str, field: &str, right: impl Serialize) -> serde_json::Value {
+        Self::match_eq(
+            serde_json::json!({ "payload": { "protocol": protocol, "field": field } }),
+            right,
+        )
+    }
+
+    /// `ct state { established, related }`
+    fn ct_established() -> serde_json::Value {
+        Self::ct_match(
+            "state",
+            serde_json::json!({ "set": ["established", "related"] }),
+        )
+    }
+
+    /// Creates a rate limit expression (no burst, not inverted).
     fn rate_limit(rate: u32, per: &str) -> serde_json::Value {
         serde_json::json!({ "limit": { "rate": rate, "per": per } })
+    }
+
+    /// Wraps a list of values in an anonymous set, or returns the single value.
+    fn value_or_set(mut values: Vec<serde_json::Value>) -> serde_json::Value {
+        if values.len() == 1 {
+            values.swap_remove(0)
+        } else {
+            serde_json::json!({ "set": values })
+        }
     }
 
     /// Converts an `IpNetwork` to nftables JSON format.
@@ -958,17 +1075,15 @@ impl FirewallRuleset {
     /// For network prefixes, we use `.network()` to get the canonical network address.
     /// This handles edge cases where users enter non-canonical CIDRs like "192.168.1.50/24"
     /// which should be normalized to the network address "192.168.1.0".
-    fn ip_to_nft_json(ip: &ipnetwork::IpNetwork) -> serde_json::Value {
+    fn ip_to_nft_json(ip: &IpNetwork) -> serde_json::Value {
         let is_single_host = match ip {
-            ipnetwork::IpNetwork::V4(v4) => v4.prefix() == 32,
-            ipnetwork::IpNetwork::V6(v6) => v6.prefix() == 128,
+            IpNetwork::V4(v4) => v4.prefix() == 32,
+            IpNetwork::V6(v6) => v6.prefix() == 128,
         };
 
         if is_single_host {
-            // Single host - just the IP address string
             serde_json::json!(ip.ip().to_string())
         } else {
-            // Network prefix - use prefix object with canonical network address
             serde_json::json!({
                 "prefix": {
                     "addr": ip.network().to_string(),
@@ -978,93 +1093,59 @@ impl FirewallRuleset {
         }
     }
 
-    /// Creates a rule add wrapper with the standard drfw table structure
-    fn rule_add(chain: &str, expr: &[serde_json::Value], comment: &str) -> serde_json::Value {
-        serde_json::json!({
-            "add": {
-                "rule": {
-                    "family": "inet",
-                    "table": "drfw",
-                    "chain": chain,
-                    "expr": expr,
-                    "comment": comment
-                }
-            }
-        })
+    /// Creates an `add rule` command in the drfw table.
+    ///
+    /// The comment is sanitized for nft quoted strings and omitted when empty.
+    fn rule_add(chain: &str, expr: Vec<serde_json::Value>, comment: &str) -> serde_json::Value {
+        let mut rule = serde_json::json!({
+            "family": NFT_FAMILY,
+            "table": NFT_TABLE,
+            "chain": chain,
+        });
+        rule["expr"] = serde_json::Value::Array(expr);
+        let comment = crate::validators::sanitize_nft_quoted(comment);
+        if !comment.is_empty() {
+            rule["comment"] = serde_json::json!(comment);
+        }
+        let mut command = serde_json::json!({ "add": {} });
+        command["add"]["rule"] = rule;
+        command
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Generates the nftables JSON representation of the ruleset.
-    /// Follows the spec in Section 4 of `PLAN_DRFW.md`.
-    pub fn to_nftables_json(&self) -> serde_json::Value {
+    fn add_base_chains(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
 
-        // Issue #11: Pre-allocate Vec with estimated capacity
-        // Base rules: ~15, user rules: N, termination: ~5
-        let estimated_capacity = 20 + self.rules.len();
-        let mut nft_rules = Vec::with_capacity(estimated_capacity);
-
-        // 1. Setup Table & Flush
-        nft_rules.push(json!({ "add": { "table": { "family": "inet", "name": "drfw" } } }));
-        nft_rules.push(json!({ "flush": { "table": { "family": "inet", "name": "drfw" } } }));
-
-        // 2. Base Chains
-        Self::add_base_chains(&mut nft_rules, &self.advanced_security);
-
-        // 3. Base Rules
-        Self::add_base_rules(&mut nft_rules, &self.advanced_security);
-
-        // 4. User Rules
-        for rule in &self.rules {
-            if !rule.enabled {
-                continue; // Skip disabled rules
-            }
-
-            // Skip OUTPUT rules in Desktop Mode (policy is ACCEPT, rules are redundant)
-            if self.advanced_security.egress_profile == EgressProfile::Desktop
-                && rule.chain == Chain::Output
-            {
-                continue;
-            }
-
-            Self::add_user_rule(&mut nft_rules, rule);
-        }
-
-        // 5. Termination Rules
-        Self::add_termination_rules(&mut nft_rules, &self.advanced_security);
-
-        json!({ "nftables": nft_rules })
-    }
-
-    fn add_base_chains(
-        nft_rules: &mut Vec<serde_json::Value>,
-        advanced: &AdvancedSecuritySettings,
-    ) {
-        use serde_json::json;
-
-        // OUTPUT policy depends on egress filtering profile
         let output_policy = match advanced.egress_profile {
             EgressProfile::Desktop => "accept",
             EgressProfile::Server => "drop",
         };
+        // Forwarding is left alone by default: the kernel only forwards when IP
+        // forwarding is enabled, and then it is usually Docker/libvirt/VPNs that
+        // need it (their own tables accepting is not enough, a drop here wins).
+        let forward_policy = if advanced.block_forwarding {
+            "drop"
+        } else {
+            "accept"
+        };
 
         let chains = [
-            ("input", "drop", -10),
-            ("forward", "drop", -10),
-            ("output", output_policy, -10),
+            ("input", "drop"),
+            ("forward", forward_policy),
+            ("output", output_policy),
         ];
 
-        for (name, policy, priority) in chains {
-            nft_rules.push(json!({
+        for (name, policy) in chains {
+            cmds.push(json!({
                 "add": {
                     "chain": {
-                        "family": "inet",
-                        "table": "drfw",
+                        "family": NFT_FAMILY,
+                        "table": NFT_TABLE,
                         "name": name,
                         "type": "filter",
                         "hook": name,
-                        "prio": priority,
+                        "prio": CHAIN_PRIORITY,
                         "policy": policy
                     }
                 }
@@ -1072,7 +1153,7 @@ impl FirewallRuleset {
         }
     }
 
-    fn add_base_rules(nft_rules: &mut Vec<serde_json::Value>, advanced: &AdvancedSecuritySettings) {
+    fn add_base_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
 
         // Rule ordering matters for performance and correctness:
@@ -1080,795 +1161,543 @@ impl FirewallRuleset {
         // 1. Loopback - most common, should bypass all checks
         // 2. Drop invalid early - avoid wasting cycles on malformed packets
         // 3. Established/related - most traffic will match here
-        // 4. Block ICMP redirects - prevent MITM attacks
-        // 5. [OPTIONAL] ICMP rate limiting
+        // 4. DHCPv6 client replies (not tracked: the request went to multicast)
+        // 5. Block ICMP redirects - prevent MITM attacks
         // 6. ICMP - needed for network diagnostics (strict mode or general allow)
+        cmds.section = SECTION_BASE;
 
         // Optional: Anti-spoofing (RPF) - WARNING: Breaks Docker/VPNs
         if advanced.enable_rpf {
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": [
-                            { "match": {
-                                "left": { "fib": { "flags": ["saddr", "iif"], "result": "oif" } },
-                                "op": "==",
-                                "right": false
-                            } },
-                            { "drop": null },
-                        ],
-                        "comment": "drop packets with spoofed source addresses (RPF)"
-                    }
-                }
-            }));
+            cmds.push(Self::rule_add(
+                "input",
+                vec![
+                    Self::match_eq(
+                        json!({ "fib": { "flags": ["saddr", "iif"], "result": "oif" } }),
+                        false,
+                    ),
+                    json!({ "drop": null }),
+                ],
+                "drop packets with spoofed source addresses (RPF)",
+            ));
         }
 
-        // Standard rules (always enabled)
-        let standard_rules = [
-            (
-                "allow from loopback",
-                vec![
-                    json!({ "match": { "left": { "meta": { "key": "iifname" } }, "op": "==", "right": "lo" } }),
-                    json!({ "accept": null }),
-                ],
-            ),
-            (
-                "early drop of invalid connections",
-                vec![
-                    json!({ "match": { "left": { "ct": { "key": "state" } }, "op": "==", "right": "invalid" } }),
-                    json!({ "drop": null }),
-                ],
-            ),
-            (
-                "allow tracked connections",
-                vec![
-                    json!({ "match": { "left": { "ct": { "key": "state" } }, "op": "==", "right": {"set": ["established", "related"]} } }),
-                    json!({ "accept": null }),
-                ],
-            ),
-            (
-                "drop icmp redirects",
-                vec![
-                    json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "icmp" } }),
-                    json!({ "match": { "left": { "payload": { "protocol": "icmp", "field": "type" } }, "op": "==", "right": "redirect" } }),
-                    json!({ "drop": null }),
-                ],
-            ),
-            (
-                "drop icmpv6 redirects",
-                vec![
-                    json!({ "match": { "left": { "meta": { "key": "l4proto" } }, "op": "==", "right": "ipv6-icmp" } }),
-                    json!({ "match": { "left": { "payload": { "protocol": "icmpv6", "field": "type" } }, "op": "==", "right": "nd-redirect" } }),
-                    json!({ "drop": null }),
-                ],
-            ),
-        ];
+        cmds.push(Self::rule_add(
+            "input",
+            vec![Self::meta_match("iifname", "lo"), json!({ "accept": null })],
+            "allow from loopback",
+        ));
+        cmds.push(Self::rule_add(
+            "input",
+            vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
+            "early drop of invalid connections",
+        ));
+        cmds.push(Self::rule_add(
+            "input",
+            vec![Self::ct_established(), json!({ "accept": null })],
+            "allow tracked connections",
+        ));
+        // DHCPv6 replies come from the server's link-local address to ours; the
+        // request went to a multicast group so conntrack cannot associate them.
+        cmds.push(Self::rule_add(
+            "input",
+            vec![
+                Self::payload_match(
+                    "ip6",
+                    "saddr",
+                    json!({ "prefix": { "addr": "fe80::", "len": 10 } }),
+                ),
+                Self::payload_match("udp", "sport", 547),
+                Self::payload_match("udp", "dport", 546),
+                json!({ "accept": null }),
+            ],
+            "allow dhcpv6 client replies",
+        ));
 
-        for (comment, expr) in standard_rules {
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": expr,
-                        "comment": comment
-                    }
-                }
-            }));
+        if advanced.block_forwarding {
+            cmds.push(Self::rule_add(
+                "forward",
+                vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
+                "drop invalid forwarded connections",
+            ));
+            cmds.push(Self::rule_add(
+                "forward",
+                vec![Self::ct_established(), json!({ "accept": null })],
+                "allow tracked forwarded connections",
+            ));
         }
 
-        // ICMP handling: rate limiting (optional) + strict mode OR general allow
-        Self::add_icmp_rules(nft_rules, advanced);
+        if advanced.egress_profile == EgressProfile::Server {
+            Self::add_server_output_base_rules(cmds);
+        }
+
+        cmds.section = SECTION_SECURITY;
+        cmds.push(Self::rule_add(
+            "input",
+            vec![
+                Self::meta_match("l4proto", "icmp"),
+                Self::payload_match("icmp", "type", "redirect"),
+                json!({ "drop": null }),
+            ],
+            "drop icmp redirects",
+        ));
+        cmds.push(Self::rule_add(
+            "input",
+            vec![
+                Self::meta_match("l4proto", "ipv6-icmp"),
+                Self::payload_match("icmpv6", "type", "nd-redirect"),
+                json!({ "drop": null }),
+            ],
+            "drop icmpv6 redirects",
+        ));
+
+        cmds.section = SECTION_ICMP;
+        Self::add_icmp_rules(cmds, advanced);
     }
 
-    fn add_icmp_rules(nft_rules: &mut Vec<serde_json::Value>, advanced: &AdvancedSecuritySettings) {
+    /// Base rules for the output chain in Server Mode (policy drop).
+    ///
+    /// Without these, a default-deny output policy drops loopback traffic,
+    /// replies to accepted inbound connections and IPv6 neighbor discovery,
+    /// which locks the machine out of its own network.
+    fn add_server_output_base_rules(cmds: &mut CommandList) {
         use serde_json::json;
 
-        // Helper to build ICMP rule expressions with optional rate limiting
-        let build_icmp_rule = |protocol: &str,
-                               type_filter: Option<serde_json::Value>,
-                               rate_limit: u32|
-         -> Vec<serde_json::Value> {
-            let mut expr = vec![Self::meta_match("l4proto", protocol)];
+        cmds.push(Self::rule_add(
+            "output",
+            vec![Self::meta_match("oifname", "lo"), json!({ "accept": null })],
+            "allow to loopback",
+        ));
+        cmds.push(Self::rule_add(
+            "output",
+            vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
+            "early drop of invalid outbound connections",
+        ));
+        cmds.push(Self::rule_add(
+            "output",
+            vec![Self::ct_established(), json!({ "accept": null })],
+            "allow outbound tracked connections",
+        ));
+        // Neighbor discovery and MLD are not connection-tracked (untracked), so the
+        // established rule above does not cover them; IPv6 breaks without them.
+        cmds.push(Self::rule_add(
+            "output",
+            vec![
+                Self::meta_match("l4proto", "ipv6-icmp"),
+                Self::payload_match(
+                    "icmpv6",
+                    "type",
+                    json!({ "set": [
+                        "nd-router-solicit",
+                        "nd-neighbor-solicit",
+                        "nd-neighbor-advert",
+                        "mld-listener-report",
+                        "mld2-listener-report"
+                    ] }),
+                ),
+                json!({ "accept": null }),
+            ],
+            "allow outbound ipv6 neighbor discovery",
+        ));
+    }
 
+    fn add_icmp_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
+        use serde_json::json;
+
+        // Builds an ICMP accept rule with optional type filter and rate limit
+        let build_icmp_rule = |protocol: &str, type_filter: Option<serde_json::Value>| {
+            let mut expr = vec![Self::meta_match("l4proto", protocol)];
             if let Some(filter) = type_filter {
                 expr.push(filter);
             }
-
-            if rate_limit > 0 {
-                expr.push(Self::rate_limit(rate_limit, "second"));
+            if advanced.icmp_rate_limit > 0 {
+                expr.push(Self::rate_limit(advanced.icmp_rate_limit, "second"));
             }
-
             expr.push(json!({ "accept": null }));
             expr
         };
 
         if advanced.strict_icmp {
-            // Strict ICMP mode: Only allow essential types
-
             // IPv4 ICMP - essential types only
-            let ipv4_types = json!({ "match": {
-                "left": { "payload": { "protocol": "icmp", "field": "type" } },
-                "op": "==",
-                "right": {"set": [
+            let ipv4_types = Self::payload_match(
+                "icmp",
+                "type",
+                json!({ "set": [
                     "echo-reply",              // Type 0: ping responses
                     "destination-unreachable", // Type 3: path MTU discovery
                     "echo-request",            // Type 8: allow being pinged
-                    "time-exceeded"            // Type 11: traceroute
-                ]}
-            }});
-
-            let ipv4_expr = build_icmp_rule("icmp", Some(ipv4_types), advanced.icmp_rate_limit);
-            nft_rules.push(Self::rule_add(
+                    "time-exceeded",           // Type 11: traceroute
+                    "parameter-problem"        // Type 12: header errors
+                ] }),
+            );
+            cmds.push(Self::rule_add(
                 "input",
-                &ipv4_expr,
+                build_icmp_rule("icmp", Some(ipv4_types)),
                 "allow essential icmp (strict mode)",
             ));
 
             // IPv6 ICMP - essential types only (more types required for IPv6 to function)
-            let ipv6_types = json!({ "match": {
-                "left": { "payload": { "protocol": "icmpv6", "field": "type" } },
-                "op": "==",
-                "right": {"set": [
+            let ipv6_types = Self::payload_match(
+                "icmpv6",
+                "type",
+                json!({ "set": [
                     "destination-unreachable", // Type 1
                     "packet-too-big",          // Type 2: path MTU (CRITICAL for IPv6)
                     "time-exceeded",           // Type 3
+                    "parameter-problem",       // Type 4
                     "echo-request",            // Type 128
                     "echo-reply",              // Type 129
+                    "mld-listener-query",      // Type 130: multicast listener discovery
+                    "nd-router-advert",        // Type 134: SLAAC / default route
                     "nd-neighbor-solicit",     // Type 135 (CRITICAL for IPv6)
                     "nd-neighbor-advert"       // Type 136 (CRITICAL for IPv6)
-                ]}
-            }});
-
-            let ipv6_expr =
-                build_icmp_rule("ipv6-icmp", Some(ipv6_types), advanced.icmp_rate_limit);
-            nft_rules.push(Self::rule_add(
+                ] }),
+            );
+            cmds.push(Self::rule_add(
                 "input",
-                &ipv6_expr,
+                build_icmp_rule("ipv6-icmp", Some(ipv6_types)),
                 "allow essential icmpv6 (strict mode)",
             ));
         } else {
             // Default mode: Allow all ICMP (except redirects which are already blocked)
-
-            let ipv4_expr = build_icmp_rule("icmp", None, advanced.icmp_rate_limit);
-            nft_rules.push(Self::rule_add("input", &ipv4_expr, "allow icmp"));
-
-            let ipv6_expr = build_icmp_rule("ipv6-icmp", None, advanced.icmp_rate_limit);
-            nft_rules.push(Self::rule_add("input", &ipv6_expr, "allow icmp v6"));
+            cmds.push(Self::rule_add(
+                "input",
+                build_icmp_rule("icmp", None),
+                "allow icmp",
+            ));
+            cmds.push(Self::rule_add(
+                "input",
+                build_icmp_rule("ipv6-icmp", None),
+                "allow icmp v6",
+            ));
         }
     }
 
-    /// Adds user rule(s) to the `nft_rules` vector.
-    /// May generate multiple nftables rules if the DRFW rule has mixed IPv4/IPv6 addresses.
+    /// Adds the nft rule(s) for one user rule.
     ///
-    /// nftables requires separate rules for IPv4 and IPv6:
-    /// - `ip saddr` only matches IPv4 addresses
-    /// - `ip6 saddr` only matches IPv6 addresses
+    /// nftables matches IPv4 and IPv6 addresses with different expressions
+    /// (`ip saddr` vs `ip6 saddr`), and one rule cannot match both. A rule with
+    /// mixed address families is therefore emitted once per family, and a
+    /// family-specific copy is only emitted when **every** non-empty address
+    /// list (sources, destinations) has an address of that family. Otherwise
+    /// the copy would silently drop a list and match more than the user asked
+    /// for (e.g. sources `[v4, v6]` with destinations `[v4]` must not produce an
+    /// IPv6 rule that matches any destination).
     ///
-    /// So if a user specifies both IPv4 and IPv6 sources, we generate two nft rules.
-    fn add_user_rule(nft_rules: &mut Vec<serde_json::Value>, rule: &Rule) {
-        // Split sources and destinations by IP version
-        let ipv4_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv4()).collect();
-        let ipv6_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv6()).collect();
-        let ipv4_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv4()).collect();
-        let ipv6_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv6()).collect();
+    /// Rules that cannot be expressed without widening are skipped with a
+    /// warning: no family satisfies both address lists, or an interface name
+    /// is empty after sanitization.
+    fn add_user_rule(cmds: &mut CommandList, rule: &Rule) {
+        let iif = rule
+            .interface
+            .as_deref()
+            .map(crate::validators::sanitize_nft_quoted);
+        let oif = rule
+            .output_interface
+            .as_deref()
+            .map(crate::validators::sanitize_nft_quoted);
+        if iif.as_deref().is_some_and(str::is_empty) || oif.as_deref().is_some_and(str::is_empty) {
+            tracing::warn!(
+                "Skipping rule '{}': interface name is empty after sanitization",
+                rule.label
+            );
+            return;
+        }
+        let ifaces = (iif.as_deref(), oif.as_deref());
 
-        // For rules with no IP filtering, generate a single rule
         if rule.sources.is_empty() && rule.destinations.is_empty() {
-            Self::add_single_rule(nft_rules, rule, &[], &[]);
+            Self::add_single_rule(cmds, rule, ifaces, &AddressMatch::default());
             return;
         }
 
-        // Generate IPv4 rule if we have IPv4 sources or destinations
-        if !ipv4_sources.is_empty() || !ipv4_dests.is_empty() {
-            Self::add_single_rule(nft_rules, rule, &ipv4_sources, &ipv4_dests);
+        let mut emitted = false;
+        for (family, is_v6) in [("ip", false), ("ip6", true)] {
+            let sources: Vec<&IpNetwork> = rule
+                .sources
+                .iter()
+                .filter(|n| n.is_ipv6() == is_v6)
+                .collect();
+            let destinations: Vec<&IpNetwork> = rule
+                .destinations
+                .iter()
+                .filter(|n| n.is_ipv6() == is_v6)
+                .collect();
+            let sources_ok = rule.sources.is_empty() || !sources.is_empty();
+            let destinations_ok = rule.destinations.is_empty() || !destinations.is_empty();
+            if sources_ok && destinations_ok {
+                let addresses = AddressMatch {
+                    family,
+                    sources,
+                    destinations,
+                };
+                Self::add_single_rule(cmds, rule, ifaces, &addresses);
+                emitted = true;
+            }
         }
 
-        // Generate IPv6 rule if we have IPv6 sources or destinations
-        if !ipv6_sources.is_empty() || !ipv6_dests.is_empty() {
-            Self::add_single_rule(nft_rules, rule, &ipv6_sources, &ipv6_dests);
+        if !emitted {
+            tracing::warn!(
+                "Skipping rule '{}': sources and destinations have no IP family in common",
+                rule.label
+            );
         }
     }
 
-    /// Generates a single nftables rule with the given sources and destinations.
+    /// Generates a single nftables rule for one address family.
     fn add_single_rule(
-        nft_rules: &mut Vec<serde_json::Value>,
+        cmds: &mut CommandList,
         rule: &Rule,
-        sources: &[&IpNetwork],
-        destinations: &[&IpNetwork],
+        (iif, oif): (Option<&str>, Option<&str>),
+        addresses: &AddressMatch<'_>,
     ) {
         use serde_json::json;
 
-        let mut expressions = Vec::with_capacity(8);
+        let mut expressions = Vec::with_capacity(10);
 
-        // Protocol matching
-        match rule.protocol {
-            Protocol::Any => {}
-            Protocol::Tcp | Protocol::Udp => {
-                expressions.push(Self::meta_match("l4proto", rule.protocol.as_str()));
+        // Protocol matching. Ports only make sense for TCP/UDP: a port list on
+        // "Any" means TCP+UDP (never silently drop the ports, that would widen
+        // the rule to every port); on ICMP they are meaningless and ignored.
+        let has_ports = !rule.ports.is_empty();
+        let port_protocol = match rule.protocol {
+            Protocol::Any => {
+                if has_ports {
+                    expressions.push(Self::meta_match("l4proto", json!({"set": ["tcp", "udp"]})));
+                    Some("th")
+                } else {
+                    None
+                }
+            }
+            Protocol::Tcp => {
+                expressions.push(Self::meta_match("l4proto", "tcp"));
+                Some("tcp")
+            }
+            Protocol::Udp => {
+                expressions.push(Self::meta_match("l4proto", "udp"));
+                Some("udp")
             }
             Protocol::TcpAndUdp => {
                 expressions.push(Self::meta_match("l4proto", json!({"set": ["tcp", "udp"]})));
+                Some("th")
             }
             Protocol::Icmp => {
                 expressions.push(Self::meta_match("l4proto", "icmp"));
+                None
             }
             Protocol::Icmpv6 => {
                 expressions.push(Self::meta_match("l4proto", "ipv6-icmp"));
+                None
             }
             Protocol::IcmpBoth => {
                 expressions.push(Self::meta_match(
                     "l4proto",
                     json!({"set": ["icmp", "ipv6-icmp"]}),
                 ));
+                None
             }
-        }
+        };
 
-        // Source IP filtering (all sources should be same IP version)
-        if !sources.is_empty() {
-            let is_ipv6 = sources[0].is_ipv6();
-            let protocol = if is_ipv6 { "ip6" } else { "ip" };
-
-            let src_val = if sources.len() == 1 {
-                Self::ip_to_nft_json(sources[0])
-            } else {
-                let src_set: Vec<serde_json::Value> =
-                    sources.iter().map(|ip| Self::ip_to_nft_json(ip)).collect();
-                json!({ "set": src_set })
-            };
-
-            expressions.push(json!({
-                "match": {
-                    "left": { "payload": { "protocol": protocol, "field": "saddr" } },
-                    "op": "==",
-                    "right": src_val
-                }
-            }));
-        }
-
-        // Input interface
-        if let Some(ref iface) = rule.interface {
+        if let Some(iface) = iif {
             expressions.push(Self::meta_match("iifname", iface));
         }
-
-        // Output interface
-        if let Some(ref oiface) = rule.output_interface {
-            expressions.push(Self::meta_match("oifname", oiface));
+        if let Some(iface) = oif {
+            expressions.push(Self::meta_match("oifname", iface));
         }
 
-        // Port filtering
-        if !rule.ports.is_empty()
-            && matches!(
-                rule.protocol,
-                Protocol::Tcp | Protocol::Udp | Protocol::TcpAndUdp
-            )
-        {
-            let port_val = if rule.ports.len() == 1 {
-                rule.ports[0].to_nft_json()
-            } else {
-                let port_set: Vec<serde_json::Value> = rule
-                    .ports
+        if !addresses.sources.is_empty() {
+            let value = Self::value_or_set(
+                addresses
+                    .sources
+                    .iter()
+                    .map(|ip| Self::ip_to_nft_json(ip))
+                    .collect(),
+            );
+            expressions.push(Self::payload_match(addresses.family, "saddr", value));
+        }
+        if !addresses.destinations.is_empty() {
+            let value = Self::value_or_set(
+                addresses
+                    .destinations
+                    .iter()
+                    .map(|ip| Self::ip_to_nft_json(ip))
+                    .collect(),
+            );
+            expressions.push(Self::payload_match(addresses.family, "daddr", value));
+        }
+
+        if has_ports && let Some(protocol) = port_protocol {
+            let value = Self::value_or_set(
+                rule.ports
                     .iter()
                     .copied()
                     .map(PortEntry::to_nft_json)
-                    .collect();
-                json!({ "set": port_set })
-            };
-
-            let protocol_key = if matches!(rule.protocol, Protocol::TcpAndUdp) {
-                "th"
-            } else {
-                rule.protocol.as_str()
-            };
-
-            expressions.push(json!({
-                "match": {
-                    "left": { "payload": { "protocol": protocol_key, "field": "dport" } },
-                    "op": "==",
-                    "right": port_val
-                }
-            }));
+                    .collect(),
+            );
+            expressions.push(Self::payload_match(protocol, "dport", value));
         }
 
-        // Destination IP filtering (all destinations should be same IP version)
-        if !destinations.is_empty() {
-            let is_ipv6 = destinations[0].is_ipv6();
-            let protocol = if is_ipv6 { "ip6" } else { "ip" };
+        // Limits: for Accept the rule matches while UNDER the limit ("accept up
+        // to N/s"). For Drop/Reject the intent is "drop when OVER the limit", so
+        // the limit is inverted; a plain limit would drop exactly the traffic
+        // that stays within it.
+        let inverted = rule.action != Action::Accept;
 
-            let dest_val = if destinations.len() == 1 {
-                Self::ip_to_nft_json(destinations[0])
-            } else {
-                let dest_set: Vec<serde_json::Value> = destinations
-                    .iter()
-                    .map(|ip| Self::ip_to_nft_json(ip))
-                    .collect();
-                json!({ "set": dest_set })
-            };
-
-            expressions.push(json!({
-                "match": {
-                    "left": { "payload": { "protocol": protocol, "field": "daddr" } },
-                    "op": "==",
-                    "right": dest_val
-                }
-            }));
-        }
-
-        // Advanced options: rate limiting (with optional burst)
         if let Some(rate_limit) = rule.rate_limit {
-            let mut limit_obj = json!({
+            let mut limit = json!({
                 "rate": rate_limit.count,
                 "per": rate_limit.unit.as_str()
             });
+            // nft rejects "burst 0 packets"; 0 means "no burst"
             if let Some(burst) = rate_limit.burst.filter(|&b| b > 0) {
-                limit_obj["burst"] = json!(burst);
+                limit["burst"] = json!(burst);
             }
-            expressions.push(json!({ "limit": limit_obj }));
+            if inverted {
+                limit["inv"] = json!(true);
+            }
+            expressions.push(json!({ "limit": limit }));
         }
 
-        // Advanced options: connection limiting
         if rule.connection_limit > 0 {
-            expressions.push(json!({
-                "ct count": { "val": rule.connection_limit }
-            }));
+            let mut count = json!({ "val": rule.connection_limit });
+            if inverted {
+                count["inv"] = json!(true);
+            }
+            expressions.push(json!({ "ct count": count }));
         }
 
         // Per-rule logging (before action, so log happens even if action is accept)
         if rule.log_enabled {
-            expressions.push(json!({
-                "log": {
-                    "prefix": &rule.log_prefix,
-                    "level": "info"
-                }
-            }));
+            let prefix = if rule.log_prefix.is_empty() {
+                Rule::sanitize_log_prefix(&rule.label)
+            } else {
+                crate::validators::sanitize_nft_quoted(&rule.log_prefix).into_owned()
+            };
+            expressions.push(json!({ "log": { "prefix": prefix, "level": "info" } }));
         }
 
-        // Action (Accept/Drop/Reject with optional reject type)
-        match rule.action {
-            Action::Accept => expressions.push(json!({ "accept": null })),
-            Action::Drop => expressions.push(json!({ "drop": null })),
-            Action::Reject => {
-                let reject_expr = match rule.reject_type {
-                    RejectType::Default => json!({ "reject": null }),
-                    RejectType::PortUnreachable => {
-                        json!({ "reject": { "type": "icmpx", "expr": "port-unreachable" } })
-                    }
-                    RejectType::HostUnreachable => {
-                        json!({ "reject": { "type": "icmpx", "expr": "host-unreachable" } })
-                    }
-                    RejectType::AdminProhibited => {
-                        json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } })
-                    }
-                    RejectType::TcpReset => json!({ "reject": { "type": "tcp reset" } }),
-                };
-                expressions.push(reject_expr);
-            }
-        }
-
-        nft_rules.push(json!({
-            "add": {
-                "rule": {
-                    "family": "inet",
-                    "table": "drfw",
-                    "chain": rule.chain.as_ref(),
-                    "expr": expressions,
-                    "comment": if rule.label.is_empty() { None } else { Some(&rule.label) }
+        expressions.push(match rule.action {
+            Action::Accept => json!({ "accept": null }),
+            Action::Drop => json!({ "drop": null }),
+            Action::Reject => match rule.reject_type {
+                RejectType::Default => json!({ "reject": null }),
+                RejectType::PortUnreachable => {
+                    json!({ "reject": { "type": "icmpx", "expr": "port-unreachable" } })
                 }
-            }
-        }));
+                RejectType::HostUnreachable => {
+                    json!({ "reject": { "type": "icmpx", "expr": "host-unreachable" } })
+                }
+                RejectType::AdminProhibited => {
+                    json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } })
+                }
+                RejectType::TcpReset => json!({ "reject": { "type": "tcp reset" } }),
+            },
+        });
+
+        cmds.push(Self::rule_add(
+            rule.chain.as_ref(),
+            expressions,
+            &rule.label,
+        ));
     }
 
-    fn add_termination_rules(
-        nft_rules: &mut Vec<serde_json::Value>,
-        advanced: &AdvancedSecuritySettings,
-    ) {
+    fn add_termination_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
+
+        cmds.section = SECTION_END;
 
         // Optional: Log dropped packets before rejection
         if advanced.log_dropped {
-            nft_rules.push(json!({
-                "add": {
-                    "rule": {
-                        "family": "inet",
-                        "table": "drfw",
-                        "chain": "input",
-                        "expr": [
-                            { "limit": { "rate": advanced.log_rate_per_minute, "per": "minute" } },
-                            { "log": {
-                                "prefix": &advanced.log_prefix,
-                                "level": "info"
-                            } },
-                        ],
-                        "comment": "log dropped packets (rate limited)"
-                    }
-                }
-            }));
+            let prefix = crate::validators::sanitize_nft_quoted(&advanced.log_prefix);
+            cmds.push(Self::rule_add(
+                "input",
+                vec![
+                    Self::rate_limit(advanced.log_rate_per_minute, "minute"),
+                    json!({ "log": { "prefix": prefix, "level": "info" } }),
+                ],
+                "log dropped packets (rate limited)",
+            ));
         }
 
         // Rate-limited reject (prevents port scanning)
-        nft_rules.push(json!({
-            "add": {
-                "rule": {
-                    "family": "inet",
-                    "table": "drfw",
-                    "chain": "input",
-                    "expr": [
-                        { "match": { "left": { "meta": { "key": "pkttype" } }, "op": "==", "right": "host" } },
-                        { "limit": { "rate": 5, "per": "second" } },
-                        { "counter": null },
-                        { "reject": { "type": "icmpx", "expr": "admin-prohibited" } }
-                    ]
-                }
-            }
-        }));
+        cmds.push(Self::rule_add(
+            "input",
+            vec![
+                Self::meta_match("pkttype", "host"),
+                Self::rate_limit(5, "second"),
+                json!({ "counter": null }),
+                json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } }),
+            ],
+            "",
+        ));
 
         // Final counter (catches all remaining drops from chain policy)
-        nft_rules.push(json!({
-            "add": {
-                "rule": {
-                    "family": "inet",
-                    "table": "drfw",
-                    "chain": "input",
-                    "expr": [ { "counter": null } ]
-                }
-            }
-        }));
+        cmds.push(Self::rule_add(
+            "input",
+            vec![json!({ "counter": null })],
+            "",
+        ));
     }
+}
 
-    /// Generates human-readable .nft text for preview.
-    pub fn to_nft_text(&self) -> String {
-        use std::fmt::Write;
+/// nftables address family of the drfw table.
+const NFT_FAMILY: &str = "inet";
+/// Name of the drfw table.
+const NFT_TABLE: &str = "drfw";
+/// Priority of drfw's base chains (runs just before the default filter priority 0).
+const CHAIN_PRIORITY: i32 = -10;
 
-        let mut out = String::new();
+// Preview section headings (text output only; see `NftCommand::section`).
+const SECTION_SETUP: &str = "Setup";
+const SECTION_BASE: &str = "Base rules";
+const SECTION_SECURITY: &str = "Security";
+const SECTION_ICMP: &str = "ICMP";
+const SECTION_USER: &str = "User rules";
+const SECTION_END: &str = "End of chain";
 
-        let _ = writeln!(out, "table inet drfw {{");
+/// One nftables JSON command plus the preview section it belongs to.
+///
+/// The section is presentation-only: the JSON output ignores it, and the text
+/// renderer prints it as a `# --- … ---` heading when it changes within a chain.
+#[derive(Debug, Clone)]
+pub(crate) struct NftCommand {
+    pub section: &'static str,
+    pub value: serde_json::Value,
+}
 
-        let _ = writeln!(out, "    chain input {{");
+/// Accumulates [`NftCommand`]s, tagging each with the current section.
+struct CommandList {
+    commands: Vec<NftCommand>,
+    section: &'static str,
+}
 
-        let _ = writeln!(
-            out,
-            "        type filter hook input priority -10; policy drop;\n"
-        );
-
-        Self::write_base_rules_text(&mut out, &self.advanced_security);
-
-        if !self.rules.is_empty() {
-            self.write_user_rules_text(&mut out);
-        }
-
-        let _ = writeln!(out, "        # --- Rejects (End of Chain) ---");
-
-        if self.advanced_security.log_dropped {
-            let _ = writeln!(
-                out,
-                "        limit rate {}/minute log prefix \"{}\" level info",
-                self.advanced_security.log_rate_per_minute, self.advanced_security.log_prefix
-            );
-        }
-
-        let _ = writeln!(
-            out,
-            "        meta pkttype host limit rate 5/second counter reject with icmpx type admin-prohibited"
-        );
-
-        let _ = writeln!(out, "        counter");
-
-        let _ = writeln!(out, "    }}\n");
-
-        let _ = writeln!(out, "    chain forward {{");
-
-        let _ = writeln!(
-            out,
-            "        type filter hook forward priority -10; policy drop;"
-        );
-
-        let _ = writeln!(out, "    }}\n");
-
-        let _ = writeln!(out, "    chain output {{");
-
-        let output_policy = match self.advanced_security.egress_profile {
-            EgressProfile::Desktop => "accept",
-            EgressProfile::Server => "drop",
-        };
-
-        let _ = writeln!(
-            out,
-            "        type filter hook output priority -10; policy {output_policy};"
-        );
-
-        let _ = writeln!(out, "    }}\n");
-
-        let _ = writeln!(out, "}}");
-
-        out
-    }
-
-    fn write_base_rules_text(out: &mut String, advanced: &AdvancedSecuritySettings) {
-        use std::fmt::Write;
-
-        let _ = writeln!(out, "        # --- Base Rules ---");
-
-        let _ = writeln!(
-            out,
-            "        # Rule ordering: loopback → invalid drop → established → block redirects → ICMP"
-        );
-
-        // Optional: Anti-spoofing (RPF)
-        if advanced.enable_rpf {
-            let _ = writeln!(out, "        # [OPTIONAL: Anti-Spoofing Enabled]");
-            let _ = writeln!(
-                out,
-                "        fib saddr . iif oif eq 0 drop comment \"drop packets with spoofed source addresses (RPF)\"\n"
-            );
-        }
-
-        let _ = writeln!(
-            out,
-            "        iifname \"lo\" accept comment \"allow from loopback\""
-        );
-
-        let _ = writeln!(
-            out,
-            "        ct state invalid drop comment \"early drop of invalid connections\""
-        );
-
-        let _ = writeln!(
-            out,
-            "        ct state established,related accept comment \"allow tracked connections\"\n"
-        );
-
-        let _ = writeln!(out, "        # --- Security Rules ---");
-
-        let _ = writeln!(
-            out,
-            "        meta l4proto icmp icmp type redirect drop comment \"drop icmp redirects\""
-        );
-
-        let _ = writeln!(
-            out,
-            "        meta l4proto ipv6-icmp icmpv6 type nd-redirect drop comment \"drop icmpv6 redirects\"\n"
-        );
-
-        let _ = writeln!(out, "        # --- Standard Protocols ---");
-
-        // ICMP rules (strict mode or general allow, with optional rate limiting)
-        if advanced.strict_icmp {
-            let _ = writeln!(out, "        # [STRICT ICMP MODE ENABLED]");
-            if advanced.icmp_rate_limit > 0 {
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto icmp icmp type {{ echo-reply, destination-unreachable, echo-request, time-exceeded }} limit rate {}/second accept comment \"allow essential icmp (strict mode, rate limited)\"",
-                    advanced.icmp_rate_limit
-                );
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto ipv6-icmp icmpv6 type {{ destination-unreachable, packet-too-big, time-exceeded, echo-request, echo-reply, nd-neighbor-solicit, nd-neighbor-advert }} limit rate {}/second accept comment \"allow essential icmpv6 (strict mode, rate limited)\"\n",
-                    advanced.icmp_rate_limit
-                );
-            } else {
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto icmp icmp type {{ echo-reply, destination-unreachable, echo-request, time-exceeded }} accept comment \"allow essential icmp (strict mode)\""
-                );
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto ipv6-icmp icmpv6 type {{ destination-unreachable, packet-too-big, time-exceeded, echo-request, echo-reply, nd-neighbor-solicit, nd-neighbor-advert }} accept comment \"allow essential icmpv6 (strict mode)\"\n"
-                );
-            }
-        } else {
-            // Default: Allow all ICMP (except redirects)
-            if advanced.icmp_rate_limit > 0 {
-                let _ = writeln!(
-                    out,
-                    "        # [ICMP RATE LIMITING: {}/second]",
-                    advanced.icmp_rate_limit
-                );
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto icmp limit rate {}/second accept comment \"allow icmp (rate limited)\"",
-                    advanced.icmp_rate_limit
-                );
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto ipv6-icmp limit rate {}/second accept comment \"allow icmp v6 (rate limited)\"\n",
-                    advanced.icmp_rate_limit
-                );
-            } else {
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto icmp accept comment \"allow icmp\""
-                );
-                let _ = writeln!(
-                    out,
-                    "        meta l4proto ipv6-icmp accept comment \"allow icmp v6\"\n"
-                );
-            }
+impl CommandList {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            commands: Vec::with_capacity(capacity),
+            section: SECTION_SETUP,
         }
     }
 
-    fn write_user_rules_text(&self, out: &mut String) {
-        use std::fmt::Write;
-        let _ = writeln!(out, "        # --- User Defined Rules ---");
-        for rule in &self.rules {
-            if !rule.enabled {
-                continue;
-            }
+    fn push(&mut self, value: serde_json::Value) {
+        self.commands.push(NftCommand {
+            section: self.section,
+            value,
+        });
+    }
+}
 
-            // Skip OUTPUT rules in Desktop Mode (policy is ACCEPT, rules are redundant)
-            if self.advanced_security.egress_profile == EgressProfile::Desktop
-                && rule.chain == Chain::Output
-            {
-                continue;
-            }
-            let _ = write!(out, "        ");
-            // Source IP filtering - show all sources (may be mixed IPv4/IPv6)
-            // Note: JSON generation splits by IP version, text preview shows simplified
-            if !rule.sources.is_empty() {
-                let ipv4_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv4()).collect();
-                let ipv6_sources: Vec<_> = rule.sources.iter().filter(|s| s.is_ipv6()).collect();
+/// Address matches for one family-specific copy of a user rule.
+struct AddressMatch<'a> {
+    /// Payload protocol for address matches: `ip` or `ip6`
+    family: &'static str,
+    sources: Vec<&'a IpNetwork>,
+    destinations: Vec<&'a IpNetwork>,
+}
 
-                if !ipv4_sources.is_empty() {
-                    if ipv4_sources.len() == 1 {
-                        let _ = write!(out, "ip saddr {} ", ipv4_sources[0]);
-                    } else {
-                        let addrs = ipv4_sources
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let _ = write!(out, "ip saddr {{ {addrs} }} ");
-                    }
-                }
-                if !ipv6_sources.is_empty() {
-                    if ipv6_sources.len() == 1 {
-                        let _ = write!(out, "ip6 saddr {} ", ipv6_sources[0]);
-                    } else {
-                        let addrs = ipv6_sources
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let _ = write!(out, "ip6 saddr {{ {addrs} }} ");
-                    }
-                }
-            }
-            // Destination IP filtering - show all destinations
-            if !rule.destinations.is_empty() {
-                let ipv4_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv4()).collect();
-                let ipv6_dests: Vec<_> = rule.destinations.iter().filter(|d| d.is_ipv6()).collect();
-
-                if !ipv4_dests.is_empty() {
-                    if ipv4_dests.len() == 1 {
-                        let _ = write!(out, "ip daddr {} ", ipv4_dests[0]);
-                    } else {
-                        let addrs = ipv4_dests
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let _ = write!(out, "ip daddr {{ {addrs} }} ");
-                    }
-                }
-                if !ipv6_dests.is_empty() {
-                    if ipv6_dests.len() == 1 {
-                        let _ = write!(out, "ip6 daddr {} ", ipv6_dests[0]);
-                    } else {
-                        let addrs = ipv6_dests
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let _ = write!(out, "ip6 daddr {{ {addrs} }} ");
-                    }
-                }
-            }
-            if let Some(ref iface) = rule.interface {
-                let _ = write!(out, "iifname \"{iface}\" ");
-            }
-            if let Some(ref oiface) = rule.output_interface {
-                let _ = write!(out, "oifname \"{oiface}\" ");
-            }
-            match rule.protocol {
-                Protocol::Any => {} // No-op
-                Protocol::Tcp | Protocol::Udp => {
-                    let _ = write!(out, "{} ", rule.protocol);
-                    if !rule.ports.is_empty() {
-                        if rule.ports.len() == 1 {
-                            let _ = write!(out, "dport {} ", rule.ports[0]);
-                        } else {
-                            // Multiple ports - use set syntax
-                            let ports_str = rule
-                                .ports
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let _ = write!(out, "dport {{ {ports_str} }} ");
-                        }
-                    }
-                }
-                Protocol::TcpAndUdp => {
-                    let _ = write!(out, "meta l4proto {{ tcp, udp }} ");
-                    if !rule.ports.is_empty() {
-                        if rule.ports.len() == 1 {
-                            let _ = write!(out, "th dport {} ", rule.ports[0]);
-                        } else {
-                            let ports_str = rule
-                                .ports
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let _ = write!(out, "th dport {{ {ports_str} }} ");
-                        }
-                    }
-                }
-                Protocol::Icmp => {
-                    let _ = write!(out, "meta l4proto icmp ");
-                }
-                Protocol::Icmpv6 => {
-                    let _ = write!(out, "meta l4proto ipv6-icmp ");
-                }
-                Protocol::IcmpBoth => {
-                    // Match both ICMP and ICMPv6 for dual-stack support
-                    let _ = write!(out, "meta l4proto {{ icmp, ipv6-icmp }} ");
-                }
-            }
-            // Advanced options: rate limiting (with optional burst)
-            if let Some(rate_limit) = rule.rate_limit {
-                if let Some(burst) = rate_limit.burst {
-                    let _ = write!(
-                        out,
-                        "limit rate {}/{} burst {} packets ",
-                        rate_limit.count, rate_limit.unit, burst
-                    );
-                } else {
-                    let _ = write!(out, "limit rate {}/{} ", rate_limit.count, rate_limit.unit);
-                }
-            }
-            // Advanced options: connection limiting
-            if rule.connection_limit > 0 {
-                let _ = write!(out, "ct count {} ", rule.connection_limit);
-            }
-            // Per-rule logging (before action)
-            if rule.log_enabled {
-                let _ = write!(out, "log prefix \"{}\" level info ", rule.log_prefix);
-            }
-            // Action (with optional reject type)
-            match rule.action {
-                Action::Accept => {
-                    let _ = write!(out, "accept");
-                }
-                Action::Drop => {
-                    let _ = write!(out, "drop");
-                }
-                Action::Reject => match rule.reject_type {
-                    RejectType::Default => {
-                        let _ = write!(out, "reject");
-                    }
-                    RejectType::PortUnreachable => {
-                        let _ = write!(out, "reject with icmpx type port-unreachable");
-                    }
-                    RejectType::HostUnreachable => {
-                        let _ = write!(out, "reject with icmpx type host-unreachable");
-                    }
-                    RejectType::AdminProhibited => {
-                        let _ = write!(out, "reject with icmpx type admin-prohibited");
-                    }
-                    RejectType::TcpReset => {
-                        let _ = write!(out, "reject with tcp reset");
-                    }
-                },
-            }
-            if !rule.label.is_empty() {
-                let _ = write!(out, " comment \"{}\"", rule.label);
-            }
-            let _ = writeln!(out);
+impl Default for AddressMatch<'_> {
+    fn default() -> Self {
+        Self {
+            family: "ip",
+            sources: Vec::new(),
+            destinations: Vec::new(),
         }
-        let _ = writeln!(out);
     }
 }

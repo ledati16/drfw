@@ -206,6 +206,10 @@ enum NftToken {
     Packets,
     #[token("reset")]
     Reset,
+    #[token("over")]
+    Over,
+    #[token("missing")]
+    Missing,
 
     // Strings and numbers
     #[regex(r#""([^"\\]|\\.)*""#)]
@@ -313,13 +317,20 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
     let mut lex = NftToken::lexer(line);
 
     while let Some(token_result) = lex.next() {
-        let Ok(token) = token_result else {
-            // Skip invalid tokens
-            continue;
-        };
-
         let span = lex.span();
         let text = &line[span];
+        let Ok(token) = token_result else {
+            // Characters the lexer has no rule for (e.g. `!`, `*`, `@`) are still
+            // part of the file: show them as plain text rather than dropping them,
+            // so the preview never differs from what gets saved.
+            tokens.push(Token {
+                text: Cow::Owned(text.to_string()),
+                color: TokenColor::Primary,
+                bold: false,
+                italic: false,
+            });
+            continue;
+        };
         match token {
             // Actions - semantic colors + bold for maximum visibility
             Accept => {
@@ -346,7 +357,7 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
             | Saddr | Daddr | Type | Hook | Priority | Policy | Fib | Iif | Oif | Eq | Protocol
             | Redirect | Ipv6Icmp | Icmpv6 | Limit | Rate | Second | Minute | Hour | Day | Week
             | Log | Prefix | Level | Info | Warn | Debug | Pkttype | Host | Counter | With
-            | Icmpx | Th | Count | Burst | Packets | Reset => {
+            | Icmpx | Th | Count | Burst | Packets | Reset | Over | Missing => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Keyword,
@@ -614,5 +625,26 @@ mod tests {
                 DiffType::Unchanged,
             ]
         );
+    }
+
+    /// Every character of the source must survive tokenization, otherwise the
+    /// preview shows something different from what is saved.
+    #[test]
+    fn test_tokenize_preserves_generated_text() {
+        let mut ruleset = crate::core::firewall::FirewallRuleset::new();
+        ruleset.advanced_security.enable_rpf = true;
+        ruleset.advanced_security.log_dropped = true;
+        let text = format!(
+            "{}        iifname \"eth*\" meta mark != 0x1 @set accept\n",
+            ruleset.to_nft_text()
+        );
+
+        let lines = tokenize_nft(&text);
+        assert_eq!(lines.len(), text.lines().count());
+        for (highlighted, source) in lines.iter().zip(text.lines()) {
+            let rebuilt: String = highlighted.tokens.iter().map(|t| t.text.as_ref()).collect();
+            assert_eq!(rebuilt, source.trim_start());
+        }
+        assert_eq!(lines[0].tokens[0].color, TokenColor::Comment);
     }
 }

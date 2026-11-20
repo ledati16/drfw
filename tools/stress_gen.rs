@@ -1244,6 +1244,7 @@ fn generate_ruleset(
         } else {
             EgressProfile::Server
         },
+        block_forwarding: rng.random_bool(0.2),
     };
 
     (

@@ -505,3 +505,57 @@ async fn test_cli_profile_not_found() {
         );
     }
 }
+
+/// Save to System write path with the mock nft (`-c -f FILE` accepts files that
+/// start with the DRFW shebang). Real-nft coverage is in `tests/real_nft.rs`.
+#[tokio::test]
+async fn test_save_config_file_with_mock_nft() {
+    use std::os::unix::fs::PermissionsExt;
+    setup_mock_nft();
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("nftables.conf");
+    let target_str = target.to_str().unwrap();
+    let backup = dir.path().join("nftables.conf.drfw-bak");
+
+    // No existing file: written, no backup reported
+    let text = create_test_ruleset().to_nft_text();
+    let output = drfw::core::system_config::write_config_file(&text, target_str)
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(
+        drfw::core::system_config::backup_path_from_output(&output),
+        None
+    );
+    assert!(!backup.exists());
+
+    // Rejected content: original untouched, no backup, no temp file left
+    let output = drfw::core::system_config::write_config_file("not nft\n", target_str)
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+    assert!(!backup.exists());
+    assert!(!dir.path().join(".nftables.conf.drfw-tmp").exists());
+
+    // Second successful save backs up the previous file
+    let output = drfw::core::system_config::write_config_file(&text, target_str)
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        drfw::core::system_config::backup_path_from_output(&output),
+        Some(backup.clone())
+    );
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+}

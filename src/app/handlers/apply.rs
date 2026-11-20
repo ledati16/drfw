@@ -413,6 +413,12 @@ pub(crate) fn handle_save_to_system_verify_result(
 }
 
 /// Handles user confirming Save to System - proceeds with file write
+///
+/// One elevated invocation writes the text to a temp file next to the target,
+/// checks it with `nft -c -f`, backs up the existing file and atomically
+/// renames the new one into place (see `elevation::SAVE_CONFIG_SCRIPT`). The
+/// earlier JSON verification only gates the modal; the text check here is the
+/// authoritative one because it covers the exact bytes being installed.
 pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message> {
     state.status = AppStatus::SavingToSystem;
 
@@ -420,41 +426,13 @@ pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message
 
     Task::perform(
         async move {
-            use std::io::Write;
-            use tempfile::NamedTempFile;
-
-            // Create temp file with content
-            let mut temp =
-                NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
-            temp.write_all(text.as_bytes())
-                .map_err(|e| format!("Failed to write temp file: {e}"))?;
-            temp.flush()
-                .map_err(|e| format!("Failed to flush temp file: {e}"))?;
-
-            let temp_path_str = temp
-                .path()
-                .to_str()
-                .ok_or_else(|| "Invalid temp path".to_string())?
-                .to_string();
-
-            // Use elevated install command with proper permissions (644)
-            let mut cmd = crate::elevation::create_elevated_install_command(&[
-                "-m",
-                "644",
-                &temp_path_str,
-                drfw::SYSTEM_NFT_PATH,
-            ])
-            .map_err(|e| format!("Elevation error: {e}"))?;
-
-            // Capture output for better error messages
-            let output = match tokio::time::timeout(Duration::from_secs(120), cmd.output()).await {
-                Ok(Ok(output)) => output,
-                Ok(Err(e)) => return Err(format!("Failed to execute install: {e}")),
-                Err(_) => return Err("Install timed out (authentication dialog expired?)".into()),
-            };
-
-            // Use shared helper to interpret exit codes
-            interpret_elevated_command_output(&output)
+            let output =
+                crate::core::system_config::write_config_file(&text, drfw::SYSTEM_NFT_PATH)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            interpret_elevated_command_output(&output)?;
+            Ok(crate::core::system_config::backup_path_from_output(&output)
+                .map(|p| p.display().to_string()))
         },
         Message::SaveToSystemResult,
     )
@@ -468,18 +446,22 @@ pub(crate) fn handle_save_to_system_cancelled(state: &mut State) {
 /// Handles save to system result
 pub(crate) fn handle_save_to_system_result(
     state: &mut State,
-    result: Result<(), String>,
+    result: Result<Option<String>, String>,
 ) -> Task<Message> {
     state.status = AppStatus::Idle;
     let enable_event_log = state.enable_event_log;
     let target_path = drfw::SYSTEM_NFT_PATH.to_string();
 
     match result {
-        Ok(()) => {
-            state.push_banner(
-                format!("Configuration saved to {}", drfw::SYSTEM_NFT_PATH),
-                BannerSeverity::Success,
-            );
+        Ok(backup) => {
+            let message = match backup {
+                Some(backup) => format!(
+                    "Configuration saved to {} (previous file kept as {backup})",
+                    drfw::SYSTEM_NFT_PATH
+                ),
+                None => format!("Configuration saved to {}", drfw::SYSTEM_NFT_PATH),
+            };
+            state.push_banner(message, BannerSeverity::Success);
             Task::perform(
                 async move {
                     audit::log_save_to_system(enable_event_log, true, &target_path, None).await;

@@ -5,6 +5,8 @@
 //!
 //! - [`firewall`]: Data structures for representing firewall rules and rulesets
 //! - [`nft_json`]: JSON-based nftables rule application and snapshot management
+//! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
+//! - [`system_config`]: Safe, verified writes of the system nftables configuration
 //! - [`verify`]: Ruleset validation and syntax checking
 //! - [`error`]: Error types for firewall operations
 //! - [`profiles`]: Firewall profile management
@@ -13,8 +15,10 @@
 pub mod error;
 pub mod firewall;
 pub mod nft_json;
+pub mod nft_text;
 pub mod profiles;
 pub mod rule_constraints;
+pub mod system_config;
 pub mod verify;
 
 #[cfg(test)]

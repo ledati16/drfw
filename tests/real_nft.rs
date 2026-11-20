@@ -1,0 +1,701 @@
+//! Tests against the real `nft` binary and kernel, in a private namespace
+//!
+//! Every test runs `nft` inside `unshare -rn`: a fresh unprivileged user +
+//! network namespace. Rulesets are loaded, listed and compared there without
+//! root and without touching the host firewall.
+//!
+//! If `unshare`/`nft` are missing or the namespace cannot be created (e.g.
+//! unprivileged user namespaces disabled), the tests print a skip notice and
+//! pass, unless `DRFW_REQUIRE_REAL_NFT=1` is set (CI sets it), in which case
+//! they fail.
+//!
+//! What is covered:
+//! - The text output of varied rulesets passes `nft -c -f` and loads.
+//! - **Differential**: applying the JSON and applying the text produce
+//!   identical kernel rulesets (proptest over generated rulesets).
+//! - Loading the text twice does not duplicate rules.
+//! - Mixed IPv4/IPv6 rules never widen.
+//! - Server Mode keeps loopback working.
+//! - The Save to System script, end to end, with the real `nft -c`.
+//!
+//! This file has its own rule helpers: integration tests cannot see the
+//! library's `#[cfg(test)]` helpers.
+
+#![allow(clippy::uninlined_format_args)]
+
+use drfw::core::firewall::{
+    Action, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol, RateLimit, RejectType,
+    Rule, TimeUnit,
+};
+use ipnetwork::IpNetwork;
+use proptest::prelude::*;
+use std::path::Path;
+use std::process::{Command, Output};
+use std::sync::OnceLock;
+
+// ============================================================================
+// Namespace helpers
+// ============================================================================
+
+/// Returns true when real nft tests can run; prints a skip notice otherwise.
+///
+/// Panics instead of skipping when `DRFW_REQUIRE_REAL_NFT=1`.
+fn real_nft_available() -> bool {
+    static AVAILABLE: OnceLock<Result<(), String>> = OnceLock::new();
+    let status = AVAILABLE.get_or_init(|| {
+        let output = Command::new("unshare")
+            .args(["-rn", "nft", "list", "ruleset"])
+            .output()
+            .map_err(|e| format!("cannot run unshare: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "`unshare -rn nft list ruleset` failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+    });
+    match status {
+        Ok(()) => true,
+        Err(reason) => {
+            assert!(
+                std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
+                "DRFW_REQUIRE_REAL_NFT=1 but real nft is unavailable: {reason}"
+            );
+            eprintln!("SKIPPING real nft test: {reason}");
+            false
+        }
+    }
+}
+
+/// Runs a `/bin/sh` script in a fresh user + network namespace, in `dir`.
+fn run_in_netns(dir: &Path, script: &str) -> Output {
+    Command::new("unshare")
+        .args(["-rn", "/bin/sh", "-c", script])
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn unshare")
+}
+
+/// Like [`run_in_netns`] but panics with the script's stderr on failure.
+fn run_in_netns_ok(dir: &Path, script: &str) -> Output {
+    let output = run_in_netns(dir, script);
+    assert!(
+        output.status.success(),
+        "script failed: {script}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// Writes the JSON and text forms of a ruleset into `dir`.
+fn write_ruleset(dir: &Path, ruleset: &FirewallRuleset) {
+    std::fs::write(
+        dir.join("rules.json"),
+        serde_json::to_string(&ruleset.to_nftables_json()).expect("serialize JSON"),
+    )
+    .expect("write rules.json");
+    std::fs::write(dir.join("rules.nft"), ruleset.to_nft_text()).expect("write rules.nft");
+}
+
+/// Parses `nft -j list` output and strips run-specific data (handles, metainfo).
+fn normalize_listing(raw: &[u8]) -> serde_json::Value {
+    fn strip_handles(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("handle");
+                map.values_mut().for_each(strip_handles);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_handles),
+            _ => {}
+        }
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(raw).expect("nft -j list output");
+    let items = value["nftables"]
+        .as_array_mut()
+        .expect("nftables array in listing");
+    items.retain(|item| item.get("metainfo").is_none());
+    strip_handles(&mut value);
+    value
+}
+
+/// Rules (as listed by the kernel) of the drfw table.
+fn listed_rules(listing: &serde_json::Value) -> Vec<&serde_json::Value> {
+    listing["nftables"]
+        .as_array()
+        .expect("nftables array")
+        .iter()
+        .filter_map(|item| item.get("rule"))
+        .collect()
+}
+
+/// Applies JSON, lists; flushes; applies text, lists. Returns both listings.
+fn apply_both_forms(
+    dir: &Path,
+    ruleset: &FirewallRuleset,
+) -> (serde_json::Value, serde_json::Value) {
+    write_ruleset(dir, ruleset);
+    run_in_netns_ok(
+        dir,
+        "nft -j -f rules.json && nft -j list table inet drfw > from_json.out \
+         && nft flush ruleset \
+         && nft -f rules.nft && nft -j list table inet drfw > from_text.out",
+    );
+    let from_json = normalize_listing(&std::fs::read(dir.join("from_json.out")).expect("read"));
+    let from_text = normalize_listing(&std::fs::read(dir.join("from_text.out")).expect("read"));
+    (from_json, from_text)
+}
+
+/// Describes the first difference between two normalized listings, if any.
+fn listing_difference(a: &serde_json::Value, b: &serde_json::Value) -> Option<String> {
+    let empty = Vec::new();
+    let a_items = a["nftables"].as_array().unwrap_or(&empty);
+    let b_items = b["nftables"].as_array().unwrap_or(&empty);
+    for (i, (x, y)) in a_items.iter().zip(b_items).enumerate() {
+        if x != y {
+            return Some(format!("item {i} differs:\n json: {x}\n text: {y}"));
+        }
+    }
+    (a_items.len() != b_items.len()).then(|| {
+        format!(
+            "item count differs: json {} vs text {}",
+            a_items.len(),
+            b_items.len()
+        )
+    })
+}
+
+/// A temporary working directory for one test.
+fn work_dir() -> tempfile::TempDir {
+    tempfile::tempdir().expect("create temp dir")
+}
+
+// ============================================================================
+// Rule helpers
+// ============================================================================
+
+fn rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
+    Rule::with_caches(
+        uuid::Uuid::new_v4(),
+        label.to_string(),
+        protocol,
+        ports,
+        Vec::new(),
+        None,
+        Chain::Input,
+        true,
+        chrono::Utc::now(),
+        Vec::new(),
+    )
+}
+
+fn nets(addrs: &[&str]) -> Vec<IpNetwork> {
+    addrs
+        .iter()
+        .map(|a| a.parse().expect("valid test address"))
+        .collect()
+}
+
+/// A ruleset exercising every feature the generator supports.
+fn kitchen_sink_rules() -> Vec<Rule> {
+    let mut rules = Vec::new();
+
+    for protocol in [
+        Protocol::Any,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::TcpAndUdp,
+        Protocol::Icmp,
+        Protocol::Icmpv6,
+        Protocol::IcmpBoth,
+    ] {
+        // Without ports (old text renderer emitted bare "tcp accept")
+        rules.push(rule(&format!("{protocol:?} no ports"), protocol, vec![]));
+        // With a port set incl. a range (ignored for ICMP, TCP+UDP for Any)
+        rules.push(rule(
+            &format!("{protocol:?} ports"),
+            protocol,
+            vec![PortEntry::Single(22), PortEntry::range(8000, 8080)],
+        ));
+    }
+
+    let mut r = rule("Single port", Protocol::Tcp, vec![PortEntry::Single(443)]);
+    r.sources = nets(&["192.168.1.0/24"]);
+    rules.push(r);
+
+    let mut r = rule("Mixed families", Protocol::Tcp, vec![PortEntry::Single(22)]);
+    r.sources = nets(&["10.0.0.0/8", "192.168.1.50/24", "fd00::/8", "2001:db8::1"]);
+    r.destinations = nets(&["10.1.1.1", "fe80::1"]);
+    rules.push(r);
+
+    let mut r = rule("V6 only dest", Protocol::Udp, vec![PortEntry::Single(53)]);
+    r.destinations = nets(&["::1"]);
+    rules.push(r);
+
+    let mut r = rule("Interface", Protocol::Tcp, vec![PortEntry::Single(80)]);
+    r.interface = Some("eth0".to_string());
+    rules.push(r);
+
+    let mut r = rule(
+        "Wildcard iface",
+        Protocol::Udp,
+        vec![PortEntry::Single(51820)],
+    );
+    r.interface = Some("wg*".to_string());
+    rules.push(r);
+
+    let mut r = rule("Hostile iface", Protocol::Tcp, vec![PortEntry::Single(81)]);
+    r.interface = Some("x\" accept #".to_string());
+    rules.push(r);
+
+    for (i, (action, burst)) in [
+        (Action::Accept, None),
+        (Action::Accept, Some(10)),
+        (Action::Drop, Some(0)),
+        (Action::Reject, Some(5)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut r = rule(
+            &format!("Rate {i}"),
+            Protocol::Tcp,
+            vec![PortEntry::Single(22)],
+        );
+        r.action = action;
+        r.rate_limit = Some(RateLimit {
+            count: 5,
+            unit: [
+                TimeUnit::Second,
+                TimeUnit::Minute,
+                TimeUnit::Hour,
+                TimeUnit::Day,
+            ][i],
+            burst,
+        });
+        rules.push(r);
+    }
+
+    for action in [Action::Accept, Action::Drop] {
+        let mut r = rule(
+            &format!("Ct {action:?}"),
+            Protocol::Tcp,
+            vec![PortEntry::Single(25)],
+        );
+        r.action = action;
+        r.connection_limit = 10;
+        r.log_enabled = true;
+        rules.push(r);
+    }
+
+    for reject_type in [
+        RejectType::Default,
+        RejectType::PortUnreachable,
+        RejectType::HostUnreachable,
+        RejectType::AdminProhibited,
+        RejectType::TcpReset,
+    ] {
+        let mut r = rule(
+            &format!("Reject {reject_type:?}"),
+            Protocol::Tcp,
+            vec![PortEntry::Single(23)],
+        );
+        r.action = Action::Reject;
+        r.reject_type = reject_type;
+        rules.push(r);
+    }
+
+    let mut r = rule("Outbound DNS", Protocol::Udp, vec![PortEntry::Single(53)]);
+    r.chain = Chain::Output;
+    r.output_interface = Some("eth*".to_string());
+    rules.push(r);
+
+    let mut r = rule("Disabled", Protocol::Tcp, vec![PortEntry::Single(9)]);
+    r.enabled = false;
+    rules.push(r);
+
+    for r in &mut rules {
+        r.rebuild_caches();
+    }
+    rules
+}
+
+/// Every combination of the global settings, each with the kitchen-sink rules.
+fn varied_rulesets() -> Vec<(String, FirewallRuleset)> {
+    let mut out = Vec::new();
+    for bits in 0u8..32 {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules = kitchen_sink_rules();
+        let adv = &mut ruleset.advanced_security;
+        adv.strict_icmp = bits & 1 != 0;
+        adv.enable_rpf = bits & 2 != 0;
+        adv.block_forwarding = bits & 4 != 0;
+        adv.log_dropped = bits & 8 != 0;
+        adv.egress_profile = if bits & 16 != 0 {
+            EgressProfile::Server
+        } else {
+            EgressProfile::Desktop
+        };
+        adv.icmp_rate_limit = if bits % 3 == 0 { 10 } else { 0 };
+        out.push((format!("settings {bits:05b}"), ruleset));
+    }
+    out.push(("empty".to_string(), FirewallRuleset::new()));
+    out
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[test]
+fn test_text_output_passes_nft_check_and_loads() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    for (name, ruleset) in varied_rulesets() {
+        write_ruleset(dir.path(), &ruleset);
+        let output = run_in_netns(dir.path(), "nft -c -f rules.nft && nft -f rules.nft");
+        assert!(
+            output.status.success(),
+            "{name}: nft rejected the text output:\n{}\n--- text ---\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            ruleset.to_nft_text()
+        );
+    }
+}
+
+#[test]
+fn test_varied_rulesets_json_and_text_are_identical_in_kernel() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    for (name, ruleset) in varied_rulesets() {
+        let (from_json, from_text) = apply_both_forms(dir.path(), &ruleset);
+        if let Some(diff) = listing_difference(&from_json, &from_text) {
+            panic!("{name}: JSON and text differ in kernel: {diff}");
+        }
+    }
+}
+
+#[test]
+fn test_loading_text_twice_does_not_duplicate_rules() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.rules = kitchen_sink_rules();
+    write_ruleset(dir.path(), &ruleset);
+
+    run_in_netns_ok(
+        dir.path(),
+        "nft -f rules.nft && nft -j list table inet drfw > once.out \
+         && nft -f rules.nft && nft -j list table inet drfw > twice.out",
+    );
+    let once = normalize_listing(&std::fs::read(dir.path().join("once.out")).expect("read"));
+    let twice = normalize_listing(&std::fs::read(dir.path().join("twice.out")).expect("read"));
+    let rule_count = listed_rules(&once).len();
+    assert!(
+        rule_count > 10,
+        "expected the kitchen-sink rules, got {rule_count}"
+    );
+    assert_eq!(rule_count, listed_rules(&twice).len());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn test_mixed_family_rule_never_widens_in_kernel() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let mut ruleset = FirewallRuleset::new();
+    let mut r = rule("Mixed", Protocol::Tcp, vec![PortEntry::Single(22)]);
+    // Only IPv4 destinations: an IPv6 copy would have no daddr match
+    r.sources = nets(&["10.0.0.0/8", "fd00::/8"]);
+    r.destinations = nets(&["192.168.1.1"]);
+    r.rebuild_caches();
+    ruleset.rules.push(r);
+
+    let (from_json, from_text) = apply_both_forms(dir.path(), &ruleset);
+    assert_eq!(listing_difference(&from_json, &from_text), None);
+
+    let mixed: Vec<_> = listed_rules(&from_text)
+        .into_iter()
+        .filter(|r| r["comment"] == "Mixed")
+        .collect();
+    assert_eq!(mixed.len(), 1, "exactly one (IPv4) copy expected");
+    let expr = mixed[0]["expr"].to_string();
+    assert!(expr.contains("\"daddr\""), "daddr match missing: {expr}");
+    assert!(expr.contains("\"saddr\""), "saddr match missing: {expr}");
+    assert!(
+        !expr.contains("\"ip6\""),
+        "IPv6 copy must not exist: {expr}"
+    );
+}
+
+#[test]
+fn test_server_mode_keeps_loopback_working() {
+    if !real_nft_available() {
+        return;
+    }
+    if Command::new("ping").arg("-V").output().is_err() {
+        eprintln!("SKIPPING loopback ping test: ping not installed");
+        return;
+    }
+    let dir = work_dir();
+
+    // Control: a bare output policy drop must break loopback ping, otherwise
+    // this test could not detect a lockout.
+    let control = run_in_netns(
+        dir.path(),
+        "ip link set lo up && nft add table inet t \
+         && nft add chain inet t o '{ type filter hook output priority 0; policy drop; }' \
+         && ping -c1 -W1 127.0.0.1",
+    );
+    if control.status.success() {
+        eprintln!("SKIPPING loopback ping test: ping not filtered in this namespace");
+        return;
+    }
+
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.advanced_security.egress_profile = EgressProfile::Server;
+    ruleset.advanced_security.strict_icmp = true;
+    write_ruleset(dir.path(), &ruleset);
+    run_in_netns_ok(
+        dir.path(),
+        "ip link set lo up && nft -f rules.nft \
+         && ping -c1 -W1 127.0.0.1 && ping -c1 -W1 ::1",
+    );
+}
+
+#[test]
+fn test_save_config_script_with_real_nft() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let target = dir.path().join("nftables.conf");
+    let backup = dir.path().join("nftables.conf.drfw-bak");
+    let tmp = dir.path().join(".nftables.conf.drfw-tmp");
+
+    // nft wrapper: the save script's `nft -c` runs inside a private namespace
+    let wrapper = dir.path().join("nft-wrapper.sh");
+    std::fs::write(&wrapper, "#!/bin/sh\nexec unshare -rn nft \"$@\"\n").expect("write wrapper");
+    set_mode(&wrapper, 0o755);
+
+    std::fs::write(&target, "# old config\n").expect("write old config");
+    set_mode(&target, 0o600);
+
+    // SAFETY: this is the only test in this binary that touches DRFW_NFT_COMMAND,
+    // and it does so before spawning any task that reads it.
+    unsafe {
+        std::env::set_var("DRFW_NFT_COMMAND", &wrapper);
+    }
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let target_str = target.to_str().expect("utf-8 temp path");
+
+    // 1. Valid content: installed, old file backed up with its permissions
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.rules = kitchen_sink_rules();
+    let text = ruleset.to_nft_text();
+    let output = runtime
+        .block_on(drfw::core::system_config::write_config_file(
+            &text, target_str,
+        ))
+        .expect("run save script");
+    assert!(
+        output.status.success(),
+        "save failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&target).expect("read target"), text);
+    assert_eq!(mode_of(&target), 0o644);
+    assert_eq!(
+        std::fs::read_to_string(&backup).expect("read backup"),
+        "# old config\n"
+    );
+    assert_eq!(
+        mode_of(&backup),
+        0o600,
+        "backup must keep original permissions"
+    );
+    assert_eq!(
+        drfw::core::system_config::backup_path_from_output(&output),
+        Some(backup.clone())
+    );
+    assert!(!tmp.exists());
+
+    // 2. Invalid content: rejected by nft -c, target and backup untouched
+    let output = runtime
+        .block_on(drfw::core::system_config::write_config_file(
+            "table inet drfw { chain input { bogus } }\n",
+            target_str,
+        ))
+        .expect("run save script");
+    unsafe {
+        std::env::remove_var("DRFW_NFT_COMMAND");
+    }
+    assert_eq!(output.status.code(), Some(3), "nft rejection exit code");
+    assert_eq!(std::fs::read_to_string(&target).expect("read target"), text);
+    assert_eq!(
+        std::fs::read_to_string(&backup).expect("read backup"),
+        "# old config\n"
+    );
+    assert!(!tmp.exists(), "temp file must be removed on failure");
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+}
+
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+}
+
+// ============================================================================
+// Differential property test
+// ============================================================================
+
+fn arb_ip() -> impl Strategy<Value = IpNetwork> {
+    prop_oneof![
+        (any::<[u8; 4]>(), 0u8..=32).prop_map(|(o, len)| IpNetwork::V4(
+            ipnetwork::Ipv4Network::new(std::net::Ipv4Addr::from(o), len).expect("valid prefix")
+        )),
+        (any::<[u16; 8]>(), 0u8..=128).prop_map(|(s, len)| IpNetwork::V6(
+            ipnetwork::Ipv6Network::new(
+                std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]),
+                len
+            )
+            .expect("valid prefix")
+        )),
+    ]
+}
+
+fn arb_port_entry() -> impl Strategy<Value = PortEntry> {
+    (1u16..=65535, 1u16..=65535).prop_map(|(a, b)| {
+        if a == b {
+            PortEntry::Single(a)
+        } else {
+            PortEntry::range(a.min(b), a.max(b))
+        }
+    })
+}
+
+fn arb_interface() -> impl Strategy<Value = Option<String>> {
+    proptest::option::of(prop_oneof![
+        Just("eth0".to_string()),
+        Just("wg*".to_string()),
+        Just("br-lan.10".to_string()),
+        Just("x\" accept #".to_string()),
+        Just("a\\b\nc".to_string()),
+    ])
+}
+
+fn arb_protocol() -> impl Strategy<Value = Protocol> {
+    prop_oneof![
+        Just(Protocol::Any),
+        Just(Protocol::Tcp),
+        Just(Protocol::Udp),
+        Just(Protocol::TcpAndUdp),
+        Just(Protocol::Icmp),
+        Just(Protocol::Icmpv6),
+        Just(Protocol::IcmpBoth),
+    ]
+}
+
+prop_compose! {
+    fn arb_rule()(
+        label in "\\PC{0,30}",
+        protocol in arb_protocol(),
+        ports in prop::collection::vec(arb_port_entry(), 0..4),
+        sources in prop::collection::vec(arb_ip(), 0..3),
+        destinations in prop::collection::vec(arb_ip(), 0..3),
+        interface in arb_interface(),
+        output_interface in arb_interface(),
+        output_chain in any::<bool>(),
+        action in prop_oneof![Just(Action::Accept), Just(Action::Drop), Just(Action::Reject)],
+        reject_type in prop_oneof![
+            Just(RejectType::Default),
+            Just(RejectType::PortUnreachable),
+            Just(RejectType::HostUnreachable),
+            Just(RejectType::AdminProhibited),
+            Just(RejectType::TcpReset),
+        ],
+        rate_limit in proptest::option::of((1u32..1000, 0usize..4, proptest::option::of(0u32..50))),
+        connection_limit in prop_oneof![Just(0u32), 1u32..1000],
+        log_enabled in any::<bool>(),
+        tags in prop::collection::vec("\\PC{0,24}", 0..3),
+    ) -> Rule {
+        let mut r = Rule::with_caches(
+            uuid::Uuid::new_v4(),
+            label,
+            protocol,
+            ports,
+            sources,
+            interface,
+            if output_chain { Chain::Output } else { Chain::Input },
+            true,
+            chrono::Utc::now(),
+            tags,
+        );
+        r.destinations = destinations;
+        r.output_interface = output_interface;
+        r.action = action;
+        // TCP reset is only valid for pure TCP (the GUI enforces this)
+        r.reject_type = if reject_type == RejectType::TcpReset && protocol != Protocol::Tcp {
+            RejectType::Default
+        } else {
+            reject_type
+        };
+        r.rate_limit = rate_limit.map(|(count, unit, burst)| RateLimit {
+            count,
+            unit: [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day][unit],
+            burst,
+        });
+        r.connection_limit = connection_limit;
+        r.log_enabled = log_enabled;
+        r.rebuild_caches();
+        r
+    }
+}
+
+prop_compose! {
+    fn arb_ruleset()(
+        rules in prop::collection::vec(arb_rule(), 0..8),
+        settings in any::<[bool; 5]>(),
+        icmp_rate in prop_oneof![Just(0u32), 1u32..50],
+    ) -> FirewallRuleset {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules = rules;
+        let adv = &mut ruleset.advanced_security;
+        adv.strict_icmp = settings[0];
+        adv.enable_rpf = settings[1];
+        adv.block_forwarding = settings[2];
+        adv.log_dropped = settings[3];
+        adv.egress_profile = if settings[4] { EgressProfile::Server } else { EgressProfile::Desktop };
+        adv.icmp_rate_limit = icmp_rate;
+        ruleset
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    /// The text file and the JSON must load into byte-identical kernel rulesets.
+    #[test]
+    fn prop_json_and_text_are_identical_in_kernel(ruleset in arb_ruleset()) {
+        if !real_nft_available() {
+            return Ok(());
+        }
+        let dir = work_dir();
+        let (from_json, from_text) = apply_both_forms(dir.path(), &ruleset);
+        let diff = listing_difference(&from_json, &from_text);
+        prop_assert!(diff.is_none(), "JSON and text differ in kernel: {}", diff.unwrap_or_default());
+    }
+}

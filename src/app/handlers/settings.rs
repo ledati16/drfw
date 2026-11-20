@@ -2,7 +2,7 @@
 //!
 //! Handles configuration changes:
 //! - Display settings (diff view, zebra striping)
-//! - Security settings (auto-revert, strict ICMP, RPF)
+//! - Security settings (auto-revert, strict ICMP, RPF, forwarding)
 //! - Logging settings (event log, dropped packet logging)
 //! - Theme and font selection
 //! - Debounced auto-save
@@ -205,6 +205,27 @@ pub(crate) fn handle_confirm_enable_rpf(state: &mut State) -> Task<Message> {
                 "RPF (reverse path filtering) enabled",
             )
             .await;
+        },
+        |()| Message::AuditLogWritten,
+    )
+}
+
+/// Handles toggling forwarded-traffic blocking (forward chain policy)
+///
+/// No warning modal: the settings row explains that blocking breaks
+/// Docker/VM/VPN routing, and the change only takes effect on Apply.
+pub(crate) fn handle_toggle_block_forwarding(state: &mut State, enabled: bool) -> Task<Message> {
+    state.ruleset.advanced_security.block_forwarding = enabled;
+    state.mark_profile_dirty();
+    let enable_event_log = state.enable_event_log;
+    let desc = if enabled {
+        "Forwarded traffic blocking enabled"
+    } else {
+        "Forwarded traffic blocking disabled"
+    };
+    Task::perform(
+        async move {
+            crate::audit::log_settings_saved(enable_event_log, desc).await;
         },
         |()| Message::AuditLogWritten,
     )
@@ -414,6 +435,15 @@ mod tests {
         let _ = handle_toggle_diff(&mut state, true);
         assert!(state.show_diff);
         assert!(state.config_dirty);
+    }
+
+    #[test]
+    fn test_handle_toggle_block_forwarding() {
+        let mut state = create_test_state();
+        let _ = handle_toggle_block_forwarding(&mut state, true);
+        assert!(state.ruleset.advanced_security.block_forwarding);
+        let _ = handle_toggle_block_forwarding(&mut state, false);
+        assert!(!state.ruleset.advanced_security.block_forwarding);
     }
 
     #[test]

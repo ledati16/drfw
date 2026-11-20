@@ -300,7 +300,8 @@ pub enum Message {
     SaveToSystemVerifyResult(Result<crate::core::verify::VerifyResult, String>),
     SaveToSystemConfirmed,
     SaveToSystemCancelled,
-    SaveToSystemResult(Result<(), String>),
+    /// Ok carries the backup path of the previous file, if there was one
+    SaveToSystemResult(Result<Option<String>, String>),
     EventOccurred(iced::Event),
     ToggleDiff(bool),
     ToggleZebraStriping(bool),
@@ -313,6 +314,8 @@ pub enum Message {
     IcmpRateLimitChanged(u32),
     ToggleRpfRequested(bool),
     ConfirmEnableRpf,
+    /// Block forwarded traffic (forward chain policy drop)
+    ToggleBlockForwarding(bool),
     CancelWarning,
     ToggleDroppedLogging(bool),
     LogRateChanged(u32),
@@ -972,6 +975,9 @@ impl State {
                 return handlers::handle_toggle_rpf_requested(self, enabled);
             }
             Message::ConfirmEnableRpf => return handlers::handle_confirm_enable_rpf(self),
+            Message::ToggleBlockForwarding(enabled) => {
+                return handlers::handle_toggle_block_forwarding(self, enabled);
+            }
             Message::CancelWarning => handlers::handle_cancel_warning(self),
             Message::ToggleDroppedLogging(enabled) => {
                 return handlers::handle_toggle_dropped_logging(self, enabled);

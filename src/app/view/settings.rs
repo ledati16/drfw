@@ -241,6 +241,17 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                 state.font_regular,
             ),
             render_settings_row(
+                "Block forwarded traffic",
+                "Drop routed traffic. Breaks Docker, VMs and VPN routing; only for routers",
+                toggler(advanced.block_forwarding)
+                    .on_toggle(Message::ToggleBlockForwarding)
+                    .width(Length::Shrink)
+                    .style(move |_, status| themed_toggler(theme, status))
+                    .into(),
+                theme,
+                state.font_regular,
+            ),
+            render_settings_row(
                 "Log dropped packets",
                 "Record filtered traffic to system logs",
                 toggler(advanced.log_dropped)

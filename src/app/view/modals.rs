@@ -25,7 +25,7 @@ pub fn view_warning_modal<'a>(
         ),
         PendingWarning::EnableStrictIcmp => (
             "⚠️ Strict ICMP Mode",
-            "This restricts ICMP to essential types only:\n\n    ✓ Ping (echo-request/echo-reply)\n    ✓ MTU discovery (packet-too-big)\n    ✓ Error reporting (destination-unreachable, time-exceeded)\n    ✓ IPv6 neighbor discovery\n\nThis may break:\n\n    • Network diagnostic tools (traceroute variations)\n    • Some games and applications\n    • IPv6 SLAAC autoconfiguration (if your network uses it)\n\nMost home/office networks use DHCPv6, not SLAAC, so this is usually safe.",
+            "This restricts ICMP to essential types only:\n\n    ✓ Ping (echo-request/echo-reply)\n    ✓ MTU discovery (packet-too-big)\n    ✓ Error reporting (destination-unreachable, time-exceeded, parameter-problem)\n    ✓ IPv6 neighbor discovery, router advertisements (SLAAC) and multicast listener queries\n\nThis may break:\n\n    • Network diagnostic tools (traceroute variations)\n    • Some games and applications\n    • Anything relying on other ICMP types (e.g. timestamp requests)",
             Message::ConfirmStrictIcmp,
         ),
     };

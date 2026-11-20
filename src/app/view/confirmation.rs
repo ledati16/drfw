@@ -391,6 +391,17 @@ pub fn view_apply_flow_modal<'a>(
 // Save to System Modal
 // ============================================================================
 
+/// Explanation shown in the Save to System modal (built once; the path is a
+/// compile-time constant but not a literal, so `concat!` cannot be used).
+static SAVE_TO_SYSTEM_DETAILS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "The file is checked with nft before it replaces the current one, which is \
+         kept as {}.drfw-bak. {} loads it at boot when enabled.",
+        drfw::SYSTEM_NFT_PATH,
+        drfw::SYSTEM_NFT_SERVICE
+    )
+});
+
 /// Modal for confirming the Save to System operation.
 /// Shows when `AppStatus::AwaitingSaveToSystem` is active.
 pub fn view_save_to_system_modal(
@@ -413,7 +424,7 @@ pub fn view_save_to_system_modal(
         .color(theme.fg_primary)
         .width(400)
         .align_x(Alignment::Center),
-        text("This will overwrite the system default configuration.")
+        text(SAVE_TO_SYSTEM_DETAILS.as_str())
             .size(12)
             .font(font)
             .color(theme.fg_muted)

@@ -114,6 +114,35 @@ pub fn sanitize_label(input: &str) -> String {
         .collect()
 }
 
+/// Makes a string safe to embed in an nftables quoted string (`"..."`).
+///
+/// nft quoted strings cannot contain `"`, and backslashes and control
+/// characters (newlines in particular) either break the token or start a new
+/// statement. Those characters are removed; everything else is kept, so valid
+/// interface names, comments and log prefixes pass through unchanged.
+///
+/// Used for every string the generator places in quotes (interface names, log
+/// prefixes, comments) on **both** the JSON and the text side, so the two
+/// outputs stay byte-for-byte equivalent and no profile content can inject
+/// statements into a saved `nftables.conf`.
+///
+/// # Examples
+///
+/// ```
+/// use drfw::validators::sanitize_nft_quoted;
+///
+/// assert_eq!(sanitize_nft_quoted("eth0"), "eth0");
+/// assert_eq!(sanitize_nft_quoted("eth0\" accept\n accept #"), "eth0 accept accept #");
+/// ```
+pub fn sanitize_nft_quoted(input: &str) -> std::borrow::Cow<'_, str> {
+    let is_forbidden = |c: char| c == '"' || c == '\\' || c.is_control();
+    if input.contains(is_forbidden) {
+        std::borrow::Cow::Owned(input.chars().filter(|&c| !is_forbidden(c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(input)
+    }
+}
+
 /// Validates a single port number.
 ///
 /// # Errors

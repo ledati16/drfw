@@ -5,7 +5,8 @@
 //! specific operations:
 //!
 //! - **nft**: Firewall rule verification and application
-//! - **install**: Writing configuration to system locations
+//! - **/bin/sh** running the fixed [`SAVE_CONFIG_SCRIPT`]: verified, atomic writes of
+//!   the system nftables configuration (Save to System)
 //!
 //! # Elevation Strategy
 //!
@@ -24,7 +25,7 @@
 //! which caches credentials **per-process (PID)**, not per-desktop-session:
 //!
 //! - Once DRFW authenticates for nft, all subsequent pkexec calls from that process
-//!   are authorized (including install) without re-prompting
+//!   are authorized without re-prompting
 //! - Cache expires after ~5 minutes OR when DRFW exits (whichever comes first)
 //! - Restarting DRFW requires reauthentication (new PID = new polkit subject)
 //!
@@ -40,7 +41,7 @@
 //!
 //! # Security
 //!
-//! - Only specific binaries can be elevated (nft, install)
+//! - Only specific programs can be elevated (nft, and `/bin/sh` with a fixed script)
 //! - All inputs are validated before elevation
 //! - Commands are constructed safely without shell interpolation
 //! - Audit logging tracks all privileged operations (via caller)
@@ -108,7 +109,7 @@ fn binary_exists(name: &str) -> bool {
 /// Internal helper to build an elevated command for a specific program.
 ///
 /// This is not exposed publicly - callers must use the specific functions
-/// (`create_elevated_nft_command`, `create_elevated_install_command`) to ensure
+/// (`create_elevated_nft_command`, `create_elevated_save_config_command`) to ensure
 /// only approved binaries can be elevated.
 fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, ElevationError> {
     use std::os::fd::AsFd;
@@ -245,43 +246,120 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
     build_elevated_command("nft", args)
 }
 
-/// Creates an elevated `install` command with the specified arguments
+/// Fixed shell script run (elevated) by Save to System.
 ///
-/// This function constructs a command that will execute `install` with root privileges.
-/// Used for writing configuration files to system locations like `/etc/nftables.conf`.
+/// Arguments: `$1` = target path, `$2` = nft command. The new file content
+/// arrives on stdin. No user-controlled data is ever interpolated into the
+/// script text; the target path is a compile-time constant
+/// ([`crate::SYSTEM_NFT_PATH`]) in the GUI and is only ever passed as argv.
 ///
-/// # Elevation Strategy
+/// Steps:
+/// 1. Write stdin to `<dir>/.<name>.drfw-tmp` (mode 644) in the target's own
+///    directory, so the final rename is atomic (same filesystem).
+/// 2. `nft -c -f` that temp file: the authoritative check of the exact bytes
+///    that will be installed.
+/// 3. Copy the existing target (if any) to `<target>.drfw-bak`, preserving
+///    mode/owner/timestamps. Done after the check so a rejected file never
+///    overwrites a good backup.
+/// 4. `mv -f` the temp file over the target (atomic rename).
 ///
-/// Same as [`create_elevated_nft_command`] - prefers run0, falls back to sudo/pkexec.
+/// Any failure removes the temp file and leaves the original untouched. On
+/// success, prints `backup=<path>` on stdout when a backup was made.
+///
+/// Exit codes: 0 success, 3 nft rejected the file, 1 other failures. 126/127
+/// are deliberately never used: callers interpret those as authentication
+/// errors from pkexec/sudo/run0.
+pub const SAVE_CONFIG_SCRIPT: &str = r#"set -u
+target=$1
+nft=$2
+dir=$(dirname -- "$target") || exit 1
+name=$(basename -- "$target") || exit 1
+tmp="$dir/.$name.drfw-tmp"
+backup="$target.drfw-bak"
+fail() {
+    rm -f -- "$tmp"
+    printf 'drfw: %s\n' "$1" >&2
+    exit "$2"
+}
+rm -f -- "$tmp" || fail "cannot remove stale temporary file $tmp" 1
+install -m 644 /dev/stdin "$tmp" || fail "cannot write $tmp" 1
+if ! check_output=$("$nft" -c -f "$tmp" 2>&1); then
+    fail "nft rejected the configuration; $target left unchanged: $check_output" 3
+fi
+if [ -e "$target" ]; then
+    cp -p -- "$target" "$backup" || fail "cannot back up $target to $backup" 1
+    made_backup=1
+else
+    made_backup=0
+fi
+mv -f -- "$tmp" "$target" || fail "cannot replace $target" 1
+if [ "$made_backup" = 1 ]; then
+    printf 'backup=%s\n' "$backup"
+fi
+exit 0
+"#;
+
+/// `$0` for [`SAVE_CONFIG_SCRIPT`] (shows up in `ps` and in shell error messages).
+const SAVE_CONFIG_SCRIPT_NAME: &str = "drfw-save-config";
+
+/// Absolute shell path: elevation tools must not resolve `sh` through `PATH`.
+const SHELL_PATH: &str = "/bin/sh";
+
+/// Creates the (elevated) command that installs a new system nftables config.
+///
+/// Runs [`SAVE_CONFIG_SCRIPT`] with `/bin/sh` and a single elevation prompt.
+/// The caller writes the file content to the command's stdin.
 ///
 /// # Arguments
 ///
-/// * `args` - Command-line arguments to pass to `install`
+/// * `target` - Path of the file to replace (normally [`crate::SYSTEM_NFT_PATH`])
 ///
-/// # Returns
+/// # Testing
 ///
-/// - `Ok(Command)` - Configured tokio Command ready to spawn
-/// - `Err(ElevationError)` - If pkexec/sudo are not available
+/// When `DRFW_NFT_COMMAND` is set, the script runs **without elevation** and
+/// uses that command for the `nft -c` check, mirroring
+/// [`create_elevated_nft_command`]. Tests point `target` at a temporary directory.
+///
+/// # Errors
+///
+/// Returns `Err(ElevationError)` if no elevation method is available.
 ///
 /// # Example
 ///
 /// ```no_run
-/// use drfw::elevation::create_elevated_install_command;
+/// use drfw::elevation::create_elevated_save_config_command;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Install a config file with mode 644
-/// let mut cmd = create_elevated_install_command(&["-m", "644", "/tmp/config", "/etc/nftables.conf"])?;
-/// let status = cmd.status().await?;
+/// let mut cmd = create_elevated_save_config_command(drfw::SYSTEM_NFT_PATH)?;
+/// cmd.stdin(std::process::Stdio::piped());
 /// # Ok(())
 /// # }
 /// ```
-///
-/// # Security
-///
-/// Arguments are passed directly to `install` without shell interpretation.
-/// Callers must ensure file paths are properly validated before calling this function.
-pub fn create_elevated_install_command(args: &[&str]) -> Result<Command, ElevationError> {
-    build_elevated_command("install", args)
+pub fn create_elevated_save_config_command(target: &str) -> Result<Command, ElevationError> {
+    if let Ok(nft_path) = std::env::var("DRFW_NFT_COMMAND")
+        && !nft_path.is_empty()
+    {
+        let mut cmd = Command::new(SHELL_PATH);
+        cmd.args([
+            "-c",
+            SAVE_CONFIG_SCRIPT,
+            SAVE_CONFIG_SCRIPT_NAME,
+            target,
+            &nft_path,
+        ]);
+        return Ok(cmd);
+    }
+
+    build_elevated_command(
+        SHELL_PATH,
+        &[
+            "-c",
+            SAVE_CONFIG_SCRIPT,
+            SAVE_CONFIG_SCRIPT_NAME,
+            target,
+            "nft",
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -323,29 +401,26 @@ mod tests {
     }
 
     #[test]
-    fn test_create_install_command_returns_ok() {
+    fn test_save_config_command_with_mock_skips_elevation() {
         let _guard = ENV_VAR_MUTEX.lock().unwrap();
 
-        // In TTY mode (which cargo test uses), this should return Ok with sudo
-        // Even if sudo doesn't exist, Command::new("sudo") succeeds - it only
-        // fails when you try to spawn/run it.
-        //
-        // Note: This test may fail in non-TTY CI environments without pkexec.
-        // That's acceptable - the install command is only used in the GUI app.
-        let cmd = create_elevated_install_command(&["-m", "644", "/tmp/test", "/etc/test"]);
-
-        // If we're in a non-TTY environment without pkexec, this could fail
-        // with PkexecNotFound, which is expected behavior
-        if let Err(ElevationError::PkexecNotFound) = &cmd {
-            eprintln!("Skipping test: not in TTY and pkexec not available");
-            return;
+        let mock_path = get_mock_nft_path();
+        unsafe {
+            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
+        }
+        let cmd = create_elevated_save_config_command("/nonexistent/nftables.conf");
+        unsafe {
+            std::env::remove_var("DRFW_NFT_COMMAND");
         }
 
-        assert!(
-            cmd.is_ok(),
-            "Should create install command: {:?}",
-            cmd.err()
-        );
+        let cmd = cmd.expect("mock mode never needs elevation");
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_program(), SHELL_PATH);
+        let args: Vec<_> = std_cmd.get_args().collect();
+        // Fixed script, then $0, target and nft command as separate argv entries
+        assert_eq!(args[1], SAVE_CONFIG_SCRIPT);
+        assert_eq!(args[3], "/nonexistent/nftables.conf");
+        assert_eq!(args[4], mock_path.as_str());
     }
 
     #[test]

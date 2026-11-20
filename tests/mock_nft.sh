@@ -39,6 +39,18 @@ case "$1" in
             exit 0
         fi
         ;;
+
+    -c|--check)
+        # Text file syntax check (Save to System): `nft -c -f FILE`.
+        # Accepts any readable file whose first line is the DRFW shebang.
+        if [ "$2" = "-f" ] && [ -r "$3" ]; then
+            if head -n 1 "$3" | grep -q '^#!/usr/sbin/nft -f'; then
+                exit 0
+            fi
+            echo "Error: syntax error (mock)" >&2
+            exit 1
+        fi
+        ;;
 esac
 
 # Unknown command
