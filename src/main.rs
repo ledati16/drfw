@@ -37,13 +37,16 @@
 //! drfw
 //!
 //! # CLI commands
-//! drfw list                          # List available profiles
-//! drfw status                        # Show active profile
-//! drfw apply my-profile              # Apply profile (permanent)
-//! drfw apply my-profile --confirm    # Apply with 15s auto-revert
-//! drfw apply my-profile --confirm 60 # Apply with 60s auto-revert
+//! drfw list                            # List available profiles
+//! drfw status                          # Show active profile
+//! drfw apply my-profile                # Apply with 15s auto-revert (default)
+//! drfw apply my-profile --confirm 60   # Apply with 60s auto-revert (5-120)
+//! drfw apply my-profile --no-confirm   # Apply without auto-revert
 //! drfw export my-profile --format nft  # Export as nftables config
 //! ```
+//!
+//! `drfw apply` changes the running kernel ruleset only; it does not persist
+//! across reboots. Use "Save to System" in the GUI for boot persistence.
 
 mod app;
 mod audit;
@@ -102,6 +105,37 @@ enum ConfirmResult {
     Error(String),
 }
 
+/// What a keypress during the countdown asks for
+#[derive(Debug, PartialEq, Eq)]
+enum CountdownKey {
+    /// Keep the new rules
+    Confirm,
+    /// Restore the previous ruleset immediately
+    Revert,
+    /// Not a control key; keep counting down
+    Ignore,
+}
+
+/// Maps a keypress during the countdown to an action.
+///
+/// Raw mode delivers Ctrl-C as `Char('c')` with the `CONTROL` modifier instead of
+/// a signal, so modifiers must be checked before treating `c` as "confirm": a user
+/// hitting Ctrl-C (or Esc) wants to abort, which here means reverting.
+fn classify_countdown_key(key: &crossterm::event::KeyEvent) -> CountdownKey {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let ctrl_or_alt = key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('r' | 'R') => CountdownKey::Revert,
+        KeyCode::Char('c' | 'C') if ctrl_or_alt => CountdownKey::Revert,
+        KeyCode::Char('c' | 'C') | KeyCode::Enter if !ctrl_or_alt => CountdownKey::Confirm,
+        _ => CountdownKey::Ignore,
+    }
+}
+
 /// Checks if we're running as root via sudo or run0.
 ///
 /// This is detected by checking if we're root AND the `SUDO_USER` environment
@@ -114,10 +148,11 @@ fn is_running_via_sudo() -> bool {
 ///
 /// Displays a countdown timer and polls for keypresses:
 /// - 'c' or Enter: Confirm changes immediately
-/// - 'r': Revert changes immediately
-/// - Any other key or timeout: Auto-revert
+/// - 'r', Esc or Ctrl-C: Revert changes immediately
+/// - Any other key: Ignored (countdown continues)
+/// - Timeout: Auto-revert
 async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value) -> ConfirmResult {
-    use crossterm::event::{self, Event, KeyCode};
+    use crossterm::event::{self, Event, KeyEventKind};
     use std::io::Write;
 
     // Enable raw mode for immediate keypress detection
@@ -132,18 +167,19 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
             let _ = stdout().execute(SetForegroundColor(Color::Yellow));
             print!("{remaining:2}s");
             let _ = stdout().execute(ResetColor);
-            print!("  [c/Enter=confirm, r=revert now]   ");
+            print!("  [c/Enter=confirm, r/Esc/Ctrl-C=revert now]   ");
             std::io::stdout().flush().ok();
 
             // Poll for keypresses for 1 second
             if let Ok(true) = event::poll(std::time::Duration::from_secs(1))
                 && let Ok(Event::Key(key)) = event::read()
+                && key.kind != KeyEventKind::Release
             {
-                match key.code {
-                    KeyCode::Char('c' | 'C') | KeyCode::Enter => {
+                match classify_countdown_key(&key) {
+                    CountdownKey::Confirm => {
                         return ConfirmResult::Confirmed;
                     }
-                    KeyCode::Char('r' | 'R') => {
+                    CountdownKey::Revert => {
                         print!("\r\x1b[K"); // Clear line
                         println!("Reverting...");
                         match core::nft_json::restore_snapshot(snapshot).await {
@@ -151,7 +187,7 @@ async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value)
                             Err(e) => return ConfirmResult::Error(format!("Revert failed: {e}")),
                         }
                     }
-                    _ => {
+                    CountdownKey::Ignore => {
                         // Any other key ignored, continue countdown
                     }
                 }
@@ -293,7 +329,9 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 let _ = stdout().execute(SetForegroundColor(Color::Green));
                 print!("✓");
                 let _ = stdout().execute(ResetColor);
-                println!(" Rules applied permanently (no auto-revert).");
+                println!(
+                    " Rules applied (no auto-revert; active until reboot, use Save to System to persist)."
+                );
             } else {
                 // Safe by default: use auto-revert
                 let timeout_secs = confirm.clamp(5, 120);
@@ -310,7 +348,9 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                         let _ = stdout().execute(SetForegroundColor(Color::Green));
                         print!("✓");
                         let _ = stdout().execute(ResetColor);
-                        println!(" Changes confirmed and saved.");
+                        println!(
+                            " Changes confirmed (active until reboot; use Save to System to persist)."
+                        );
                     }
                     ConfirmResult::Reverted => {
                         println!();
@@ -397,5 +437,95 @@ fn launch_gui() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::FAILURE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn test_countdown_ctrl_c_reverts() {
+        // Raw mode turns Ctrl-C into a 'c' keypress; it must NOT confirm
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            CountdownKey::Revert
+        );
+        assert_eq!(
+            classify_countdown_key(&key(
+                KeyCode::Char('C'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            CountdownKey::Revert
+        );
+    }
+
+    #[test]
+    fn test_countdown_esc_and_r_revert() {
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Esc, KeyModifiers::NONE)),
+            CountdownKey::Revert
+        );
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Char('r'), KeyModifiers::NONE)),
+            CountdownKey::Revert
+        );
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+            CountdownKey::Revert
+        );
+    }
+
+    #[test]
+    fn test_countdown_plain_c_and_enter_confirm() {
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Char('c'), KeyModifiers::NONE)),
+            CountdownKey::Confirm
+        );
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Char('C'), KeyModifiers::SHIFT)),
+            CountdownKey::Confirm
+        );
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Enter, KeyModifiers::NONE)),
+            CountdownKey::Confirm
+        );
+    }
+
+    #[test]
+    fn test_countdown_other_keys_ignored() {
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Char('x'), KeyModifiers::NONE)),
+            CountdownKey::Ignore
+        );
+        assert_eq!(
+            classify_countdown_key(&key(KeyCode::Enter, KeyModifiers::CONTROL)),
+            CountdownKey::Ignore
+        );
+    }
+
+    #[test]
+    fn test_cli_apply_examples_parse() {
+        // Keep the module-level usage examples in sync with the real CLI
+        for args in [
+            &["drfw", "apply", "my-profile"][..],
+            &["drfw", "apply", "my-profile", "--confirm", "60"],
+            &["drfw", "apply", "my-profile", "--no-confirm"],
+            &["drfw", "export", "my-profile", "--format", "nft"],
+            &["drfw", "list"],
+            &["drfw", "status"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_ok(),
+                "failed to parse {args:?}"
+            );
+        }
+        // A bare `--confirm` needs a value
+        assert!(Cli::try_parse_from(["drfw", "apply", "my-profile", "--confirm"]).is_err());
     }
 }

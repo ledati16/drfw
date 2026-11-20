@@ -266,7 +266,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 let badge_text: std::borrow::Cow<'_, str> = if chain_arrow.is_empty() {
                     std::borrow::Cow::Borrowed(&rule.badge_display)
                 } else {
-                    std::borrow::Cow::Owned(format!("{chain_arrow}{}", &rule.badge_display))
+                    std::borrow::Cow::Owned(format!("{chain_arrow}{}", rule.badge_display))
                 };
 
                 let badge = container(

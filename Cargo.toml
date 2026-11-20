@@ -2,7 +2,8 @@
 name = "drfw"
 version = "0.9.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.100"
+license = "MIT"
 default-run = "drfw"
 repository = "https://github.com/ledati16/drfw"
 
@@ -62,8 +63,8 @@ chrono = { version = "0.4", features = ["serde"] }  # Rule creation timestamps
 # ═══════════════════════════════════════════════════════════════════════════
 # UI Helpers
 # ═══════════════════════════════════════════════════════════════════════════
-similar = "2"  # Diff algorithm for ruleset comparison (show changes)
-rfd = "0.17"  # Native OS file dialogs (save/export)
+similar = "3"  # Diff algorithm for ruleset comparison (show changes)
+rfd = "0.18"  # Native OS file dialogs (save/export)
 network-interface = "2.0"  # Cross-platform network interface discovery
 logos = "0.16"  # Declarative lexer generator (compile-time DFA)
 strum = { version = "0.28", features = ["derive"] }  # Enum boilerplate elimination (Display, iter, etc.)
@@ -79,23 +80,26 @@ tracing-subscriber = "0.3"  # Logging configuration and output formatting
 # ═══════════════════════════════════════════════════════════════════════════
 # Security & System Integration
 # ═══════════════════════════════════════════════════════════════════════════
-sha2 = "0.10"  # Snapshot checksums for integrity verification
+sha2 = "0.11"  # Snapshot checksums for integrity verification
 fontdb = "0.23"  # System font enumeration for font picker
 clap = { version = "4", features = ["derive"] }  # CLI argument parsing
-nix = { version = "0.31", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
+nix = { version = "0.32", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
 crossterm = "0.29"  # Terminal control for CLI countdown timers
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Build Information
 # ═══════════════════════════════════════════════════════════════════════════
-shadow-rs = "1.7"  # Embed git commit, build time, dirty status at compile time
+# No default features: the runtime side only needs the generated constants.
+shadow-rs = { version = "2.0", default-features = false }  # Embed git commit, build time, dirty status at compile time
 
 [build-dependencies]
-shadow-rs = "1.7"
+# "build" without the default "git2" feature: shadow-rs falls back to the `git`
+# CLI, keeping git2/libgit2-sys/libz-sys (C build + advisories) out of the tree.
+shadow-rs = { version = "2.0", default-features = false, features = ["build"] }
 
 [dev-dependencies]
 proptest = "1"
-rand = "0.9"
+rand = "0.10"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Development Tools
@@ -107,7 +111,7 @@ path = "tools/stress_gen.rs"
 required-features = ["stress_gen"]
 
 [dependencies.rand]
-version = "0.9"
+version = "0.10"
 optional = true
 
 [features]

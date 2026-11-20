@@ -972,7 +972,7 @@ mod tests {
         ];
 
         for theme in &themes {
-            assert!(!theme.name.is_empty());
+            assert_ne!(theme.name, "");
         }
     }
 

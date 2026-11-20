@@ -692,7 +692,7 @@ impl State {
             .into_iter()
             .map(|s| {
                 if s.len() > 16 {
-                    format!("{}…", &s[..15])
+                    format!("{}…", crate::utils::truncate_str(s, 15))
                 } else {
                     s.clone()
                 }

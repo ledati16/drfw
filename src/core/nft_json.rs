@@ -1,6 +1,5 @@
 use crate::core::error::{Error, Result};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -148,9 +147,7 @@ pub fn validate_snapshot(snapshot: &Value) -> Result<()> {
 #[allow(dead_code)] // Used in integration tests, not in binary
 pub fn compute_checksum(snapshot: &Value) -> String {
     let json_str = serde_json::to_string(snapshot).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(json_str.as_bytes());
-    format!("{:x}", hasher.finalize())
+    crate::utils::sha256_hex(json_str.as_bytes())
 }
 
 /// Reverts to a previous snapshot.
@@ -269,27 +266,22 @@ pub fn save_snapshot_to_disk(snapshot: &Value) -> Result<std::path::PathBuf> {
 
     let json_string = serde_json::to_string_pretty(snapshot)?;
 
-    #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
 
-        // Create file with restrictive permissions
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        cfg_select! {
+            unix => {
+                // Create file with restrictive permissions
+                std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            }
+            _ => {}
+        }
+        let mut file = options.open(&path)?;
 
-        let mut file = file;
         file.write_all(json_string.as_bytes())?;
         file.sync_all()?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&path, json_string)?;
     }
 
     info!("Snapshot saved to {:?}", path);
@@ -330,7 +322,8 @@ pub fn list_snapshots() -> Result<Vec<std::path::PathBuf>> {
         })
         .collect();
 
-    snapshots_with_time.sort_unstable_by(|a, b| b.1.cmp(&a.1)); // Newest first
+    // Newest first; order among identical mtimes is irrelevant (directory order is arbitrary anyway)
+    snapshots_with_time.sort_unstable_by_key(|&(_, time)| std::cmp::Reverse(time));
     let snapshots: Vec<_> = snapshots_with_time.into_iter().map(|(p, _)| p).collect();
 
     Ok(snapshots)
@@ -755,7 +748,7 @@ mod tests {
         let nftables = emergency["nftables"]
             .as_array()
             .expect("nftables should be an array");
-        assert!(!nftables.is_empty());
+        assert_ne!(nftables.len(), 0, "emergency ruleset must not be empty");
 
         // Should pass validation
         assert!(validate_snapshot(&emergency).is_ok());

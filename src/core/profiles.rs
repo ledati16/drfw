@@ -148,10 +148,7 @@ pub async fn load_profile(name: &str) -> Result<FirewallRuleset, ProfileError> {
     checksum_path.set_extension("json.sha256");
 
     if let Ok(expected_checksum) = tokio::fs::read_to_string(&checksum_path).await {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(json.as_bytes());
-        let actual_checksum = format!("{:x}", hasher.finalize());
+        let actual_checksum = crate::utils::sha256_hex(json.as_bytes());
 
         if expected_checksum.trim() != actual_checksum {
             tracing::warn!(
@@ -201,27 +198,22 @@ pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), P
     let mut temp_path = path.clone();
     temp_path.set_extension("json.tmp");
 
-    #[cfg(unix)]
     {
-        use tokio::fs::OpenOptions;
         use tokio::io::AsyncWriteExt;
 
-        // Set restrictive permissions (0o600) BEFORE writing sensitive firewall rules
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp_path)
-            .await?;
+        let mut options = tokio::fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        cfg_select! {
+            unix => {
+                // Set restrictive permissions (0o600) BEFORE writing sensitive firewall rules
+                options.mode(0o600);
+            }
+            _ => {}
+        }
+        let mut file = options.open(&temp_path).await?;
 
         file.write_all(json.as_bytes()).await?;
         file.sync_all().await?; // Ensure bits are on the platter before renaming
-    }
-
-    #[cfg(not(unix))]
-    {
-        tokio::fs::write(&temp_path, json).await?;
     }
 
     tokio::fs::rename(temp_path, &path).await.map_err(|e| {
@@ -236,12 +228,7 @@ pub async fn save_profile(name: &str, ruleset: &FirewallRuleset) -> Result<(), P
     })?;
 
     // Calculate and save checksum for integrity verification
-    let checksum = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(json.as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
+    let checksum = crate::utils::sha256_hex(json.as_bytes());
 
     let mut checksum_path = path.clone();
     checksum_path.set_extension("json.sha256");

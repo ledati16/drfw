@@ -832,12 +832,17 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 
 ## 12. Development Workflow
 
+### Toolchain
+- **Pinned:** `rust-toolchain.toml` pins the exact Rust release; `rust-version` in `Cargo.toml` matches it (MSRV == pinned toolchain, no separate MSRV job).
+- **Bumping:** When a new stable is installed, bump both deliberately in one commit and fix any new clippy lints in that same commit. CI's non-blocking "latest-stable" job gives early warning of upcoming lints.
+
 ### Pre-Commit Checklist
 ```bash
 cargo fmt --check
-cargo clippy --all-targets  # pedantic lints configured in Cargo.toml
+cargo clippy --all-targets -- -D warnings  # pedantic lints configured in Cargo.toml
 cargo test
 cargo build --release
+cargo deny check  # advisories/licenses (config in deny.toml)
 ```
 
 ### Before Architectural Changes
@@ -947,6 +952,6 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-01-10 (Test audit: added handler test coverage policy, 10 new tests for apply.rs helper functions)
+**Last Updated:** 2026-11-20 (Toolchain pinned to Rust 1.100 via rust-toolchain.toml; cargo-deny added)
 **DRFW Version:** 0.9.0
 **Iced Version:** 0.14

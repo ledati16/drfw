@@ -89,30 +89,21 @@ pub async fn save_config(config: &AppConfig) -> std::io::Result<()> {
 
         // Create file with restrictive permissions from the start to prevent
         // race condition where file is briefly world-readable
-        #[cfg(unix)]
         {
-            use tokio::fs::OpenOptions;
             use tokio::io::AsyncWriteExt;
 
-            let mut file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .mode(0o600) // Set permissions BEFORE any data is written
-                .open(&temp_path)
-                .await?;
+            let mut options = tokio::fs::OpenOptions::new();
+            options.create(true).write(true).truncate(true);
+            cfg_select! {
+                unix => {
+                    options.mode(0o600); // Set permissions BEFORE any data is written
+                }
+                _ => {}
+            }
+            let mut file = options.open(&temp_path).await?;
 
             file.write_all(json.as_bytes()).await?;
             file.sync_all().await?; // Ensure data is flushed to physical media
-        }
-
-        #[cfg(not(unix))]
-        {
-            use tokio::io::AsyncWriteExt;
-
-            let mut file = tokio::fs::File::create(&temp_path).await?;
-            file.write_all(json.as_bytes()).await?;
-            file.sync_all().await?;
         }
 
         // Atomic rename

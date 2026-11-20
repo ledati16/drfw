@@ -86,7 +86,7 @@ fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         id: Uuid::new_v4(),
         label: label.to_string(),
         protocol: Protocol::Tcp,
-        ports: port.map(|p| vec![PortEntry::Single(p)]).unwrap_or_default(),
+        ports: port.map_or_default(|p| vec![PortEntry::Single(p)]),
         sources: vec![],
         destinations: vec![],
         interface: None,
@@ -132,11 +132,10 @@ fn create_full_test_rule(
         id: Uuid::new_v4(),
         label: label.to_string(),
         protocol,
-        ports: port.map(|p| vec![PortEntry::Single(p)]).unwrap_or_default(),
+        ports: port.map_or_default(|p| vec![PortEntry::Single(p)]),
         sources: source
             .and_then(|s| s.parse().ok())
-            .map(|ip| vec![ip])
-            .unwrap_or_default(),
+            .map_or_default(|ip| vec![ip]),
         destinations: vec![],
         interface: interface.map(String::from),
         output_interface: None,

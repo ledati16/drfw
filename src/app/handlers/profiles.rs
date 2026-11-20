@@ -266,7 +266,10 @@ pub(crate) fn handle_profile_deleted(
         }
         Err(e) => {
             let msg = if e.len() > 55 {
-                format!("Failed to delete profile: {}...", &e[..46])
+                format!(
+                    "Failed to delete profile: {}...",
+                    crate::utils::truncate_str(&e, 46)
+                )
             } else {
                 format!("Failed to delete profile: {e}")
             };
@@ -350,7 +353,10 @@ pub(crate) fn handle_profile_renamed(
         }
         Err(e) => {
             let msg = if e.len() > 55 {
-                format!("Failed to rename profile: {}...", &e[..46])
+                format!(
+                    "Failed to rename profile: {}...",
+                    crate::utils::truncate_str(&e, 46)
+                )
             } else {
                 format!("Failed to rename profile: {e}")
             };

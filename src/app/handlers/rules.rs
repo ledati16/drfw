@@ -355,8 +355,7 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
             .rules
             .iter()
             .find(|r| r.id == drag_id)
-            .map(|r| r.label.clone())
-            .unwrap_or_default();
+            .map_or_default(|r| r.label.clone());
 
         let direction = if new_index > old_index { "down" } else { "up" };
         let enable_event_log = state.enable_event_log;

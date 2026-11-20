@@ -43,8 +43,10 @@ pub fn fuzzy_filter_fonts<'a>(
         })
         .collect();
 
-    // Sort by score descending (highest relevance first)
-    results.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    // Sort by score descending (highest relevance first). Stable sort keeps
+    // equally-scored entries in their input order, so ties don't reshuffle
+    // between keystrokes.
+    results.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
     results
 }
 
@@ -91,8 +93,10 @@ pub fn fuzzy_filter_themes(
         })
         .collect();
 
-    // Sort by score descending (highest relevance first)
-    results.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    // Sort by score descending (highest relevance first). Stable sort keeps
+    // equally-scored entries in their input order, so ties don't reshuffle
+    // between keystrokes.
+    results.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
     results
 }
 
@@ -127,7 +131,8 @@ mod tests {
     fn test_fuzzy_filter_themes_empty_query() {
         let themes = ThemeChoice::iter();
         let results = fuzzy_filter_themes(themes, "");
-        assert!(!results.is_empty());
+        // Empty query returns every theme
+        assert_eq!(results.len(), ThemeChoice::iter().count());
         // All scores should be 0 for empty query
         assert!(results.iter().all(|(_, score)| *score == 0));
     }

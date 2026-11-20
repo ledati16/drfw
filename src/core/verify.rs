@@ -155,7 +155,7 @@ mod tests {
         let stderr = "";
         let errors = parse_nft_errors(stderr);
 
-        assert!(errors.is_empty());
+        assert_eq!(errors, Vec::<String>::new());
     }
 
     #[test]
@@ -193,7 +193,7 @@ mod tests {
     fn test_verify_result_success() {
         let result = VerifyResult::success();
         assert!(result.success);
-        assert!(result.errors.is_empty());
+        assert_eq!(result.errors, Vec::<String>::new());
     }
 
     #[test]

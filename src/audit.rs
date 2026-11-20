@@ -155,25 +155,15 @@ impl AuditLog {
     pub async fn log(&self, event: AuditEvent) -> std::io::Result<()> {
         let json = serde_json::to_string(&event)?;
 
-        #[cfg(unix)]
-        let mut file = {
-            #[allow(unused_imports)] // Used implicitly by .mode()
-            use std::os::unix::fs::OpenOptionsExt;
-
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600) // User read/write only
-                .open(&self.log_path)
-                .await?
-        };
-
-        #[cfg(not(unix))]
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)
-            .await?;
+        let mut options = tokio::fs::OpenOptions::new();
+        options.create(true).append(true);
+        cfg_select! {
+            unix => {
+                options.mode(0o600); // User read/write only, set before any data is written
+            }
+            _ => {}
+        }
+        let mut file = options.open(&self.log_path).await?;
 
         file.write_all(json.as_bytes()).await?;
         file.write_all(b"\n").await?;
@@ -570,7 +560,7 @@ mod tests {
         let event: AuditEvent = serde_json::from_str(json).unwrap();
 
         assert!(event.success);
-        assert!(matches!(event.event_type, EventType::ApplyRules));
+        std::assert_matches!(event.event_type, EventType::ApplyRules);
     }
 
     #[test]

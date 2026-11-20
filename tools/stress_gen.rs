@@ -48,7 +48,6 @@ use drfw::validators::{
 };
 use ipnetwork::IpNetwork;
 use rand::prelude::*;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -652,9 +651,7 @@ fn random_tags(rng: &mut impl Rng) -> Vec<String> {
     }
 
     let count = rng.random_range(1..=3);
-    TAGS.choose_multiple(rng, count)
-        .map(|s| (*s).to_string())
-        .collect()
+    TAGS.sample(rng, count).map(|s| (*s).to_string()).collect()
 }
 
 fn random_label(rng: &mut impl Rng, index: usize) -> String {
@@ -1326,7 +1323,7 @@ fn main() {
     }
 
     // Initialize RNG
-    let mut rng: Box<dyn RngCore> = match args.seed {
+    let mut rng: Box<dyn Rng> = match args.seed {
         Some(seed) => {
             println!("Using seed: {seed}");
             Box::new(rand::rngs::StdRng::seed_from_u64(seed))
@@ -1380,9 +1377,7 @@ fn main() {
     let json = serde_json::to_string_pretty(&ruleset).expect("Failed to serialize ruleset");
 
     // Calculate checksum
-    let mut hasher = Sha256::new();
-    hasher.update(json.as_bytes());
-    let checksum = format!("{:x}", hasher.finalize());
+    let checksum = drfw::utils::sha256_hex(json.as_bytes());
 
     // Write JSON file
     // Safe: validated at lines 1324-1327 (exits if output is None and not dry_run)

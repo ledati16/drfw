@@ -20,10 +20,14 @@ use tracing::warn;
 
 /// Truncates an error message to fit within a maximum length, adding ellipsis if needed.
 /// The prefix is always included, and the message is truncated to fit.
+/// Lengths are in bytes; the cut never splits a multibyte character.
 fn truncate_error_message(prefix: &str, message: &str, max_total_len: usize) -> String {
     let available = max_total_len.saturating_sub(prefix.len()).saturating_sub(3); // 3 for "..."
     if message.len() > available {
-        format!("{prefix}{}...", &message[..available])
+        format!(
+            "{prefix}{}...",
+            crate::utils::truncate_str(message, available)
+        )
     } else {
         format!("{prefix}{message}")
     }
@@ -612,6 +616,15 @@ mod tests {
     fn test_truncate_error_message_empty_prefix() {
         let result = truncate_error_message("", "some error", 80);
         assert_eq!(result, "some error");
+    }
+
+    #[test]
+    fn test_truncate_error_message_multibyte_does_not_panic() {
+        // available = 10 - 0 - 3 = 7 bytes; each "é" is 2 bytes, so byte 7
+        // falls inside the 4th one and the cut must move back to byte 6.
+        let result = truncate_error_message("", "éééééé", 10);
+        assert_eq!(result, "ééé...");
+        assert!(result.len() <= 10);
     }
 
     // Helper to create Output with specific exit code and stderr (Unix only)

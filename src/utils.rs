@@ -61,31 +61,21 @@ pub fn get_state_dir() -> Option<PathBuf> {
 }
 
 pub fn ensure_dirs() -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::fs::DirBuilder;
-        use std::os::unix::fs::DirBuilderExt;
-
-        let mut builder = DirBuilder::new();
-        builder.mode(0o700); // User read/write/execute only
-        builder.recursive(true);
-
-        if let Some(dir) = get_data_dir() {
-            builder.create(dir)?;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    cfg_select! {
+        unix => {
+            // User read/write/execute only
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
         }
-        if let Some(dir) = get_state_dir() {
-            builder.create(dir)?;
-        }
+        _ => {}
     }
 
-    #[cfg(not(unix))]
-    {
-        if let Some(dir) = get_data_dir() {
-            std::fs::create_dir_all(dir)?;
-        }
-        if let Some(dir) = get_state_dir() {
-            std::fs::create_dir_all(dir)?;
-        }
+    if let Some(dir) = get_data_dir() {
+        builder.create(dir)?;
+    }
+    if let Some(dir) = get_state_dir() {
+        builder.create(dir)?;
     }
 
     Ok(())
@@ -187,5 +177,118 @@ where
         tokio::runtime::Runtime::new()
             .expect("Failed to create Tokio runtime")
             .block_on(future)
+    }
+}
+
+/// Returns the lowercase hexadecimal SHA-256 digest of `data`.
+///
+/// Produces the same 64-character lowercase hex string that `sha2` 0.10's
+/// `format!("{:x}", hasher.finalize())` did, so existing `.sha256` checksum
+/// files on disk remain valid.
+///
+/// # Example
+///
+/// ```
+/// use drfw::utils::sha256_hex;
+///
+/// assert_eq!(
+///     sha256_hex(b"abc"),
+///     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+/// );
+/// ```
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    let digest = Sha256::digest(data);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in &digest {
+        // Writing to a `String` cannot fail
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Truncates `s` to at most `max_bytes` bytes without splitting a UTF-8 character.
+///
+/// Slicing a `&str` at an arbitrary byte index panics when the index falls inside
+/// a multibyte character (e.g. `é`, `日`, emoji). This rounds the cut point down
+/// to the nearest character boundary instead, so the result may be slightly
+/// shorter than `max_bytes`. Strings already within the limit are returned whole.
+///
+/// The limit is in bytes (not characters) so the result is never longer than the
+/// space reserved for it; callers append their own ellipsis.
+///
+/// # Example
+///
+/// ```
+/// use drfw::utils::truncate_str;
+///
+/// assert_eq!(truncate_str("firewall", 4), "fire");
+/// assert_eq!(truncate_str("short", 64), "short");
+/// // "é" is 2 bytes; cutting at byte 2 would split it, so the cut moves back
+/// assert_eq!(truncate_str("aé", 2), "a");
+/// ```
+pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    &s[..s.floor_char_boundary(max_bytes)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sha256_hex_known_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn test_truncate_str_ascii() {
+        assert_eq!(truncate_str("hello world", 5), "hello");
+        assert_eq!(truncate_str("hello", 5), "hello");
+        assert_eq!(truncate_str("hello", 100), "hello");
+        assert_eq!(truncate_str("hello", 0), "");
+        assert_eq!(truncate_str("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_str_multibyte_never_splits() {
+        // 'é' = 2 bytes, '日' = 3 bytes, '🔥' = 4 bytes
+        let s = "aé日🔥b";
+        assert_eq!(s.len(), 11);
+        let expected = [
+            "",
+            "a",
+            "a",
+            "aé",
+            "aé",
+            "aé",
+            "aé日",
+            "aé日",
+            "aé日",
+            "aé日",
+            "aé日🔥",
+        ];
+        for (max, want) in expected.iter().enumerate() {
+            assert_eq!(truncate_str(s, max), *want, "max_bytes = {max}");
+        }
+        assert_eq!(truncate_str(s, 11), s);
+    }
+
+    #[test]
+    fn test_truncate_str_all_cut_points_valid() {
+        let s = "Ошибка: нет доступа 🚫 — ファイアウォール";
+        for max in 0..=s.len() + 2 {
+            let out = truncate_str(s, max);
+            assert!(out.len() <= max);
+            assert!(s.starts_with(out));
+        }
     }
 }

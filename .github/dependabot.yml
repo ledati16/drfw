@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One PR per week for all compatible (minor/patch) Rust dependency updates;
+      # major bumps still arrive as individual PRs since they may need code changes.
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    ignore:
+      # Pinned to match rust-toolchain.toml; bumped deliberately together with it
+      - dependency-name: dtolnay/rust-toolchain

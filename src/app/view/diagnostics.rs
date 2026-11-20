@@ -140,8 +140,7 @@ pub fn format_audit_event<'a>(
                 event.details["label"].as_str().unwrap_or(""),
                 event.details["ports"]
                     .as_str()
-                    .map(|p| format!(" ({p})"))
-                    .unwrap_or_default()
+                    .map_or_default(|p| format!(" ({p})"))
             ),
         ),
         (EventType::RuleDeleted, _) => (
@@ -158,8 +157,7 @@ pub fn format_audit_event<'a>(
                 event.details["label"].as_str().unwrap_or(""),
                 event.details["ports"]
                     .as_str()
-                    .map(|p| format!(" ({p})"))
-                    .unwrap_or_default()
+                    .map_or_default(|p| format!(" ({p})"))
             ),
         ),
         (EventType::RuleToggled, _) => (

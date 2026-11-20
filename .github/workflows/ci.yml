@@ -5,33 +5,113 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly (Monday 06:00 UTC): surface new RustSec advisories and toolchain
+    # lints even when nothing in the repo changed.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  lint:
+    name: Format & Clippy
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # Must match rust-toolchain.toml (and rust-version in Cargo.toml)
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --check
 
+      # Pedantic lints are configured in Cargo.toml [lints.clippy]
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Clippy (stress_gen feature)
+        run: cargo clippy --all-targets --locked --features stress_gen -- -D warnings
+
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.100.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Real-nft integration tests run `nft` inside an unprivileged user+net
+      # namespace, so they need the nft binary and user namespaces enabled.
+      - name: Install nftables
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nftables
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Build
-        run: cargo build --all-targets
+        run: cargo build --all-targets --locked
+
+      - name: Build stress_gen
+        run: cargo build --locked --features stress_gen --bin stress_gen
 
       - name: Run tests
-        run: cargo test
+        env:
+          # Fail (instead of skip) if real-nft tests cannot run here
+          DRFW_REQUIRE_REAL_NFT: "1"
+        run: cargo test --locked
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Advisories, licenses, bans and sources; config in deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  latest-stable:
+    name: Latest stable (early warning)
+    runs-on: ubuntu-latest
+    # Non-blocking: flags new lints/breakage before the pinned toolchain is bumped
+    continue-on-error: true
+    env:
+      # Override rust-toolchain.toml so this job really uses latest stable
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Clippy (pedantic)
-        run: cargo clippy --all-targets -- -W clippy::pedantic
+      - name: Run tests
+        run: cargo test --locked

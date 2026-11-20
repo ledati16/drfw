@@ -561,3 +561,58 @@ impl TokenColor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rebuilds the plain text of a highlighted line (indent + tokens)
+    fn line_text(line: &HighlightedLine) -> String {
+        let mut s = " ".repeat(line.indent);
+        for token in &line.tokens {
+            s.push_str(&token.text);
+        }
+        s
+    }
+
+    #[test]
+    fn test_compute_and_tokenize_diff_marks_changed_lines() {
+        let old = "table inet drfw {\n\tchain input {\n\t\ttcp dport 22 accept\n\t}\n}\n";
+        let new = "table inet drfw {\n\tchain input {\n\t\ttcp dport 22 accept\n\t\ttcp dport 443 accept\n\t}\n}\n";
+
+        let diff = compute_and_tokenize_diff(old, new).expect("diff should not be empty");
+        let tags: Vec<DiffType> = diff.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            tags,
+            [
+                DiffType::Unchanged,
+                DiffType::Unchanged,
+                DiffType::Unchanged,
+                DiffType::Added,
+                DiffType::Unchanged,
+                DiffType::Unchanged,
+            ]
+        );
+        assert!(line_text(&diff[3].1).contains("tcp dport 443 accept"));
+        // Line numbers follow diff order
+        let numbers: Vec<usize> = diff.iter().map(|(_, l)| l.line_number).collect();
+        assert_eq!(numbers, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_compute_and_tokenize_diff_replacement() {
+        let old = "a\nb\nc\n";
+        let new = "a\nx\nc\n";
+        let diff = compute_and_tokenize_diff(old, new).expect("diff should not be empty");
+        let tags: Vec<DiffType> = diff.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            tags,
+            [
+                DiffType::Unchanged,
+                DiffType::Removed,
+                DiffType::Added,
+                DiffType::Unchanged,
+            ]
+        );
+    }
+}

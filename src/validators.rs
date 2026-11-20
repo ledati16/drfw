@@ -155,8 +155,8 @@ pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), &'static 
 /// use drfw::validators::validate_port_entry;
 /// use drfw::core::firewall::PortEntry;
 ///
-/// assert!(matches!(validate_port_entry("22"), Ok(PortEntry::Single(22))));
-/// assert!(matches!(validate_port_entry("8000-8080"), Ok(PortEntry::Range { start: 8000, end: 8080 })));
+/// std::assert_matches!(validate_port_entry("22"), Ok(PortEntry::Single(22)));
+/// std::assert_matches!(validate_port_entry("8000-8080"), Ok(PortEntry::Range { start: 8000, end: 8080 }));
 /// assert!(validate_port_entry("0").is_err());
 /// assert!(validate_port_entry("100-50").is_err());
 /// ```

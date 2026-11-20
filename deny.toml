@@ -1,0 +1,54 @@
+# cargo-deny configuration (https://embarkstudios.github.io/cargo-deny/)
+#
+# Run locally with `cargo deny check`. CI runs the same check on every push/PR
+# and weekly, so newly published advisories surface even without code changes.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+# Report unmaintained/unsound crates anywhere in the tree, not only direct
+# dependencies, so the weekly CI run flags new transitive problems.
+unmaintained = "all"
+unsound = "all"
+# Each ignore is stuck behind a dependency we cannot upgrade yet. Re-check
+# (and delete the entry) whenever iced or the named crate is bumped.
+ignore = [
+    { id = "RUSTSEC-2026-0253", reason = "lru 0.16 pop() panic-safety unsound (fixed in 0.18.2); cryoglyph in iced 0.14 pins lru 0.16" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; required by fontdb/cosmic-text in iced 0.14's text stack, no replacement upstream yet" },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; compile-time proc macro only, via wgpu-hal/metal (macOS) in iced 0.14" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; direct dep for rule timestamps, migration tracked as a separate task" },
+]
+
+[licenses]
+# Licenses actually present in the dependency tree (after resolving `OR`
+# alternatives). Adding a new one is a deliberate review decision.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# iced 0.14 pulls in several duplicate versions (windows-sys, bitflags, ...)
+# that we cannot unify from here.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

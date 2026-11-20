@@ -327,7 +327,7 @@ fn view_tags_helper<'a>(
                         row(form.tags.iter().enumerate().map(|(i, tag)| {
                             // Truncate long tags for display (same as tag cloud)
                             let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
-                                format!("{}…", &tag[..15]).into()
+                                format!("{}…", crate::utils::truncate_str(tag, 15)).into()
                             } else {
                                 tag.as_str().into()
                             };
@@ -412,7 +412,7 @@ pub fn tags_summary(tags: &[String]) -> String {
     } else if tags.len() == 1 {
         // Truncate long tags for display (same as tag cloud)
         if tags[0].len() > 16 {
-            format!("{}…", &tags[0][..15])
+            format!("{}…", crate::utils::truncate_str(&tags[0], 15))
         } else {
             tags[0].clone()
         }

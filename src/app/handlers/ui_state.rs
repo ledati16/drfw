@@ -453,10 +453,11 @@ pub(crate) fn handle_event(state: &mut State, event: iced::Event) -> Task<Messag
                     return Task::done(Message::Redo);
                 }
             }
-            iced::keyboard::Key::Character("y") if modifiers.command() || modifiers.control() => {
-                if state.command_history.can_redo() {
-                    return Task::done(Message::Redo);
-                }
+            iced::keyboard::Key::Character("y")
+                if (modifiers.command() || modifiers.control())
+                    && state.command_history.can_redo() =>
+            {
+                return Task::done(Message::Redo);
             }
             _ => {}
         }

@@ -79,7 +79,7 @@ pub(crate) fn handle_export_result(
         }
         Err(e) => {
             let msg = if e.len() > 50 {
-                format!("Export failed: {}...", &e[..47])
+                format!("Export failed: {}...", crate::utils::truncate_str(&e, 47))
             } else {
                 format!("Export failed: {e}")
             };
