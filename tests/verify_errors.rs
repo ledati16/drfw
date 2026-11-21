@@ -159,6 +159,52 @@ async fn test_real_rejection_maps_every_broken_rule() {
     assert_eq!(result.rejected_count(), 2);
 }
 
+/// Per-source limits add `add set` commands next to their rule; attribution
+/// must still name the right rule (not drop the name, not blame a neighbour).
+#[tokio::test]
+async fn test_real_rejection_with_per_source_sets_names_the_rule() {
+    use drfw::core::firewall::{RateLimit, TimeUnit};
+
+    if !real_nft_available() {
+        return;
+    }
+    let per_source = |label: &str, port: u16| {
+        let mut r = rule(label, Protocol::Tcp, vec![PortEntry::single(port)]);
+        r.rate_limit = Some(RateLimit {
+            count: 3,
+            unit: TimeUnit::Minute,
+            burst: None,
+            per_source: true,
+        });
+        r.connection_limit = 4;
+        r.connection_limit_per_source = true;
+        r
+    };
+    let before = per_source("ssh limited", 22);
+    let mut broken = per_source("broken limited", 2222);
+    broken.interface = Some("b".repeat(31));
+    let after = per_source("web limited", 443);
+    let broken_id = broken.id;
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.rules = vec![before, broken, after];
+    for r in &mut ruleset.rules {
+        r.rebuild_caches();
+    }
+
+    let result = check_and_locate(&ruleset).await;
+    let ids = rule_ids(&result);
+    assert!(
+        !ids.is_empty(),
+        "attribution was dropped: {:#?}",
+        result.issues
+    );
+    assert!(
+        ids.iter().all(|id| *id == broken_id),
+        "only the broken rule may be blamed: {:#?}",
+        result.issues
+    );
+}
+
 // ============================================================================
 // CLI
 // ============================================================================
