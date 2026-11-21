@@ -41,6 +41,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
+use crate::core::confirmed::{ConfirmedRecord, RecordKind};
+use crate::core::firewall::FirewallRuleset;
 use crate::elevation::AuthError;
 
 /// Upper bound for the authentication step of an elevated apply: from
@@ -158,19 +160,37 @@ pub enum GuardError {
 }
 
 /// Handle to a running revert guard, returned by [`apply_guarded`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Two handles are equal when they name the same guard (same nonce,
+/// directories and deadline).
+#[derive(Debug, Clone)]
 pub struct GuardHandle {
     nonce: String,
     confirm_dir: PathBuf,
     state_dir: PathBuf,
     timeout: Duration,
     deadline: Instant,
-    /// The applied nftables JSON, recorded by [`record_confirmed`] once confirmed
-    payload: Arc<[u8]>,
+    /// What was applied (exactly the bytes nft read), written to
+    /// `record_dir` once the guard reports a confirmation
+    record: Arc<ConfirmedRecord>,
     /// Where to record it: DRFW's state directory when the apply started
     /// (`None`: do not record)
     record_dir: Option<PathBuf>,
 }
+
+impl PartialEq for GuardHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.nonce == other.nonce
+            && self.confirm_dir == other.confirm_dir
+            && self.state_dir == other.state_dir
+            && self.timeout == other.timeout
+            && self.deadline == other.deadline
+            && self.record_dir == other.record_dir
+            && Arc::ptr_eq(&self.record, &other.record)
+    }
+}
+
+impl Eq for GuardHandle {}
 
 impl GuardHandle {
     /// A handle for unit tests: nonce `0123…cdef`, tokens in `dir/confirm`,
@@ -183,7 +203,14 @@ impl GuardHandle {
             state_dir: dir.join("state"),
             timeout,
             deadline: Instant::now() + timeout,
-            payload: Arc::from(&b"{}"[..]),
+            record: Arc::new(
+                ConfirmedRecord::new(
+                    &serde_json::json!({}),
+                    &FirewallRuleset::new(),
+                    RecordKind::Confirmed,
+                )
+                .expect("serializable"),
+            ),
             record_dir: None,
         }
     }
@@ -242,7 +269,8 @@ impl GuardHandle {
     /// Waits until the watcher reports an outcome, at most `max_wait`.
     ///
     /// Removes this guard's tokens once an outcome is known. A confirmed
-    /// ruleset is recorded for [`confirmed_ruleset_matches`].
+    /// ruleset is recorded as the last one applied and kept (see
+    /// [`crate::core::confirmed`]).
     ///
     /// # Errors
     ///
@@ -256,7 +284,7 @@ impl GuardHandle {
                 if outcome == GuardOutcome::Confirmed
                     && let Some(dir) = &self.record_dir
                 {
-                    record_confirmed(dir, &self.payload).await;
+                    self.record.save_in(dir).await;
                 }
                 return Ok(outcome);
             }
@@ -501,12 +529,16 @@ pub fn pending_guard(state_dir: &Path) -> std::io::Result<Option<PendingGuard>> 
     }))
 }
 
-/// Applies `json` with one elevation and, if `timeout_secs > 0`, arms the
-/// root-side revert guard.
+/// Applies `json` (generated from `ruleset`) with one elevation and, if
+/// `timeout_secs > 0`, arms the root-side revert guard.
 ///
 /// Returns `Ok(None)` for an unguarded apply (`timeout_secs == 0`), otherwise
 /// the handle used to confirm, revert or wait for the outcome. Dropping the
 /// handle does not stop the guard: without a confirmation the rules revert.
+///
+/// A successful unguarded apply is recorded at once as the last ruleset
+/// applied and kept ([`RecordKind::Unguarded`]); a guarded one when it is
+/// confirmed ([`GuardHandle::wait_outcome`]). See [`crate::core::confirmed`].
 ///
 /// Authentication may take up to [`APPLY_TIMEOUT`]; once the script reports
 /// that it started (as root), it gets another [`SCRIPT_TIMEOUT`].
@@ -525,13 +557,20 @@ pub fn pending_guard(state_dir: &Path) -> std::io::Result<Option<PendingGuard>> 
 pub async fn apply_guarded(
     json: &serde_json::Value,
     timeout_secs: u64,
+    ruleset: &FirewallRuleset,
 ) -> Result<Option<GuardHandle>, ApplyError> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let timeout_secs = timeout_secs.min(MAX_GUARD_TIMEOUT_SECS);
-    let payload: Arc<[u8]> = serde_json::to_vec(json)
-        .map_err(|e| ApplyError::Failed(e.to_string()))?
-        .into();
+    let kind = if timeout_secs == 0 {
+        RecordKind::Unguarded
+    } else {
+        RecordKind::Confirmed
+    };
+    // The record holds exactly the bytes nft reads
+    let record = Arc::new(
+        ConfirmedRecord::new(json, ruleset, kind).map_err(|e| ApplyError::Failed(e.to_string()))?,
+    );
     let nonce = new_nonce()?;
     let uid = nix::unistd::getuid().as_raw();
     let confirm_dir = confirm_dir(uid)?;
@@ -557,12 +596,12 @@ pub async fn apply_guarded(
     // fit into the pipe before nft reads it, and the start marker must be
     // seen while the script runs.
     let stdin = child.stdin.take();
-    let stdin_payload = Arc::clone(&payload);
+    let stdin_payload = Arc::clone(record.nftables_text());
     let stdin_task = tokio::spawn(async move {
         if let Some(mut stdin) = stdin {
             // A script that exits before reading (failed authentication,
             // rejected arguments) closes the pipe; its exit status says why
-            if let Err(e) = stdin.write_all(&stdin_payload).await {
+            if let Err(e) = stdin.write_all(stdin_payload.as_bytes()).await {
                 tracing::debug!("apply script stdin: {e}");
             }
             // Dropping stdin closes the pipe so nft sees EOF
@@ -645,7 +684,12 @@ pub async fn apply_guarded(
         String::from_utf8_lossy(&stdout).trim()
     );
 
+    let record_dir = crate::utils::get_state_dir();
     if timeout_secs == 0 {
+        // No safety net by choice: these rules are kept as of now
+        if let Some(dir) = &record_dir {
+            record.save_in(dir).await;
+        }
         return Ok(None);
     }
     let timeout = Duration::from_secs(timeout_secs);
@@ -655,8 +699,8 @@ pub async fn apply_guarded(
         state_dir,
         timeout,
         deadline: Instant::now() + timeout,
-        payload,
-        record_dir: crate::utils::get_state_dir(),
+        record,
+        record_dir,
     }))
 }
 
@@ -665,43 +709,6 @@ fn contains_started_marker(stdout: &[u8]) -> bool {
     String::from_utf8_lossy(stdout)
         .lines()
         .any(|line| line.trim() == STARTED_MARKER)
-}
-
-/// File in DRFW's state directory holding the nftables JSON of the last
-/// ruleset whose revert guard was confirmed.
-const CONFIRMED_RULESET_FILE: &str = "confirmed-ruleset.json";
-
-/// Records `payload` (nftables JSON) as the last confirmed ruleset, in `dir`
-/// (DRFW's state directory). Failures are only logged: the record is
-/// advisory (see [`confirmed_ruleset_matches`]).
-async fn record_confirmed(dir: &Path, payload: &[u8]) {
-    let path = dir.join(CONFIRMED_RULESET_FILE);
-    if let Err(e) = crate::utils::write_atomic_private_async(path, payload.to_vec()).await {
-        warn!("Cannot record the confirmed ruleset: {e}");
-    }
-}
-
-/// True if `json` is exactly the nftables JSON of the last ruleset that was
-/// applied with auto-revert and then confirmed (by the GUI or `drfw apply`).
-///
-/// It tells whether a ruleset has been tested on this machine under the
-/// dead-man switch; it says nothing about what is live in the kernel now.
-/// `false` when nothing was recorded or the record cannot be read.
-pub async fn confirmed_ruleset_matches(json: &serde_json::Value) -> bool {
-    match crate::utils::get_state_dir() {
-        Some(dir) => confirmed_ruleset_matches_in(&dir, json).await,
-        None => false,
-    }
-}
-
-/// [`confirmed_ruleset_matches`] with the record in `dir`.
-async fn confirmed_ruleset_matches_in(dir: &Path, json: &serde_json::Value) -> bool {
-    let Ok(expected) = serde_json::to_vec(json) else {
-        return false;
-    };
-    tokio::fs::read(dir.join(CONFIRMED_RULESET_FILE))
-        .await
-        .is_ok_and(|recorded| recorded == expected)
 }
 
 #[cfg(test)]
@@ -935,40 +942,40 @@ mod tests {
         assert!(!confirm_token.exists());
     }
 
-    /// A confirmed outcome records the applied JSON; other outcomes do not.
+    /// A confirmed outcome records the applied JSON and ruleset; other
+    /// outcomes do not.
     #[tokio::test]
     async fn test_confirmed_ruleset_is_recorded() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("state")).unwrap();
-        let record = dir.path().join("record");
-        std::fs::create_dir_all(&record).unwrap();
-        let json = serde_json::json!({ "nftables": [{ "add": { "table": {} } }] });
+        let record_dir = dir.path().join("record");
+        std::fs::create_dir_all(&record_dir).unwrap();
+        let ruleset = crate::core::test_helpers::create_test_ruleset();
+        let json = ruleset.to_nftables_json();
         let mut handle = handle_in(dir.path(), Duration::from_secs(5));
-        handle.payload = serde_json::to_vec(&json).unwrap().into();
-        handle.record_dir = Some(record.clone());
+        handle.record =
+            Arc::new(ConfirmedRecord::new(&json, &ruleset, RecordKind::Confirmed).unwrap());
+        handle.record_dir = Some(record_dir.clone());
         let status = dir
             .path()
             .join("state/status-0123456789abcdef0123456789abcdef");
 
         std::fs::write(&status, "reverted\n").unwrap();
         let _ = handle.wait_outcome(Duration::from_secs(1)).await;
-        assert!(!confirmed_ruleset_matches_in(&record, &json).await);
+        assert!(ConfirmedRecord::load_from(&record_dir).await.is_none());
 
         std::fs::write(&status, "confirmed\n").unwrap();
         let _ = handle.wait_outcome(Duration::from_secs(1)).await;
-        assert!(confirmed_ruleset_matches_in(&record, &json).await);
-        assert!(!confirmed_ruleset_matches_in(&record, &serde_json::json!({})).await);
-        cfg_select! {
-            unix => {
-                let mode = std::os::unix::fs::PermissionsExt::mode(
-                    &std::fs::metadata(record.join(CONFIRMED_RULESET_FILE))
-                        .unwrap()
-                        .permissions(),
-                );
-                assert_eq!(mode & 0o777, 0o600);
-            }
-            _ => {}
-        }
+        let record = ConfirmedRecord::load_from(&record_dir)
+            .await
+            .expect("recorded");
+        assert!(record.matches(&json));
+        assert!(!record.matches(&serde_json::json!({})));
+        assert_eq!(record.kind(), RecordKind::Confirmed);
+        assert_eq!(
+            record.ruleset().map(|r| r.rules[0].id),
+            Some(ruleset.rules[0].id)
+        );
     }
 
     #[test]

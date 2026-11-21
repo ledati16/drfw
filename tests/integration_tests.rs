@@ -59,17 +59,40 @@ fn setup_mock_nft() {
     });
 }
 
+/// Serializes the tests that point the data/state dirs (process-wide
+/// environment variables) at their own temp dir.
+static TEST_DIRS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A temp data/state directory, exclusively in use until dropped.
+struct TestDirs {
+    dir: tempfile::TempDir,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl TestDirs {
+    fn path(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+}
+
 /// Set up a temp directory for tests that access profile/config directories.
 ///
 /// This prevents tests from creating or modifying the user's real data.
-/// Returns a `TempDir` that will be automatically cleaned up when dropped.
-fn setup_temp_test_dirs() -> tempfile::TempDir {
+/// The directory is removed when the returned value is dropped; until then
+/// no other test can redirect the directories.
+fn setup_temp_test_dirs() -> TestDirs {
+    let lock = TEST_DIRS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
     unsafe {
         env::set_var("DRFW_TEST_DATA_DIR", temp_dir.path());
         env::set_var("DRFW_TEST_STATE_DIR", temp_dir.path());
     }
-    temp_dir
+    TestDirs {
+        dir: temp_dir,
+        _lock: lock,
+    }
 }
 
 /// Create a basic test ruleset with one SSH rule
@@ -557,10 +580,11 @@ async fn test_save_config_file_with_mock_nft() {
 #[tokio::test]
 async fn test_guarded_apply_with_mock_nft() {
     use drfw::core::apply_guard::{ApplyError, GuardOutcome, OUTCOME_GRACE, apply_guarded};
+    use drfw::core::confirmed::{ConfirmedRecord, RecordKind};
     setup_mock_nft();
     // A confirmed guard records the ruleset in the state directory: never
     // the user's real one
-    let _dirs = setup_temp_test_dirs();
+    let dirs = setup_temp_test_dirs();
 
     let dir = tempfile::tempdir().unwrap();
     let runtime_dir = dir.path().join("run");
@@ -576,22 +600,44 @@ async fn test_guarded_apply_with_mock_nft() {
         env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
         env::set_var("DRFW_GUARD_STATE_DIR", &state_dir);
     }
-    let json = create_test_ruleset().to_nftables_json();
+    let ruleset = create_test_ruleset();
+    let json = ruleset.to_nftables_json();
+    let record = || ConfirmedRecord::load_from_blocking(dirs.path());
 
-    // No guard: just applied
-    assert_eq!(apply_guarded(&json, 0).await, Ok(None));
+    // No guard: just applied, and kept at once (the same record the GUI
+    // keeps for an apply with auto-revert off)
+    assert_eq!(apply_guarded(&json, 0, &ruleset).await, Ok(None));
+    let kept = record().expect("recorded");
+    assert_eq!(kept.kind(), RecordKind::Unguarded);
+    assert!(kept.matches(&json));
+    assert_eq!(
+        kept.ruleset().map(|r| r.rules[0].id),
+        Some(ruleset.rules[0].id)
+    );
 
     // Confirmed before the timeout: the watcher reports it
-    let handle = apply_guarded(&json, 30).await.unwrap().expect("guard");
+    let handle = apply_guarded(&json, 30, &ruleset)
+        .await
+        .unwrap()
+        .expect("guard");
+    assert_eq!(
+        record().map(|r| r.kind()),
+        Some(RecordKind::Unguarded),
+        "not kept until confirmed"
+    );
     handle.confirm().unwrap();
     assert_eq!(
         handle.wait_outcome(OUTCOME_GRACE).await,
         Ok(GuardOutcome::Confirmed)
     );
+    assert_eq!(record().map(|r| r.kind()), Some(RecordKind::Confirmed));
     // Tokens are cleaned up by the user side, never by the watcher
     assert_eq!(std::fs::read_dir(&runtime_dir).unwrap().count(), 0);
     // The token really went to the runtime dir: a watcher confirmed it there
-    let handle = apply_guarded(&json, 30).await.unwrap().expect("guard");
+    let handle = apply_guarded(&json, 30, &ruleset)
+        .await
+        .unwrap()
+        .expect("guard");
     handle.confirm().unwrap();
     assert_eq!(std::fs::read_dir(&runtime_dir).unwrap().count(), 1);
     assert_eq!(
@@ -599,12 +645,18 @@ async fn test_guarded_apply_with_mock_nft() {
         Ok(GuardOutcome::Confirmed)
     );
 
-    // Not confirmed: the watcher reverts on its own
-    let handle = apply_guarded(&json, 1).await.unwrap().expect("guard");
+    // Not confirmed: the watcher reverts on its own, the record stays
+    let mut other = ruleset.clone();
+    other.rules.push(create_test_rule("Other", Some(8080)));
+    let handle = apply_guarded(&other.to_nftables_json(), 1, &other)
+        .await
+        .unwrap()
+        .expect("guard");
     assert_eq!(
         handle.wait_for_timeout_outcome().await,
         Ok(GuardOutcome::Reverted)
     );
+    assert!(record().expect("still recorded").matches(&json));
 
     // The script is killed right after the rules went live: DRFW cannot know
     // the outcome and says so, and the guard (started before the apply)
@@ -621,7 +673,7 @@ async fn test_guarded_apply_with_mock_nft() {
     };
     let before = reverted_count();
     std::fs::write(state_dir.join("mock-kill-apply"), "").unwrap();
-    let error = apply_guarded(&json, 1).await.unwrap_err();
+    let error = apply_guarded(&json, 1, &ruleset).await.unwrap_err();
     assert!(
         matches!(error, ApplyError::StateUnknown(_)),
         "a killed apply script must not be reported as 'nothing changed': {error}"
@@ -1156,7 +1208,10 @@ fn test_cli_save_refuses_unconfirmed_rules_without_yes() {
     let output = run_drfw_save(root.path(), bin.path(), &["web"]);
     assert_eq!(output.status.code(), Some(7), "{}", all_output(&output));
     let out = all_output(&output);
-    assert!(out.contains("never confirmed"), "{out}");
+    assert!(
+        out.contains("not the one last applied and confirmed"),
+        "{out}"
+    );
     assert!(out.contains("WITHOUT a dead-man switch"), "{out}");
     assert!(out.contains("drfw apply web"), "{out}");
     assert!(!root.path().join("nftables.conf").exists());
@@ -1174,7 +1229,7 @@ fn test_cli_save_with_yes_saves_and_warns_about_boot() {
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
     let out = all_output(&output);
     assert!(
-        out.contains("never confirmed"),
+        out.contains("not the one last applied and confirmed"),
         "the warning is still shown: {out}"
     );
     assert_eq!(
@@ -1226,8 +1281,9 @@ fn test_cli_save_enable_at_boot() {
     assert!(root.path().join("nftables.conf.drfw-bak").exists());
 }
 
-/// A ruleset confirmed under the guard (recorded by `GuardHandle::wait_outcome`)
-/// saves without --yes and without the warning.
+/// A ruleset confirmed under the guard, recorded by an older DRFW (the bare
+/// nftables JSON; now written by `GuardHandle::wait_outcome` in the record
+/// format), saves without --yes and without the warning.
 #[test]
 fn test_cli_save_confirmed_rules_need_no_yes() {
     let root = tempfile::tempdir().unwrap();
@@ -1242,8 +1298,9 @@ fn test_cli_save_confirmed_rules_need_no_yes() {
     let output = run_drfw_save(root.path(), bin.path(), &["web"]);
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
     let out = all_output(&output);
-    assert!(out.contains("applied and confirmed"), "{out}");
-    assert!(!out.contains("never confirmed"), "{out}");
+    assert!(out.contains("was applied and confirmed"), "{out}");
+    assert!(out.contains("earlier session"), "no boot id: {out}");
+    assert!(!out.contains("not the one last applied"), "{out}");
     assert!(root.path().join("nftables.conf").exists());
 
     // Any change to the profile makes it "not confirmed" again
@@ -1252,6 +1309,140 @@ fn test_cli_save_confirmed_rules_need_no_yes() {
     write_profile(root.path(), "web", &changed);
     let output = run_drfw_save(root.path(), bin.path(), &["web"]);
     assert_eq!(output.status.code(), Some(7), "{}", all_output(&output));
+}
+
+/// Runs `drfw apply <args>` against `root` (mock nft, private runtime dir,
+/// guard state under `root`, stdin closed: not a terminal).
+fn run_drfw_apply(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    use std::os::unix::fs::PermissionsExt;
+    let runtime = root.join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .arg("apply")
+        .args(args)
+        .env("DRFW_TEST_DATA_DIR", root)
+        .env("DRFW_TEST_STATE_DIR", root)
+        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
+        .env("DRFW_GUARD_STATE_DIR", root.join("guard"))
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run drfw")
+}
+
+/// A profile `web` with `count` rules under `root`.
+fn web_profile_with(root: &std::path::Path, count: u16) -> FirewallRuleset {
+    let mut ruleset = FirewallRuleset::new();
+    for i in 0..count {
+        ruleset
+            .rules
+            .push(create_test_rule(&format!("svc{i}"), Some(8000 + i)));
+    }
+    write_profile(root, "web", &ruleset);
+    ruleset
+}
+
+/// `drfw apply --no-confirm` keeps the rules at once: it writes the record
+/// (like the GUI with auto-revert off), so `drfw save` treats them as tested
+/// and says how they were kept.
+#[test]
+fn test_cli_unguarded_apply_is_recorded_for_save() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    let ruleset = web_profile_with(root.path(), 2);
+
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let record =
+        drfw::core::confirmed::ConfirmedRecord::load_from_blocking(root.path()).expect("recorded");
+    assert_eq!(record.kind(), drfw::core::confirmed::RecordKind::Unguarded);
+    assert!(record.matches(&ruleset.to_nftables_json()));
+
+    let output = run_drfw_save(root.path(), bin.path(), &["web"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(
+        out.contains("applied (without auto-revert) and kept"),
+        "{out}"
+    );
+    assert!(!out.contains("earlier session"), "same boot: {out}");
+}
+
+/// The retention guard: removing most of the kept rules needs --yes off a
+/// terminal (exit 9, nothing applied); small changes pass.
+#[test]
+fn test_cli_apply_retention_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let original = web_profile_with(root.path(), 5);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let kept_json = original.to_nftables_json();
+
+    // 2 of 5 disabled: below the threshold
+    let mut ruleset = original.clone();
+    ruleset.rules[0].enabled = false;
+    ruleset.rules[1].enabled = false;
+    write_profile(root.path(), "web", &ruleset);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(!all_output(&output).contains("big change"));
+
+    // Back to the 5 kept (re-enabling is no removal), then 3 of 5 removed
+    let mut ruleset = original;
+    write_profile(root.path(), "web", &ruleset);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    ruleset.rules.truncate(2);
+    write_profile(root.path(), "web", &ruleset);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("Removes 3 of the 5 enabled rules"), "{out}");
+    assert!(out.contains("\"svc2\", \"svc3\", \"svc4\""), "{out}");
+    assert!(out.contains("pass --yes"), "{out}");
+    assert!(!out.contains("Applying ruleset"), "{out}");
+    let record =
+        drfw::core::confirmed::ConfirmedRecord::load_from_blocking(root.path()).expect("recorded");
+    assert!(
+        record.matches(&kept_json),
+        "nothing applied, record unchanged"
+    );
+
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(all_output(&output).contains("big change"), "still shown");
+
+    // Server mode needs a confirmation even without removals
+    ruleset.advanced_security.egress_profile = drfw::core::firewall::EgressProfile::Server;
+    write_profile(root.path(), "web", &ruleset);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
+    assert!(all_output(&output).contains("Server mode"));
+}
+
+/// `drfw save` shows the retention warning too; --yes covers it.
+#[test]
+fn test_cli_save_retention_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    let mut ruleset = web_profile_with(root.path(), 4);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+
+    ruleset.advanced_security.block_forwarding = true;
+    ruleset.rules.truncate(1);
+    write_profile(root.path(), "web", &ruleset);
+    let output = run_drfw_save(root.path(), bin.path(), &["web"]);
+    assert_eq!(output.status.code(), Some(7), "{}", all_output(&output));
+    assert!(!root.path().join("nftables.conf").exists());
+
+    let output = run_drfw_save(root.path(), bin.path(), &["web", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("Removes 3 of the 4 enabled rules"), "{out}");
+    assert!(out.contains("Blocks forwarded traffic"), "{out}");
+    assert!(root.path().join("nftables.conf").exists());
 }
 
 #[test]
@@ -1278,7 +1469,13 @@ fn test_cli_help_lists_exit_codes() {
         .expect("run drfw");
     let help = stdout_of(&help);
     assert!(help.contains("Exit codes:"), "{help}");
-    for code in ["  3  apply", "  6  apply", "  7  save", "  8  save"] {
+    for code in [
+        "  3  apply",
+        "  6  apply",
+        "  7  save",
+        "  8  save",
+        "  9  apply/save",
+    ] {
         assert!(help.contains(code), "{code:?} missing:\n{help}");
     }
     assert!(help.contains("save"), "{help}");

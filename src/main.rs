@@ -85,11 +85,15 @@ mod exit_code {
     pub const SUPERSEDED: u8 = 5;
     /// The outcome is unknown: the new rules may be active
     pub const STATE_UNKNOWN: u8 = 6;
-    /// `drfw save` refused: the rules are not confirmed and there was no
-    /// `--yes` (or the question was answered no)
+    /// `drfw save` refused: the rules are not the ones last applied and kept
+    /// and there was no `--yes` (or the question was answered no)
     pub const NOT_CONFIRMED: u8 = 7;
     /// `drfw save` saved the file, but the boot service could not be enabled
     pub const NOT_ENABLED: u8 = 8;
+    /// `drfw apply`/`drfw save` refused by the retention guard (most of the
+    /// kept rules removed, Server mode or forward blocking turned on) without
+    /// `--yes` (or the question was answered no); nothing was changed
+    pub const RETENTION: u8 = 9;
 }
 
 /// Exit code table for `--help` and the README.
@@ -103,9 +107,12 @@ Exit codes:
   4  apply: the revert FAILED: the new, unconfirmed rules are STILL ACTIVE
   5  apply: another apply replaced these rules before they were confirmed
   6  apply: the outcome is UNKNOWN: the new rules may be active
-  7  save: not saved: the rules were never confirmed with `drfw apply`
-     (pass --yes to save anyway)
-  8  save: saved, but the boot service could not be enabled";
+  7  save: not saved: the rules are not the ones last applied and
+     confirmed with `drfw apply` (pass --yes to save anyway)
+  8  save: saved, but the boot service could not be enabled
+  9  apply/save: not done: the ruleset removes most of the rules last
+     applied and kept, or turns on Server mode or forward blocking
+     (pass --yes to go ahead)";
 
 /// A CLI failure with its exit code (see [`exit_code`]). An empty message
 /// means the details were already printed.
@@ -459,6 +466,11 @@ enum Commands {
     /// countdown, the previous rules are still restored on time. Applying asks
     /// for authentication once; confirming or reverting needs none.
     /// Use --no-confirm to disable.
+    ///
+    /// A ruleset that removes most of the rules last applied and kept (at
+    /// least 3 and 40 % of the enabled ones; disabled counts as removed), or
+    /// turns on Server mode or forward blocking, needs --yes (or an answer on
+    /// a terminal).
     #[command(after_help = EXIT_CODES_HELP)]
     Apply {
         /// Name of the profile to apply
@@ -466,9 +478,14 @@ enum Commands {
         /// Auto-revert timeout in seconds (default: 15s, max: 120s)
         #[arg(short, long, value_name = "SECONDS", default_value = "15")]
         confirm: u64,
-        /// Skip auto-revert confirmation (apply immediately without safety net)
+        /// Skip auto-revert confirmation (apply immediately without safety
+        /// net); the rules count as kept at once
         #[arg(long, conflicts_with = "confirm")]
         no_confirm: bool,
+        /// Apply even if it removes most of the rules last applied and kept,
+        /// or turns on Server mode or forward blocking
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Show the active profile, a pending auto-revert, the boot config and
     /// whether a systemd unit loads it at boot
@@ -481,8 +498,10 @@ enum Commands {
     /// Writes the profile to the system nftables config, checked with
     /// `nft -c` first (one authentication prompt). It does not change the
     /// running rules. The saved rules load at the next boot WITHOUT a
-    /// dead-man switch, so a profile that was never confirmed with
-    /// `drfw apply` (or the GUI) needs --yes (or an answer on a terminal).
+    /// dead-man switch, so a profile that is not the one last applied and
+    /// kept with `drfw apply` (or the GUI) needs --yes (or an answer on a
+    /// terminal). So does one that removes most of the kept rules, or turns
+    /// on Server mode or forward blocking.
     #[command(after_help = EXIT_CODES_HELP)]
     Save {
         /// Name of the profile to save
@@ -490,7 +509,8 @@ enum Commands {
         /// Also enable the boot service if it is not enabled (same prompt)
         #[arg(long)]
         enable_at_boot: bool,
-        /// Save even if this exact ruleset was never confirmed on this machine
+        /// Save even if this exact ruleset is not the one last applied and
+        /// kept on this machine, or the retention guard warns
         #[arg(short, long)]
         yes: bool,
     },
@@ -578,6 +598,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             name,
             confirm,
             no_confirm,
+            yes,
         } => {
             let ruleset = load_applicable_profile(&name, "apply").await?;
             let nft_json = ruleset.to_nftables_json();
@@ -597,11 +618,19 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 print_issues(&verify_result.issues);
                 return Err("Verification failed".into());
             }
+            let record = core::confirmed::ConfirmedRecord::load().await;
+            retention_guard(
+                &ruleset,
+                record.as_ref(),
+                yes,
+                ("Apply anyway?", "not applied"),
+            )
+            .await?;
 
             println!();
             println!("Applying ruleset...");
             let timeout_secs = if no_confirm { 0 } else { confirm.clamp(5, 120) };
-            let result = core::apply_guard::apply_guarded(&nft_json, timeout_secs).await;
+            let result = core::apply_guard::apply_guarded(&nft_json, timeout_secs, &ruleset).await;
             audit::log_apply(
                 enable_event_log,
                 rule_count,
@@ -823,6 +852,47 @@ async fn ask_yes_no(question: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// The retention guard for `drfw apply` and `drfw save` (see
+/// `core::retention`): prints why `ruleset` is a big change compared with
+/// the rules last applied and kept, then asks on a terminal unless `yes`.
+/// `(question, refused)` are e.g. `("Apply anyway?", "not applied")`.
+///
+/// # Errors
+///
+/// [`exit_code::RETENTION`] when it warns, `yes` is not set and stdin is not
+/// a terminal, or the answer is not yes.
+async fn retention_guard(
+    ruleset: &core::firewall::FirewallRuleset,
+    record: Option<&core::confirmed::ConfirmedRecord>,
+    yes: bool,
+    (question, refused): (&str, &str),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let kept = record.and_then(core::confirmed::ConfirmedRecord::ruleset);
+    let Some(warning) = core::retention::RetentionWarning::check(kept, ruleset) else {
+        return Ok(());
+    };
+    eprintln!(
+        "{} This is a big change compared with the rules last applied and kept:",
+        paint("WARNING:", Color::Red, Stream::Stderr.colored())
+    );
+    for line in &warning.lines {
+        eprintln!("  {line}");
+    }
+    if yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(failure(
+            exit_code::RETENTION,
+            format!("{refused}: pass --yes to go ahead"),
+        ));
+    }
+    if !ask_yes_no(question).await {
+        return Err(failure(exit_code::RETENTION, refused));
+    }
+    Ok(())
+}
+
 /// Why the save script failed, from its exit status and stderr.
 fn save_error(output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -850,8 +920,9 @@ fn save_error(output: &std::process::Output) -> String {
 /// optionally `systemctl enable` in the same prompt).
 ///
 /// The saved rules load at the next boot without a dead-man switch, so a
-/// ruleset that was never confirmed under the guard needs `--yes` (or a yes
-/// on the terminal).
+/// ruleset that is not the one last applied and kept (the
+/// `core::confirmed` record, compared byte for byte) needs `--yes` (or a yes
+/// on the terminal). So does one the retention guard warns about.
 ///
 /// # Errors
 ///
@@ -886,23 +957,33 @@ async fn save_profile(
         Err(e) => eprintln!("Note: could not check the ruleset without privileges ({e})."),
     }
 
-    let confirmed = core::apply_guard::confirmed_ruleset_matches(&json).await;
-    // The CLI always saves the profile itself; it is "tested" when it is exactly
-    // what a confirmed guard applied on this machine
+    let record = core::confirmed::ConfirmedRecord::load().await;
+    // The CLI always saves the profile itself; it is "tested" when its JSON is
+    // byte for byte the last ruleset applied and kept on this machine
+    let confirmed = record.as_ref().filter(|r| r.matches(&json));
     let details = audit::SaveDetails {
         last_confirmed: false,
-        untested: !confirmed,
+        untested: confirmed.is_none(),
     };
-    if confirmed {
+    if let Some(record) = confirmed {
+        let how = match record.kind() {
+            core::confirmed::RecordKind::Confirmed => "applied and confirmed",
+            core::confirmed::RecordKind::Unguarded => "applied (without auto-revert) and kept",
+        };
         print_status(
             "✓",
             Color::Green,
-            "This exact ruleset was applied and confirmed on this machine.",
+            &format!("This exact ruleset was {how} on this machine."),
         );
+        if !record.from_this_boot() {
+            println!(
+                "  That was in an earlier session (before a reboot, or recorded by an older DRFW): it may not be what is running now."
+            );
+        }
     } else {
         let warn = Stream::Stderr.colored();
         eprintln!(
-            "{} This ruleset was never confirmed on this machine (with `drfw apply` or the GUI).",
+            "{} This ruleset is not the one last applied and confirmed on this machine (with `drfw apply` or the GUI).",
             paint("WARNING:", Color::Red, warn)
         );
         eprintln!(
@@ -914,7 +995,7 @@ async fn save_profile(
             if !std::io::stdin().is_terminal() {
                 return Err(failure(
                     exit_code::NOT_CONFIRMED,
-                    "not saved: pass --yes to save rules that were never confirmed",
+                    "not saved: pass --yes to save rules that were not applied and confirmed",
                 ));
             }
             if !ask_yes_no("Save anyway?").await {
@@ -922,6 +1003,13 @@ async fn save_profile(
             }
         }
     }
+    retention_guard(
+        &ruleset,
+        record.as_ref(),
+        yes,
+        ("Save anyway?", "not saved"),
+    )
+    .await?;
 
     let before = core::boot::query_boot_status().await;
     let service = if enable_at_boot && before.loads_at_boot() != Some(true) {
@@ -1132,6 +1220,7 @@ mod tests {
             exit_code::STATE_UNKNOWN,
             exit_code::NOT_CONFIRMED,
             exit_code::NOT_ENABLED,
+            exit_code::RETENTION,
         ];
         let unique: std::collections::HashSet<u8> = codes.into_iter().collect();
         assert_eq!(unique.len(), codes.len());
@@ -1221,6 +1310,8 @@ mod tests {
             &["drfw", "apply", "my-profile"][..],
             &["drfw", "apply", "my-profile", "--confirm", "60"],
             &["drfw", "apply", "my-profile", "--no-confirm"],
+            &["drfw", "apply", "my-profile", "--no-confirm", "--yes"],
+            &["drfw", "apply", "my-profile", "-y"],
             &["drfw", "export", "my-profile", "--format", "nft"],
             &["drfw", "export", "my-profile", "--format", "json"],
             &["drfw", "export", "my-profile"],

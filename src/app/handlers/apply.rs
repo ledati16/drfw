@@ -21,7 +21,9 @@ use crate::app::{AppStatus, BannerSeverity, Message, State};
 use crate::audit;
 use crate::core::apply_guard::{ApplyError, GuardError, GuardHandle, GuardOutcome};
 use crate::core::boot::BootStatus;
+use crate::core::confirmed::{ConfirmedRecord, RecordKind};
 use crate::core::firewall::FirewallRuleset;
+use crate::core::retention::RetentionWarning;
 use crate::core::system_config::EnableOutcome;
 use crate::core::verify::{VerifyError, VerifyResult};
 use crate::elevation::AuthError;
@@ -87,10 +89,42 @@ pub struct ApplySession {
     json: serde_json::Value,
     /// `last_applied_ruleset` before this apply, restored if it is reverted
     previous_applied: Option<FirewallRuleset>,
+    /// Why this apply needs an explicit "Apply anyway" (compared with the
+    /// last ruleset applied and kept), computed when Apply was clicked
+    retention: Option<RetentionWarning>,
+}
+
+impl ApplySession {
+    /// The retention guard's warning for this apply, if any (shown in the
+    /// "Commit Changes?" dialog).
+    pub fn retention(&self) -> Option<&RetentionWarning> {
+        self.retention.as_ref()
+    }
+
+    /// The record of this ruleset once it is kept (the same one
+    /// `apply_guarded` and the guard persist).
+    fn kept_record(&self, kind: RecordKind) -> Option<ConfirmedRecord> {
+        ConfirmedRecord::new(&self.json, &self.verified, kind)
+            .map_err(|e| tracing::error!("Cannot record the kept ruleset: {e}"))
+            .ok()
+    }
+}
+
+/// The ruleset of the last apply that was kept, if known.
+fn kept_ruleset(state: &State) -> Option<&FirewallRuleset> {
+    state
+        .confirmed_record
+        .as_ref()
+        .and_then(ConfirmedRecord::ruleset)
 }
 
 /// Longest banner text for apply errors.
 const BANNER_MAX_LEN: usize = 100;
+
+/// Banner for [`ApplyError::StateUnknown`] (at most 120 characters, the
+/// banner's width); the details are in the panel it opens.
+pub(crate) const STATE_UNKNOWN_BANNER: &str =
+    "New rules MAY BE ACTIVE: the apply did not report its outcome. See Apply Details.";
 
 /// Banner lifetime that never expires (dismiss by clicking it).
 const PERSISTENT_BANNER_SECS: u64 = u64::MAX;
@@ -301,6 +335,7 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
 
     let verified = state.ruleset.clone();
     let json = verified.to_nftables_json();
+    let retention = RetentionWarning::check(kept_ruleset(state), &verified);
     let task = Task::perform(
         verify_and_locate(verified.clone(), json.clone()),
         Message::VerifyCompleted,
@@ -309,6 +344,7 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
         verified,
         json,
         previous_applied: None,
+        retention,
     });
     state.status = AppStatus::Verifying;
     task
@@ -352,8 +388,21 @@ pub(crate) fn handle_cancel_apply(state: &mut State) {
     }
 }
 
-/// Handles proceeding to apply after successful verification
+/// Handles proceeding to apply after successful verification ("Apply" or
+/// Enter). Refused while the retention guard warns: that takes the "Apply
+/// anyway" button ([`handle_proceed_to_apply_anyway`]).
 pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
+    proceed_to_apply(state, false)
+}
+
+/// Handles "Apply anyway": the user confirmed the retention guard's warning.
+pub(crate) fn handle_proceed_to_apply_anyway(state: &mut State) -> Task<Message> {
+    proceed_to_apply(state, true)
+}
+
+/// Starts the elevated apply of the verified snapshot. `retention_confirmed`:
+/// the user explicitly accepted the retention guard's warning.
+fn proceed_to_apply(state: &mut State, retention_confirmed: bool) -> Task<Message> {
     if state.status != AppStatus::AwaitingApply {
         return Task::none();
     }
@@ -362,12 +411,21 @@ pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
         state.status = AppStatus::Idle;
         return Task::none();
     };
+    if session.retention.is_some() && !retention_confirmed {
+        // The dialog stays open; only its "Apply anyway" button continues
+        const HINT: &str = "Review the warning, then click \"Apply anyway\" to apply these rules.";
+        if state.banners.back().is_none_or(|b| b.message != HINT) {
+            state.push_banner(HINT, BannerSeverity::Warning);
+        }
+        return Task::none();
+    }
     session
         .previous_applied
         .clone_from(&state.last_applied_ruleset);
 
     state.status = AppStatus::Applying;
     let json = session.json.clone();
+    let ruleset = session.verified.clone();
     let rule_count = session.verified.rules.len();
     let enabled_count = session.verified.rules.iter().filter(|r| r.enabled).count();
     let enable_event_log = state.enable_event_log;
@@ -375,7 +433,8 @@ pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
 
     Task::perform(
         async move {
-            let result = crate::core::apply_guard::apply_guarded(&json, timeout_secs).await;
+            let result =
+                crate::core::apply_guard::apply_guarded(&json, timeout_secs, &ruleset).await;
             audit::log_apply(
                 enable_event_log,
                 rule_count,
@@ -422,9 +481,13 @@ pub(crate) fn handle_apply_result(
     state.set_last_applied(Some(verified));
 
     let Some(guard) = guard else {
-        // Auto-revert is off: the user chose to keep these rules unconditionally
+        // Auto-revert is off: the user chose to keep these rules
+        // unconditionally (`apply_guarded` persisted the same record)
         state.status = AppStatus::Idle;
-        state.last_confirmed_ruleset = state.apply_session.take().map(|s| s.verified);
+        state.confirmed_record = state
+            .apply_session
+            .take()
+            .and_then(|s| s.kept_record(RecordKind::Unguarded));
         state.push_banner(
             "Firewall rules applied successfully!",
             BannerSeverity::Success,
@@ -453,8 +516,13 @@ pub(crate) fn handle_apply_result(
 fn apply_error_feedback(state: &mut State, error: &ApplyError) -> Task<Message> {
     match error {
         ApplyError::Auth(auth) => return auth_error_feedback(state, auth),
-        ApplyError::StateUnknown(_) => {
-            push_persistent_banner(state, truncate_error_message("", &error.to_string(), 160));
+        ApplyError::StateUnknown(detail) => {
+            // Short enough for the banner; the full explanation goes to the
+            // details panel, opened right away
+            push_persistent_banner(state, STATE_UNKNOWN_BANNER.to_string());
+            state.verify_errors =
+                Some(crate::app::verify_errors::VerifyErrorsPanel::apply_state_unknown(detail));
+            state.show_verify_errors = true;
         }
         ApplyError::GuardNotStarted(_) => state.push_banner(
             truncate_error_message("", &error.to_string(), BANNER_MAX_LEN),
@@ -565,15 +633,15 @@ pub(crate) fn handle_guard_finished(
         return Task::none();
     }
     state.status = AppStatus::Idle;
-    let (verified, previous_applied) = state.apply_session.take().map_or((None, None), |session| {
-        (Some(session.verified), session.previous_applied)
-    });
+    let session = state.apply_session.take();
+    let previous_applied = session.as_ref().and_then(|s| s.previous_applied.clone());
     let enable_event_log = state.enable_event_log;
     let timeout_secs = guard_timeout_secs(state);
 
     match result {
         Ok(GuardOutcome::Confirmed) => {
-            state.last_confirmed_ruleset = verified;
+            // The guard persisted the same record (`GuardHandle::wait_outcome`)
+            state.confirmed_record = session.and_then(|s| s.kept_record(RecordKind::Confirmed));
             state.push_banner("Changes confirmed!", BannerSeverity::Success);
             audit_task(audit::log_auto_revert_confirmed(
                 enable_event_log,
@@ -647,7 +715,7 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
 pub enum SaveSource {
     /// The rules in the editor (what was just verified)
     Editor,
-    /// The last rules applied and kept this session (`last_confirmed_ruleset`)
+    /// The last rules applied and kept (`State::confirmed_record`)
     LastConfirmed,
 }
 
@@ -655,21 +723,24 @@ pub enum SaveSource {
 /// in the system file take effect at the next boot, with no auto-revert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SaveTested {
-    /// The editor's rules are the ones last applied and kept
+    /// The editor's rules are the ones last applied and kept: their
+    /// nftables JSON is byte for byte the recorded one (the test `drfw save`
+    /// uses)
     #[default]
     Tested,
-    /// Rules were applied and kept this session, but the editor's differ
+    /// Other rules were applied and kept (and can be saved instead)
     Differs,
-    /// Nothing was applied and kept this session
+    /// No kept rules that could be saved instead: nothing recorded, or a
+    /// record from an older DRFW without its ruleset
     NothingApplied,
 }
 
 impl SaveTested {
-    fn of(editor: &FirewallRuleset, last_confirmed: Option<&FirewallRuleset>) -> Self {
-        match last_confirmed {
-            Some(confirmed) if crate::app::rulesets_match(confirmed, editor) => Self::Tested,
-            Some(_) => Self::Differs,
-            None => Self::NothingApplied,
+    fn of(editor_json: &serde_json::Value, record: Option<&ConfirmedRecord>) -> Self {
+        match record {
+            Some(record) if record.matches(editor_json) => Self::Tested,
+            Some(record) if record.ruleset().is_some() => Self::Differs,
+            _ => Self::NothingApplied,
         }
     }
 
@@ -679,17 +750,23 @@ impl SaveTested {
             Self::Tested => None,
             Self::Differs => Some(
                 "The rules in the editor differ from the rules you last applied and \
-                 confirmed. Untested rules take effect at the next boot, with no \
+                 kept. Untested rules take effect at the next boot, with no \
                  automatic revert if they lock you out.",
             ),
             Self::NothingApplied => Some(
-                "These rules were not applied this session. They take effect at the \
-                 next boot, with no automatic revert if they lock you out. Apply and \
-                 confirm them first to test them.",
+                "These rules are not the ones last applied and kept on this machine. \
+                 They take effect at the next boot, with no automatic revert if they \
+                 lock you out. Apply and confirm them first to test them.",
             ),
         }
     }
 }
+
+/// Shown in the Save to System dialog when the kept rules it relies on were
+/// applied before the current boot (or the record does not say when).
+const EARLIER_SESSION_NOTE: &str = "The rules you last applied and kept are from an earlier \
+     session (before a reboot, or recorded by an older DRFW), so they may not be the rules \
+     running now.";
 
 /// Boot persistence part of the Save to System dialog, prepared in `update()`
 /// (the view only reads it).
@@ -697,6 +774,10 @@ impl SaveTested {
 pub struct SaveToSystemDialog {
     /// Whether the editor's rules were tested live (see [`SaveTested`])
     pub tested: SaveTested,
+    /// [`EARLIER_SESSION_NOTE`] when the kept rules predate this boot
+    pub earlier_session: Option<&'static str>,
+    /// The retention guard's warning for saving the editor's rules
+    pub retention: Option<RetentionWarning>,
     /// What `systemctl` said; `None` while it is being asked
     pub boot: Option<BootStatus>,
     /// The line shown in the dialog
@@ -737,12 +818,13 @@ impl SaveToSystemDialog {
     }
 
     /// The dialog's primary (highlighted, Enter) choice: the tested rules.
-    /// `None` when only untested rules could be saved; that takes a click.
+    /// `None` when only untested rules could be saved, or when the retention
+    /// guard warns about the editor's rules; that takes a click.
     pub fn primary_source(&self) -> Option<SaveSource> {
         match self.tested {
-            SaveTested::Tested => Some(SaveSource::Editor),
+            SaveTested::Tested if self.retention.is_none() => Some(SaveSource::Editor),
             SaveTested::Differs => Some(SaveSource::LastConfirmed),
-            SaveTested::NothingApplied => None,
+            SaveTested::Tested | SaveTested::NothingApplied => None,
         }
     }
 }
@@ -781,8 +863,15 @@ pub(crate) fn handle_save_to_system_verify_result(
             state.status = AppStatus::AwaitingSaveToSystem;
             clear_verify_errors(state);
             state.save_dialog = SaveToSystemDialog::checking();
-            state.save_dialog.tested =
-                SaveTested::of(&state.ruleset, state.last_confirmed_ruleset.as_ref());
+            let record = state.confirmed_record.as_ref();
+            state.save_dialog.tested = SaveTested::of(&state.ruleset.to_nftables_json(), record);
+            state.save_dialog.earlier_session = record
+                .filter(|r| {
+                    !r.from_this_boot() && state.save_dialog.tested != SaveTested::NothingApplied
+                })
+                .map(|_| EARLIER_SESSION_NOTE);
+            state.save_dialog.retention =
+                RetentionWarning::check(kept_ruleset(state), &state.ruleset);
             Task::perform(
                 crate::core::boot::query_boot_status(),
                 Message::SaveToSystemBootChecked,
@@ -836,7 +925,7 @@ pub(crate) fn handle_save_to_system_confirmed(
     let text = match source {
         SaveSource::Editor => state.ruleset.to_nft_text(),
         SaveSource::LastConfirmed => {
-            let Some(confirmed) = &state.last_confirmed_ruleset else {
+            let Some(confirmed) = kept_ruleset(state) else {
                 tracing::error!("Save of the last confirmed rules without any");
                 return Task::none();
             };
@@ -1598,7 +1687,7 @@ mod tests {
     #[test]
     fn test_save_to_system_warns_when_nothing_was_applied() {
         let mut state = state_awaiting_save();
-        assert!(state.last_confirmed_ruleset.is_none());
+        assert!(state.confirmed_record.is_none());
         assert_eq!(state.save_dialog.tested, SaveTested::NothingApplied);
         assert!(
             state
@@ -1693,15 +1782,198 @@ mod tests {
             Ok(GuardOutcome::RevertFailed("busy".to_string())),
         );
         assert!(
-            state.last_confirmed_ruleset.is_none(),
+            state.confirmed_record.is_none(),
             "still active, never confirmed"
         );
 
         // Auto-revert off: applied without a guard, kept by choice
         let mut state = state_applying();
         let _ = handle_apply_result(&mut state, Ok(None));
-        let confirmed = state.last_confirmed_ruleset.as_ref().expect("kept");
-        assert_eq!(confirmed.rules[0].label, "New");
+        let record = state.confirmed_record.as_ref().expect("kept");
+        assert_eq!(record.kind(), RecordKind::Unguarded);
+        assert_eq!(record.ruleset().expect("ruleset").rules[0].label, "New");
+        assert!(record.matches(&state.ruleset.to_nftables_json()));
+
+        // Confirmed in time: recorded as confirmed
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Kept", Some(22)));
+        state.mark_profile_dirty();
+        apply_and_confirm(&mut state);
+        let record = state.confirmed_record.as_ref().expect("kept");
+        assert_eq!(record.kind(), RecordKind::Confirmed);
+        assert!(record.from_this_boot() || crate::core::confirmed::current_boot_id().is_none());
+    }
+
+    /// The record loaded at startup (shared with the CLI) drives the Save to
+    /// System dialog: the same JSON bytes are "tested", and a record from an
+    /// earlier boot says so.
+    #[test]
+    fn test_save_dialog_uses_the_persisted_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        let record = ConfirmedRecord::new(
+            &state.ruleset.to_nftables_json(),
+            &state.ruleset,
+            RecordKind::Confirmed,
+        )
+        .unwrap();
+        // As written by another process during an earlier boot
+        let path = dir
+            .path()
+            .join(crate::core::confirmed::CONFIRMED_RULESET_FILE);
+        crate::utils::block_on_async(record.save_in(dir.path()));
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        file["boot_id"] = serde_json::json!("earlier-boot");
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        state.confirmed_record = ConfirmedRecord::load_from_blocking(dir.path());
+
+        open_save_dialog(&mut state);
+        assert_eq!(state.save_dialog.tested, SaveTested::Tested);
+        assert_eq!(
+            state.save_dialog.earlier_session,
+            Some(EARLIER_SESSION_NOTE)
+        );
+        assert_eq!(state.save_dialog.primary_source(), Some(SaveSource::Editor));
+        handle_save_to_system_cancelled(&mut state);
+
+        // This boot: no note
+        state.confirmed_record = Some(record);
+        open_save_dialog(&mut state);
+        assert_eq!(
+            state.save_dialog.earlier_session,
+            crate::core::confirmed::current_boot_id()
+                .is_none()
+                .then_some(EARLIER_SESSION_NOTE)
+        );
+    }
+
+    /// A state whose last kept ruleset has `count` enabled rules, with the
+    /// editor holding the same rules.
+    fn state_with_kept_rules(count: u16) -> State {
+        let mut state = create_test_state();
+        for i in 0..count {
+            state
+                .ruleset
+                .rules
+                .push(create_test_rule(&format!("rule{i}"), Some(1000 + i)));
+        }
+        state.mark_profile_dirty();
+        state.confirmed_record = Some(
+            ConfirmedRecord::new(
+                &state.ruleset.to_nftables_json(),
+                &state.ruleset,
+                RecordKind::Confirmed,
+            )
+            .unwrap(),
+        );
+        state
+    }
+
+    #[test]
+    fn test_retention_guard_needs_apply_anyway() {
+        let mut state = state_with_kept_rules(5);
+        state.ruleset.rules.truncate(2);
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert_eq!(state.status, AppStatus::AwaitingApply);
+        let warning = state
+            .apply_session
+            .as_ref()
+            .and_then(ApplySession::retention)
+            .expect("3 of 5 removed")
+            .clone();
+        assert_eq!(warning.removed_count, 3);
+        assert!(
+            warning.lines[0].contains("\"rule2\", \"rule3\", \"rule4\""),
+            "{warning:?}"
+        );
+
+        // Enter (ProceedToApply) is refused, with a hint
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::AwaitingApply);
+        assert!(last_banner(&state).0.contains("Apply anyway"));
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.banners.len(), 1, "the hint is not repeated");
+
+        // The button goes ahead
+        let _ = state.update(Message::ProceedToApplyAnyway);
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    #[test]
+    fn test_retention_guard_stays_quiet_for_small_changes() {
+        let mut state = state_with_kept_rules(10);
+        state.ruleset.rules.truncate(7); // 3 of 10
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert!(state.apply_session.as_ref().unwrap().retention().is_none());
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    #[test]
+    fn test_retention_guard_in_save_dialog() {
+        let mut state = state_with_kept_rules(4);
+        for rule in &mut state.ruleset.rules[..3] {
+            rule.enabled = false;
+        }
+        state.ruleset.advanced_security.block_forwarding = true;
+        state.mark_profile_dirty();
+        open_save_dialog(&mut state);
+        assert_eq!(state.save_dialog.tested, SaveTested::Differs);
+        let retention = state.save_dialog.retention.as_ref().expect("warns");
+        assert_eq!(retention.removed_count, 3);
+        assert!(retention.enables_block_forwarding);
+        assert_eq!(retention.lines.len(), 2);
+        // Enter saves the kept rules, never the editor's
+        assert_eq!(
+            state.save_dialog.primary_source(),
+            Some(SaveSource::LastConfirmed)
+        );
+    }
+
+    /// Even if the editor's rules were the tested ones, a retention warning
+    /// takes the Enter shortcut away from them.
+    #[test]
+    fn test_retention_warning_is_never_the_enter_choice() {
+        let mut server = FirewallRuleset::new();
+        server.advanced_security.egress_profile = crate::core::firewall::EgressProfile::Server;
+        let dialog = SaveToSystemDialog {
+            tested: SaveTested::Tested,
+            retention: RetentionWarning::check(None, &server),
+            ..SaveToSystemDialog::default()
+        };
+        assert!(dialog.retention.is_some());
+        assert_eq!(dialog.primary_source(), None);
+    }
+
+    /// The "may be active" banner fits the banner; the full explanation is in
+    /// the details panel, opened at once.
+    #[test]
+    fn test_state_unknown_banner_is_short_with_details_panel() {
+        assert!(STATE_UNKNOWN_BANNER.len() <= 120);
+        assert!(STATE_UNKNOWN_BANNER.starts_with("New rules MAY BE ACTIVE"));
+        let detail = "The apply script (running as root) did not finish within 90 seconds. \
+                      If the rules were applied with auto-revert, they revert on their own \
+                      when the countdown ends.";
+        let mut state = state_applying();
+        let _ = handle_apply_result(
+            &mut state,
+            Err(ApplyError::StateUnknown(detail.to_string())),
+        );
+        assert_eq!(last_banner(&state).0, STATE_UNKNOWN_BANNER);
+        assert!(state.show_verify_errors);
+        let panel = state.verify_errors.as_ref().expect("details");
+        assert_eq!(panel.title, "Apply Details");
+        assert!(panel.summary.contains("MAY BE ACTIVE"));
+        assert_eq!(panel.rows[0].message, detail);
+        assert_eq!(panel.rows[0].edit_rule_id(), None);
+        assert!(panel.next_step.contains("nft list table inet drfw"));
     }
 
     #[test]

@@ -141,6 +141,7 @@ drfw check <profile>                 # Validate + nft --check without privileges
 drfw apply <profile>                 # Apply with 15s auto-revert safety
 drfw apply <profile> --confirm 30    # Apply with 30s timeout (5-120)
 drfw apply <profile> --no-confirm    # Apply without auto-revert (until reboot)
+drfw apply <profile> --yes           # ... even if the retention guard warns
 drfw save <profile>                  # Save to System: the boot config (one prompt)
 drfw save <profile> --enable-at-boot # ... and enable the boot service if needed
 drfw export <profile> --format nft   # Export as nftables text (default)
@@ -159,10 +160,13 @@ drfw export <profile> --format json  # Export as nftables JSON
   in the GUI) to make rules survive a reboot.
 - `drfw save` writes the same file as the GUI's Save to System. The saved rules load at
   the next boot **without** a dead-man switch, so if the profile is not exactly what you
-  last applied *and confirmed* on this machine, it warns and asks (or, without a
-  terminal, refuses unless you pass `--yes`). The safe sequence on a server is
-  `drfw apply web`, confirm, `drfw save web`. It warns when the boot service is not
-  enabled; `--enable-at-boot` enables it in the same prompt.
+  last applied *and kept* on this machine (see [The kept-ruleset
+  record](#the-kept-ruleset-record)), it warns and asks (or, without a terminal,
+  refuses unless you pass `--yes`). The safe sequence on a server is `drfw apply web`,
+  confirm, `drfw save web`. It warns when the boot service is not enabled;
+  `--enable-at-boot` enables it in the same prompt.
+- `drfw apply` and `drfw save` ask before a big change (see [Retention
+  guard](#retention-guard)); without a terminal they need `--yes`.
 - During the `drfw apply` countdown, if another apply replaces the pending one, the
   countdown stops at once and reports it.
 
@@ -177,8 +181,9 @@ Exit codes (also in `drfw --help`):
 | 4 | `apply`: the revert **failed**: the new, unconfirmed rules are still active |
 | 5 | `apply`: another apply replaced these rules before they were confirmed |
 | 6 | `apply`: the outcome is **unknown**: the new rules may be active (e.g. the apply was interrupted after authentication) |
-| 7 | `save`: not saved, the rules were never confirmed (use `--yes`) |
+| 7 | `save`: not saved, the rules are not the ones last applied and confirmed (use `--yes`) |
 | 8 | `save`: saved, but the boot service could not be enabled |
+| 9 | `apply`/`save`: not done, the retention guard asks for a confirmation (use `--yes`) |
 
 A timed-out revert exits 0: that is the dead-man switch doing its job. Codes 3 to 6 mean
 "look at the firewall now"; scripts must not treat them like 1.
@@ -270,7 +275,8 @@ the watcher exists before the new rules go live, so even a killed script leaves 
 guarded. If DRFW cannot tell what happened after you authenticated (the script was
 killed, or took more than 90 seconds), it says the state is **unknown** and that the
 new rules may be active, instead of "nothing was changed"; a guarded apply then still
-reverts when its countdown ends.
+reverts when its countdown ends. In the GUI the banner stays short and opens **Apply
+Details** with the full explanation (reopen it from the header button).
 
 **Who can confirm.** Confirm and revert tokens are files in your `$XDG_RUNTIME_DIR`
 (or DRFW's state directory), which must belong to you and be closed to other users
@@ -283,6 +289,43 @@ ruleset in place. Only if even that fails are the new rules reported as still ac
 
 A new apply during a pending countdown replaces the earlier guard and keeps its
 revert point: a timeout always goes back to the last *confirmed* rules.
+
+### The kept-ruleset record
+
+When you keep an apply (confirm it in time, or apply with auto-revert off, in the GUI or
+with `drfw apply --no-confirm`), DRFW records it in
+`~/.local/state/drfw/confirmed-ruleset.json` (mode 0600, written atomically): the exact
+nftables JSON that was applied, the rules it came from, and the boot id. The GUI loads it
+at startup and the CLI reads it, so both agree on what was last applied and kept.
+Reverted, superseded or failed applies never change it. A profile counts as *tested*
+when its nftables JSON is byte for byte the recorded one.
+
+The record says what was **applied**, not what is running now: a reboot without Save to
+System, `nft flush ruleset` or another tool can change the kernel's rules. When the
+record is from an earlier boot (or from an older DRFW that did not store the boot id),
+the Save to System dialog and `drfw save` say that it was kept in an earlier session and
+may not be what is running.
+
+`--no-confirm` counts as kept on purpose: it is the same explicit choice as turning
+auto-revert off in the GUI, and a record left at an older ruleset would describe rules
+that are no longer in place (and would make the retention guard compare against them).
+
+### Retention guard
+
+Before **Apply** and **Save to System** (GUI, `drfw apply`, `drfw save`), DRFW compares
+the ruleset with the last one applied and kept, and asks for an explicit confirmation
+when it:
+
+- removes at least 3 of the enabled rules, and at least 40 % of them (rules are matched
+  by id; disabling a rule counts as removing it);
+- switches from Desktop to Server mode (outgoing connections need allow rules);
+- turns on **Block forwarded traffic**.
+
+The GUI lists the removed rules (the first 10, then "+N more") in the "Commit
+Changes?" or Save to System dialog; applying then takes a click on **Apply anyway**
+(Enter does not do it), and saving the editor's rules a click on a red button. The CLI
+prints the same lines and asks y/N on a terminal; without one it needs `--yes` (exit
+code 9 otherwise, nothing changed). With no record yet, only the two mode changes ask.
 
 ## Save to System
 
@@ -323,8 +366,10 @@ sudo cp -p /etc/nftables.conf.drfw-orig /etc/nftables.conf
 `drfw save <profile>` does the same on a headless machine (one prompt). Because saved
 rules load at boot without a dead-man switch, it warns loudly and asks (or needs
 `--yes` without a terminal) unless the profile is exactly what you last applied and
-confirmed. It warns when the boot service is not enabled; `--enable-at-boot` enables it
-in the same prompt. See the exit codes under [CLI Interface](#cli-interface).
+kept (see [The kept-ruleset record](#the-kept-ruleset-record)); the [retention
+guard](#retention-guard) applies too. It warns when the boot service is not enabled;
+`--enable-at-boot` enables it in the same prompt. See the exit codes under [CLI
+Interface](#cli-interface).
 
 ### Example Rules
 
@@ -431,7 +476,7 @@ leaves a "log cleared" entry as the first line of the new log.
 | Audit log | `~/.local/state/drfw/audit.log` (rotated to `audit.log.old` past 1 MiB, at startup) |
 | Revert guard state (root, tmpfs) | `/run/drfw/` (`active`, `status-<id>`, revert batches) |
 | Confirm/revert tokens | `$XDG_RUNTIME_DIR` (else the state directory); must be yours, mode 0700 |
-| Last confirmed ruleset (for `drfw save`) | `~/.local/state/drfw/confirmed-ruleset.json` |
+| Last ruleset applied and kept (GUI and CLI) | `~/.local/state/drfw/confirmed-ruleset.json` |
 | Boot config (Save to System) | `/etc/nftables.conf`, plus `.drfw-bak` and `.drfw-orig` |
 
 All files in your home are created with `0o600` permissions, directories with `0o700`. A
@@ -584,6 +629,8 @@ src/
 │   ├── validate.rs     # The rule/ruleset validator
 │   ├── verify.rs       # Pre-apply `nft --check`
 │   ├── apply_guard.rs  # Apply + root-side revert guard
+│   ├── confirmed.rs    # Record of the last ruleset applied and kept
+│   ├── retention.rs    # Confirmation before a big change
 │   ├── system_config.rs # Save to System
 │   ├── boot.rs         # Boot persistence (`systemctl is-enabled`, unprivileged)
 │   └── profiles.rs     # Profile persistence

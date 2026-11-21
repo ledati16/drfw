@@ -394,8 +394,11 @@ lock (waits for a still-running apply), and reverts if there is no status, armed
 (the revert file is the pre-apply state, so restoring it is right either way). DRFW maps
 a signal or an unexpected exit after the start marker, and a script that outlives
 `SCRIPT_TIMEOUT` (90 s, after authentication; root, so `kill_on_drop` can't stop it), to
-`ApplyError::StateUnknown` (`rules_may_be_active()`; persistent warning, exit 6 in the
-CLI). Before the marker every failure means nothing changed.
+`ApplyError::StateUnknown` (`rules_may_be_active()`; exit 6 in the CLI). The GUI shows
+the persistent, short `STATE_UNKNOWN_BANNER` (≤ 120 chars, "MAY BE ACTIVE" first; banners
+truncate) and puts the full reason in the "Apply Details" panel
+(`VerifyErrorsPanel::apply_state_unknown`). Before the marker every failure means nothing
+changed.
 
 The watcher polls once per second on `/proc/uptime` (immune to clock changes), and
 checks the deadline **before** touching the user's directory. The user side confirms or
@@ -412,9 +415,37 @@ table, never to re-applying drop policies. Closing the GUI, a crash, a closed te
 or a dropped SSH session all end in the revert. A revert whose lock is still held after
 60 s (once armed) goes ahead anyway and logs it (journal, or `logger -t drfw`).
 
-A confirmed outcome (seen by `GuardHandle::wait_outcome`, GUI or CLI) records the applied
-JSON in `<state dir>/confirmed-ruleset.json`; `drfw save` uses it to tell tested rules
-from untested ones (`apply_guard::confirmed_ruleset_matches`).
+### Kept-Ruleset Record (`core::confirmed`)
+One record of the last ruleset **applied and kept**, shared by the GUI and the CLI:
+`<state dir>/confirmed-ruleset.json` (0600, atomic). It holds the exact nftables JSON
+text nft read on stdin, the ruleset (profile format, read back with `parse_profile`) and
+the boot id (`/proc/sys/kernel/random/boot_id`).
+
+- **Writers (only these two):** `apply_guarded` after an unguarded apply (GUI with
+  auto-revert off, `drfw apply --no-confirm`: kind `unguarded`) and
+  `GuardHandle::wait_outcome` on a confirmation (kind `confirmed`). Reverted, superseded
+  and failed applies never write it. The GUI keeps the same record in
+  `State::confirmed_record` (loaded at startup, replaced when an apply is kept).
+- **"Tested" = the same JSON bytes:** `ConfirmedRecord::matches(json)`, used by the Save
+  to System dialog (`SaveTested`) and `drfw save`. Do not compare rulesets field by field
+  for this.
+- **Not live state:** a reboot, `nft flush` or another tool invalidates it.
+  `from_this_boot()` is false for an earlier boot or an unknown boot id; user-facing text
+  must then say "kept in an earlier session", never "running now".
+- Older DRFW wrote the bare nftables JSON: still read (confirmed, no ruleset, boot unknown).
+- `--no-confirm` records on purpose: the same explicit choice as auto-revert off in the
+  GUI, and a stale record would describe rules that are no longer in place.
+
+### Retention Guard (`core::retention`)
+Before Apply and Save to System (GUI and CLI), `RetentionWarning::check(kept, next)`
+compares with the record's ruleset (DRFW's defaults when there is none): at least 3
+**and** at least 40 % of its enabled rules removed (matched by id; disabled = removed),
+Desktop→Server, or block forwarding turned on. GUI: computed in `update()`
+(`ApplySession::retention`, `SaveToSystemDialog::retention`); only the "Apply anyway"
+button (`Message::ProceedToApplyAnyway`) proceeds, Enter (`ProceedToApply`) is refused,
+and `SaveToSystemDialog::primary_source()` never picks the editor's rules then. CLI
+(`retention_guard` in `main.rs`): prints the same `lines`, asks y/N on a terminal,
+otherwise needs `--yes` (exit code 9, nothing changed).
 
 **Never** move the revert back into the DRFW process or require a second prompt for it:
 that fails exactly when the user is locked out. **Never** start the watcher after the
@@ -436,9 +467,9 @@ The script ignores `HUP`/`INT`/`QUIT`/`TERM`/`PIPE` like `APPLY_SCRIPT`.
 
 `drfw save <profile> [--enable-at-boot] [--yes]` is the same path for headless
 servers (`validate_for_apply`, unprivileged check, `write_config_file_and_enable`). A
-profile whose JSON is not the last confirmed one (see the guard) prints a loud
-"never confirmed; no dead-man switch at boot" warning and needs `--yes` (no TTY) or a
-y/N answer (exit 7 otherwise). With `--enable-at-boot` a failed enable exits 8; without
+profile whose JSON is not the kept-ruleset record (see above) prints a loud
+"not the one last applied and confirmed; no dead-man switch at boot" warning and needs
+`--yes` (no TTY) or a y/N answer (exit 7 otherwise); the retention guard follows (exit 9). With `--enable-at-boot` a failed enable exits 8; without
 it a disabled boot service is warned about. Tests set `DRFW_TEST_SYSTEM_NFT_PATH`
 (honoured only together with `DRFW_NFT_COMMAND`).
 
@@ -569,7 +600,7 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/app/verify_errors.rs` | Unit tests for the "Verification Errors" panel model | Row titles, summary/banner wording, "Edit Rule" only for rules that still exist |
 | `src/distro.rs` | Compile-time validators, service unit template | `is_valid_absolute_path()`, `is_valid_service_name()`, `service_unit()` |
 | `src/core/boot.rs` | `systemctl` output mapping | `enablement_from_output()`, `BootStatus` summaries and checkbox rules |
-| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts), CLI `status`/`check`/`save`/`print-service-unit` and the `--help` exit codes (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
+| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts; which applies write the kept-ruleset record), CLI `status`/`check`/`save`/`print-service-unit`, the retention guard of `apply`/`save` and the `--help` exit codes (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
 | `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
 | `tests/verify_errors.rs` | Error attribution against real `nft` in `unshare -rn`, and `drfw check` output (own binary) | A rejected ruleset names the rule that caused each error (also with per-source sets), CLI prints mapped errors without color codes |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
@@ -1195,7 +1226,7 @@ fn handle_message(&mut self) -> Task<Message> {
 - Revert guard state: `/run/drfw/` (root-owned 0755 tmpfs dir; `active`, `status-*` 0644)
 - Confirm/revert tokens: `$XDG_RUNTIME_DIR` or the state dir, which must be owned by
   the user and 0700 or stricter; tokens 0600
-- Last confirmed ruleset: `~/.local/state/drfw/confirmed-ruleset.json` (0o600)
+- Last ruleset applied and kept (`core::confirmed`): `~/.local/state/drfw/confirmed-ruleset.json` (0o600)
 - Boot config: `drfw::SYSTEM_NFT_PATH` (0644) with `.drfw-bak` and `.drfw-orig`; its
   directory is created 0755 if missing
 
@@ -1203,7 +1234,8 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-11-20 (audit fixes: signal-safe guard with the watcher started
+**Last Updated:** 2026-11-20 (kept-ruleset record shared by GUI and CLI, retention
+guard, short `StateUnknown` banner with Apply Details. Before: audit fixes: signal-safe guard with the watcher started
 before the apply, `StateUnknown`; user rules before ICMP; per-source Accept-only;
 split inverted rate+connection limits; `drfw save`; CLI exit codes; elevation context;
 no polkit rule. Earlier: chrono → jiff, diagnostics view model, `drfw check`/honest `status`, docs for the revert guard, single generator and Save to System; `distro` compile-time config, boot persistence, enable-at-boot, `print-service-unit`)

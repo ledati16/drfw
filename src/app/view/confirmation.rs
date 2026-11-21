@@ -5,10 +5,48 @@ use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Sha
 
 use crate::app::handlers::SaveTested;
 use crate::app::ui_components::{
-    card_container, danger_button, primary_button, secondary_button, section_header_container,
-    themed_checkbox,
+    card_container, danger_button, inset_container_bordered, primary_button, secondary_button,
+    section_header_container, themed_checkbox,
 };
 use crate::app::{AppStatus, Message, SaveSource};
+use crate::core::retention::RetentionWarning;
+
+/// Heading of the retention guard's warning in both dialogs.
+const RETENTION_HEADING: &str = "This is a big change. Check it before you continue:";
+
+/// The retention guard's warning: why this ruleset needs an explicit
+/// confirmation (every line prepared in `update()`).
+fn retention_block<'a>(
+    warning: &'a RetentionWarning,
+    width: f32,
+    theme: &'a crate::theme::AppTheme,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    let lines = warning.lines.iter().map(|line| {
+        text(line)
+            .size(13)
+            .font(font)
+            .color(theme.fg_primary)
+            .into()
+    });
+    container(
+        column![
+            text(RETENTION_HEADING)
+                .size(13)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..font
+                })
+                .color(theme.danger),
+        ]
+        .extend(lines)
+        .spacing(6),
+    )
+    .padding(12)
+    .width(width)
+    .style(move |_| inset_container_bordered(theme))
+    .into()
+}
 
 // ============================================================================
 // Helper Functions - Build modal body content
@@ -65,16 +103,29 @@ fn build_awaiting_body<'a>(
     .into()
 }
 
-/// Build the buttons for `AwaitingApply` state
+/// Build the buttons for `AwaitingApply` state. With a retention warning the
+/// apply button is "Apply anyway" (danger style, click only: Enter is refused)
 fn build_awaiting_buttons(
     auto_revert_enabled: bool,
+    retention: bool,
     theme: &crate::theme::AppTheme,
     font: iced::Font,
 ) -> Element<'_, Message> {
-    let button_text = if auto_revert_enabled {
-        "Apply & Start Timer"
+    let apply = if retention {
+        button(text("Apply anyway").size(14).font(font))
+            .on_press(Message::ProceedToApplyAnyway)
+            .padding([10, 24])
+            .style(move |_, status| danger_button(theme, status))
     } else {
-        "Apply Now"
+        let button_text = if auto_revert_enabled {
+            "Apply & Start Timer"
+        } else {
+            "Apply Now"
+        };
+        button(text(button_text).size(14).font(font))
+            .on_press(Message::ProceedToApply)
+            .padding([10, 24])
+            .style(move |_, status| primary_button(theme, status))
     };
 
     // Cancel closes the dialog without applying; the edits stay
@@ -83,10 +134,7 @@ fn build_awaiting_buttons(
             .on_press(Message::CancelApply)
             .padding([10, 20])
             .style(move |_, status| secondary_button(theme, status)),
-        button(text(button_text).size(14).font(font))
-            .on_press(Message::ProceedToApply)
-            .padding([10, 24])
-            .style(move |_, status| primary_button(theme, status)),
+        apply,
     ]
     .spacing(16)
     .into()
@@ -352,9 +400,11 @@ fn build_confirmation_buttons(
 /// - `PendingConfirmation`: Countdown timer with progress bar
 ///
 /// `timer_secs` and `countdown_text` are the timer length and the remaining
-/// seconds, formatted in `update()`.
+/// seconds, formatted in `update()`; `retention` is the retention guard's
+/// warning for this apply (computed when Apply was clicked).
 pub fn view_apply_flow_modal<'a>(
     status: &'a AppStatus,
+    retention: Option<&'a RetentionWarning>,
     auto_revert_enabled: bool,
     timer_secs: &'a str,
     countdown_text: &'a str,
@@ -365,11 +415,21 @@ pub fn view_apply_flow_modal<'a>(
 ) -> Element<'a, Message> {
     // Determine content based on current status
     let (title_text, body, buttons) = match status {
-        AppStatus::AwaitingApply => (
-            "Commit Changes?",
-            build_awaiting_body(auto_revert_enabled, timer_secs, theme, font),
-            build_awaiting_buttons(auto_revert_enabled, theme, font),
-        ),
+        AppStatus::AwaitingApply => {
+            let body = build_awaiting_body(auto_revert_enabled, timer_secs, theme, font);
+            let body = match retention {
+                Some(warning) => column![body, retention_block(warning, 400.0, theme, font)]
+                    .spacing(16)
+                    .align_x(Alignment::Center)
+                    .into(),
+                None => body,
+            };
+            (
+                "Commit Changes?",
+                body,
+                build_awaiting_buttons(auto_revert_enabled, retention.is_some(), theme, font),
+            )
+        }
         AppStatus::Applying => (
             "Applying Rules...",
             build_applying_body(theme, font),
@@ -495,6 +555,18 @@ pub fn view_save_to_system_modal<'a>(
         );
     }
 
+    // The kept rules may not be what runs now (applied before a reboot)
+    if let Some(note) = dialog.earlier_session {
+        body = body.push(
+            text(note)
+                .size(12)
+                .font(font)
+                .color(theme.warning)
+                .width(400)
+                .align_x(Alignment::Center),
+        );
+    }
+
     // Untested rules take effect at boot without the auto-revert safety net
     if let Some(warning) = dialog.tested.warning() {
         body = body.push(
@@ -514,7 +586,19 @@ pub fn view_save_to_system_modal<'a>(
         .on_press(Message::SaveToSystemCancelled)
         .padding([10, 20])
         .style(move |_, status| secondary_button(theme, status));
+    // Saving the editor's rules despite the retention guard takes a click
+    if let Some(retention) = &dialog.retention {
+        body = body.push(retention_block(retention, 400.0, theme, font));
+    }
+
     let buttons = match dialog.tested {
+        SaveTested::Tested if dialog.retention.is_some() => row![
+            cancel,
+            button(text("Save anyway").size(14).font(font))
+                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .padding([10, 24])
+                .style(move |_, status| danger_button(theme, status)),
+        ],
         SaveTested::Tested => row![
             cancel,
             button(text("Save").size(14).font(font))

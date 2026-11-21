@@ -11,6 +11,8 @@ use crate::core::verify::VerifyResult;
 /// The errors of the last failed verification, ready to display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyErrorsPanel {
+    /// Panel title, also the label of the header button that reopens it
+    pub title: &'static str,
     /// "nft rejected 2 rules." / "nft rejected the ruleset."
     pub summary: String,
     /// What to do next ("... then apply again"), set by whoever verified
@@ -53,12 +55,34 @@ impl VerifyErrorsPanel {
             })
             .collect();
         let mut panel = Self {
+            title: "Verification Errors",
             summary: format!("{}.", rejected_phrase(result)),
             next_step: "Nothing was changed. Fix the rules below, then apply again.",
             rows,
         };
         panel.sync_with(ruleset);
         panel
+    }
+
+    /// The details of an apply whose outcome is unknown (the new rules may be
+    /// active): the banner is short, the full explanation is here. `detail`
+    /// is the reason `ApplyError::StateUnknown` carries.
+    pub fn apply_state_unknown(detail: &str) -> Self {
+        Self {
+            title: "Apply Details",
+            summary: "Firewall state unknown: the new rules MAY BE ACTIVE.".to_string(),
+            next_step: "DRFW cannot tell whether the old or the new rules are loaded. \
+                        Check with `sudo nft list table inet drfw`. Applying again (with \
+                        auto-revert) brings the firewall back to a known state.",
+            rows: vec![VerifyErrorRow {
+                title: "What happened".to_string(),
+                rule_id: None,
+                rule_exists: false,
+                message: detail.to_string(),
+                source_line: None,
+                caret: None,
+            }],
+        }
     }
 
     /// Re-checks which rules the rows point at still exist, after the

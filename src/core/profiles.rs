@@ -393,6 +393,19 @@ async fn remove_legacy_checksum(path: &std::path::Path) {
     }
 }
 
+/// `ruleset` in the on-disk profile format (with `version`), as a JSON value
+/// that [`parse_profile`] reads back (used by the confirmed-ruleset record).
+///
+/// # Errors
+///
+/// Returns `Err` if serialization fails.
+pub(crate) fn profile_value(ruleset: &FirewallRuleset) -> serde_json::Result<serde_json::Value> {
+    serde_json::to_value(ProfileFileRef {
+        version: PROFILE_FORMAT_VERSION,
+        ruleset,
+    })
+}
+
 /// Serializes `ruleset` in the on-disk profile format (with `version`).
 fn profile_json(ruleset: &FirewallRuleset) -> Result<Vec<u8>, ProfileError> {
     Ok(serde_json::to_vec_pretty(&ProfileFileRef {

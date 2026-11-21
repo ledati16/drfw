@@ -100,7 +100,7 @@ pub fn view_verify_errors_modal<'a>(
     container(
         column![
             container(
-                text("Verification Errors")
+                text(panel.title)
                     .size(18)
                     .font(regular_font)
                     .color(theme.fg_primary)

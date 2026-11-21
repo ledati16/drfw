@@ -6,6 +6,7 @@
 //! - [`firewall`]: Data structures for representing firewall rules and rulesets
 //! - [`apply_guard`]: Applying rules with a root-side auto-revert guard
 //! - [`boot`]: Whether a systemd unit loads the saved rules at boot
+//! - [`confirmed`]: The record of the last ruleset applied and kept
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
@@ -14,14 +15,17 @@
 //! - [`profiles`]: Firewall profile management
 //! - [`rule_constraints`]: Business rules for valid field combinations
 //! - [`validate`]: Rule and ruleset validation (shared by the form, loader and apply)
+//! - [`retention`]: Confirmation before dropping most of the kept rules
 
 pub mod apply_guard;
 pub mod boot;
+pub mod confirmed;
 pub mod error;
 pub mod firewall;
 pub mod nft_errors;
 pub mod nft_text;
 pub mod profiles;
+pub mod retention;
 pub mod rule_constraints;
 pub mod system_config;
 pub mod validate;

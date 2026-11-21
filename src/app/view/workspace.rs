@@ -26,17 +26,14 @@ pub fn view_workspace<'a>(
     ]
     .spacing(8)
     .align_y(Alignment::Center);
-    // Reopens the errors of the last failed verification
-    if state.verify_errors.is_some() {
+    // Reopens the errors of the last failed verification (or the details of
+    // an apply with an unknown outcome)
+    if let Some(panel) = &state.verify_errors {
         nav_row = nav_row.push(
-            button(
-                text("Verification Errors")
-                    .size(13)
-                    .font(state.font_regular),
-            )
-            .on_press(Message::ToggleVerifyErrors(true))
-            .padding([8, 16])
-            .style(move |_, status| danger_button(theme, status)),
+            button(text(panel.title).size(13).font(state.font_regular))
+                .on_press(Message::ToggleVerifyErrors(true))
+                .padding([8, 16])
+                .style(move |_, status| danger_button(theme, status)),
         );
     }
     let nav_row = nav_row.extend([

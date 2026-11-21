@@ -108,11 +108,14 @@ pub struct State {
     pub ruleset: FirewallRuleset,
     /// What DRFW last applied to the kernel; `None` = unknown (e.g. at startup)
     pub last_applied_ruleset: Option<FirewallRuleset>,
-    /// The last ruleset applied *and kept* this session: confirmed within the
-    /// auto-revert countdown, or applied with auto-revert off. Unlike
-    /// `last_applied_ruleset` it is never an unconfirmed or failed-revert
-    /// state. Save to System offers it as the tested choice.
-    pub last_confirmed_ruleset: Option<FirewallRuleset>,
+    /// The last ruleset applied *and kept* (confirmed within the auto-revert
+    /// countdown, or applied with auto-revert off), shared with the CLI
+    /// through the persisted record (`core::confirmed`): loaded at startup,
+    /// replaced when an apply is kept. Unlike `last_applied_ruleset` it is
+    /// never an unconfirmed or failed-revert state, and it may come from an
+    /// earlier boot. Save to System offers it as the tested choice; the
+    /// retention guard compares new rulesets with it.
+    pub confirmed_record: Option<crate::core::confirmed::ConfirmedRecord>,
     /// Ruleset snapshot carried through verify -> apply -> confirm/revert
     pub apply_session: Option<handlers::ApplySession>,
     pub cached_disk_profile: Option<FirewallRuleset>,
@@ -545,6 +548,9 @@ pub enum Message {
     ApplyClicked,
     VerifyCompleted(Result<crate::core::verify::VerifyResult, crate::core::verify::VerifyError>),
     ProceedToApply,
+    /// "Apply anyway" in "Commit Changes?" when the retention guard warns
+    /// (Enter sends `ProceedToApply`, which is refused then)
+    ProceedToApplyAnyway,
     /// Close the "Commit Changes?" dialog without applying (edits are kept)
     CancelApply,
     ApplyResult(
@@ -777,7 +783,7 @@ impl State {
         let mut state = Self {
             // Unknown until DRFW applies something: the kernel may hold anything
             last_applied_ruleset: None,
-            last_confirmed_ruleset: None,
+            confirmed_record: crate::core::confirmed::ConfirmedRecord::load_blocking(),
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -911,7 +917,7 @@ impl State {
 
         let mut state = Self {
             last_applied_ruleset: Some(ruleset.clone()),
-            last_confirmed_ruleset: None,
+            confirmed_record: None,
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -1544,6 +1550,9 @@ impl State {
                 return handlers::handle_verify_completed(self, result);
             }
             Message::ProceedToApply => return handlers::handle_proceed_to_apply(self),
+            Message::ProceedToApplyAnyway => {
+                return handlers::handle_proceed_to_apply_anyway(self);
+            }
             Message::CancelApply => handlers::handle_cancel_apply(self),
             Message::ApplyResult(result) => return handlers::handle_apply_result(self, result),
             Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),

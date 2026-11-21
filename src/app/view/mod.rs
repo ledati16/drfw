@@ -215,6 +215,10 @@ fn dialog(state: &State) -> Option<Element<'_, Message>> {
         AppStatus::AwaitingApply | AppStatus::Applying | AppStatus::PendingConfirmation { .. } => {
             Some(confirmation::view_apply_flow_modal(
                 &state.status,
+                state
+                    .apply_session
+                    .as_ref()
+                    .and_then(crate::app::handlers::ApplySession::retention),
                 state.auto_revert_enabled,
                 &state.settings_display.apply_timer_secs,
                 &state.countdown_display,
