@@ -8,15 +8,35 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
-use super::helper_modals;
 use crate::app::ui_components::{
-    card_container, primary_button, secondary_button, section_header_container, themed_checkbox,
-    themed_pick_list, themed_pick_list_menu, themed_text_input,
+    card_container, danger_button, primary_button, secondary_button, section_header_container,
+    themed_checkbox, themed_pick_list, themed_pick_list_menu, themed_text_input,
 };
 use crate::app::{HelperType, Message, RuleForm};
 use crate::core::firewall::{Protocol, RejectType};
 use crate::core::rule_constraints::{available_reject_types_for_protocol, protocol_supports_ports};
 
+/// Protocols offered in the form; the single ICMP versions only with the
+/// advanced options shown.
+const BASIC_PROTOCOLS: [Protocol; 5] = [
+    Protocol::Any,
+    Protocol::Tcp,
+    Protocol::Udp,
+    Protocol::TcpAndUdp,
+    Protocol::IcmpBoth,
+];
+const ALL_PROTOCOLS: [Protocol; 7] = [
+    Protocol::Any,
+    Protocol::Tcp,
+    Protocol::Udp,
+    Protocol::TcpAndUdp,
+    Protocol::IcmpBoth,
+    Protocol::Icmp,
+    Protocol::Icmpv6,
+];
+
+/// The rule form. `confirm_discard` replaces the footer buttons with the
+/// "Discard changes?" prompt.
 pub fn view_rule_form<'a>(
     form: &'a RuleForm,
     errors: Option<&'a crate::app::FormErrors>,
@@ -26,6 +46,7 @@ pub fn view_rule_form<'a>(
     regular_font: iced::Font,
     mono_font: iced::Font,
     server_mode: bool,
+    confirm_discard: bool,
 ) -> Element<'a, Message> {
     let title_text = if form.id.is_some() {
         "Edit Rule"
@@ -55,11 +76,8 @@ pub fn view_rule_form<'a>(
         output_interface_error
     });
 
-    // Summary strings for multi-value fields
-    let ports_summary = helper_modals::ports_summary(&form.ports);
-    let sources_summary = helper_modals::addresses_summary(&form.sources);
-    let destinations_summary = helper_modals::addresses_summary(&form.destinations);
-    let tags_summary = helper_modals::tags_summary(&form.tags);
+    // Summary strings for multi-value fields (cached in the form)
+    let display = &form.display;
 
     let form_box = column![
         // Title Section
@@ -85,6 +103,7 @@ pub fn view_rule_form<'a>(
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
             text_input("e.g. Local Web Server", &form.label)
+                .id(crate::app::focus::RULE_FORM_LABEL)
                 .on_input(Message::RuleFormLabelChanged)
                 .padding(8)
                 .font(regular_font)
@@ -104,20 +123,10 @@ pub fn view_rule_form<'a>(
                     .padding([2, 6])
                     .style(move |_| section_header_container(theme)),
                     pick_list(
-                        {
-                            let mut protocols = vec![
-                                Protocol::Any,
-                                Protocol::Tcp,
-                                Protocol::Udp,
-                                Protocol::TcpAndUdp,
-                                Protocol::IcmpBoth,
-                            ];
-                            // Only show individual ICMP versions in advanced mode
-                            if form.show_advanced {
-                                protocols.push(Protocol::Icmp);
-                                protocols.push(Protocol::Icmpv6);
-                            }
-                            protocols
+                        if form.show_advanced {
+                            &ALL_PROTOCOLS[..]
+                        } else {
+                            &BASIC_PROTOCOLS[..]
                         },
                         Some(form.protocol),
                         Message::RuleFormProtocolChanged
@@ -141,7 +150,7 @@ pub fn view_rule_form<'a>(
                         )
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
-                        view_ports_summary(form, ports_summary.clone(), theme, regular_font),
+                        view_ports_summary(form, &display.ports_summary, theme, regular_font),
                     ]
                     .spacing(4)
                     .width(Length::Fill);
@@ -171,7 +180,7 @@ pub fn view_rule_form<'a>(
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                         view_summary_button(
-                            sources_summary.clone(),
+                            &display.sources_summary,
                             HelperType::SourceAddresses,
                             !form.sources.is_empty(),
                             theme,
@@ -214,19 +223,12 @@ pub fn view_rule_form<'a>(
                         )
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
-                        pick_list(
-                            vec![
-                                crate::core::firewall::Chain::Input,
-                                crate::core::firewall::Chain::Output,
-                            ],
-                            Some(form.chain),
-                            Message::RuleFormChainChanged
-                        )
-                        .width(Length::Fill)
-                        .padding(8)
-                        .font(regular_font)
-                        .style(move |_, status| themed_pick_list(theme, status))
-                        .menu_style(move |_| themed_pick_list_menu(theme))
+                        pick_list(&CHAINS[..], Some(form.chain), Message::RuleFormChainChanged)
+                            .width(Length::Fill)
+                            .padding(8)
+                            .font(regular_font)
+                            .style(move |_, status| themed_pick_list(theme, status))
+                            .menu_style(move |_| themed_pick_list_menu(theme))
                     ]
                     .spacing(4),
                 );
@@ -244,7 +246,7 @@ pub fn view_rule_form<'a>(
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
             view_summary_button(
-                tags_summary.clone(),
+                &display.tags_summary,
                 HelperType::Tags,
                 !form.tags.is_empty(),
                 theme,
@@ -255,7 +257,7 @@ pub fn view_rule_form<'a>(
         // Advanced Options Section
         view_advanced_section(
             form,
-            destinations_summary,
+            &display.destinations_summary,
             destination_error,
             rate_limit_error,
             connection_limit_error,
@@ -271,19 +273,7 @@ pub fn view_rule_form<'a>(
             Element::from(Space::new())
         },
         // Footer Actions
-        row![
-            button(text("Cancel").size(14).font(regular_font))
-                .on_press(Message::CancelRuleForm)
-                .padding([10, 20])
-                .style(move |_, status| secondary_button(theme, status)),
-            Space::new().width(Length::Fill),
-            button(text(button_text).size(14).font(regular_font))
-                .on_press(Message::SaveRuleForm)
-                .padding([10, 24])
-                .style(move |_, status| primary_button(theme, status)),
-        ]
-        .spacing(16)
-        .align_y(Alignment::Center)
+        view_form_footer(button_text, confirm_discard, theme, regular_font),
     ]
     .spacing(6)
     .padding(20);
@@ -294,10 +284,53 @@ pub fn view_rule_form<'a>(
         .into()
 }
 
+/// Cancel / Create (or Update), or the "Discard changes?" prompt.
+fn view_form_footer<'a>(
+    button_text: &'static str,
+    confirm_discard: bool,
+    theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+) -> Element<'a, Message> {
+    if confirm_discard {
+        return row![
+            text("Discard your changes to this rule?")
+                .size(13)
+                .font(regular_font)
+                .color(theme.danger),
+            Space::new().width(Length::Fill),
+            button(text("Keep editing").size(14).font(regular_font))
+                .on_press(Message::KeepEditingRuleForm)
+                .padding([10, 20])
+                .style(move |_, status| secondary_button(theme, status)),
+            button(text("Discard").size(14).font(regular_font))
+                .on_press(Message::DiscardRuleForm)
+                .padding([10, 20])
+                .style(move |_, status| danger_button(theme, status)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .into();
+    }
+    row![
+        button(text("Cancel").size(14).font(regular_font))
+            .on_press(Message::CancelRuleForm)
+            .padding([10, 20])
+            .style(move |_, status| secondary_button(theme, status)),
+        Space::new().width(Length::Fill),
+        button(text(button_text).size(14).font(regular_font))
+            .on_press(Message::SaveRuleForm)
+            .padding([10, 24])
+            .style(move |_, status| primary_button(theme, status)),
+    ]
+    .spacing(16)
+    .align_y(Alignment::Center)
+    .into()
+}
+
 /// Renders ports summary button or "Not applicable" for non-port protocols
 fn view_ports_summary<'a>(
     form: &RuleForm,
-    summary: String,
+    summary: &'a str,
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
 ) -> Element<'a, Message> {
@@ -326,16 +359,13 @@ fn view_ports_summary<'a>(
 }
 
 /// Renders a summary button that opens a helper modal.
-///
-/// Takes ownership of `summary` String to avoid lifetime issues -
-/// the string becomes part of the Element and is dropped with it.
-fn view_summary_button(
-    summary: String,
+fn view_summary_button<'a>(
+    summary: &'a str,
     helper_type: HelperType,
     has_values: bool,
-    theme: &crate::theme::AppTheme,
+    theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
     let text_color = if has_values {
         theme.fg_primary
     } else {
@@ -454,6 +484,23 @@ fn view_interface_fields<'a>(
     }
 }
 
+/// Choices of the action, rate unit and chain pick lists.
+const ACTIONS: [crate::core::firewall::Action; 3] = [
+    crate::core::firewall::Action::Accept,
+    crate::core::firewall::Action::Drop,
+    crate::core::firewall::Action::Reject,
+];
+const TIME_UNITS: [crate::core::firewall::TimeUnit; 4] = [
+    crate::core::firewall::TimeUnit::Second,
+    crate::core::firewall::TimeUnit::Minute,
+    crate::core::firewall::TimeUnit::Hour,
+    crate::core::firewall::TimeUnit::Day,
+];
+const CHAINS: [crate::core::firewall::Chain; 2] = [
+    crate::core::firewall::Chain::Input,
+    crate::core::firewall::Chain::Output,
+];
+
 /// Helper text under the "Per source address" checkboxes.
 const PER_SOURCE_HELP: &str = "Each client IP (IPv6: each /64) gets its own limit. \
      Recommended for SSH and other login services.";
@@ -486,7 +533,7 @@ fn view_per_source_checkbox(
 /// Advanced options section with destination, action, reject type, rate limiting, etc.
 fn view_advanced_section<'a>(
     form: &'a RuleForm,
-    destinations_summary: String,
+    destinations_summary: &'a str,
     destination_error: Option<&'a String>,
     rate_limit_error: Option<&'a String>,
     connection_limit_error: Option<&'a String>,
@@ -544,11 +591,7 @@ fn view_advanced_section<'a>(
                 .padding([2, 6])
                 .style(move |_| section_header_container(theme)),
                 pick_list(
-                    vec![
-                        crate::core::firewall::Action::Accept,
-                        crate::core::firewall::Action::Drop,
-                        crate::core::firewall::Action::Reject,
-                    ],
+                    &ACTIONS[..],
                     Some(form.action),
                     Message::RuleFormActionChanged
                 )
@@ -631,6 +674,7 @@ fn view_advanced_section<'a>(
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                         text_input("e.g. 5", &form.rate_limit_count)
+                            .id(crate::app::focus::RULE_FORM_RATE_COUNT)
                             .on_input(Message::RuleFormRateLimitCountChanged)
                             .padding(8)
                             .font(mono_font)
@@ -648,12 +692,7 @@ fn view_advanced_section<'a>(
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                         pick_list(
-                            vec![
-                                crate::core::firewall::TimeUnit::Second,
-                                crate::core::firewall::TimeUnit::Minute,
-                                crate::core::firewall::TimeUnit::Hour,
-                                crate::core::firewall::TimeUnit::Day,
-                            ],
+                            &TIME_UNITS[..],
                             Some(form.rate_limit_unit),
                             Message::RuleFormRateLimitUnitChanged
                         )
@@ -675,6 +714,7 @@ fn view_advanced_section<'a>(
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
                         text_input("optional", &form.rate_limit_burst)
+                            .id(crate::app::focus::RULE_FORM_RATE_BURST)
                             .on_input(Message::RuleFormRateLimitBurstChanged)
                             .padding(8)
                             .font(mono_font)
@@ -709,6 +749,7 @@ fn view_advanced_section<'a>(
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
             text_input("0 = unlimited", &form.connection_limit)
+                .id(crate::app::focus::RULE_FORM_CONNECTION_LIMIT)
                 .on_input(Message::RuleFormConnectionLimitChanged)
                 .padding(8)
                 .font(mono_font)

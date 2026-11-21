@@ -73,12 +73,75 @@ pub enum HelperType {
 /// Helper modal state for editing multi-value fields
 ///
 /// The helper operates directly on `RuleForm`'s Vec fields.
-/// This struct only holds UI state (input field, error message).
+/// This struct only holds UI state (input field and its feedback).
 #[derive(Debug, Clone, Default)]
 pub struct RuleFormHelper {
     pub helper_type: Option<HelperType>,
     pub input: String,
+    /// Why the typed value was not added (shown in the danger color)
     pub error: Option<String>,
+    /// Neutral feedback: duplicates skipped, characters removed from a tag
+    pub notice: Option<String>,
+}
+
+/// Longest tag shown in full; longer ones are cut (same as the tag cloud).
+const TAG_DISPLAY_MAX: usize = 16;
+
+/// `tag` cut to [`TAG_DISPLAY_MAX`] characters with an ellipsis.
+fn truncate_tag(tag: &str) -> String {
+    if tag.len() > TAG_DISPLAY_MAX {
+        format!("{}…", crate::utils::truncate_str(tag, TAG_DISPLAY_MAX - 1))
+    } else {
+        tag.to_string()
+    }
+}
+
+/// Summary of the ports field in the form ("All ports", "Port 22", ...).
+pub fn ports_summary(ports: &[PortEntry]) -> String {
+    match ports {
+        [] => "All ports".to_string(),
+        [PortEntry::Single(p)] => format!("Port {p}"),
+        [PortEntry::Range { start, end }] => format!("Ports {start}-{end}"),
+        _ => format!("{} ports configured", ports.len()),
+    }
+}
+
+/// Summary of an address field in the form ("Any", one address, or a count).
+pub fn addresses_summary(addresses: &[IpNetwork]) -> String {
+    match addresses {
+        [] => "Any".to_string(),
+        [one] => one.to_string(),
+        _ => format!("{} addresses", addresses.len()),
+    }
+}
+
+/// Summary of the tags field in the form.
+pub fn tags_summary(tags: &[String]) -> String {
+    match tags {
+        [] => "No tags".to_string(),
+        [one] => truncate_tag(one),
+        _ => format!("{} tags", tags.len()),
+    }
+}
+
+/// Display strings of a rule form and its helpers, derived from the form's
+/// multi-value fields by [`RuleForm::refresh_display`] whenever one of them
+/// changes, so `view()` never formats.
+///
+/// Being a pure function of the other fields, it takes part in the form's
+/// equality without changing its meaning.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuleFormDisplay {
+    pub ports_summary: String,
+    pub sources_summary: String,
+    pub destinations_summary: String,
+    pub tags_summary: String,
+    /// One entry per port ("22", "8000-8080") for the ports helper list
+    pub port_items: Vec<String>,
+    pub source_items: Vec<String>,
+    pub destination_items: Vec<String>,
+    /// Tags cut for the helper's chips
+    pub tag_items: Vec<String>,
 }
 
 /// Rule form state with validation
@@ -88,7 +151,7 @@ pub struct RuleFormHelper {
 /// - `sources`: Multiple source IP/CIDR addresses
 /// - `destinations`: Multiple destination IP/CIDR addresses
 /// - `tags`: Multiple organizational tags
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuleForm {
     pub id: Option<uuid::Uuid>,
     pub label: String,
@@ -125,11 +188,14 @@ pub struct RuleForm {
 
     // UI state
     pub show_advanced: bool,
+
+    /// Cached display strings (see [`RuleFormDisplay`])
+    pub display: RuleFormDisplay,
 }
 
 impl Default for RuleForm {
     fn default() -> Self {
-        Self {
+        let mut form = Self {
             id: None,
             label: String::new(),
             protocol: Protocol::Tcp,
@@ -151,7 +217,10 @@ impl Default for RuleForm {
             connection_limit_per_source: false,
             log_enabled: false,
             show_advanced: false,
-        }
+            display: RuleFormDisplay::default(),
+        };
+        form.refresh_display();
+        form
     }
 }
 
@@ -167,7 +236,7 @@ impl RuleForm {
             || rule.reject_type != RejectType::Default
             || rule.log_enabled;
 
-        Self {
+        let mut form = Self {
             id: Some(rule.id),
             label: rule.label.clone(),
             protocol: rule.protocol,
@@ -200,7 +269,32 @@ impl RuleForm {
             connection_limit_per_source: rule.connection_limit_per_source,
             log_enabled: rule.log_enabled,
             show_advanced: has_advanced,
-        }
+            display: RuleFormDisplay::default(),
+        };
+        form.refresh_display();
+        form
+    }
+
+    /// Rebuilds [`Self::display`]; call after changing a multi-value field.
+    pub fn refresh_display(&mut self) {
+        let display = &mut self.display;
+        display.ports_summary = ports_summary(&self.ports);
+        display.sources_summary = addresses_summary(&self.sources);
+        display.destinations_summary = addresses_summary(&self.destinations);
+        display.tags_summary = tags_summary(&self.tags);
+        display.port_items = self.ports.iter().map(ToString::to_string).collect();
+        display.source_items = self.sources.iter().map(ToString::to_string).collect();
+        display.destination_items = self.destinations.iter().map(ToString::to_string).collect();
+        display.tag_items = self.tags.iter().map(|t| truncate_tag(t)).collect();
+    }
+
+    /// Whether the form differs from `initial` (what it was opened with) in
+    /// anything that would be saved; showing or hiding the advanced options
+    /// is not a change.
+    pub fn has_changes(&self, initial: &Self) -> bool {
+        let mut current = self.clone();
+        current.show_advanced = initial.show_advanced;
+        current != *initial
     }
 
     /// Parses the free-text numeric fields, recording form-specific errors.
@@ -449,6 +543,30 @@ mod tests {
         assert!(form.show_advanced);
         let rebuilt = form.to_rule(rule.id, rule.enabled, rule.created_at);
         assert_eq!(rebuilt, rule);
+    }
+
+    #[test]
+    fn test_display_strings_are_cached() {
+        let mut form = tcp_form();
+        form.refresh_display();
+        assert_eq!(form.display.ports_summary, "Port 22");
+        assert_eq!(form.display.sources_summary, "Any");
+        assert_eq!(form.display.tags_summary, "No tags");
+        form.ports.push(PortEntry::range(8000, 8080));
+        form.refresh_display();
+        assert_eq!(form.display.ports_summary, "2 ports configured");
+        assert_eq!(form.display.port_items, vec!["22", "8000-8080"]);
+        assert_eq!(RuleForm::default().display.ports_summary, "All ports");
+    }
+
+    #[test]
+    fn test_has_changes_ignores_showing_advanced_options() {
+        let initial = tcp_form();
+        let mut form = initial.clone();
+        form.show_advanced = !form.show_advanced;
+        assert!(!form.has_changes(&initial));
+        form.rate_limit_count = "x".into();
+        assert!(form.has_changes(&initial));
     }
 }
 

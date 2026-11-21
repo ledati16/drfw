@@ -169,18 +169,25 @@ impl DiagnosticsLog {
             .any(|row| row.time.len() > TIME_ONLY_LEN);
         self.any_visible_dated = any_dated;
         let total = self.rows.len();
-        let shown = self.visible.len();
+        let matching = self.visible.len();
         let noun = if total == 1 { "event" } else { "events" };
-        self.count_label = if shown == total {
+        self.count_label = if matching > ROWS_SHOWN {
+            format!("newest {ROWS_SHOWN} of {matching} matching ({total} {noun}); search to narrow")
+        } else if matching == total {
             format!("{total} {noun}")
         } else {
-            format!("{shown} of {total} {noun}")
+            format!("{matching} of {total} {noun}")
         };
     }
 
-    /// Rows passing the current filter and search, most recent first
+    /// Rows passing the current filter and search, most recent first, at
+    /// most [`ROWS_SHOWN`] (the modal is rebuilt on every refresh, so it
+    /// stays cheap with a long log)
     pub fn visible_rows(&self) -> impl Iterator<Item = &DiagnosticRow> {
-        self.visible.iter().filter_map(|&i| self.rows.get(i))
+        self.visible
+            .iter()
+            .take(ROWS_SHOWN)
+            .filter_map(|&i| self.rows.get(i))
     }
 
     /// Whether no row passes the current filter and search
@@ -188,6 +195,9 @@ impl DiagnosticsLog {
         self.visible.is_empty()
     }
 }
+
+/// Most rows the diagnostics modal lists at once.
+pub const ROWS_SHOWN: usize = 200;
 
 /// Length of an `HH:MM:SS` time
 const TIME_ONLY_LEN: usize = 8;
@@ -203,6 +213,7 @@ fn matches_filter(row: &DiagnosticRow, filter: DiagnosticsFilter) -> bool {
                 | EventType::ProfileDeleted
                 | EventType::ProfileRenamed
                 | EventType::ProfileSwitched
+                | EventType::ProfileReset
         ),
         DiagnosticsFilter::Settings => matches!(row.event_type, EventType::SettingsSaved),
     }
@@ -379,6 +390,19 @@ fn describe_event(event: &AuditEvent) -> (RowTone, String) {
             RowTone::Accent,
             format!("Renamed profile '{}' → '{}'", d("old_name"), d("new_name")),
         ),
+        (EventType::ProfileReset, _) => (
+            RowTone::Warning,
+            match event.details["backup"].as_str() {
+                Some(backup) => format!(
+                    "Started fresh: profile '{}' emptied (old file kept at {backup})",
+                    d("profile_name")
+                ),
+                None => format!(
+                    "Started fresh: profile '{}' emptied (no backup copy)",
+                    d("profile_name")
+                ),
+            },
+        ),
         (EventType::ProfileSwitched, _) => (
             RowTone::Accent,
             format!("Switched profile: '{}' → '{}'", d("from"), d("to")),
@@ -458,7 +482,15 @@ fn describe_event(event: &AuditEvent) -> (RowTone, String) {
             ),
         ),
         (EventType::SaveToSystem, true) => {
-            (RowTone::Success, format!("Saved to {}", d("target_path")))
+            let what = match (
+                event.details["source"].as_str(),
+                event.details["untested"].as_bool(),
+            ) {
+                (Some("last_confirmed"), _) => "Saved the last applied rules",
+                (_, Some(true)) => "Saved untested rules",
+                _ => "Saved",
+            };
+            (RowTone::Success, format!("{what} to {}", d("target_path")))
         }
         (EventType::SaveToSystem, false) => (
             RowTone::Danger,
@@ -614,6 +646,52 @@ mod tests {
         log.set_search("no such event".to_string(), DiagnosticsFilter::All);
         assert!(log.nothing_visible());
         assert_eq!(log.count_label, "0 of 4 events");
+    }
+
+    /// The modal lists at most `ROWS_SHOWN` rows (it is rebuilt on each
+    /// refresh), and says so.
+    #[test]
+    fn test_long_logs_show_the_newest_rows_only() {
+        let tz = TimeZone::UTC;
+        let today = date(2026, 11, 20);
+        let events: Vec<AuditEvent> = (0..ROWS_SHOWN + 5)
+            .map(|_| event_at("2026-11-20T09:00:00Z", EventType::SettingsSaved, true))
+            .collect();
+        let mut log = DiagnosticsLog::default();
+        let (generation, _) = log.begin_load(today).unwrap();
+        log.finish_load(
+            generation,
+            loaded(build_rows(&events, &tz, today)),
+            DiagnosticsFilter::All,
+        );
+        assert_eq!(log.visible_rows().count(), ROWS_SHOWN);
+        assert!(
+            log.count_label.starts_with("newest 200 of 205"),
+            "{}",
+            log.count_label
+        );
+    }
+
+    #[test]
+    fn test_save_and_reset_events_are_described() {
+        let tz = TimeZone::UTC;
+        let today = date(2026, 11, 20);
+        let mut untested = event_at("2026-11-20T09:00:00Z", EventType::SaveToSystem, true);
+        untested.details = serde_json::json!({
+            "target_path": "/etc/nftables.conf", "source": "editor", "untested": true
+        });
+        let mut reset = event_at("2026-11-20T09:00:00Z", EventType::ProfileReset, true);
+        reset.details = serde_json::json!({ "profile_name": "work", "backup": null });
+        let rows = build_rows(&[untested, reset], &tz, today);
+        let texts: Vec<&str> = rows.iter().map(|r| r.description.as_str()).collect();
+        assert!(
+            texts.contains(&"Saved untested rules to /etc/nftables.conf"),
+            "{texts:?}"
+        );
+        assert!(
+            texts.contains(&"Started fresh: profile 'work' emptied (no backup copy)"),
+            "{texts:?}"
+        );
     }
 
     #[test]

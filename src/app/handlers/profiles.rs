@@ -84,10 +84,13 @@ fn reset_editing_state(state: &mut State) {
     super::clear_verify_errors(state);
     state.command_history = crate::command::CommandHistory::default();
     state.rule_form = None;
+    state.rule_form_initial = None;
+    state.confirm_discard_form = false;
     state.rule_form_helper = None;
     state.form_errors = None;
     state.deleting_id = None;
     state.pending_warning = None;
+    state.confirm_start_fresh = false;
     state.clear_drag_state();
 }
 
@@ -101,7 +104,14 @@ fn banner_error(prefix: &str, error: &str) -> String {
 }
 
 /// Handles profile selection (with dirty check)
+///
+/// Clicking the active profile does nothing: reloading it from disk would
+/// wipe the undo history and silently drop unsaved edits. Only a read-only
+/// (unreadable) active profile is reloaded, to retry it.
 pub(crate) fn handle_profile_selected(state: &mut State, name: String) -> Task<Message> {
+    if name == state.active_profile_name && state.unreadable_profile.is_none() {
+        return Task::none();
+    }
     if state.is_profile_dirty() {
         // Autosave pauses while this dialog is open
         state.pending_profile_switch = Some(name);
@@ -141,6 +151,18 @@ pub(crate) fn handle_profile_switched(
         tracing::debug!("Ignoring stale load of profile '{name}'");
         return Task::none();
     }
+    // An apply started while the profile loaded: it owns the ruleset now.
+    // Say so instead of dropping the switch silently.
+    if super::edits_locked(state) {
+        state.push_banner(
+            format!(
+                "Switching to '{name}' was cancelled because an apply started. \
+                 Switch again when it is done."
+            ),
+            BannerSeverity::Warning,
+        );
+        return Task::none();
+    }
 
     let from_profile = state.active_profile_name.clone();
     let ruleset = match result {
@@ -173,13 +195,29 @@ pub(crate) fn handle_profile_switched(
     })
 }
 
-/// Replaces an unreadable profile with an empty one ("Start fresh").
+/// "Start fresh" in the read-only notice: asks for confirmation first (see
+/// `view::profile::view_start_fresh_confirm`; stronger when no backup copy
+/// of the file exists).
+pub(crate) fn handle_start_fresh_requested(state: &mut State) {
+    if state.unreadable_profile.is_some() {
+        state.confirm_start_fresh = true;
+    }
+}
+
+/// Cancels the "Start fresh?" confirmation
+pub(crate) fn handle_cancel_start_fresh(state: &mut State) {
+    state.confirm_start_fresh = false;
+}
+
+/// Replaces an unreadable profile with an empty one (confirmed "Start fresh").
 ///
-/// The original file was already copied aside when the load failed; the
-/// empty profile is saved over it by the next autosave.
-pub(crate) fn handle_start_fresh_profile(state: &mut State) {
+/// The original file was copied aside when the load failed, if that was
+/// possible (the confirmation warns when it wasn't); the empty profile is
+/// saved over it by the next autosave. Audit-logged with the backup path.
+pub(crate) fn handle_start_fresh_profile(state: &mut State) -> Task<Message> {
+    state.confirm_start_fresh = false;
     let Some(issue) = state.unreadable_profile.take() else {
-        return;
+        return Task::none();
     };
     state.ruleset = FirewallRuleset::default();
     state.cached_disk_profile = Some(FirewallRuleset::default());
@@ -189,14 +227,19 @@ pub(crate) fn handle_start_fresh_profile(state: &mut State) {
     // Write the empty profile (the dirty flag is what triggers autosave)
     state.mark_profile_dirty();
 
-    let note = match &issue.backup {
-        Some(path) => format!(" The old file is kept at {}.", path.display()),
+    let backup = issue.backup.as_ref().map(|path| path.display().to_string());
+    let note = match &backup {
+        Some(path) => format!(" The old file is kept at {path}."),
         None => String::new(),
     };
     state.push_banner(
         format!("Started fresh: '{}' is now empty.{note}", issue.name),
         BannerSeverity::Info,
     );
+    let enable_event_log = state.enable_event_log;
+    super::audit_task(async move {
+        audit::log_profile_reset(enable_event_log, &issue.name, backup).await;
+    })
 }
 
 /// Handles creating a profile from the current rules, or an empty one.
@@ -218,6 +261,10 @@ pub(crate) fn handle_save_profile_as(state: &mut State, name: String) -> Task<Me
     } else {
         state.ruleset.clone()
     };
+    // The new profile becomes the active one: write the current profile's
+    // edits that autosave has not written yet, or they would be lost.
+    let flush = (state.profile_dirty && state.unreadable_profile.is_none())
+        .then(|| (state.active_profile_name.clone(), state.ruleset.clone()));
 
     if let Some(mgr) = &mut state.profile_manager {
         mgr.creating_new = false;
@@ -229,11 +276,19 @@ pub(crate) fn handle_save_profile_as(state: &mut State, name: String) -> Task<Me
     Task::perform(
         async move {
             let result = async {
-                crate::core::profiles::create_profile(&name, &ruleset).await?;
-                crate::core::profiles::list_profiles().await
+                if let Some((current, current_rules)) = flush {
+                    crate::core::profiles::save_profile(&current, &current_rules)
+                        .await
+                        .map_err(|e| format!("could not save '{current}' first: {e}"))?;
+                }
+                crate::core::profiles::create_profile(&name, &ruleset)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                crate::core::profiles::list_profiles()
+                    .await
+                    .map_err(|e| e.to_string())
             }
-            .await
-            .map_err(|e| e.to_string());
+            .await;
             (name, ruleset, result)
         },
         |(name, ruleset, result)| Message::ProfileCreated(name, Box::new(ruleset), result),
@@ -250,8 +305,19 @@ pub(crate) fn handle_profile_created(
 ) -> Task<Message> {
     let enable_event_log = state.enable_event_log;
     match result {
+        Ok(profiles) if super::edits_locked(state) => {
+            // An apply owns the ruleset: list the new profile, don't switch
+            state.set_available_profiles(profiles);
+            state.push_banner(
+                format!("Profile '{name}' was created. Switch to it when the apply is done."),
+                BannerSeverity::Info,
+            );
+            super::audit_task(async move {
+                audit::log_profile_created(enable_event_log, &name).await;
+            })
+        }
         Ok(profiles) => {
-            state.available_profiles = profiles;
+            state.set_available_profiles(profiles);
             // The new profile holds exactly what was written (the profile
             // manager is modal, so nothing changed meanwhile)
             state.profile_dirty = false;
@@ -280,24 +346,29 @@ pub(crate) fn handle_profile_created(
     }
 }
 
+/// Opens the name field for a new profile (from the current rules, or
+/// empty) and focuses it; an open rename is closed (one name field at a time).
+fn start_creating_profile(state: &mut State, empty: bool) -> Task<Message> {
+    let Some(mgr) = &mut state.profile_manager else {
+        return Task::none();
+    };
+    mgr.creating_new = true;
+    mgr.creating_empty = empty;
+    mgr.new_name_input = String::new();
+    mgr.new_name_error = profile_name_error(&state.available_profiles, "", None);
+    mgr.renaming_name = None;
+    mgr.rename_error = None;
+    crate::app::focus::focus_input(crate::app::focus::PROFILE_NEW_NAME)
+}
+
 /// Handles opening profile creation flow
-pub(crate) fn handle_start_creating_new_profile(state: &mut State) {
-    if let Some(mgr) = &mut state.profile_manager {
-        mgr.creating_new = true;
-        mgr.creating_empty = false;
-        mgr.new_name_input = String::new();
-        mgr.new_name_error = profile_name_error(&state.available_profiles, "", None);
-    }
+pub(crate) fn handle_start_creating_new_profile(state: &mut State) -> Task<Message> {
+    start_creating_profile(state, false)
 }
 
 /// Handles creating empty profile flow
-pub(crate) fn handle_create_empty_profile(state: &mut State) {
-    if let Some(mgr) = &mut state.profile_manager {
-        mgr.creating_new = true;
-        mgr.creating_empty = true;
-        mgr.new_name_input = String::new();
-        mgr.new_name_error = profile_name_error(&state.available_profiles, "", None);
-    }
+pub(crate) fn handle_create_empty_profile(state: &mut State) -> Task<Message> {
+    start_creating_profile(state, true)
 }
 
 /// Handles new profile name input change
@@ -400,7 +471,7 @@ pub(crate) fn handle_profile_deleted(
     match result {
         Ok(profiles) => {
             let old_active = state.active_profile_name.clone();
-            state.available_profiles.clone_from(&profiles);
+            state.set_available_profiles(profiles.clone());
             let audit_task = super::audit_task(async move {
                 audit::log_profile_deleted(enable_event_log, &name).await;
             });
@@ -431,12 +502,19 @@ pub(crate) fn handle_cancel_delete_profile(state: &mut State) {
     }
 }
 
-/// Handles requesting profile rename
-pub(crate) fn handle_rename_profile_requested(state: &mut State, name: String) {
-    if let Some(mgr) = &mut state.profile_manager {
-        mgr.rename_error = None;
-        mgr.renaming_name = Some((name.clone(), name));
-    }
+/// Handles requesting profile rename: opens the inline name field, focused
+/// (closing the new-profile field: one name field at a time)
+pub(crate) fn handle_rename_profile_requested(state: &mut State, name: String) -> Task<Message> {
+    let Some(mgr) = &mut state.profile_manager else {
+        return Task::none();
+    };
+    mgr.rename_error = None;
+    mgr.renaming_name = Some((name.clone(), name));
+    mgr.creating_new = false;
+    mgr.creating_empty = false;
+    mgr.new_name_input.clear();
+    mgr.new_name_error = None;
+    crate::app::focus::focus_input(crate::app::focus::PROFILE_RENAME)
 }
 
 /// Handles profile new name input change
@@ -516,9 +594,25 @@ pub(crate) fn handle_profile_renamed(
 ) -> Task<Message> {
     state.profile_rename_in_flight = false;
     let enable_event_log = state.enable_event_log;
+    let audit = handle_rename_outcome(state, old, new, result, enable_event_log);
+    // A close request waited for the rename (see `handle_close_requested`)
+    if std::mem::take(&mut state.close_after_rename) {
+        return Task::batch([audit, super::start_close_flush(state)]);
+    }
+    audit
+}
+
+/// Applies a finished rename and returns its audit task.
+fn handle_rename_outcome(
+    state: &mut State,
+    old: String,
+    new: String,
+    result: Result<Vec<String>, String>,
+    enable_event_log: bool,
+) -> Task<Message> {
     match result {
         Ok(profiles) => {
-            state.available_profiles = profiles;
+            state.set_available_profiles(profiles);
             if state.active_profile_name == old {
                 state.active_profile_name.clone_from(&new);
                 state.profile_generation += 1;
@@ -581,7 +675,20 @@ fn start_profile_save(state: &mut State, then_switch_to: Option<String>) -> Task
 }
 
 /// Handles confirming profile switch (saves current profile first)
+///
+/// Refused while a rename of the profile runs: the save would recreate the
+/// file under its old name. The dialog stays open to try again.
 pub(crate) fn handle_confirm_profile_switch(state: &mut State) -> Task<Message> {
+    if state.pending_profile_switch.is_none() {
+        return Task::none();
+    }
+    if state.profile_rename_in_flight {
+        state.push_banner(
+            "The profile is being renamed; try again in a moment",
+            BannerSeverity::Warning,
+        );
+        return Task::none();
+    }
     let Some(name) = state.pending_profile_switch.take() else {
         return Task::none();
     };
@@ -658,10 +765,18 @@ pub(crate) fn handle_profile_saved(
     match outcome.result {
         Ok(()) => {
             if !current {
+                if let Some(target) = outcome.then_switch_to {
+                    state.push_banner(
+                        format!(
+                            "The switch to '{target}' was cancelled because the profile \
+                             changed meanwhile. Choose it again to switch."
+                        ),
+                        BannerSeverity::Warning,
+                    );
+                }
                 return Task::none();
             }
-            let unchanged = outcome.snapshot.rules == state.ruleset.rules
-                && outcome.snapshot.advanced_security == state.ruleset.advanced_security;
+            let unchanged = crate::app::rulesets_match(&outcome.snapshot, &state.ruleset);
             state.set_cached_disk_profile(outcome.snapshot);
             if unchanged {
                 state.profile_dirty = false;
@@ -673,6 +788,9 @@ pub(crate) fn handle_profile_saved(
                 );
             }
             match outcome.then_switch_to {
+                // Edited while "Save & Switch" was saving: save those edits
+                // too before switching, or the switch would drop them
+                Some(target) if !unchanged => start_profile_save(state, Some(target)),
                 Some(target) => perform_profile_switch(state, target),
                 None => Task::none(),
             }
@@ -809,7 +927,7 @@ mod tests {
             reason: "damaged".into(),
             backup: None,
         });
-        handle_start_fresh_profile(&mut state);
+        let _ = handle_start_fresh_profile(&mut state);
         assert!(verify_errors_cleared(&state));
 
         // Rename: only a successful rename of the active profile
@@ -1055,7 +1173,7 @@ mod tests {
         assert!(state.rule_form.is_none());
 
         // Start fresh: editable again and the empty profile gets saved
-        handle_start_fresh_profile(&mut state);
+        let _ = handle_start_fresh_profile(&mut state);
         assert!(state.unreadable_profile.is_none());
         assert!(state.profile_dirty);
         let _ = state.update(Message::AddRuleClicked);
@@ -1123,7 +1241,7 @@ mod tests {
     fn test_rename_active_changes_name_only_on_success() {
         let mut state = create_test_state();
         handle_open_profile_manager(&mut state);
-        handle_rename_profile_requested(&mut state, "test".into());
+        let _ = handle_rename_profile_requested(&mut state, "test".into());
         handle_profile_new_name_changed(&mut state, "renamed".into());
         let _ = handle_confirm_rename_profile(&mut state);
         assert_eq!(state.active_profile_name, "test");
@@ -1152,7 +1270,7 @@ mod tests {
         let mut state = create_test_state();
         state.available_profiles = vec!["test".into(), "beta".into()];
         handle_open_profile_manager(&mut state);
-        handle_rename_profile_requested(&mut state, "test".into());
+        let _ = handle_rename_profile_requested(&mut state, "test".into());
         handle_profile_new_name_changed(&mut state, "Beta".into());
         assert!(
             state
@@ -1172,5 +1290,168 @@ mod tests {
                 .renaming_name
                 .is_some()
         );
+    }
+
+    fn unreadable(backup: Option<&str>) -> UnreadableProfile {
+        UnreadableProfile {
+            name: "test".into(),
+            reason: "Profile 'test' is damaged".into(),
+            backup: backup.map(Into::into),
+        }
+    }
+
+    /// H2: "Start fresh" overwrites the profile, so it asks first.
+    #[test]
+    fn test_start_fresh_asks_first() {
+        let mut state = create_test_state();
+        state.unreadable_profile = Some(unreadable(None));
+        let _ = state.update(Message::StartFreshProfile);
+        assert!(state.confirm_start_fresh, "confirmation shown");
+        assert!(state.unreadable_profile.is_some(), "nothing replaced yet");
+        assert!(!state.profile_dirty);
+
+        let _ = state.update(Message::CancelStartFresh);
+        assert!(!state.confirm_start_fresh);
+        assert!(state.unreadable_profile.is_some());
+
+        let _ = state.update(Message::StartFreshProfile);
+        let task = handle_start_fresh_profile(&mut state);
+        assert!(task.units() > 0, "audit-logged");
+        assert!(!state.confirm_start_fresh);
+        assert!(state.unreadable_profile.is_none());
+        assert!(state.profile_dirty, "the empty profile gets saved");
+        assert!(
+            state
+                .banners
+                .back()
+                .unwrap()
+                .message
+                .contains("Started fresh")
+        );
+    }
+
+    #[test]
+    fn test_start_fresh_request_needs_an_unreadable_profile() {
+        let mut state = create_test_state();
+        handle_start_fresh_requested(&mut state);
+        assert!(!state.confirm_start_fresh);
+    }
+
+    /// M5: clicking the active profile must not reload it (that would wipe
+    /// undo and drop unsaved edits); only a read-only one is retried.
+    #[test]
+    fn test_clicking_the_active_profile_is_a_no_op() {
+        let mut state = dirty_state();
+        state.command_history.execute(
+            Box::new(crate::command::AddRuleCommand {
+                rule: create_test_rule("Undoable", Some(1)),
+            }),
+            &mut state.ruleset,
+        );
+        state.mark_profile_dirty();
+        let request = state.switch_request;
+        let _ = state.update(Message::ProfileSelected("test".into()));
+        assert_eq!(state.switch_request, request, "no reload");
+        assert!(state.pending_profile_switch.is_none(), "no dialog");
+        assert!(state.command_history.can_undo());
+
+        let mut state = create_test_state();
+        state.unreadable_profile = Some(unreadable(None));
+        let _ = handle_profile_selected(&mut state, "test".into());
+        assert_eq!(state.switch_request, 1, "read-only: retried");
+    }
+
+    /// Edits made while "Save & Switch" is saving are saved too before the
+    /// switch, instead of being dropped by it.
+    #[test]
+    fn test_save_and_switch_saves_edits_made_meanwhile() {
+        let mut state = dirty_state();
+        state.pending_profile_switch = Some("other".into());
+        let _ = handle_confirm_profile_switch(&mut state);
+        let outcome = saved(&state, Some("other"), Ok(()));
+        state
+            .ruleset
+            .rules
+            .push(create_test_rule("Meanwhile", Some(81)));
+        state.mark_profile_dirty();
+        let request = state.switch_request;
+        let _ = handle_profile_saved(&mut state, outcome);
+        assert_eq!(state.switch_request, request, "not switched yet");
+        assert!(state.profile_save_in_flight, "saving again");
+
+        let outcome = saved(&state, Some("other"), Ok(()));
+        let _ = handle_profile_saved(&mut state, outcome);
+        assert_eq!(state.switch_request, request + 1, "switched");
+    }
+
+    #[test]
+    fn test_save_and_switch_cancelled_by_a_profile_change_says_so() {
+        let mut state = dirty_state();
+        let outcome = saved(&state, Some("other"), Ok(()));
+        state.profile_generation += 1;
+        let request = state.switch_request;
+        let _ = handle_profile_saved(&mut state, outcome);
+        assert_eq!(state.switch_request, request);
+        assert!(
+            state
+                .banners
+                .back()
+                .unwrap()
+                .message
+                .contains("'other' was cancelled")
+        );
+    }
+
+    #[test]
+    fn test_save_and_switch_waits_for_a_rename() {
+        let mut state = dirty_state();
+        state.pending_profile_switch = Some("other".into());
+        state.profile_rename_in_flight = true;
+        let _ = handle_confirm_profile_switch(&mut state);
+        assert!(!state.profile_save_in_flight, "no save under the old name");
+        assert!(state.pending_profile_switch.is_some(), "dialog stays");
+        assert!(state.banners.back().unwrap().message.contains("renamed"));
+    }
+
+    /// Load/create results that arrive while an apply runs are reported or
+    /// applied, never dropped silently.
+    #[test]
+    fn test_profile_results_during_an_apply_are_not_dropped() {
+        let mut state = create_test_state();
+        let _ = perform_profile_switch(&mut state, "other".into());
+        let request = state.switch_request;
+        state.status = crate::app::AppStatus::Verifying;
+        let _ = state.update(Message::ProfileSwitched(
+            request,
+            "other".into(),
+            Ok(FirewallRuleset::default()),
+        ));
+        assert_eq!(state.active_profile_name, "test");
+        assert!(state.banners.back().unwrap().message.contains("cancelled"));
+
+        let _ = state.update(Message::ProfileCreated(
+            "fresh".into(),
+            Box::default(),
+            Ok(vec!["fresh".into(), "test".into()]),
+        ));
+        assert_eq!(state.active_profile_name, "test", "not switched");
+        assert!(
+            state.available_profiles.contains(&"fresh".to_string()),
+            "listed"
+        );
+        assert_eq!(state.profile_count_display, "2 profiles");
+    }
+
+    #[test]
+    fn test_one_profile_name_field_at_a_time() {
+        let mut state = create_test_state();
+        handle_open_profile_manager(&mut state);
+        let _ = handle_create_empty_profile(&mut state);
+        let _ = handle_rename_profile_requested(&mut state, "test".into());
+        let mgr = state.profile_manager.as_ref().unwrap();
+        assert!(mgr.renaming_name.is_some() && !mgr.creating_new);
+        let _ = handle_start_creating_new_profile(&mut state);
+        let mgr = state.profile_manager.as_ref().unwrap();
+        assert!(mgr.renaming_name.is_none() && mgr.creating_new);
     }
 }

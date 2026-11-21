@@ -39,7 +39,7 @@ pub fn view_from_cached_diff_tokens<'a>(
         let line_number = highlighted_line.line_number;
         let mut row_content = row![].spacing(0);
 
-        // Line number (same format as normal view - no extra diff indicator, pre-formatted to avoid allocation)
+        // Line number (same format as normal view, pre-formatted to avoid allocation)
         row_content = row_content.push(
             container(
                 text(&highlighted_line.formatted_line_number_nft)
@@ -52,9 +52,27 @@ pub fn view_from_cached_diff_tokens<'a>(
             .padding(iced::Padding::new(0.0).right(8.0)),
         );
 
+        // "+"/"-" marker: the change is visible without color (reduced
+        // colors, color vision)
+        let (marker, marker_color) = match diff_type {
+            crate::app::syntax_cache::DiffType::Added => ("+", theme.success),
+            crate::app::syntax_cache::DiffType::Removed => ("-", theme.danger),
+            crate::app::syntax_cache::DiffType::Unchanged => ("", theme.fg_muted),
+        };
+        row_content = row_content.push(
+            container(
+                text(marker)
+                    .font(mono_font)
+                    .size(14)
+                    .wrapping(Wrapping::None)
+                    .color(marker_color),
+            )
+            .width(Length::Fixed(super::DIFF_GUTTER_WIDTH_PX)),
+        );
+
         // Indentation
         if highlighted_line.indent > 0 {
-            let spaces = &SPACES[..highlighted_line.indent];
+            let spaces = &SPACES[..highlighted_line.indent.min(SPACES.len())];
             row_content = row_content.push(
                 text(spaces)
                     .font(mono_font)
@@ -179,7 +197,7 @@ pub fn view_from_cached_nft_tokens<'a>(
 
         // Indentation (NFT only uses actual indentation, no extra spacing)
         if highlighted_line.indent > 0 && !highlighted_line.tokens.is_empty() {
-            let spaces = &SPACES[..highlighted_line.indent];
+            let spaces = &SPACES[..highlighted_line.indent.min(SPACES.len())];
             row_content = row_content.push(
                 text(spaces)
                     .font(mono_font)

@@ -13,7 +13,48 @@ use crate::app::ui_components::{
     themed_scrollable, themed_text_input,
 };
 use crate::app::{HelperType, Message, RuleForm, RuleFormHelper};
-use crate::core::firewall::PortEntry;
+
+/// The helper's feedback line: the error (danger color) or a neutral notice.
+fn view_feedback<'a>(
+    helper: &'a RuleFormHelper,
+    theme: &crate::theme::AppTheme,
+    regular_font: iced::Font,
+) -> Element<'a, Message> {
+    if let Some(err) = &helper.error {
+        container(text(err).size(12).font(regular_font).color(theme.danger)).into()
+    } else if let Some(notice) = &helper.notice {
+        container(
+            text(notice)
+                .size(12)
+                .font(regular_font)
+                .color(theme.fg_muted),
+        )
+        .into()
+    } else {
+        container(Space::new()).into()
+    }
+}
+
+/// One removable entry of a ports/addresses helper list.
+fn view_list_item<'a>(
+    index: usize,
+    label: &'a str,
+    theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+    mono_font: iced::Font,
+) -> Element<'a, Message> {
+    row![
+        text(label).size(13).font(mono_font).color(theme.fg_primary),
+        Space::new().width(Length::Fill),
+        button(text("×").size(14).font(regular_font).color(theme.danger))
+            .on_press(Message::HelperRemoveValue(index))
+            .padding(4)
+            .style(button::text),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
 
 /// Renders the helper modal based on current helper type
 pub fn view_helper_modal<'a>(
@@ -60,6 +101,7 @@ fn view_ports_helper<'a>(
         // Input row
         row![
             text_input("e.g. 22 or 8000-8080", &helper.input)
+                .id(crate::app::focus::HELPER_INPUT)
                 .on_input(Message::HelperInputChanged)
                 .on_submit(Message::HelperAddValue)
                 .padding(8)
@@ -73,14 +115,8 @@ fn view_ports_helper<'a>(
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        // Error message
-        {
-            if let Some(err) = &helper.error {
-                container(text(err).size(12).font(regular_font).color(theme.danger))
-            } else {
-                container(Space::new())
-            }
-        },
+        // Error or notice
+        view_feedback(helper, theme, regular_font),
         // Current values list
         container(
             text("CONFIGURED PORTS")
@@ -94,25 +130,8 @@ fn view_ports_helper<'a>(
         container(
             scrollable(
                 container(
-                    column(form.ports.iter().enumerate().map(|(i, port)| {
-                        let port_text = match port {
-                            PortEntry::Single(p) => p.to_string(),
-                            PortEntry::Range { start, end } => format!("{start}-{end}"),
-                        };
-                        row![
-                            text(port_text)
-                                .size(13)
-                                .font(mono_font)
-                                .color(theme.fg_primary),
-                            Space::new().width(Length::Fill),
-                            button(text("×").size(14).font(regular_font).color(theme.danger))
-                                .on_press(Message::HelperRemoveValue(i))
-                                .padding(4)
-                                .style(button::text),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center)
-                        .into()
+                    column(form.display.port_items.iter().enumerate().map(|(i, port)| {
+                        view_list_item(i, port, theme, regular_font, mono_font)
                     }))
                     .spacing(4),
                 )
@@ -161,9 +180,9 @@ fn view_addresses_helper<'a>(
         "Configure Destination Addresses"
     };
     let addresses = if is_source {
-        &form.sources
+        &form.display.source_items
     } else {
-        &form.destinations
+        &form.display.destination_items
     };
     let header_text = if is_source {
         "SOURCE ADDRESSES"
@@ -181,6 +200,7 @@ fn view_addresses_helper<'a>(
         // Input row
         row![
             text_input("e.g. 192.168.1.0/24 or 10.0.0.1", &helper.input)
+                .id(crate::app::focus::HELPER_INPUT)
                 .on_input(Message::HelperInputChanged)
                 .on_submit(Message::HelperAddValue)
                 .padding(8)
@@ -194,14 +214,8 @@ fn view_addresses_helper<'a>(
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        // Error message
-        {
-            if let Some(err) = &helper.error {
-                container(text(err).size(12).font(regular_font).color(theme.danger))
-            } else {
-                container(Space::new())
-            }
-        },
+        // Error or notice
+        view_feedback(helper, theme, regular_font),
         // Current values list
         container(
             text(header_text)
@@ -216,20 +230,7 @@ fn view_addresses_helper<'a>(
             scrollable(
                 container(
                     column(addresses.iter().enumerate().map(|(i, addr)| {
-                        row![
-                            text(addr.to_string())
-                                .size(13)
-                                .font(mono_font)
-                                .color(theme.fg_primary),
-                            Space::new().width(Length::Fill),
-                            button(text("×").size(14).font(regular_font).color(theme.danger))
-                                .on_press(Message::HelperRemoveValue(i))
-                                .padding(4)
-                                .style(button::text),
-                        ]
-                        .spacing(8)
-                        .align_y(Alignment::Center)
-                        .into()
+                        view_list_item(i, addr, theme, regular_font, mono_font)
                     }))
                     .spacing(4),
                 )
@@ -277,13 +278,14 @@ fn view_tags_helper<'a>(
             .size(18)
             .font(regular_font)
             .color(theme.info),
-        text("Add organizational labels (max 10 tags)")
+        text("Add organizational labels (max 10 tags; separate several with commas)")
             .size(12)
             .font(regular_font)
             .color(theme.fg_muted),
         // Input row
         row![
             text_input("e.g. web-server, production", &helper.input)
+                .id(crate::app::focus::HELPER_INPUT)
                 .on_input(Message::HelperInputChanged)
                 .on_submit(Message::HelperAddValue)
                 .padding(8)
@@ -297,14 +299,8 @@ fn view_tags_helper<'a>(
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        // Error message
-        {
-            if let Some(err) = &helper.error {
-                container(text(err).size(12).font(regular_font).color(theme.danger))
-            } else {
-                container(Space::new())
-            }
-        },
+        // Error or notice
+        view_feedback(helper, theme, regular_font),
         // Section header (matches ports/addresses helpers)
         container(
             text("CONFIGURED TAGS")
@@ -325,16 +321,11 @@ fn view_tags_helper<'a>(
                             .color(theme.fg_muted)
                             .into()
                     } else {
-                        row(form.tags.iter().enumerate().map(|(i, tag)| {
-                            // Truncate long tags for display (same as tag cloud)
-                            let display_tag: std::borrow::Cow<'_, str> = if tag.len() > 16 {
-                                format!("{}…", crate::utils::truncate_str(tag, 15)).into()
-                            } else {
-                                tag.as_str().into()
-                            };
+                        row(form.display.tag_items.iter().enumerate().map(|(i, tag)| {
+                            // Cut like the tag cloud (cached in the form)
                             button(
                                 row![
-                                    text(display_tag).size(10).font(regular_font),
+                                    text(tag).size(10).font(regular_font),
                                     text("×").size(12).font(regular_font).color(theme.danger),
                                 ]
                                 .spacing(6)
@@ -379,45 +370,4 @@ fn view_tags_helper<'a>(
         .max_width(400)
         .style(move |_| card_container(theme))
         .into()
-}
-
-/// Returns a summary string for ports (used in main form)
-pub fn ports_summary(ports: &[PortEntry]) -> String {
-    if ports.is_empty() {
-        "All ports".to_string()
-    } else if ports.len() == 1 {
-        match &ports[0] {
-            PortEntry::Single(p) => format!("Port {p}"),
-            PortEntry::Range { start, end } => format!("Ports {start}-{end}"),
-        }
-    } else {
-        format!("{} ports configured", ports.len())
-    }
-}
-
-/// Returns a summary string for addresses (used in main form)
-pub fn addresses_summary(addresses: &[ipnetwork::IpNetwork]) -> String {
-    if addresses.is_empty() {
-        "Any".to_string()
-    } else if addresses.len() == 1 {
-        addresses[0].to_string()
-    } else {
-        format!("{} addresses", addresses.len())
-    }
-}
-
-/// Returns a summary string for tags (used in main form)
-pub fn tags_summary(tags: &[String]) -> String {
-    if tags.is_empty() {
-        "No tags".to_string()
-    } else if tags.len() == 1 {
-        // Truncate long tags for display (same as tag cloud)
-        if tags[0].len() > 16 {
-            format!("{}…", crate::utils::truncate_str(&tags[0], 15))
-        } else {
-            tags[0].clone()
-        }
-    } else {
-        format!("{} tags", tags.len())
-    }
 }

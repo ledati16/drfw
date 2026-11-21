@@ -181,6 +181,7 @@ pub fn view_diagnostics_modal<'a>(
                 .style(move |_, status| themed_pick_list(theme, status))
                 .menu_style(move |_| themed_pick_list_menu(theme)),
                 text_input("Search events...", &log.search)
+                    .id(crate::app::focus::DIAGNOSTICS_SEARCH)
                     .on_input(Message::DiagnosticsSearchChanged)
                     .padding(8)
                     .size(13)

@@ -323,6 +323,13 @@ style.border = Border {
 
 ---
 
+### Layer Order
+`view::LAYERS` is the draw order of all dialogs, bottom to top, and must
+agree with `handlers::top_layer()` (what Escape, Enter and Tab act on); a
+test checks it. Notification banners are the last layer, so no dialog hides
+an error. Banners carry a severity word (OK/INFO/WARNING/ERROR) besides the
+color, and diff lines a "+"/"-" marker, so nothing relies on color alone.
+
 ## 7. Dropdown Menus (Pick Lists)
 
 **Location:** `src/app/ui_components.rs:themed_pick_list()`
@@ -457,15 +464,16 @@ let content_width = match (state.active_tab, state.show_diff) {
 
 ### Calculation
 ```rust
-const CHAR_WIDTH_PX: f32 = 8.4;
+const CHAR_WIDTH_PX: f32 = 8.8;   // errs wide: too wide is blank space, too narrow clips
 const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
 const TRAILING_PADDING_PX: f32 = 60.0;  // ~7 chars breathing room
 const MIN_WIDTH_PX: f32 = 800.0;
-const MAX_WIDTH_PX: f32 = 3000.0;
+const MAX_WIDTH_PX: f32 = 40_000.0;  // guards absurd widths only
 
 let max_chars = tokens.iter()
-    .map(|line| line.indent + line.tokens.iter().map(|t| t.text.len()).sum())
+    .map(|line| line.indent + line.tokens.iter().map(|t| t.text.chars().count()).sum())
     .max().unwrap_or(0);
+// The diff view adds `view::DIFF_GUTTER_WIDTH_PX` for its "+"/"-" markers
 
 let width = (LINE_NUMBER_WIDTH_PX + (max_chars as f32 * CHAR_WIDTH_PX) + TRAILING_PADDING_PX)
     .clamp(MIN_WIDTH_PX, MAX_WIDTH_PX);

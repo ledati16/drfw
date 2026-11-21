@@ -1,6 +1,6 @@
 //! Theme and font picker modals
 
-use iced::widget::{Id, button, column, container, row, rule, scrollable, space, text, text_input};
+use iced::widget::{button, column, container, row, rule, scrollable, space, text, text_input};
 use iced::{Alignment, Border, Color, Element, Length, Padding};
 
 use crate::app::ui_components::{
@@ -111,7 +111,7 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                 .padding(10)
                 .size(13)
                 .font(state.font_regular)
-                .id(Id::new(super::FONT_SEARCH_INPUT_ID))
+                .id(crate::app::focus::FONT_SEARCH)
                 .style(move |_, status| themed_text_input(theme, status)),
             container(
                 scrollable(
@@ -521,6 +521,7 @@ pub fn view_theme_picker<'a>(
             .padding([4, 8])
             .style(move |_| section_header_container(theme)),
             text_input("Search themes...", &picker.search)
+                .id(crate::app::focus::THEME_SEARCH)
                 .on_input(Message::ThemePickerSearchChanged)
                 .padding(10)
                 .size(13)

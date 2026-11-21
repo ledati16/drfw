@@ -58,6 +58,7 @@ pub(crate) fn handle_toggle_auto_revert(state: &mut State, enabled: bool) -> Tas
 /// Handles auto-revert timeout change
 pub(crate) fn handle_auto_revert_timeout_changed(state: &mut State, timeout: u64) {
     state.auto_revert_timeout_secs = timeout.clamp(5, 120);
+    state.refresh_settings_display();
     state.mark_config_dirty();
     // Schedule debounced logging - log after 2s of no changes
     let desc = format!("Auto-revert timeout set to {timeout}s");
@@ -283,16 +284,25 @@ pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
 
 /// Quiet period after the last settings change before the config is written.
 const CONFIG_SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+/// Retry delay after a failed config save.
+const CONFIG_SAVE_RETRY: Duration = Duration::from_secs(5);
 
-/// When the pending config save is due, if the config is dirty.
+/// When the pending config save is due: `None` while the config is clean or
+/// a save is running (the next one starts after it, so an older snapshot can
+/// never land last).
 pub(crate) fn config_save_deadline(state: &State, now: Instant) -> Option<Instant> {
-    if !state.config_dirty {
+    if !state.config_dirty || state.config_save_in_flight {
         return None;
     }
+    let debounce = if state.config_save_error.is_some() {
+        CONFIG_SAVE_RETRY
+    } else {
+        CONFIG_SAVE_DEBOUNCE
+    };
     Some(
         state
             .last_config_change
-            .map_or(now, |last_change| last_change + CONFIG_SAVE_DEBOUNCE),
+            .map_or(now, |last_change| last_change + debounce),
     )
 }
 
@@ -302,18 +312,33 @@ pub(crate) fn run_config_save_if_due(state: &mut State, now: Instant) -> Task<Me
         return Task::none();
     }
     state.config_dirty = false;
+    state.config_save_in_flight = true;
     state.save_config()
 }
 
-/// Handles the result of a config save: a failure is shown in a banner (the
-/// next settings change tries again).
+/// Handles the result of a config save. A failure keeps the config dirty so
+/// it is retried (after [`CONFIG_SAVE_RETRY`]), with one banner per distinct
+/// error; the first success after a failure says so.
 pub(crate) fn handle_config_saved(state: &mut State, result: Result<(), String>) {
-    if let Err(e) = result {
-        tracing::error!("Failed to save configuration: {e}");
-        state.push_banner(
-            format!("Could not save settings: {e}"),
-            crate::app::BannerSeverity::Error,
-        );
+    use crate::app::BannerSeverity;
+
+    state.config_save_in_flight = false;
+    match result {
+        Ok(()) => {
+            if state.config_save_error.take().is_some() {
+                state.push_banner("Settings saved", BannerSeverity::Success);
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to save configuration: {e}");
+            let message = format!("Could not save settings: {e}. Retrying.");
+            if state.config_save_error.as_deref() != Some(message.as_str()) {
+                state.push_banner(message.clone(), BannerSeverity::Error);
+            }
+            state.config_save_error = Some(message);
+            state.config_dirty = true;
+            state.last_config_change = Some(Instant::now());
+        }
     }
 }
 
@@ -324,6 +349,8 @@ pub(crate) fn handle_regular_font_changed(
 ) -> Task<Message> {
     state.regular_font_choice = choice.clone();
     state.font_regular = choice.to_font();
+    // Closes like the monospace picker does
+    state.font_picker = None;
     state.mark_config_dirty();
     super::log_setting_change(state, format!("UI font changed to {}", choice.name()))
 }
@@ -461,5 +488,68 @@ mod tests {
         let mut state = create_test_state();
         let _ = handle_toggle_auto_revert(&mut state, true);
         assert!(state.auto_revert_enabled);
+    }
+
+    #[test]
+    fn test_failed_config_save_is_retried() {
+        let mut state = create_test_state();
+        handle_toggle_zebra_striping_dirty(&mut state);
+        let due = config_save_deadline(&state, Instant::now()).unwrap();
+        let _ = run_config_save_if_due(&mut state, due);
+        assert!(state.config_save_in_flight);
+        assert!(
+            config_save_deadline(&state, Instant::now()).is_none(),
+            "one save at a time"
+        );
+
+        handle_config_saved(&mut state, Err("Read-only file system".into()));
+        assert!(!state.config_save_in_flight);
+        assert!(state.config_dirty, "retried");
+        let now = Instant::now();
+        let retry = config_save_deadline(&state, now).unwrap();
+        assert!(retry + Duration::from_millis(100) >= now + CONFIG_SAVE_RETRY);
+        assert_eq!(state.banners.len(), 1);
+        // The same failure again: no second banner
+        let _ = run_config_save_if_due(&mut state, retry);
+        handle_config_saved(&mut state, Err("Read-only file system".into()));
+        assert_eq!(state.banners.len(), 1);
+        // Recovery is announced
+        let retry = config_save_deadline(&state, Instant::now()).unwrap();
+        let _ = run_config_save_if_due(&mut state, retry);
+        handle_config_saved(&mut state, Ok(()));
+        assert!(!state.config_dirty);
+        assert!(state.config_save_error.is_none());
+        assert_eq!(state.banners.back().unwrap().message, "Settings saved");
+    }
+
+    fn handle_toggle_zebra_striping_dirty(state: &mut State) {
+        let _ = handle_toggle_zebra_striping(state, false);
+        assert!(state.config_dirty);
+    }
+
+    #[test]
+    fn test_font_pickers_close_on_choice() {
+        let mut state = create_test_state();
+        crate::app::handlers::handle_open_font_picker(
+            &mut state,
+            crate::app::FontPickerTarget::Regular,
+        );
+        let _ =
+            handle_regular_font_changed(&mut state, &crate::fonts::RegularFontChoice::default());
+        assert!(state.font_picker.is_none());
+    }
+
+    #[test]
+    fn test_settings_labels_are_cached() {
+        let mut state = create_test_state();
+        handle_icmp_rate_limit_changed(&mut state, 0);
+        assert_eq!(state.settings_display.icmp_rate, "Off", "0 means no limit");
+        handle_icmp_rate_limit_changed(&mut state, 7);
+        assert_eq!(state.settings_display.icmp_rate, "7/s");
+        handle_log_rate_changed(&mut state, 12);
+        assert_eq!(state.settings_display.log_rate, "12/m");
+        handle_auto_revert_timeout_changed(&mut state, 30);
+        assert_eq!(state.settings_display.auto_revert_timeout, "30s");
+        assert_eq!(state.settings_display.apply_timer_secs, "30");
     }
 }

@@ -1,5 +1,6 @@
 mod debounce;
 mod diagnostics;
+mod focus;
 mod forms;
 mod handlers;
 mod helpers;
@@ -15,12 +16,12 @@ use std::time::Duration;
 
 pub use debounce::TimerKind;
 pub use forms::{FormErrors, HelperType, RuleForm, RuleFormHelper};
+pub use handlers::apply::SaveSource;
+pub use handlers::ui_state::BaseShortcut;
 use helpers::{
     calculate_max_content_width, calculate_max_content_width_from_refs, fuzzy_filter_fonts,
     fuzzy_filter_themes,
 };
-use iced::widget::Id;
-use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
 
 use crate::core::firewall::{FirewallRuleset, Protocol};
@@ -106,6 +107,11 @@ pub struct State {
     pub ruleset: FirewallRuleset,
     /// What DRFW last applied to the kernel; `None` = unknown (e.g. at startup)
     pub last_applied_ruleset: Option<FirewallRuleset>,
+    /// The last ruleset applied *and kept* this session: confirmed within the
+    /// auto-revert countdown, or applied with auto-revert off. Unlike
+    /// `last_applied_ruleset` it is never an unconfirmed or failed-revert
+    /// state. Save to System offers it as the tested choice.
+    pub last_confirmed_ruleset: Option<FirewallRuleset>,
     /// Ruleset snapshot carried through verify -> apply -> confirm/revert
     pub apply_session: Option<handlers::ApplySession>,
     pub cached_disk_profile: Option<FirewallRuleset>,
@@ -113,10 +119,17 @@ pub struct State {
     pub banners: std::collections::VecDeque<NotificationBanner>,
     pub active_tab: WorkspaceTab,
     pub rule_form: Option<RuleForm>,
+    /// The rule form as it was opened, to tell whether Cancel/Escape would
+    /// discard changes
+    pub rule_form_initial: Option<RuleForm>,
+    /// The rule form shows "Discard changes?"
+    pub confirm_discard_form: bool,
     pub rule_form_helper: Option<RuleFormHelper>,
     pub interface_combo: iced::widget::combo_box::State<String>,
     pub output_interface_combo: iced::widget::combo_box::State<String>,
     pub countdown_remaining: u32,
+    /// `countdown_remaining` as text, for the countdown dialog
+    pub countdown_display: String,
     pub progress_animation: Animation<f32>,
     pub form_errors: Option<FormErrors>,
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
@@ -162,8 +175,12 @@ pub struct State {
     /// Boot persistence shown in the Save to System dialog (and its "Also
     /// enable at boot" checkbox), filled in `update()` from `systemctl`
     pub save_dialog: handlers::SaveToSystemDialog,
+    /// The running Save to System (which rules, tested or not)
+    pub save_in_progress: Option<handlers::SaveInProgress>,
     pub diagnostics_filter: DiagnosticsFilter,
     pub show_export_modal: bool,
+    /// An export file dialog is open (the export buttons are disabled)
+    pub export_in_progress: bool,
     pub show_shortcuts_help: bool,
     pub font_picker: Option<FontPickerState>,
     pub theme_picker: Option<ThemePickerState>,
@@ -191,6 +208,12 @@ pub struct State {
     // Config save debouncing
     pub config_dirty: bool,
     pub last_config_change: Option<std::time::Instant>,
+    /// A config save task is running (the next one waits for it)
+    pub config_save_in_flight: bool,
+    /// Last config save error; saving is retried until it succeeds
+    pub config_save_error: Option<String>,
+    /// Slider value labels of the settings tab, refreshed on change
+    pub settings_display: SettingsDisplay,
     // Profile save debouncing
     pub profile_dirty: bool,
     pub last_profile_change: Option<std::time::Instant>,
@@ -200,7 +223,10 @@ pub struct State {
     timers: debounce::Timers,
     // Profile management
     pub active_profile_name: String,
+    /// Set through [`State::set_available_profiles`] (keeps the count label)
     pub available_profiles: Vec<String>,
+    /// "N profiles" for the profile manager
+    pub profile_count_display: String,
     pub pending_profile_switch: Option<String>,
     /// Diagnostics modal: pre-formatted event log rows, filter/search
     /// results and reload bookkeeping (see `app::diagnostics`)
@@ -209,6 +235,8 @@ pub struct State {
     /// is then open read-only (empty, edits and autosave blocked) until the user
     /// switches profile or chooses "Start fresh".
     pub unreadable_profile: Option<crate::core::profiles::UnreadableProfile>,
+    /// The "Start fresh?" confirmation is open
+    pub confirm_start_fresh: bool,
     /// Bumped whenever the active profile is replaced (switch, create, rename,
     /// start fresh); async save results from an older generation are ignored.
     pub profile_generation: u64,
@@ -228,6 +256,30 @@ pub struct State {
     pub cached_validation_notice: Option<String>,
     /// The window is closing; pending saves are being flushed.
     pub closing: bool,
+    /// A close request waits for a running profile rename before flushing
+    pub close_after_rename: bool,
+    /// Saving on close failed: the "Close anyway?" dialog shows this text
+    pub close_error: Option<String>,
+}
+
+/// Value labels of the settings tab sliders (and the apply dialog's timer),
+/// formatted in `update()` when the values change.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SettingsDisplay {
+    /// "15s"
+    pub auto_revert_timeout: String,
+    /// The timer of the "Commit Changes?" dialog in seconds ("15")
+    pub apply_timer_secs: String,
+    /// "5/s", or "Off" for 0 (no ICMP rate limit)
+    pub icmp_rate: String,
+    /// "10/m"
+    pub log_rate: String,
+}
+
+/// Whether two rulesets produce the same firewall (rules and the advanced
+/// settings; the rest is metadata).
+pub(crate) fn rulesets_match(a: &FirewallRuleset, b: &FirewallRuleset) -> bool {
+    a.rules == b.rules && a.advanced_security == b.advanced_security
 }
 
 /// Result of an async profile save (autosave, "Save & Switch", close flush).
@@ -467,7 +519,12 @@ pub enum AppStatus {
 pub enum Message {
     AddRuleClicked,
     EditRuleClicked(uuid::Uuid),
+    /// Cancel/Escape in the rule form (asks first if it was changed)
     CancelRuleForm,
+    /// "Keep editing" in the "Discard changes?" prompt
+    KeepEditingRuleForm,
+    /// "Discard" in the "Discard changes?" prompt
+    DiscardRuleForm,
     SaveRuleForm,
     RuleFormLabelChanged(String),
     RuleFormProtocolChanged(Protocol),
@@ -509,13 +566,17 @@ pub enum Message {
     SaveToSystemBootChecked(crate::core::boot::BootStatus),
     /// The "Also enable <service> at boot" checkbox
     SaveToSystemEnableToggled(bool),
-    SaveToSystemConfirmed,
+    /// Save to System confirmed: write the editor's rules or the last
+    /// confirmed ones
+    SaveToSystemConfirmed(SaveSource),
     SaveToSystemCancelled,
     /// Backup path, `systemctl enable` result and boot persistence after saving
     SaveToSystemResult(Result<handlers::SaveOutcome, String>),
     /// A keyboard event, with whether a widget (e.g. a focused text input)
     /// already handled it
     EventOccurred(iced::Event, iced::event::Status),
+    /// A base-layer Ctrl shortcut, with whether a text input had focus
+    BaseShortcut(BaseShortcut, bool),
     ToggleDiff(bool),
     ToggleZebraStriping(bool),
     ToggleAutoRevert(bool),
@@ -626,8 +687,11 @@ pub enum Message {
     ConfirmProfileSwitch,
     DiscardProfileSwitch,
     CancelProfileSwitch,
-    /// Replace an unreadable profile with an empty one (it was copied aside)
+    /// "Start fresh" for an unreadable profile: asks for confirmation
     StartFreshProfile,
+    /// Confirmed: replace the unreadable profile with an empty one
+    ConfirmStartFresh,
+    CancelStartFresh,
     /// Periodic tick to prune expired banners
     PruneBanners,
     /// Dismiss a specific banner (click to dismiss)
@@ -640,8 +704,12 @@ pub enum Message {
     ConfigSaved(Result<(), String>),
     /// The window manager asked to close the window
     CloseRequested(iced::window::Id),
-    /// Pending saves were flushed (or timed out): exit
-    CloseFlushed,
+    /// Pending saves were flushed: exit on success, else ask
+    CloseFlushed(Result<(), String>),
+    /// "Keep DRFW open" after a failed save on close
+    CancelClose,
+    /// "Close anyway" after a failed save on close
+    CloseAnyway,
     /// No-op message for async operations that don't need a result, and for
     /// the theme picker's sample buttons (enabled so they show real styling)
     Noop,
@@ -708,6 +776,7 @@ impl State {
         let mut state = Self {
             // Unknown until DRFW applies something: the kernel may hold anything
             last_applied_ruleset: None,
+            last_confirmed_ruleset: None,
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -715,11 +784,14 @@ impl State {
             banners: std::collections::VecDeque::new(),
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
+            rule_form_initial: None,
+            confirm_discard_form: false,
             rule_form_helper: None,
             // Filled when the rule form opens (interfaces can come and go)
             interface_combo: iced::widget::combo_box::State::new(Vec::new()),
             output_interface_combo: iced::widget::combo_box::State::new(Vec::new()),
             countdown_remaining: 15,
+            countdown_display: String::new(),
             progress_animation: Animation::new(1.0),
             form_errors: None,
             cached_nft_tokens: Vec::new(),
@@ -748,8 +820,10 @@ impl State {
             verify_errors: None,
             show_verify_errors: false,
             save_dialog: handlers::SaveToSystemDialog::default(),
+            save_in_progress: None,
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
+            export_in_progress: false,
             show_shortcuts_help: false,
             font_picker: None,
             theme_picker: None,
@@ -770,15 +844,20 @@ impl State {
             fonts_loaded: false,
             config_dirty: false,
             last_config_change: None,
+            config_save_in_flight: false,
+            config_save_error: None,
+            settings_display: SettingsDisplay::default(),
             profile_dirty: false,
             last_profile_change: None,
             pending_slider_log: None,
             timers: debounce::Timers::default(),
             active_profile_name,
-            available_profiles,
+            available_profiles: Vec::new(),
+            profile_count_display: String::new(),
             pending_profile_switch: None,
             diagnostics: diagnostics::DiagnosticsLog::default(),
             unreadable_profile,
+            confirm_start_fresh: false,
             profile_generation: 0,
             switch_request: 0,
             profile_save_in_flight: false,
@@ -787,9 +866,13 @@ impl State {
             cached_rule_issues: std::collections::HashMap::new(),
             cached_validation_notice: None,
             closing: false,
+            close_after_rename: false,
+            close_error: None,
         };
 
         // Initialize all caches properly via centralized logic
+        state.set_available_profiles(available_profiles);
+        state.refresh_settings_display();
         state.update_cached_text();
 
         if let Some(issue) = &state.unreadable_profile {
@@ -827,6 +910,7 @@ impl State {
 
         let mut state = Self {
             last_applied_ruleset: Some(ruleset.clone()),
+            last_confirmed_ruleset: None,
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -834,10 +918,13 @@ impl State {
             banners: std::collections::VecDeque::new(),
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
+            rule_form_initial: None,
+            confirm_discard_form: false,
             rule_form_helper: None,
             interface_combo: iced::widget::combo_box::State::new(Vec::new()),
             output_interface_combo: iced::widget::combo_box::State::new(Vec::new()),
             countdown_remaining: 15,
+            countdown_display: String::new(),
             progress_animation: Animation::new(1.0),
             form_errors: None,
             cached_nft_tokens: Vec::new(),
@@ -866,8 +953,10 @@ impl State {
             verify_errors: None,
             show_verify_errors: false,
             save_dialog: handlers::SaveToSystemDialog::default(),
+            save_in_progress: None,
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
+            export_in_progress: false,
             show_shortcuts_help: false,
             font_picker: None,
             theme_picker: None,
@@ -888,15 +977,20 @@ impl State {
             fonts_loaded: false,
             config_dirty: false,
             last_config_change: None,
+            config_save_in_flight: false,
+            config_save_error: None,
+            settings_display: SettingsDisplay::default(),
             profile_dirty: false,
             last_profile_change: None,
             pending_slider_log: None,
             timers: debounce::Timers::default(),
             active_profile_name: "test".to_string(),
-            available_profiles: vec!["test".to_string()],
+            available_profiles: Vec::new(),
+            profile_count_display: String::new(),
             pending_profile_switch: None,
             diagnostics: diagnostics::DiagnosticsLog::default(),
             unreadable_profile: None,
+            confirm_start_fresh: false,
             profile_generation: 0,
             switch_request: 0,
             profile_save_in_flight: false,
@@ -905,8 +999,12 @@ impl State {
             cached_rule_issues: std::collections::HashMap::new(),
             cached_validation_notice: None,
             closing: false,
+            close_after_rename: false,
+            close_error: None,
         };
 
+        state.set_available_profiles(vec!["test".to_string()]);
+        state.refresh_settings_display();
         state.refresh_applied_text_cache();
         state.update_cached_text();
         state
@@ -998,7 +1096,7 @@ impl State {
         self.cached_diff_width_px = if let Some(ref diff_tokens) = self.cached_diff_tokens {
             let diff_lines: Vec<&syntax_cache::HighlightedLine> =
                 diff_tokens.iter().map(|(_, line)| line).collect();
-            calculate_max_content_width_from_refs(&diff_lines)
+            calculate_max_content_width_from_refs(&diff_lines) + view::DIFF_GUTTER_WIDTH_PX
         } else {
             self.cached_nft_width_px
         };
@@ -1032,12 +1130,12 @@ impl State {
                 .iter()
                 .any(|t| t.as_ref() == current_filter.as_ref())
         {
+            // The typed search is the user's; only the gone tag is dropped
             self.filter_tag = None;
-            self.rule_search.clear();
-            self.rule_search_lowercase.clear();
         }
 
         self.update_validation_cache();
+        self.refresh_settings_display();
         self.update_rule_badges();
         self.update_filter_cache();
         self.refresh_dirty_flags();
@@ -1065,6 +1163,38 @@ impl State {
     pub(crate) fn set_cached_disk_profile(&mut self, on_disk: FirewallRuleset) {
         self.cached_disk_profile = Some(on_disk);
         self.refresh_dirty_flags();
+    }
+
+    /// Replaces the profile list (and its "N profiles" label).
+    pub(crate) fn set_available_profiles(&mut self, profiles: Vec<String>) {
+        self.available_profiles = profiles;
+        let count = self.available_profiles.len();
+        self.profile_count_display = if count == 1 {
+            "1 profile".to_string()
+        } else {
+            format!("{count} profiles")
+        };
+    }
+
+    /// Sets the auto-revert countdown and its label.
+    pub(crate) fn set_countdown(&mut self, remaining: u32) {
+        self.countdown_remaining = remaining;
+        self.countdown_display = remaining.to_string();
+    }
+
+    /// Reformats the settings slider labels (see [`SettingsDisplay`]).
+    pub(crate) fn refresh_settings_display(&mut self) {
+        let advanced = &self.ruleset.advanced_security;
+        let display = &mut self.settings_display;
+        display.auto_revert_timeout = format!("{}s", self.auto_revert_timeout_secs);
+        display.apply_timer_secs =
+            handlers::guard_timeout_secs_for(self.auto_revert_timeout_secs).to_string();
+        display.icmp_rate = if advanced.icmp_rate_limit == 0 {
+            "Off".to_string()
+        } else {
+            format!("{}/s", advanced.icmp_rate_limit)
+        };
+        display.log_rate = format!("{}/m", advanced.log_rate_per_minute);
     }
 
     /// Recomputes the cached `is_dirty()` / `is_profile_dirty()` flags.
@@ -1199,17 +1329,15 @@ impl State {
     }
 
     fn compute_is_dirty(&self) -> bool {
-        self.last_applied_ruleset.as_ref().is_none_or(|last| {
-            last.rules != self.ruleset.rules
-                || last.advanced_security != self.ruleset.advanced_security
-        })
+        self.last_applied_ruleset
+            .as_ref()
+            .is_none_or(|last| !rulesets_match(last, &self.ruleset))
     }
 
     fn compute_is_profile_dirty(&self) -> bool {
-        self.cached_disk_profile.as_ref().is_some_and(|disk| {
-            disk.rules != self.ruleset.rules
-                || disk.advanced_security != self.ruleset.advanced_security
-        })
+        self.cached_disk_profile
+            .as_ref()
+            .is_some_and(|disk| !rulesets_match(disk, &self.ruleset))
     }
 
     /// Debug builds: the cached dirty flags and badges must match a fresh
@@ -1360,16 +1488,20 @@ impl State {
             return Task::none();
         }
 
-        if handlers::is_ruleset_edit(&message) && handlers::edits_locked(self) {
+        if (handlers::is_ruleset_edit(&message) || handlers::starts_rule_edit(&message))
+            && handlers::edits_locked(self)
+        {
             handlers::handle_edit_while_locked(self);
             return Task::none();
         }
 
         match message {
             // Rules domain
-            Message::AddRuleClicked => handlers::handle_add_rule_clicked(self),
-            Message::EditRuleClicked(id) => handlers::handle_edit_rule_clicked(self, id),
+            Message::AddRuleClicked => return handlers::handle_add_rule_clicked(self),
+            Message::EditRuleClicked(id) => return handlers::handle_edit_rule_clicked(self, id),
             Message::CancelRuleForm => handlers::handle_cancel_rule_form(self),
+            Message::KeepEditingRuleForm => handlers::handle_keep_editing_rule_form(self),
+            Message::DiscardRuleForm => handlers::handle_discard_rule_form(self),
             Message::SaveRuleForm => return handlers::handle_save_rule_form(self),
             Message::RuleFormLabelChanged(s) => handlers::handle_rule_form_label_changed(self, s),
             Message::RuleFormProtocolChanged(p) => {
@@ -1429,8 +1561,8 @@ impl State {
             Message::SaveToSystemEnableToggled(enabled) => {
                 handlers::handle_save_to_system_enable_toggled(self, enabled);
             }
-            Message::SaveToSystemConfirmed => {
-                return handlers::handle_save_to_system_confirmed(self);
+            Message::SaveToSystemConfirmed(source) => {
+                return handlers::handle_save_to_system_confirmed(self, source);
             }
             Message::SaveToSystemCancelled => {
                 handlers::handle_save_to_system_cancelled(self);
@@ -1451,6 +1583,9 @@ impl State {
             Message::TabChanged(tab) => handlers::handle_tab_changed(self, tab),
             Message::EventOccurred(event, status) => {
                 return handlers::handle_event(self, &event, status);
+            }
+            Message::BaseShortcut(shortcut, input_focused) => {
+                return handlers::handle_base_shortcut(self, shortcut, input_focused);
             }
 
             // Settings domain
@@ -1525,7 +1660,7 @@ impl State {
             }
             Message::Undo => return handlers::handle_undo(self),
             Message::Redo => return handlers::handle_redo(self),
-            Message::OpenThemePicker => handlers::handle_open_theme_picker(self),
+            Message::OpenThemePicker => return handlers::handle_open_theme_picker(self),
             Message::ThemePickerSearchChanged(search) => {
                 handlers::handle_theme_picker_search_changed(self, search);
             }
@@ -1543,7 +1678,7 @@ impl State {
             }
             Message::OpenFontPicker(target) => {
                 handlers::handle_open_font_picker(self, target);
-                return focus(Id::from(view::FONT_SEARCH_INPUT_ID));
+                return focus::focus_input(focus::FONT_SEARCH);
             }
             Message::FontPickerSearchChanged(search) => {
                 handlers::handle_font_picker_search_changed(self, search);
@@ -1559,7 +1694,9 @@ impl State {
             Message::RuleHoverEnd => handlers::handle_rule_hover_end(self),
 
             // Helper modal messages
-            Message::OpenHelper(helper_type) => handlers::handle_open_helper(self, helper_type),
+            Message::OpenHelper(helper_type) => {
+                return handlers::handle_open_helper(self, helper_type);
+            }
             Message::CloseHelper => handlers::handle_close_helper(self),
             Message::HelperInputChanged(s) => handlers::handle_helper_input_changed(self, s),
             Message::HelperAddValue => handlers::handle_helper_add_value(self),
@@ -1593,9 +1730,13 @@ impl State {
             Message::ProfileCreated(name, ruleset, result) => {
                 return handlers::handle_profile_created(self, name, *ruleset, result);
             }
-            Message::StartFreshProfile => handlers::handle_start_fresh_profile(self),
-            Message::StartCreatingNewProfile => handlers::handle_start_creating_new_profile(self),
-            Message::CreateEmptyProfile => handlers::handle_create_empty_profile(self),
+            Message::StartFreshProfile => handlers::handle_start_fresh_requested(self),
+            Message::ConfirmStartFresh => return handlers::handle_start_fresh_profile(self),
+            Message::CancelStartFresh => handlers::handle_cancel_start_fresh(self),
+            Message::StartCreatingNewProfile => {
+                return handlers::handle_start_creating_new_profile(self);
+            }
+            Message::CreateEmptyProfile => return handlers::handle_create_empty_profile(self),
             Message::NewProfileNameChanged(name) => {
                 handlers::handle_new_profile_name_changed(self, name);
             }
@@ -1611,7 +1752,7 @@ impl State {
             }
             Message::CancelDeleteProfile => handlers::handle_cancel_delete_profile(self),
             Message::RenameProfileRequested(name) => {
-                handlers::handle_rename_profile_requested(self, name);
+                return handlers::handle_rename_profile_requested(self, name);
             }
             Message::ProfileNewNameChanged(new_name) => {
                 handlers::handle_profile_new_name_changed(self, new_name);
@@ -1634,7 +1775,9 @@ impl State {
             }
             Message::ConfigSaved(result) => handlers::handle_config_saved(self, result),
             Message::CloseRequested(id) => return handlers::handle_close_requested(self, id),
-            Message::CloseFlushed => return iced::exit(),
+            Message::CloseFlushed(result) => return handlers::handle_close_flushed(self, result),
+            Message::CancelClose => handlers::handle_cancel_close(self),
+            Message::CloseAnyway => return handlers::handle_close_anyway(self),
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
@@ -1677,9 +1820,10 @@ impl State {
                 iced::Subscription::none()
             },
             // Audit log auto-refresh while the diagnostics modal is open: each
-            // tick stats the log and re-reads it only if it changed
+            // tick stats the log and re-reads it only if it changed. Once a
+            // second: every tick rebuilds the view, rows included.
             if self.show_diagnostics {
-                iced::time::every(Duration::from_millis(250)).map(|_| Message::CheckAuditLogRefresh)
+                iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckAuditLogRefresh)
             } else {
                 iced::Subscription::none()
             },

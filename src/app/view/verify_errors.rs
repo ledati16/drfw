@@ -112,7 +112,7 @@ pub fn view_verify_errors_modal<'a>(
                     .size(14)
                     .font(regular_font)
                     .color(theme.fg_primary),
-                text("Nothing was changed. Fix the rules below, then apply again.")
+                text(panel.next_step)
                     .size(12)
                     .font(regular_font)
                     .color(theme.fg_muted),

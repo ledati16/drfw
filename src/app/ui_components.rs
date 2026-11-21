@@ -1201,19 +1201,37 @@ pub fn notification_banner<'a>(
     banner: &'a crate::app::NotificationBanner,
     theme: &'a crate::theme::AppTheme,
     index: usize,
+    regular_font: iced::Font,
+    mono_font: iced::Font,
 ) -> iced::Element<'a, crate::app::Message> {
-    use iced::widget::{container, mouse_area, text};
-    use iced::{Background, Border, Shadow};
+    use iced::widget::{container, mouse_area, row, text};
+    use iced::{Alignment, Background, Border, Shadow};
 
-    // Determine colors based on severity
-    let (bg_color, fg_color) = match banner.severity {
-        crate::app::BannerSeverity::Success => (theme.success, theme.fg_on_accent),
-        crate::app::BannerSeverity::Info => (theme.info, theme.fg_on_accent),
-        crate::app::BannerSeverity::Warning => (theme.warning, theme.fg_on_accent),
-        crate::app::BannerSeverity::Error => (theme.danger, theme.fg_on_accent),
+    // Colors by severity, plus a word: severity must not rely on color alone
+    // (reduced colors, color vision)
+    let (bg_color, label) = match banner.severity {
+        crate::app::BannerSeverity::Success => (theme.success, "OK"),
+        crate::app::BannerSeverity::Info => (theme.info, "INFO"),
+        crate::app::BannerSeverity::Warning => (theme.warning, "WARNING"),
+        crate::app::BannerSeverity::Error => (theme.danger, "ERROR"),
     };
+    let fg_color = theme.fg_on_accent;
 
-    let content = text(&banner.message).size(14).color(fg_color);
+    let content = row![
+        text(label)
+            .size(10)
+            .font(iced::Font {
+                weight: iced::font::Weight::Bold,
+                ..mono_font
+            })
+            .color(fg_color),
+        text(&banner.message)
+            .size(14)
+            .font(regular_font)
+            .color(fg_color),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
 
     let styled_container =
         container(content)

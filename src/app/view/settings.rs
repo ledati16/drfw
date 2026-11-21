@@ -156,7 +156,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                     })
                     .width(Length::Fill)
                     .style(move |_, status| themed_slider(theme, status)),
-                    text(format!("{}s", state.auto_revert_timeout_secs))
+                    text(&state.settings_display.auto_revert_timeout)
                         .size(12)
                         .font(state.font_mono)
                         .width(40)
@@ -219,12 +219,12 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
             ),
             render_settings_row(
                 "ICMP rate limiting",
-                "Limit incoming ICMP packets to prevent floods",
+                "Limit incoming ICMP packets to prevent floods (0 = off)",
                 row![
                     slider(0..=50, advanced.icmp_rate_limit, Message::IcmpRateLimitChanged)
                         .width(Length::Fill)
                         .style(move |_, status| themed_slider(theme, status)),
-                    text(format!("{}/s", advanced.icmp_rate_limit))
+                    text(&state.settings_display.icmp_rate)
                         .size(12).font(state.font_mono).width(40).align_x(Alignment::End),
                 ].spacing(12).align_y(Alignment::Center).into(),
                 theme,
@@ -279,7 +279,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                             )
                             .width(Length::Fill)
                             .style(move |_, status| themed_slider(theme, status)),
-                            text(format!("{}/m", advanced.log_rate_per_minute))
+                            text(&state.settings_display.log_rate)
                                 .size(12)
                                 .font(state.font_mono)
                                 .width(40)
@@ -295,6 +295,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                         "   └ Log Prefix",
                         "Tag used in system journal",
                         text_input("DRFW-DROP: ", &advanced.log_prefix)
+                            .id(crate::app::focus::LOG_PREFIX)
                             .on_input(Message::LogPrefixChanged)
                             .padding(8)
                             .size(13)

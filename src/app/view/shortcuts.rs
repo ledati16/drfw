@@ -77,6 +77,15 @@ pub fn view_shortcuts_help(
                 &[
                     ("F1", "Show this help"),
                     ("Esc", "Close the top-most dialog or form"),
+                    (
+                        "Enter",
+                        "Run the dialog's main action (save, confirm, close)"
+                    ),
+                    ("Tab / Shift + Tab", "Move between the dialog's text fields"),
+                    (
+                        "Ctrl + Enter",
+                        "Confirm new rules during the auto-revert countdown"
+                    ),
                 ],
                 theme,
                 regular_font,
@@ -86,11 +95,11 @@ pub fn view_shortcuts_help(
                 "Rules",
                 &[
                     ("Ctrl + N", "Add new rule"),
-                    ("Enter", "Save the open rule form"),
                     ("Ctrl + S", "Apply changes"),
                     ("Ctrl + Z", "Undo last modification"),
                     ("Ctrl + Y", "Redo last undone modification"),
                     ("Ctrl + Shift + Z", "Redo (alternative)"),
+                    ("", "Ctrl shortcuts need the text fields unfocused (Esc)"),
                 ],
                 theme,
                 regular_font,

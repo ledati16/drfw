@@ -29,6 +29,8 @@ pub enum EventType {
     ProfileDeleteFailed,
     ProfileRenameFailed,
     ProfileCreateFailed,
+    /// An unreadable profile was replaced with an empty one ("Start fresh")
+    ProfileReset,
 
     // Settings changes (user-facing)
     SettingsSaved,
@@ -328,6 +330,19 @@ pub async fn log_profile_create_failed(enable_event_log: bool, profile_name: &st
 }
 
 /// Logs a profile deletion event
+/// Logs "Start fresh": an unreadable profile replaced with an empty one.
+/// `backup` is where the original was copied to (`None`: no copy exists).
+pub async fn log_profile_reset(enable_event_log: bool, profile_name: &str, backup: Option<String>) {
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileReset,
+        true,
+        serde_json::json!({ "profile_name": profile_name, "backup": backup }),
+        None,
+    )
+    .await;
+}
+
 pub async fn log_profile_deleted(enable_event_log: bool, profile_name: &str) {
     log_event_internal(
         enable_event_log,
@@ -535,17 +550,33 @@ pub async fn log_enable_at_boot(
 }
 
 /// Logs a save to system operation
+/// Which rules a Save to System wrote (see [`log_save_to_system`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SaveDetails {
+    /// The last rules applied and confirmed were saved (not the editor's)
+    pub last_confirmed: bool,
+    /// The editor's rules were saved without being applied and confirmed
+    pub untested: bool,
+}
+
+/// Logs a Save to System: target path, which rules, and whether they were
+/// tested live first.
 pub async fn log_save_to_system(
     enable_event_log: bool,
     success: bool,
     target_path: &str,
+    details: SaveDetails,
     error: Option<String>,
 ) {
     log_event_internal(
         enable_event_log,
         EventType::SaveToSystem,
         success,
-        serde_json::json!({ "target_path": target_path }),
+        serde_json::json!({
+            "target_path": target_path,
+            "source": if details.last_confirmed { "last_confirmed" } else { "editor" },
+            "untested": details.untested,
+        }),
         error,
     )
     .await;

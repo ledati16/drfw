@@ -45,6 +45,10 @@ fn truncate_error_message(prefix: &str, message: &str, max_total_len: usize) -> 
     }
 }
 
+/// Error text of [`interpret_elevated_command_output`] for a cancelled
+/// authentication (reported as a warning, not an error).
+const AUTH_CANCELLED: &str = "Authentication cancelled";
+
 /// Interprets the output of an elevated command and returns a user-friendly error message.
 /// Returns Ok(()) on success, or Err with a descriptive message on failure.
 fn interpret_elevated_command_output(output: &std::process::Output) -> Result<(), String> {
@@ -57,7 +61,7 @@ fn interpret_elevated_command_output(output: &std::process::Output) -> Result<()
 
     // Detect common error patterns from pkexec/sudo/run0
     if exit_code == 126 {
-        Err("Authentication cancelled".into())
+        Err(AUTH_CANCELLED.into())
     } else if exit_code == 127 {
         // Preserve stderr for specific error detection (e.g. "No authentication agent")
         if stderr.is_empty() {
@@ -99,10 +103,15 @@ fn push_persistent_banner(state: &mut State, message: String) {
     }
 }
 
+/// The revert timeout used for a configured timeout of `configured` seconds.
+pub(crate) fn guard_timeout_secs_for(configured: u64) -> u64 {
+    configured.clamp(1, 120)
+}
+
 /// The revert timeout to use, or 0 when auto-revert is disabled.
 fn guard_timeout_secs(state: &State) -> u64 {
     if state.auto_revert_enabled {
-        state.auto_revert_timeout_secs.clamp(1, 120)
+        guard_timeout_secs_for(state.auto_revert_timeout_secs)
     } else {
         0
     }
@@ -158,17 +167,32 @@ async fn verify_and_locate(
     Ok(crate::core::verify::locate_errors(&ruleset, result).await)
 }
 
+/// What a verification was for; the errors panel says what to retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyPurpose {
+    Apply,
+    SaveToSystem,
+}
+
 /// Banner, "Verification Errors" panel and audit entry for a ruleset nft
 /// rejected.
-fn verify_rejected_feedback(state: &mut State, result: &VerifyResult) -> Task<Message> {
+fn verify_rejected_feedback(
+    state: &mut State,
+    result: &VerifyResult,
+    purpose: VerifyPurpose,
+) -> Task<Message> {
     state.push_banner(
         crate::app::verify_errors::banner_message(result),
         BannerSeverity::Error,
     );
-    state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(
-        result,
-        &state.ruleset,
-    ));
+    let mut panel = crate::app::verify_errors::VerifyErrorsPanel::new(result, &state.ruleset);
+    panel.next_step = match purpose {
+        VerifyPurpose::Apply => "Nothing was changed. Fix the rules below, then apply again.",
+        VerifyPurpose::SaveToSystem => {
+            "Nothing was saved. Fix the rules below, then save to system again."
+        }
+    };
+    state.verify_errors = Some(panel);
     state.show_verify_errors = true;
     audit_task(audit::log_verify(
         state.enable_event_log,
@@ -190,7 +214,24 @@ pub(crate) fn edits_locked(state: &State) -> bool {
     state.is_busy() || state.status == AppStatus::AwaitingApply
 }
 
+/// Messages that open the rule form or start a rule edit. While the apply
+/// flow owns the ruleset they are refused up front, so no form opens that
+/// could not be saved.
+pub(crate) fn starts_rule_edit(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::AddRuleClicked
+            | Message::EditRuleClicked(_)
+            | Message::DeleteRuleRequested(_)
+            | Message::RuleDragStart(_)
+    )
+}
+
 /// Messages that change the ruleset (or switch to another one).
+///
+/// Results of profile loads and creations (`ProfileSwitched`,
+/// `ProfileCreated`) are not in this list: they were requested before the
+/// lock and are handled (not dropped) by their handlers.
 pub(crate) fn is_ruleset_edit(message: &Message) -> bool {
     matches!(
         message,
@@ -212,13 +253,11 @@ pub(crate) fn is_ruleset_edit(message: &Message) -> bool {
             | Message::ServerModeToggled(_)
             | Message::ConfirmServerMode
             | Message::ProfileSelected(_)
-            | Message::ProfileSwitched(..)
             | Message::SaveProfileAs(_)
             | Message::ConfirmProfileSwitch
             | Message::DiscardProfileSwitch
             | Message::CreateEmptyProfile
-            | Message::ProfileCreated(..)
-            | Message::StartFreshProfile
+            | Message::ConfirmStartFresh
             | Message::ConfirmDeleteProfile
     )
 }
@@ -287,13 +326,14 @@ pub(crate) fn handle_verify_completed(
     match result {
         Ok(verify_result) if verify_result.success => {
             state.status = AppStatus::AwaitingApply;
+            state.refresh_settings_display();
             clear_verify_errors(state);
             audit_task(audit::log_verify(enable_event_log, true, 0, None))
         }
         Ok(verify_result) => {
             state.status = AppStatus::Idle;
             state.apply_session = None;
-            verify_rejected_feedback(state, &verify_result)
+            verify_rejected_feedback(state, &verify_result, VerifyPurpose::Apply)
         }
         Err(e) => {
             state.status = AppStatus::Idle;
@@ -382,8 +422,9 @@ pub(crate) fn handle_apply_result(
     state.set_last_applied(Some(verified));
 
     let Some(guard) = guard else {
+        // Auto-revert is off: the user chose to keep these rules unconditionally
         state.status = AppStatus::Idle;
-        state.apply_session = None;
+        state.last_confirmed_ruleset = state.apply_session.take().map(|s| s.verified);
         state.push_banner(
             "Firewall rules applied successfully!",
             BannerSeverity::Success,
@@ -392,7 +433,7 @@ pub(crate) fn handle_apply_result(
     };
 
     let timeout = guard.timeout();
-    state.countdown_remaining = u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX);
+    state.set_countdown(u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX));
     state.progress_animation = iced::Animation::new(1.0)
         .easing(iced::animation::Easing::Linear)
         .duration(timeout)
@@ -457,8 +498,9 @@ pub(crate) fn handle_countdown_tick(state: &mut State) -> Task<Message> {
     let AppStatus::PendingConfirmation { guard } = &state.status else {
         return Task::none();
     };
+    let guard = guard.clone();
     let remaining = guard.remaining_secs(Instant::now());
-    state.countdown_remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+    state.set_countdown(u32::try_from(remaining).unwrap_or(u32::MAX));
 
     if remaining > 0 {
         if remaining == 5 {
@@ -470,7 +512,6 @@ pub(crate) fn handle_countdown_tick(state: &mut State) -> Task<Message> {
         return Task::none();
     }
 
-    let guard = guard.clone();
     let enable_event_log = state.enable_event_log;
     let timeout_secs = guard.timeout().as_secs();
     state.status = AppStatus::Reverting;
@@ -524,15 +565,15 @@ pub(crate) fn handle_guard_finished(
         return Task::none();
     }
     state.status = AppStatus::Idle;
-    let previous_applied = state
-        .apply_session
-        .take()
-        .and_then(|session| session.previous_applied);
+    let (verified, previous_applied) = state.apply_session.take().map_or((None, None), |session| {
+        (Some(session.verified), session.previous_applied)
+    });
     let enable_event_log = state.enable_event_log;
     let timeout_secs = guard_timeout_secs(state);
 
     match result {
         Ok(GuardOutcome::Confirmed) => {
+            state.last_confirmed_ruleset = verified;
             state.push_banner("Changes confirmed!", BannerSeverity::Success);
             audit_task(audit::log_auto_revert_confirmed(
                 enable_event_log,
@@ -601,10 +642,61 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
     )
 }
 
+/// Which rules Save to System writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveSource {
+    /// The rules in the editor (what was just verified)
+    Editor,
+    /// The last rules applied and kept this session (`last_confirmed_ruleset`)
+    LastConfirmed,
+}
+
+/// Whether the editor's rules were tried live before they are saved: rules
+/// in the system file take effect at the next boot, with no auto-revert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SaveTested {
+    /// The editor's rules are the ones last applied and kept
+    #[default]
+    Tested,
+    /// Rules were applied and kept this session, but the editor's differ
+    Differs,
+    /// Nothing was applied and kept this session
+    NothingApplied,
+}
+
+impl SaveTested {
+    fn of(editor: &FirewallRuleset, last_confirmed: Option<&FirewallRuleset>) -> Self {
+        match last_confirmed {
+            Some(confirmed) if crate::app::rulesets_match(confirmed, editor) => Self::Tested,
+            Some(_) => Self::Differs,
+            None => Self::NothingApplied,
+        }
+    }
+
+    /// The warning the dialog shows, if any.
+    pub fn warning(self) -> Option<&'static str> {
+        match self {
+            Self::Tested => None,
+            Self::Differs => Some(
+                "The rules in the editor differ from the rules you last applied and \
+                 confirmed. Untested rules take effect at the next boot, with no \
+                 automatic revert if they lock you out.",
+            ),
+            Self::NothingApplied => Some(
+                "These rules were not applied this session. They take effect at the \
+                 next boot, with no automatic revert if they lock you out. Apply and \
+                 confirm them first to test them.",
+            ),
+        }
+    }
+}
+
 /// Boot persistence part of the Save to System dialog, prepared in `update()`
 /// (the view only reads it).
 #[derive(Debug, Clone, Default)]
 pub struct SaveToSystemDialog {
+    /// Whether the editor's rules were tested live (see [`SaveTested`])
+    pub tested: SaveTested,
     /// What `systemctl` said; `None` while it is being asked
     pub boot: Option<BootStatus>,
     /// The line shown in the dialog
@@ -643,6 +735,24 @@ impl SaveToSystemDialog {
     fn service_to_enable(&self) -> Option<&'static str> {
         (self.offer_enable && self.enable_at_boot).then_some(crate::SYSTEM_NFT_SERVICE)
     }
+
+    /// The dialog's primary (highlighted, Enter) choice: the tested rules.
+    /// `None` when only untested rules could be saved; that takes a click.
+    pub fn primary_source(&self) -> Option<SaveSource> {
+        match self.tested {
+            SaveTested::Tested => Some(SaveSource::Editor),
+            SaveTested::Differs => Some(SaveSource::LastConfirmed),
+            SaveTested::NothingApplied => None,
+        }
+    }
+}
+
+/// The Save to System that is running: what it writes, for the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveInProgress {
+    pub source: SaveSource,
+    /// The editor's rules were saved without being applied and kept
+    pub untested: bool,
 }
 
 /// Result of a successful Save to System.
@@ -671,6 +781,8 @@ pub(crate) fn handle_save_to_system_verify_result(
             state.status = AppStatus::AwaitingSaveToSystem;
             clear_verify_errors(state);
             state.save_dialog = SaveToSystemDialog::checking();
+            state.save_dialog.tested =
+                SaveTested::of(&state.ruleset, state.last_confirmed_ruleset.as_ref());
             Task::perform(
                 crate::core::boot::query_boot_status(),
                 Message::SaveToSystemBootChecked,
@@ -678,7 +790,7 @@ pub(crate) fn handle_save_to_system_verify_result(
         }
         Ok(verify_result) => {
             state.status = AppStatus::Idle;
-            verify_rejected_feedback(state, &verify_result)
+            verify_rejected_feedback(state, &verify_result, VerifyPurpose::SaveToSystem)
         }
         Err(e) => {
             // Verification could not run (authentication, nft missing, ...)
@@ -710,13 +822,30 @@ pub(crate) fn handle_save_to_system_enable_toggled(state: &mut State, enabled: b
 /// service (see `elevation::SAVE_CONFIG_SCRIPT`). The earlier JSON
 /// verification only gates the modal; the text check here is the
 /// authoritative one because it covers the exact bytes being installed.
-pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message> {
+///
+/// `source` picks the editor's rules or the last confirmed ones; saving the
+/// editor's rules while they differ from the confirmed ones (or nothing was
+/// confirmed) is recorded as an untested save in the audit log.
+pub(crate) fn handle_save_to_system_confirmed(
+    state: &mut State,
+    source: SaveSource,
+) -> Task<Message> {
     if state.status != AppStatus::AwaitingSaveToSystem {
         return Task::none();
     }
+    let text = match source {
+        SaveSource::Editor => state.ruleset.to_nft_text(),
+        SaveSource::LastConfirmed => {
+            let Some(confirmed) = &state.last_confirmed_ruleset else {
+                tracing::error!("Save of the last confirmed rules without any");
+                return Task::none();
+            };
+            confirmed.to_nft_text()
+        }
+    };
+    let untested = source == SaveSource::Editor && state.save_dialog.tested != SaveTested::Tested;
     state.status = AppStatus::SavingToSystem;
-
-    let text = state.ruleset.to_nft_text();
+    state.save_in_progress = Some(SaveInProgress { source, untested });
     let enable = state.save_dialog.service_to_enable();
 
     Task::perform(
@@ -762,26 +891,47 @@ pub(crate) fn handle_save_to_system_result(
     }
     state.status = AppStatus::Idle;
     state.save_dialog = SaveToSystemDialog::default();
+    let save = state.save_in_progress.take().unwrap_or(SaveInProgress {
+        source: SaveSource::Editor,
+        untested: false,
+    });
     let enable_event_log = state.enable_event_log;
     let target_path = crate::SYSTEM_NFT_PATH.to_string();
+    let details = audit::SaveDetails {
+        last_confirmed: save.source == SaveSource::LastConfirmed,
+        untested: save.untested,
+    };
 
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(e) => {
-            let msg = truncate_error_message("Save failed: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error);
+            if e == AUTH_CANCELLED {
+                state.push_banner(
+                    "Authentication was cancelled; nothing was saved",
+                    BannerSeverity::Warning,
+                );
+            } else {
+                let msg = truncate_error_message("Save failed: ", &e, 80);
+                state.push_banner(&msg, BannerSeverity::Error);
+            }
             return audit_task(async move {
-                audit::log_save_to_system(enable_event_log, false, &target_path, Some(e)).await;
+                audit::log_save_to_system(enable_event_log, false, &target_path, details, Some(e))
+                    .await;
             });
         }
     };
 
+    let what = if details.last_confirmed {
+        "Last applied rules saved"
+    } else {
+        "Configuration saved"
+    };
     let mut message = match &outcome.backup {
         Some(backup) => format!(
-            "Configuration saved to {} (previous file kept as {backup})",
+            "{what} to {} (previous file kept as {backup})",
             crate::SYSTEM_NFT_PATH
         ),
-        None => format!("Configuration saved to {}", crate::SYSTEM_NFT_PATH),
+        None => format!("{what} to {}", crate::SYSTEM_NFT_PATH),
     };
     let loads_at_boot = outcome.boot.loads_at_boot() == Some(true);
     if loads_at_boot {
@@ -805,7 +955,7 @@ pub(crate) fn handle_save_to_system_result(
     }
 
     let mut tasks = vec![audit_task(async move {
-        audit::log_save_to_system(enable_event_log, true, &target_path, None).await;
+        audit::log_save_to_system(enable_event_log, true, &target_path, details, None).await;
     })];
     if let Some(enable) = outcome.enable {
         tasks.push(audit_task(async move {
@@ -1153,7 +1303,7 @@ mod tests {
 
         let saved = |state: &mut State, enable, enablement| {
             *state = state_awaiting_save();
-            let _ = handle_save_to_system_confirmed(state);
+            let _ = handle_save_to_system_confirmed(state, SaveSource::Editor);
             assert_eq!(state.status, AppStatus::SavingToSystem);
             let _ = handle_save_to_system_result(
                 state,
@@ -1420,5 +1570,171 @@ mod tests {
         let (message, severity) = last_banner(&state);
         assert!(message.contains("cancelled"));
         assert_eq!(severity, BannerSeverity::Warning);
+    }
+
+    // =========================================================================
+    // Save to System: tested vs untested rules
+    // =========================================================================
+
+    /// Applies the current ruleset and confirms it within the countdown.
+    fn apply_and_confirm(state: &mut State) {
+        let dir = tempfile::tempdir().unwrap();
+        let _ = handle_apply_clicked(state);
+        let _ = handle_verify_completed(state, Ok(VerifyResult::success()));
+        let _ = handle_proceed_to_apply(state);
+        let guard = GuardHandle::new_for_testing(dir.path(), Duration::from_secs(15));
+        let _ = handle_apply_result(state, Ok(Some(guard)));
+        state.status = AppStatus::Confirming;
+        let _ = handle_guard_finished(state, Ok(GuardOutcome::Confirmed));
+        assert_eq!(state.status, AppStatus::Idle);
+    }
+
+    fn open_save_dialog(state: &mut State) {
+        let _ = handle_save_to_system_clicked(state);
+        let _ = handle_save_to_system_verify_result(state, Ok(VerifyResult::success()));
+        assert_eq!(state.status, AppStatus::AwaitingSaveToSystem);
+    }
+
+    #[test]
+    fn test_save_to_system_warns_when_nothing_was_applied() {
+        let mut state = state_awaiting_save();
+        assert!(state.last_confirmed_ruleset.is_none());
+        assert_eq!(state.save_dialog.tested, SaveTested::NothingApplied);
+        assert!(
+            state
+                .save_dialog
+                .tested
+                .warning()
+                .unwrap()
+                .contains("next boot")
+        );
+        assert_eq!(state.save_dialog.primary_source(), None, "no safe default");
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::LastConfirmed);
+        assert_eq!(
+            state.status,
+            AppStatus::AwaitingSaveToSystem,
+            "nothing confirmed to save"
+        );
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::Editor);
+        assert_eq!(
+            state.save_in_progress,
+            Some(SaveInProgress {
+                source: SaveSource::Editor,
+                untested: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_save_to_system_offers_the_last_confirmed_rules() {
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(create_test_rule("Tested", Some(22)));
+        state.mark_profile_dirty();
+        apply_and_confirm(&mut state);
+        open_save_dialog(&mut state);
+        assert_eq!(state.save_dialog.tested, SaveTested::Tested);
+        assert_eq!(state.save_dialog.primary_source(), Some(SaveSource::Editor));
+        assert!(state.save_dialog.tested.warning().is_none());
+        handle_save_to_system_cancelled(&mut state);
+
+        // Edited after confirming: the confirmed rules are the safe choice
+        state
+            .ruleset
+            .rules
+            .push(create_test_rule("Untested", Some(23)));
+        state.mark_profile_dirty();
+        open_save_dialog(&mut state);
+        assert_eq!(state.save_dialog.tested, SaveTested::Differs);
+        assert_eq!(
+            state.save_dialog.primary_source(),
+            Some(SaveSource::LastConfirmed)
+        );
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::LastConfirmed);
+        assert_eq!(state.status, AppStatus::SavingToSystem);
+        assert_eq!(
+            state.save_in_progress,
+            Some(SaveInProgress {
+                source: SaveSource::LastConfirmed,
+                untested: false,
+            })
+        );
+        let _ = handle_save_to_system_result(
+            &mut state,
+            Ok(SaveOutcome {
+                backup: None,
+                enable: None,
+                boot: boot(crate::core::boot::Enablement::Enabled),
+            }),
+        );
+        assert!(state.save_in_progress.is_none());
+        assert!(
+            last_banner(&state)
+                .0
+                .starts_with("Last applied rules saved"),
+            "{:?}",
+            state.banners
+        );
+    }
+
+    /// Only a confirmed (or deliberately unguarded) apply counts as tested:
+    /// a rollback or a failed revert never does.
+    #[test]
+    fn test_last_confirmed_only_follows_kept_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_applying();
+        let guard = GuardHandle::new_for_testing(dir.path(), Duration::from_secs(15));
+        let _ = handle_apply_result(&mut state, Ok(Some(guard)));
+        state.status = AppStatus::Reverting;
+        let _ = handle_guard_finished(
+            &mut state,
+            Ok(GuardOutcome::RevertFailed("busy".to_string())),
+        );
+        assert!(
+            state.last_confirmed_ruleset.is_none(),
+            "still active, never confirmed"
+        );
+
+        // Auto-revert off: applied without a guard, kept by choice
+        let mut state = state_applying();
+        let _ = handle_apply_result(&mut state, Ok(None));
+        let confirmed = state.last_confirmed_ruleset.as_ref().expect("kept");
+        assert_eq!(confirmed.rules[0].label, "New");
+    }
+
+    #[test]
+    fn test_save_errors_panel_says_save_again() {
+        use crate::core::verify::VerifyIssue;
+        let mut state = create_test_state();
+        let _ = handle_save_to_system_clicked(&mut state);
+        let _ = handle_save_to_system_verify_result(
+            &mut state,
+            Ok(VerifyResult::failure(vec![VerifyIssue::unlocated("bad")])),
+        );
+        let panel = state.verify_errors.as_ref().expect("panel");
+        assert!(panel.next_step.contains("save to system again"));
+        assert!(panel.next_step.contains("Nothing was saved"));
+    }
+
+    #[test]
+    fn test_cancelled_save_authentication_is_a_warning() {
+        let mut state = state_awaiting_save();
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::Editor);
+        let _ = handle_save_to_system_result(&mut state, Err(AUTH_CANCELLED.to_string()));
+        let (message, severity) = last_banner(&state);
+        assert_eq!(severity, BannerSeverity::Warning);
+        assert!(message.contains("nothing was saved"));
+    }
+
+    #[test]
+    fn test_countdown_label_follows_the_countdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_applying();
+        let guard = GuardHandle::new_for_testing(dir.path(), Duration::from_secs(15));
+        let _ = handle_apply_result(&mut state, Ok(Some(guard)));
+        assert_eq!(state.countdown_display, "15");
+        assert_eq!(state.settings_display.apply_timer_secs, "15");
     }
 }

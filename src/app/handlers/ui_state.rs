@@ -65,6 +65,7 @@ pub(crate) fn handle_undo(state: &mut State) -> Task<Message> {
     state.clear_drag_state();
     state.mark_profile_dirty();
     tracing::info!("Undid: {description}");
+    state.push_banner(format!("Undid: {description}"), BannerSeverity::Info);
     let enable_event_log = state.enable_event_log;
     super::audit_task(async move {
         crate::audit::log_undone(enable_event_log, &description).await;
@@ -80,14 +81,15 @@ pub(crate) fn handle_redo(state: &mut State) -> Task<Message> {
     state.clear_drag_state();
     state.mark_profile_dirty();
     tracing::info!("Redid: {description}");
+    state.push_banner(format!("Redid: {description}"), BannerSeverity::Info);
     let enable_event_log = state.enable_event_log;
     super::audit_task(async move {
         crate::audit::log_redone(enable_event_log, &description).await;
     })
 }
 
-/// Handles opening theme picker
-pub(crate) fn handle_open_theme_picker(state: &mut State) {
+/// Handles opening theme picker (its search input gets the focus)
+pub(crate) fn handle_open_theme_picker(state: &mut State) -> Task<Message> {
     // Pre-compute all theme conversions once on modal open
     let cached_themes: Vec<_> = <crate::theme::ThemeChoice as IntoEnumIterator>::iter()
         .map(|choice| (choice, choice.to_theme()))
@@ -104,6 +106,7 @@ pub(crate) fn handle_open_theme_picker(state: &mut State) {
     };
     picker.refilter();
     state.theme_picker = Some(picker);
+    crate::app::focus::focus_input(crate::app::focus::THEME_SEARCH)
 }
 
 /// Handles theme picker search change
@@ -204,43 +207,46 @@ pub(crate) fn handle_dismiss_banner(state: &mut State, index: usize) {
     }
 }
 
-/// Handles copying a preview line to clipboard (right-click)
-///
-/// Reconstructs the line text from the cached tokens and copies to system clipboard.
-/// Works with both normal and diff view - uses whichever is currently active.
-pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) -> Task<Message> {
-    // Try diff view first if enabled, otherwise use normal tokens
-    let line_opt = if state.show_diff {
-        state
-            .cached_diff_tokens
-            .as_ref()
-            .and_then(|diff| diff.iter().find(|(_, hl)| hl.line_number == line_number))
-            .map(|(_, hl)| hl)
-    } else {
-        state
+/// The preview line `line_number` as it is on screen: the diff view when it
+/// is shown (diff enabled and there is a diff), the plain ruleset otherwise.
+/// Must match the choice in `view::view`.
+fn preview_line(
+    state: &State,
+    line_number: usize,
+) -> Option<&crate::app::syntax_cache::HighlightedLine> {
+    match (state.show_diff, &state.cached_diff_tokens) {
+        (true, Some(diff)) => diff
+            .iter()
+            .map(|(_, line)| line)
+            .find(|line| line.line_number == line_number),
+        _ => state
             .cached_nft_tokens
             .iter()
-            .find(|hl| hl.line_number == line_number)
-    };
+            .find(|line| line.line_number == line_number),
+    }
+}
 
-    let Some(line) = line_opt else {
+/// The text of a preview line: indentation plus its tokens.
+fn preview_line_text(line: &crate::app::syntax_cache::HighlightedLine) -> String {
+    let mut text = String::with_capacity(
+        line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>(),
+    );
+    text.extend(std::iter::repeat_n(' ', line.indent));
+    for token in &line.tokens {
+        text.push_str(&token.text);
+    }
+    text
+}
+
+/// Handles copying a preview line to clipboard (right-click)
+pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) -> Task<Message> {
+    let Some(text) = preview_line(state, line_number).map(preview_line_text) else {
         tracing::warn!(
             "Attempted to copy non-existent preview line {}",
             line_number
         );
         return Task::none();
     };
-
-    // Reconstruct line text: indentation + all token text concatenated
-    let mut text = String::with_capacity(
-        line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>(),
-    );
-    for _ in 0..line.indent {
-        text.push(' ');
-    }
-    for token in &line.tokens {
-        text.push_str(&token.text);
-    }
 
     state.push_banner(
         format!("Line {line_number} copied to clipboard"),
@@ -284,34 +290,9 @@ fn user_label_for_comment<'a>(
 /// Extracts the label from the line's `comment "LABEL"` and sets the sidebar search
 /// to filter to matching rules. Works with both normal and diff view.
 pub(crate) fn handle_click_preview_line(state: &mut State, line_number: usize) {
-    // Get line from either diff or normal view (same logic as copy handler)
-    let line_opt = if state.show_diff {
-        state
-            .cached_diff_tokens
-            .as_ref()
-            .and_then(|diff| diff.iter().find(|(_, hl)| hl.line_number == line_number))
-            .map(|(_, hl)| hl)
-    } else {
-        state
-            .cached_nft_tokens
-            .iter()
-            .find(|hl| hl.line_number == line_number)
-    };
-
-    let Some(line) = line_opt else {
+    let Some(text) = preview_line(state, line_number).map(preview_line_text) else {
         return; // Line not found - silently ignore
     };
-
-    // Reconstruct line text from tokens
-    let mut text = String::with_capacity(
-        line.indent + line.tokens.iter().map(|t| t.text.len()).sum::<usize>(),
-    );
-    for _ in 0..line.indent {
-        text.push(' ');
-    }
-    for token in &line.tokens {
-        text.push_str(&token.text);
-    }
 
     // No user rule for this line (system rule, header, unlabeled rule):
     // silently ignore - the user can use other methods to find the rule
@@ -346,58 +327,111 @@ const CLOSE_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// (bounded by [`CLOSE_FLUSH_TIMEOUT`]), then exits via `Message::CloseFlushed`.
 ///
 /// The debounced autosave would otherwise lose the last second of edits.
-/// A read-only (unreadable) profile is never written.
+/// A read-only (unreadable) profile is never written. While a profile rename
+/// runs, the flush waits for it (see `handle_profile_renamed`): saving under
+/// the old name now would recreate the file the rename is moving away.
 pub(crate) fn handle_close_requested(state: &mut State, _id: iced::window::Id) -> Task<Message> {
     if state.closing {
         return Task::none();
     }
     state.closing = true;
+    state.close_error = None;
     // Pending saves are flushed below; armed timers must not start more
     state.timers.cancel_all();
+    if state.profile_rename_in_flight {
+        state.close_after_rename = true;
+        return Task::none();
+    }
+    start_close_flush(state)
+}
 
+/// Writes what is pending and reports the outcome as `Message::CloseFlushed`.
+pub(crate) fn start_close_flush(state: &mut State) -> Task<Message> {
     // Re-save while a save is in flight too: the profile save lock orders it
     // after the running one, so the newest snapshot always lands last.
     let profile = ((state.profile_dirty || state.profile_save_in_flight)
         && state.unreadable_profile.is_none())
     .then(|| (state.active_profile_name.clone(), state.ruleset.clone()));
-    let config = state.config_dirty.then(|| state.config_snapshot());
+    let config =
+        (state.config_dirty || state.config_save_in_flight).then(|| state.config_snapshot());
 
     if profile.is_none() && config.is_none() {
-        return Task::done(Message::CloseFlushed);
+        return Task::done(Message::CloseFlushed(Ok(())));
     }
 
     Task::perform(
         async move {
             let flush = async {
+                let mut errors = Vec::new();
                 if let Some((name, ruleset)) = profile
                     && let Err(e) = crate::core::profiles::save_profile(&name, &ruleset).await
                 {
                     tracing::error!("Failed to save profile '{name}' on close: {e}");
+                    errors.push(format!("profile '{name}': {e}"));
                 }
                 if let Some(config) = config
                     && let Err(e) = crate::config::save_config(&config).await
                 {
                     tracing::error!("Failed to save configuration on close: {e}");
+                    errors.push(format!("settings: {e}"));
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join("; "))
                 }
             };
-            if tokio::time::timeout(CLOSE_FLUSH_TIMEOUT, flush)
+            tokio::time::timeout(CLOSE_FLUSH_TIMEOUT, flush)
                 .await
-                .is_err()
-            {
-                tracing::error!("Saving on close timed out; exiting anyway");
-            }
+                .unwrap_or_else(|_| {
+                    tracing::error!("Saving on close timed out");
+                    Err("saving timed out".to_string())
+                })
         },
-        |()| Message::CloseFlushed,
+        Message::CloseFlushed,
     )
+}
+
+/// Handles the end of the close flush: exits if everything was written,
+/// otherwise keeps the window open and asks (see the "Close anyway" dialog).
+pub(crate) fn handle_close_flushed(state: &mut State, result: Result<(), String>) -> Task<Message> {
+    match result {
+        Ok(()) => iced::exit(),
+        Err(e) => {
+            // Back to normal operation: autosave resumes and retries
+            state.closing = false;
+            state.close_error = Some(format!(
+                "Your changes could not be saved ({e}). If you close now, they are lost."
+            ));
+            Task::none()
+        }
+    }
+}
+
+/// "Keep DRFW open" in the failed-close dialog
+pub(crate) fn handle_cancel_close(state: &mut State) {
+    state.close_error = None;
+}
+
+/// "Close anyway" in the failed-close dialog: exits without saving
+pub(crate) fn handle_close_anyway(state: &mut State) -> Task<Message> {
+    if state.close_error.take().is_none() {
+        return Task::none();
+    }
+    tracing::warn!("Closing without saving after a failed save");
+    iced::exit()
 }
 
 /// The top-most open layer of the UI, following the stacking order of
 /// `view::view` (first variant = drawn on top).
 ///
-/// Escape closes exactly this layer, and shortcuts that act on the rules
-/// behind it only fire when nothing is open ([`TopLayer::Base`]).
+/// Escape closes exactly this layer, Enter runs its primary action, Tab moves
+/// between its text inputs, and shortcuts that act on the rules behind it
+/// only fire when nothing is open ([`TopLayer::Base`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TopLayer {
+    /// "Your changes could not be saved" after a close request
+    CloseFailed,
     ShortcutsHelp,
     /// "Unsaved changes" dialog before a profile switch (drawn above, and
     /// hiding, the profile manager)
@@ -409,6 +443,8 @@ pub(crate) enum TopLayer {
     Diagnostics,
     /// Port/address/tag helper on top of the rule form
     HelperModal,
+    /// "Start fresh?" for a profile that could not be loaded
+    StartFreshConfirm,
     /// Confirmation for enabling a risky setting
     Warning,
     RuleForm,
@@ -426,7 +462,9 @@ pub(crate) enum TopLayer {
 pub(crate) fn top_layer(state: &State) -> TopLayer {
     use crate::app::AppStatus;
 
-    if state.show_shortcuts_help {
+    if state.close_error.is_some() {
+        TopLayer::CloseFailed
+    } else if state.show_shortcuts_help {
         TopLayer::ShortcutsHelp
     } else if state.pending_profile_switch.is_some() {
         TopLayer::ProfileSwitchConfirm
@@ -447,6 +485,8 @@ pub(crate) fn top_layer(state: &State) -> TopLayer {
             .is_some_and(|h| h.helper_type.is_some())
     {
         TopLayer::HelperModal
+    } else if state.confirm_start_fresh && state.unreadable_profile.is_some() {
+        TopLayer::StartFreshConfirm
     } else if state.pending_warning.is_some() {
         TopLayer::Warning
     } else if state.rule_form.is_some() {
@@ -463,14 +503,45 @@ pub(crate) fn top_layer(state: &State) -> TopLayer {
     }
 }
 
+/// The text inputs of `layer`, for the Tab cycle. Inputs that are not on
+/// screen (e.g. the rate limit fields while it is off) are skipped.
+pub(crate) fn layer_inputs(layer: TopLayer) -> &'static [&'static str] {
+    use crate::app::focus;
+
+    match layer {
+        TopLayer::Base => &[focus::RULE_SEARCH, focus::LOG_PREFIX],
+        TopLayer::RuleForm => &[
+            focus::RULE_FORM_LABEL,
+            focus::RULE_FORM_RATE_COUNT,
+            focus::RULE_FORM_RATE_BURST,
+            focus::RULE_FORM_CONNECTION_LIMIT,
+        ],
+        TopLayer::HelperModal => &[focus::HELPER_INPUT],
+        TopLayer::ProfileManager => &[focus::PROFILE_RENAME, focus::PROFILE_NEW_NAME],
+        TopLayer::Diagnostics => &[focus::DIAGNOSTICS_SEARCH],
+        TopLayer::FontPicker => &[focus::FONT_SEARCH],
+        TopLayer::ThemePicker => &[focus::THEME_SEARCH],
+        TopLayer::CloseFailed
+        | TopLayer::ShortcutsHelp
+        | TopLayer::ProfileSwitchConfirm
+        | TopLayer::ExportModal
+        | TopLayer::StartFreshConfirm
+        | TopLayer::Warning
+        | TopLayer::ApplyFlow
+        | TopLayer::SaveToSystem
+        | TopLayer::VerifyErrors => &[],
+    }
+}
+
 /// The message that closes the top-most layer on Escape, if any.
 ///
 /// The apply countdown and a running apply are deliberately not closable by
-/// Escape: keeping or rolling back firewall rules needs an explicit click.
+/// Escape: keeping or rolling back firewall rules needs an explicit choice.
 fn escape_message(state: &State) -> Option<Message> {
     use crate::app::AppStatus;
 
     match top_layer(state) {
+        TopLayer::CloseFailed => Some(Message::CancelClose),
         TopLayer::ShortcutsHelp => Some(Message::ToggleShortcutsHelp(false)),
         TopLayer::ProfileSwitchConfirm => Some(Message::CancelProfileSwitch),
         TopLayer::ProfileManager => {
@@ -489,16 +560,97 @@ fn escape_message(state: &State) -> Option<Message> {
         TopLayer::ThemePicker => Some(Message::CancelThemePicker),
         TopLayer::FontPicker => Some(Message::CloseFontPicker),
         TopLayer::ExportModal => Some(Message::ToggleExportModal(false)),
-        TopLayer::Diagnostics => Some(Message::ToggleDiagnostics(false)),
+        // The "Clear log?" prompt first, then the modal
+        TopLayer::Diagnostics => Some(if state.diagnostics.confirm_clear {
+            Message::ClearEventLogCancelled
+        } else {
+            Message::ToggleDiagnostics(false)
+        }),
         TopLayer::HelperModal => Some(Message::CloseHelper),
+        TopLayer::StartFreshConfirm => Some(Message::CancelStartFresh),
         TopLayer::Warning => Some(Message::CancelWarning),
-        TopLayer::RuleForm => Some(Message::CancelRuleForm),
+        TopLayer::RuleForm => Some(if state.confirm_discard_form {
+            Message::KeepEditingRuleForm
+        } else {
+            Message::CancelRuleForm
+        }),
         TopLayer::ApplyFlow => {
             (state.status == AppStatus::AwaitingApply).then_some(Message::CancelApply)
         }
         TopLayer::SaveToSystem => Some(Message::SaveToSystemCancelled),
         TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
         TopLayer::Base => state.deleting_id.is_some().then_some(Message::CancelDelete),
+    }
+}
+
+/// The primary action of the top-most layer, run by Enter.
+///
+/// Chosen deliberately per layer:
+/// - Dialogs run their highlighted (primary) button; the dialog after a
+///   failed close keeps DRFW open.
+/// - Yes/no prompts (delete a rule or profile, clear the log, discard form
+///   changes) confirm, as their confirm button is the one being asked about.
+/// - The auto-revert countdown does **not** confirm on Enter: a stray or
+///   repeated Enter right after applying would keep untested rules and defeat
+///   the dead-man switch. Confirming by keyboard takes Ctrl+Enter (see
+///   [`key_action`]); plain Enter only shows how.
+/// - "Start fresh" without a backup copy, and Save to System with only
+///   untested rules to save, have no Enter action: both lose data or skip the
+///   safety net, so they need a click.
+fn enter_message(state: &State) -> Option<Message> {
+    use crate::app::AppStatus;
+
+    match top_layer(state) {
+        TopLayer::CloseFailed => Some(Message::CancelClose),
+        TopLayer::ShortcutsHelp => Some(Message::ToggleShortcutsHelp(false)),
+        TopLayer::ProfileSwitchConfirm => Some(Message::ConfirmProfileSwitch),
+        TopLayer::ProfileManager => {
+            let mgr = state.profile_manager.as_ref()?;
+            if mgr.deleting_name.is_some() {
+                Some(Message::ConfirmDeleteProfile)
+            } else if mgr.renaming_name.is_some() {
+                mgr.rename_error
+                    .is_none()
+                    .then_some(Message::ConfirmRenameProfile)
+            } else if mgr.creating_new {
+                mgr.new_name_error
+                    .is_none()
+                    .then(|| Message::SaveProfileAs(mgr.new_name_input.clone()))
+            } else {
+                None
+            }
+        }
+        TopLayer::ThemePicker => Some(Message::ApplyTheme),
+        TopLayer::FontPicker | TopLayer::ExportModal => None,
+        TopLayer::Diagnostics => state
+            .diagnostics
+            .confirm_clear
+            .then_some(Message::ClearEventLogConfirmed),
+        TopLayer::HelperModal => Some(Message::HelperAddValue),
+        TopLayer::StartFreshConfirm => state
+            .unreadable_profile
+            .as_ref()
+            .is_some_and(|issue| issue.backup.is_some())
+            .then_some(Message::ConfirmStartFresh),
+        TopLayer::Warning => state.pending_warning.as_ref().map(|warning| match warning {
+            crate::app::PendingWarning::EnableRpf => Message::ConfirmEnableRpf,
+            crate::app::PendingWarning::EnableServerMode => Message::ConfirmServerMode,
+            crate::app::PendingWarning::EnableStrictIcmp => Message::ConfirmStrictIcmp,
+        }),
+        TopLayer::RuleForm => Some(if state.confirm_discard_form {
+            Message::DiscardRuleForm
+        } else {
+            Message::SaveRuleForm
+        }),
+        TopLayer::ApplyFlow => {
+            (state.status == AppStatus::AwaitingApply).then_some(Message::ProceedToApply)
+        }
+        TopLayer::SaveToSystem => state
+            .save_dialog
+            .primary_source()
+            .map(Message::SaveToSystemConfirmed),
+        TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
+        TopLayer::Base => state.deleting_id.map(Message::DeleteRule),
     }
 }
 
@@ -518,36 +670,94 @@ pub(crate) fn keyboard_event_message(
     }
 }
 
-/// Handles keyboard shortcuts.
-///
-/// - Escape is global (a focused text input captures it to unfocus, and it
-///   still closes the top-most layer). On the base layer it cancels an active
-///   drag, then a pending rule delete, then clears the search.
-/// - Every other key only acts if no widget handled it
-///   (`Status::Ignored`), so Enter in a helper input adds the value instead of
-///   also saving the rule form.
-/// - Enter saves the rule form only while the form is the top layer.
-/// - Ctrl+N/S/E/Z/Y act on the rules behind any modal, so they only fire on
-///   the base layer (no form or dialog open).
+/// Ctrl shortcuts that act on the rules behind any modal. They only run on
+/// the base layer, and only while no text input is focused: iced's text
+/// input does not capture Ctrl+Z/Y/N/S/E, so Ctrl+Z in the search box would
+/// otherwise undo a rule change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseShortcut {
+    AddRule,
+    Apply,
+    Export,
+    Undo,
+    Redo,
+}
+
+impl BaseShortcut {
+    /// The message the shortcut sends, if it can act now.
+    fn message(self, state: &State) -> Option<Message> {
+        match self {
+            Self::AddRule => Some(Message::AddRuleClicked),
+            Self::Apply => Some(Message::ApplyClicked),
+            Self::Export => Some(Message::ToggleExportModal(true)),
+            Self::Undo => state.command_history.can_undo().then_some(Message::Undo),
+            Self::Redo => state.command_history.can_redo().then_some(Message::Redo),
+        }
+    }
+}
+
+/// What a key press does in the current state.
+#[derive(Debug)]
+enum KeyAction {
+    Send(Message),
+    /// Run a base-layer shortcut once it is known no text input is focused
+    Shortcut(BaseShortcut),
+    /// Tab / Shift+Tab: move focus among the top layer's inputs
+    MoveFocus {
+        forward: bool,
+    },
+    /// Escape on the base layer: cancel a drag, else clear the search
+    BaseEscape,
+    /// Enter during the auto-revert countdown: say how to confirm
+    ConfirmHint,
+}
+
+/// Banner shown when Enter is pressed during the auto-revert countdown.
+const CONFIRM_HINT: &str = "Press Ctrl+Enter or click \"Confirm & Stay\" to keep the new rules.";
+
+/// Handles keyboard shortcuts (see [`key_action`] for the mapping).
 pub(crate) fn handle_event(
     state: &mut State,
     event: &iced::Event,
     status: iced::event::Status,
 ) -> Task<Message> {
-    if let Some(message) = shortcut_message(state, event, status) {
-        return Task::done(message);
-    }
-    if is_escape(event) {
-        // Base layer, nothing to confirm or cancel
-        if state.dragged_rule_id.is_some() {
-            state.clear_drag_state();
-        } else if !state.rule_search.is_empty() {
-            state.rule_search.clear();
-            state.rule_search_lowercase.clear();
-            state.update_filter_cache();
+    match key_action(state, event, status) {
+        Some(KeyAction::Send(message)) => Task::done(message),
+        Some(KeyAction::Shortcut(shortcut)) => crate::app::focus::any_input_focused()
+            .map(move |input_focused| Message::BaseShortcut(shortcut, input_focused)),
+        Some(KeyAction::MoveFocus { forward }) => {
+            crate::app::focus::cycle(layer_inputs(top_layer(state)), forward)
         }
+        Some(KeyAction::BaseEscape) => {
+            if state.dragged_rule_id.is_some() {
+                state.clear_drag_state();
+            } else if !state.rule_search.is_empty() {
+                state.rule_search.clear();
+                state.rule_search_lowercase.clear();
+                state.update_filter_cache();
+            }
+            Task::none()
+        }
+        Some(KeyAction::ConfirmHint) => {
+            state.push_banner(CONFIRM_HINT, BannerSeverity::Info);
+            Task::none()
+        }
+        None => Task::none(),
     }
-    Task::none()
+}
+
+/// Handles a base-layer shortcut after the focus query (see
+/// [`BaseShortcut`]). The layer is checked again: a dialog may have opened
+/// while the query ran.
+pub(crate) fn handle_base_shortcut(
+    state: &State,
+    shortcut: BaseShortcut,
+    input_focused: bool,
+) -> Task<Message> {
+    if input_focused || top_layer(state) != TopLayer::Base {
+        return Task::none();
+    }
+    shortcut.message(state).map_or_else(Task::none, Task::done)
 }
 
 fn is_escape(event: &iced::Event) -> bool {
@@ -560,44 +770,86 @@ fn is_escape(event: &iced::Event) -> bool {
     )
 }
 
-/// The message a key press maps to in the current state (see
-/// [`handle_event`] for the rules), without side effects.
-fn shortcut_message(
+/// What a key press does in the current state, without side effects.
+///
+/// - Escape is global (a focused text input captures it to unfocus, and it
+///   still closes the top-most layer). Only on the base layer, and when no
+///   input took it, does it cancel a drag or clear the search; never behind
+///   a dialog.
+/// - Every other key only acts if no widget handled it (`Status::Ignored`),
+///   so Enter in an input with its own submit action (a helper input adds
+///   the value) does not also run the layer's primary action.
+/// - Enter (not auto-repeated) runs the top layer's primary action (see
+///   [`enter_message`]); Ctrl+Enter confirms the auto-revert countdown.
+/// - Tab / Shift+Tab move focus among the top layer's text inputs.
+/// - Ctrl+N/S/E/Z/Y act on the rules behind any modal, so they only fire on
+///   the base layer, with no text input focused ([`BaseShortcut`]).
+fn key_action(
     state: &State,
     event: &iced::Event,
     status: iced::event::Status,
-) -> Option<Message> {
+) -> Option<KeyAction> {
     use iced::keyboard::Key;
     use iced::keyboard::key::Named;
 
     use crate::app::AppStatus;
 
-    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key,
+        modifiers,
+        repeat,
+        ..
+    }) = event
     else {
         return None;
     };
 
+    let layer = top_layer(state);
     if is_escape(event) {
-        return escape_message(state);
+        return match escape_message(state) {
+            Some(message) => Some(KeyAction::Send(message)),
+            // A focused input took this Escape to unfocus; the next one clears
+            None if layer == TopLayer::Base && status == iced::event::Status::Ignored => {
+                Some(KeyAction::BaseEscape)
+            }
+            None => None,
+        };
     }
     if status == iced::event::Status::Captured {
         return None;
     }
 
-    let layer = top_layer(state);
     let command = modifiers.command() || modifiers.control();
     match key.as_ref() {
-        Key::Named(Named::Enter) if layer == TopLayer::RuleForm => Some(Message::SaveRuleForm),
-        Key::Named(Named::F1) => Some(Message::ToggleShortcutsHelp(true)),
-        _ if !command || layer != TopLayer::Base => None,
-        Key::Character("n") => (!matches!(state.status, AppStatus::PendingConfirmation { .. }))
-            .then_some(Message::AddRuleClicked),
-        Key::Character("s") => Some(Message::ApplyClicked),
-        Key::Character("e") => Some(Message::ToggleExportModal(true)),
-        Key::Character("z") if !modifiers.shift() => {
-            state.command_history.can_undo().then_some(Message::Undo)
+        // A held key must not click through dialogs
+        Key::Named(Named::Enter) if *repeat => None,
+        Key::Named(Named::Enter)
+            if matches!(state.status, AppStatus::PendingConfirmation { .. })
+                && layer == TopLayer::ApplyFlow =>
+        {
+            Some(if command {
+                KeyAction::Send(Message::ConfirmClicked)
+            } else {
+                KeyAction::ConfirmHint
+            })
         }
-        Key::Character("z" | "y") => state.command_history.can_redo().then_some(Message::Redo),
+        Key::Named(Named::Enter) => enter_message(state).map(KeyAction::Send),
+        Key::Named(Named::Tab) => Some(KeyAction::MoveFocus {
+            forward: !modifiers.shift(),
+        }),
+        Key::Named(Named::F1) => Some(KeyAction::Send(Message::ToggleShortcutsHelp(true))),
+        _ if !command || layer != TopLayer::Base => None,
+        Key::Character("n") => Some(KeyAction::Shortcut(BaseShortcut::AddRule)),
+        Key::Character("s") => Some(KeyAction::Shortcut(BaseShortcut::Apply)),
+        Key::Character("e") => Some(KeyAction::Shortcut(BaseShortcut::Export)),
+        Key::Character("z") if !modifiers.shift() => state
+            .command_history
+            .can_undo()
+            .then_some(KeyAction::Shortcut(BaseShortcut::Undo)),
+        Key::Character("z" | "y") => state
+            .command_history
+            .can_redo()
+            .then_some(KeyAction::Shortcut(BaseShortcut::Redo)),
         _ => None,
     }
 }
@@ -725,10 +977,20 @@ mod tests {
 
     /// Runs a key press and returns (the debug form of) the message it sends,
     /// if any; side effects of `handle_event` are applied to `state`.
+    /// Runs a key press and returns what it does as text: the message it
+    /// sends (for a base shortcut: the message it sends once no input is
+    /// focused), `MoveFocus(forward)` or `ConfirmHint`. Side effects of
+    /// `handle_event` are applied to `state`.
     fn press(state: &mut State, event: &iced::Event, status: Status) -> Option<String> {
-        let message = shortcut_message(state, event, status).map(|m| format!("{m:?}"));
+        let action = key_action(state, event, status).and_then(|action| match action {
+            KeyAction::Send(message) => Some(format!("{message:?}")),
+            KeyAction::Shortcut(shortcut) => shortcut.message(state).map(|m| format!("{m:?}")),
+            KeyAction::MoveFocus { forward } => Some(format!("MoveFocus({forward})")),
+            KeyAction::ConfirmHint => Some("ConfirmHint".to_string()),
+            KeyAction::BaseEscape => None,
+        });
         let _ = handle_event(state, event, status);
-        message
+        action
     }
 
     fn open_helper(state: &mut State) {
@@ -736,7 +998,7 @@ mod tests {
         state.rule_form_helper = Some(RuleFormHelper {
             helper_type: Some(HelperType::Ports),
             input: "22".into(),
-            error: None,
+            ..Default::default()
         });
     }
 
@@ -749,10 +1011,11 @@ mod tests {
             press(&mut state, &named(Named::Enter), Status::Captured),
             None
         );
-        // Even unhandled, Enter does not save the form behind the helper
+        // Unhandled (input not focused), Enter adds the value, and still
+        // does not save the form behind the helper
         assert_eq!(
-            press(&mut state, &named(Named::Enter), Status::Ignored),
-            None
+            press(&mut state, &named(Named::Enter), Status::Ignored).as_deref(),
+            Some("HelperAddValue")
         );
         // With the helper closed, Enter saves the form
         state.rule_form_helper = None;
@@ -849,7 +1112,7 @@ mod tests {
         state.show_diagnostics = true;
         state.show_export_modal = true;
         handle_open_font_picker(&mut state, FontPickerTarget::Mono);
-        handle_open_theme_picker(&mut state);
+        let _ = handle_open_theme_picker(&mut state);
         crate::app::handlers::handle_open_profile_manager(&mut state);
         state.pending_profile_switch = Some("other".into());
         state.show_shortcuts_help = true;
@@ -980,7 +1243,7 @@ mod tests {
             Some("CancelDeleteProfile")
         );
         crate::app::handlers::handle_cancel_delete_profile(&mut state);
-        crate::app::handlers::handle_rename_profile_requested(&mut state, "test".into());
+        let _ = crate::app::handlers::handle_rename_profile_requested(&mut state, "test".into());
         assert_eq!(
             press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
             Some("CancelRenameProfile")
@@ -1070,7 +1333,7 @@ mod tests {
     #[test]
     fn test_theme_picker_caches_filtered_list() {
         let mut state = create_test_state();
-        handle_open_theme_picker(&mut state);
+        let _ = handle_open_theme_picker(&mut state);
         let all = state.theme_picker.as_ref().unwrap().filtered.len();
         assert!(all > 1);
         handle_theme_picker_filter_changed(&mut state, ThemeFilter::Light);
@@ -1094,5 +1357,318 @@ mod tests {
         let palette = state.iced_theme().palette();
         assert_eq!(palette.background, state.theme.bg_base);
         assert_eq!(palette.text, state.theme.fg_primary);
+    }
+
+    // ------------------------------------------------------------------
+    // Enter, Tab, focus-guarded shortcuts, close flush, preview fallback
+    // ------------------------------------------------------------------
+
+    fn enter_repeat() -> iced::Event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Enter),
+            modified_key: Key::Named(Named::Enter),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat: true,
+        })
+    }
+
+    fn enter(state: &mut State) -> Option<String> {
+        press(state, &named(Named::Enter), Status::Ignored)
+    }
+
+    #[test]
+    fn test_enter_runs_the_primary_action_of_the_top_layer() {
+        let mut state = create_test_state();
+        assert_eq!(enter(&mut state), None, "base layer, nothing to confirm");
+
+        let id = uuid::Uuid::new_v4();
+        state.deleting_id = Some(id);
+        assert_eq!(enter(&mut state), Some(format!("DeleteRule({id:?})")));
+        state.deleting_id = None;
+
+        state.status = AppStatus::AwaitingApply;
+        assert_eq!(enter(&mut state).as_deref(), Some("ProceedToApply"));
+        state.status = AppStatus::Applying;
+        assert_eq!(enter(&mut state), None);
+        state.status = AppStatus::Idle;
+
+        state.pending_warning = Some(PendingWarning::EnableServerMode);
+        assert_eq!(enter(&mut state).as_deref(), Some("ConfirmServerMode"));
+        state.pending_warning = None;
+
+        crate::app::handlers::handle_open_profile_manager(&mut state);
+        assert_eq!(enter(&mut state), None, "nothing chosen in the manager");
+        crate::app::handlers::handle_delete_profile_requested(&mut state, "x".into());
+        assert_eq!(enter(&mut state).as_deref(), Some("ConfirmDeleteProfile"));
+        state.profile_manager = None;
+
+        state.show_diagnostics = true;
+        assert_eq!(enter(&mut state), None);
+        state.diagnostics.confirm_clear = true;
+        assert_eq!(enter(&mut state).as_deref(), Some("ClearEventLogConfirmed"));
+        state.show_diagnostics = false;
+
+        state.close_error = Some("disk full".into());
+        assert_eq!(
+            enter(&mut state).as_deref(),
+            Some("CancelClose"),
+            "keeps DRFW open"
+        );
+    }
+
+    #[test]
+    fn test_enter_never_confirms_the_countdown_but_ctrl_enter_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = create_test_state();
+        state.status = AppStatus::PendingConfirmation {
+            guard: crate::core::apply_guard::GuardHandle::new_for_testing(
+                dir.path(),
+                std::time::Duration::from_secs(30),
+            ),
+        };
+        assert_eq!(enter(&mut state).as_deref(), Some("ConfirmHint"));
+        assert!(matches!(
+            state.status,
+            AppStatus::PendingConfirmation { .. }
+        ));
+        assert!(
+            state
+                .banners
+                .back()
+                .is_some_and(|b| b.message.contains("Ctrl+Enter"))
+        );
+        // A held Enter (repeat) does nothing at all
+        assert_eq!(press(&mut state, &enter_repeat(), Status::Ignored), None);
+        let ctrl_enter = key_event(Key::Named(Named::Enter), Modifiers::CTRL);
+        assert_eq!(
+            press(&mut state, &ctrl_enter, Status::Ignored).as_deref(),
+            Some("ConfirmClicked")
+        );
+        // Escape still does nothing here
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored),
+            None
+        );
+    }
+
+    #[test]
+    fn test_enter_has_no_action_where_data_or_the_safety_net_is_at_stake() {
+        let mut state = create_test_state();
+        // Save to System with only untested rules: a click is required
+        state.status = AppStatus::AwaitingSaveToSystem;
+        state.save_dialog.tested = crate::app::handlers::SaveTested::NothingApplied;
+        assert_eq!(enter(&mut state), None);
+        state.save_dialog.tested = crate::app::handlers::SaveTested::Differs;
+        assert_eq!(
+            enter(&mut state).as_deref(),
+            Some("SaveToSystemConfirmed(LastConfirmed)")
+        );
+        state.status = AppStatus::Idle;
+
+        // Start fresh without a backup copy
+        state.unreadable_profile = Some(crate::core::profiles::UnreadableProfile {
+            name: "test".into(),
+            reason: "damaged".into(),
+            backup: None,
+        });
+        state.confirm_start_fresh = true;
+        assert_eq!(top_layer(&state), TopLayer::StartFreshConfirm);
+        assert_eq!(enter(&mut state), None);
+        state.unreadable_profile.as_mut().unwrap().backup = Some("/x/test.json.corrupt-1".into());
+        assert_eq!(enter(&mut state).as_deref(), Some("ConfirmStartFresh"));
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelStartFresh")
+        );
+    }
+
+    #[test]
+    fn test_tab_moves_focus_within_the_top_layer() {
+        let mut state = create_test_state();
+        assert_eq!(
+            press(&mut state, &named(Named::Tab), Status::Ignored).as_deref(),
+            Some("MoveFocus(true)")
+        );
+        let shift_tab = key_event(Key::Named(Named::Tab), Modifiers::SHIFT);
+        assert_eq!(
+            press(&mut state, &shift_tab, Status::Ignored).as_deref(),
+            Some("MoveFocus(false)")
+        );
+        // The inputs cycled are those of the top layer only
+        open_helper(&mut state);
+        assert_eq!(
+            layer_inputs(top_layer(&state)),
+            &[crate::app::focus::HELPER_INPUT]
+        );
+        state.rule_form_helper = None;
+        assert!(layer_inputs(top_layer(&state)).contains(&crate::app::focus::RULE_FORM_LABEL));
+        assert!(!layer_inputs(top_layer(&state)).contains(&crate::app::focus::RULE_SEARCH));
+    }
+
+    #[test]
+    fn test_escape_behind_a_dialog_leaves_the_base_layer_alone() {
+        let mut state = create_test_state();
+        state.rule_search = "ssh".into();
+        state.dragged_rule_id = Some(uuid::Uuid::new_v4());
+        state.status = AppStatus::Applying;
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored),
+            None
+        );
+        assert!(state.dragged_rule_id.is_some(), "no drag cancel behind it");
+        assert_eq!(state.rule_search, "ssh", "no search clear behind it");
+
+        // Base layer: an Escape the search input took (to unfocus) keeps the
+        // search; the next one clears it
+        state.status = AppStatus::Idle;
+        state.clear_drag_state();
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Captured),
+            None
+        );
+        assert_eq!(state.rule_search, "ssh");
+        let _ = press(&mut state, &named(Named::Escape), Status::Ignored);
+        assert_eq!(state.rule_search, "");
+    }
+
+    #[test]
+    fn test_escape_in_diagnostics_cancels_the_clear_prompt_first() {
+        let mut state = create_test_state();
+        state.show_diagnostics = true;
+        handle_toggle_diagnostics_confirm(&mut state);
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("ClearEventLogCancelled")
+        );
+        state.diagnostics.confirm_clear = false;
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("ToggleDiagnostics(false)")
+        );
+    }
+
+    fn handle_toggle_diagnostics_confirm(state: &mut State) {
+        crate::app::handlers::handle_clear_event_log(state);
+        assert!(state.diagnostics.confirm_clear);
+    }
+
+    /// Ctrl shortcuts wait for the focus query: with a text input focused
+    /// (typing in the search box) they do nothing.
+    #[test]
+    fn test_base_shortcuts_do_nothing_while_typing() {
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(crate::core::test_helpers::create_test_rule("A", Some(1)));
+        state.command_history.execute(
+            Box::new(crate::command::ToggleRuleCommand {
+                rule_id: state.ruleset.rules[0].id,
+                was_enabled: true,
+            }),
+            &mut state.ruleset,
+        );
+        state.mark_profile_dirty();
+        assert!(!state.ruleset.rules[0].enabled);
+
+        let _ = state.update(Message::BaseShortcut(BaseShortcut::Undo, true));
+        assert!(!state.ruleset.rules[0].enabled, "typing: no undo");
+
+        // A dialog opened while the query ran: no undo behind it either
+        state.show_export_modal = true;
+        let task = handle_base_shortcut(&state, BaseShortcut::Undo, false);
+        assert_eq!(task.units(), 0);
+        state.show_export_modal = false;
+
+        // Nothing focused: the shortcut sends its message
+        let task = handle_base_shortcut(&state, BaseShortcut::Undo, false);
+        assert!(task.units() > 0);
+        let _ = state.update(Message::Undo);
+        assert!(state.ruleset.rules[0].enabled);
+        assert!(
+            state
+                .banners
+                .back()
+                .is_some_and(|b| b.message.starts_with("Undid: ")),
+            "the undo is announced"
+        );
+        let _ = state.update(Message::Redo);
+        assert!(
+            state
+                .banners
+                .back()
+                .is_some_and(|b| b.message.starts_with("Redid: "))
+        );
+    }
+
+    #[test]
+    fn test_close_with_failed_save_stays_open_and_asks() {
+        let mut state = create_test_state();
+        let _ = handle_close_requested(&mut state, iced::window::Id::unique());
+        assert!(state.closing);
+        let _ = handle_close_flushed(&mut state, Err("profile 'test': disk full".into()));
+        assert!(!state.closing, "autosave resumes");
+        assert_eq!(top_layer(&state), TopLayer::CloseFailed);
+        assert!(state.close_error.as_ref().unwrap().contains("disk full"));
+        // Escape keeps DRFW open
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelClose")
+        );
+        handle_cancel_close(&mut state);
+        assert!(state.close_error.is_none());
+        // "Close anyway" only acts from the dialog
+        assert_eq!(handle_close_anyway(&mut state).units(), 0);
+        state.close_error = Some("x".into());
+        assert!(handle_close_anyway(&mut state).units() > 0);
+        assert!(state.close_error.is_none());
+    }
+
+    #[test]
+    fn test_close_waits_for_a_running_rename() {
+        let mut state = create_test_state();
+        state.profile_rename_in_flight = true;
+        let task = handle_close_requested(&mut state, iced::window::Id::unique());
+        assert_eq!(task.units(), 0, "nothing is saved under the old name");
+        assert!(state.closing && state.close_after_rename);
+        let _ = crate::app::handlers::handle_profile_renamed(
+            &mut state,
+            "test".into(),
+            "renamed".into(),
+            Ok(vec!["renamed".into()]),
+        );
+        assert!(!state.close_after_rename, "the flush started");
+        assert_eq!(state.active_profile_name, "renamed");
+    }
+
+    /// With the diff enabled but no diff yet (every launch), the preview
+    /// shows the plain ruleset, and clicks resolve against it.
+    #[test]
+    fn test_preview_click_falls_back_to_the_plain_ruleset() {
+        use crate::core::test_helpers::create_test_rule;
+        let mut state = create_test_state();
+        state.last_applied_ruleset = None;
+        state.cached_applied_text = None;
+        state
+            .ruleset
+            .rules
+            .push(create_test_rule("Allow SSH", Some(22)));
+        state.mark_profile_dirty();
+        state.show_diff = true;
+        assert!(state.cached_diff_tokens.is_none());
+        let line = state
+            .cached_nft_tokens
+            .iter()
+            .find(|l| l.tokens.iter().any(|t| t.text.contains("Allow SSH")))
+            .expect("the rule's line")
+            .line_number;
+        handle_click_preview_line(&mut state, line);
+        assert_eq!(state.rule_search, "Allow SSH");
+        assert!(handle_copy_preview_line(&mut state, line).units() > 0);
     }
 }

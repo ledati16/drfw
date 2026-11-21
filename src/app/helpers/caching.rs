@@ -12,18 +12,23 @@ fn calculate_max_content_width_generic<'a, I>(tokens: I) -> f32
 where
     I: IntoIterator<Item = &'a HighlightedLine>,
 {
-    const CHAR_WIDTH_PX: f32 = 8.4;
+    // Widest common monospace fonts at 14px are ~0.6em (8.4px); bold tokens
+    // and user-chosen fonts can be a little wider, so err on the wide side:
+    // too wide only adds blank space, too narrow clips the line.
+    const CHAR_WIDTH_PX: f32 = 8.8;
     const LINE_NUMBER_WIDTH_PX: f32 = 50.0;
     const TRAILING_PADDING_PX: f32 = 60.0;
     const MIN_WIDTH_PX: f32 = 800.0;
-    // Rules with multiple IPv4/IPv6 sources/destinations can exceed 400 chars
-    const MAX_WIDTH_PX: f32 = 8000.0;
+    // Rules with many IPv4/IPv6 sources/destinations make very long lines;
+    // the cap only guards against absurd widths (~4500 characters)
+    const MAX_WIDTH_PX: f32 = 40_000.0;
 
     let max_char_count = tokens
         .into_iter()
         .map(|line| {
             let indent_chars = line.indent;
-            let token_chars: usize = line.tokens.iter().map(|t| t.text.len()).sum();
+            // Characters, not bytes: a multibyte character is one glyph
+            let token_chars: usize = line.tokens.iter().map(|t| t.text.chars().count()).sum();
             indent_chars + token_chars
         })
         .max()
@@ -93,9 +98,8 @@ mod tests {
     fn test_calculate_width_long_line() {
         let tokens = vec![create_test_line(0, 300)];
         let width = calculate_max_content_width(&tokens);
-        // LINE_NUMBER_WIDTH (50) + (300 * 8.4) + TRAILING (60) = 2630
-        assert!(width > 800.0);
-        assert!(width < 3000.0);
+        // LINE_NUMBER_WIDTH (50) + (300 * 8.8) + TRAILING (60) = 2750
+        assert_eq!(width, 2750.0);
     }
 
     #[test]
@@ -108,11 +112,10 @@ mod tests {
 
     #[test]
     fn test_calculate_width_max_clamp() {
-        // Create a very long line that exceeds MAX_WIDTH_PX (8000.0)
-        // 1000 chars * 8.4 + 50 + 60 = 8510, clamped to 8000
-        let tokens = vec![create_test_line(0, 1000)];
+        // A line beyond MAX_WIDTH_PX (40000): 5000 * 8.8 + 50 + 60 = 44110
+        let tokens = vec![create_test_line(0, 5000)];
         let width = calculate_max_content_width(&tokens);
-        assert_eq!(width, 8000.0); // MAX_WIDTH_PX
+        assert_eq!(width, 40_000.0); // MAX_WIDTH_PX
     }
 
     #[test]

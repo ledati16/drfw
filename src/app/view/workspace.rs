@@ -192,8 +192,16 @@ pub fn view_workspace<'a>(
     // Zone: Commitment (Right)
     let is_busy = state.is_busy();
 
+    // A verification without an apply session is Save to System's
+    let verifying_for_apply =
+        matches!(state.status, AppStatus::Verifying) && state.apply_session.is_some();
     let save_to_system = {
-        let mut btn = button(text("Save to System").size(13).font(state.font_regular))
+        let label = match state.status {
+            AppStatus::Verifying if !verifying_for_apply => "Verifying...",
+            AppStatus::SavingToSystem => "Saving...",
+            _ => "Save to System",
+        };
+        let mut btn = button(text(label).size(13).font(state.font_regular))
             .padding([10, 20])
             .style(move |_, status| secondary_button(theme, status));
 
@@ -205,7 +213,7 @@ pub fn view_workspace<'a>(
 
     let is_dirty = state.is_dirty();
     let apply_button = {
-        let button_text = if matches!(state.status, AppStatus::Verifying) {
+        let button_text = if verifying_for_apply {
             "Verifying..."
         } else if is_busy {
             "Processing..."

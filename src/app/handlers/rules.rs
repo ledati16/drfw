@@ -31,38 +31,68 @@ fn refresh_interface_suggestions(state: &mut State) {
     state.interface_combo = iced::widget::combo_box::State::new(suggestions);
 }
 
-/// Opens the rule form (closing any helper left from an earlier form).
-fn open_rule_form(state: &mut State, form: RuleForm, errors: Option<crate::app::FormErrors>) {
+/// Opens the rule form (closing any helper left from an earlier form) and
+/// focuses its first input.
+fn open_rule_form(
+    state: &mut State,
+    form: RuleForm,
+    errors: Option<crate::app::FormErrors>,
+) -> Task<Message> {
     refresh_interface_suggestions(state);
+    state.rule_form_initial = Some(form.clone());
     state.rule_form = Some(form);
     state.rule_form_helper = None;
     state.form_errors = errors;
+    state.confirm_discard_form = false;
+    crate::app::focus::focus_input(crate::app::focus::RULE_FORM_LABEL)
 }
 
 /// Closes the rule form, its helper modal and its errors.
 fn close_rule_form(state: &mut State) {
     state.rule_form = None;
+    state.rule_form_initial = None;
     state.rule_form_helper = None;
     state.form_errors = None;
+    state.confirm_discard_form = false;
 }
 
 /// Handles opening the "Add New Rule" form
-pub(crate) fn handle_add_rule_clicked(state: &mut State) {
-    open_rule_form(state, RuleForm::default(), None);
+pub(crate) fn handle_add_rule_clicked(state: &mut State) -> Task<Message> {
+    open_rule_form(state, RuleForm::default(), None)
 }
 
 /// Handles opening the "Edit Rule" form
-pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
-    if let Some(rule) = state.ruleset.rules.iter().find(|r| r.id == id) {
-        let form = RuleForm::from_rule(rule);
-        // Show why a loaded rule is invalid right away
-        let errors = form.validate();
-        open_rule_form(state, form, errors);
-    }
+pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) -> Task<Message> {
+    let Some(rule) = state.ruleset.rules.iter().find(|r| r.id == id) else {
+        return Task::none();
+    };
+    let form = RuleForm::from_rule(rule);
+    // Show why a loaded rule is invalid right away
+    let errors = form.validate();
+    open_rule_form(state, form, errors)
 }
 
-/// Handles canceling rule form (Add or Edit)
+/// Handles Cancel (and Escape) in the rule form: closes it, or first asks
+/// "Discard changes?" when the form was changed since it opened.
 pub(crate) fn handle_cancel_rule_form(state: &mut State) {
+    let changed = match (&state.rule_form, &state.rule_form_initial) {
+        (Some(form), Some(initial)) => form.has_changes(initial),
+        _ => false,
+    };
+    if changed && !state.confirm_discard_form {
+        state.confirm_discard_form = true;
+        return;
+    }
+    close_rule_form(state);
+}
+
+/// "Keep editing" in the "Discard changes?" prompt (and Escape there)
+pub(crate) fn handle_keep_editing_rule_form(state: &mut State) {
+    state.confirm_discard_form = false;
+}
+
+/// "Discard" in the "Discard changes?" prompt
+pub(crate) fn handle_discard_rule_form(state: &mut State) {
     close_rule_form(state);
 }
 
@@ -327,6 +357,7 @@ pub(crate) fn handle_rule_form_protocol_changed(state: &mut State, protocol: Pro
     // variants, Any): hidden ports would otherwise be saved and rejected.
     if !protocol_supports_ports(protocol) {
         form.ports.clear();
+        form.refresh_display();
     }
 
     // Reset a reject type the new protocol can't use (TCP Reset off pure TCP),
@@ -405,12 +436,10 @@ pub(crate) fn handle_rule_search_changed(state: &mut State, value: &str) {
     state.update_filter_cache();
 }
 
+/// Selects the tag filter ("All" clears it). The typed search is kept: the
+/// two filters combine.
 pub(crate) fn handle_filter_by_tag(state: &mut State, tag: Option<Arc<String>>) {
     state.filter_tag = tag;
-    if state.filter_tag.is_none() {
-        state.rule_search.clear();
-        state.rule_search_lowercase.clear();
-    }
     state.update_filter_cache();
 }
 
@@ -465,15 +494,36 @@ pub(crate) fn handle_check_hover_pending(state: &mut State) {
 use crate::app::{HelperType, RuleFormHelper};
 use crate::core::firewall::RejectType;
 
-pub(crate) fn handle_open_helper(state: &mut State, helper_type: HelperType) {
+/// Most tags a rule can have.
+const MAX_TAGS: usize = 10;
+
+/// Opens the helper for a multi-value field and focuses its input.
+pub(crate) fn handle_open_helper(state: &mut State, helper_type: HelperType) -> Task<Message> {
+    if state.rule_form.is_none() {
+        return Task::none();
+    }
     state.rule_form_helper = Some(RuleFormHelper {
         helper_type: Some(helper_type),
-        input: String::new(),
-        error: None,
+        ..RuleFormHelper::default()
     });
+    crate::app::focus::focus_input(crate::app::focus::HELPER_INPUT)
 }
 
+/// Handles "Done" (and Escape) in the helper.
+///
+/// A value still in the input is added first: dropping it would leave the
+/// field empty, which means "all ports" / "any address", so the rule would
+/// silently match more than the user typed. If it can't be added, the
+/// helper stays open with the reason; clearing the input closes it.
 pub(crate) fn handle_close_helper(state: &mut State) {
+    if add_helper_value(state) == HelperAdd::Rejected {
+        if let Some(helper) = &mut state.rule_form_helper
+            && let Some(error) = &mut helper.error
+        {
+            error.push_str(" Fix it, or clear the field to close.");
+        }
+        return;
+    }
     state.rule_form_helper = None;
 }
 
@@ -483,112 +533,166 @@ pub(crate) fn handle_helper_input_changed(state: &mut State, value: String) {
     };
     helper.input = value;
     helper.error = None;
+    helper.notice = None;
 }
 
+/// What adding the helper's typed value did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HelperAdd {
+    /// Nothing was typed (or no helper is open)
+    Empty,
+    /// Every typed value is in the list now (added, or already there)
+    Done,
+    /// Something could not be added; the helper's `error` says why
+    Rejected,
+}
+
+/// Handles "+" and Enter in the helper.
 pub(crate) fn handle_helper_add_value(state: &mut State) {
+    let _ = add_helper_value(state);
+}
+
+/// Adds the helper's typed value(s) to the form field it edits.
+///
+/// Comma-separated input adds several values at once (ports and tags).
+/// Values already in the list are skipped with a notice; on success the
+/// input is cleared.
+fn add_helper_value(state: &mut State) -> HelperAdd {
     let (Some(form), Some(helper)) = (&mut state.rule_form, &mut state.rule_form_helper) else {
-        return;
+        return HelperAdd::Empty;
     };
-
     let Some(helper_type) = helper.helper_type else {
-        return;
+        return HelperAdd::Empty;
     };
-
-    let input = helper.input.trim();
+    let input = helper.input.trim().to_string();
     if input.is_empty() {
-        return;
+        return HelperAdd::Empty;
     }
 
-    match helper_type {
-        HelperType::Ports => {
-            // Support bulk paste: "22, 80, 443, 8000-8080"
-            if input.contains(',') {
-                let (entries, errors) = validators::parse_bulk_ports(input);
-                let mut added = 0;
-                let mut duplicates = 0;
+    let outcome = match helper_type {
+        HelperType::Ports => add_ports(&mut form.ports, &input),
+        HelperType::SourceAddresses => add_address(&mut form.sources, &input),
+        HelperType::DestinationAddresses => add_address(&mut form.destinations, &input),
+        HelperType::Tags => add_tags(&mut form.tags, &input),
+    };
+    form.refresh_display();
 
-                for entry in entries {
-                    if form.ports.contains(&entry) {
-                        duplicates += 1;
-                    } else {
-                        form.ports.push(entry);
-                        added += 1;
-                    }
-                }
+    let added = outcome.error.is_none();
+    helper.error = outcome.error;
+    helper.notice = outcome.notice;
+    if added {
+        helper.input.clear();
+        HelperAdd::Done
+    } else {
+        HelperAdd::Rejected
+    }
+}
 
-                if !errors.is_empty() {
-                    helper.error = Some(format!(
-                        "Added {} ports, {} errors: {}",
-                        added,
-                        errors.len(),
-                        errors.first().map_or("", |(_, e)| e)
-                    ));
-                } else if duplicates > 0 {
-                    helper.error = Some(format!(
-                        "Added {added} ports ({duplicates} duplicates skipped)"
-                    ));
-                } else if added > 0 {
-                    helper.input.clear();
-                    helper.error = None;
-                }
-            } else {
-                // Single port or range
-                match validators::validate_port_entry(input) {
-                    Ok(entry) => {
-                        if form.ports.contains(&entry) {
-                            helper.error = Some("Port already added".to_string());
-                        } else {
-                            form.ports.push(entry);
-                            helper.input.clear();
-                            helper.error = None;
-                        }
-                    }
-                    Err(e) => {
-                        helper.error = Some(e.to_string());
-                    }
-                }
-            }
-        }
-        HelperType::SourceAddresses => match input.parse::<ipnetwork::IpNetwork>() {
-            Ok(ip) => {
-                if form.sources.contains(&ip) {
-                    helper.error = Some("Address already added".to_string());
-                } else {
-                    form.sources.push(ip);
-                    helper.input.clear();
-                }
-            }
-            Err(_) => {
-                helper.error = Some("Invalid IP/CIDR (e.g., 192.168.1.0/24)".to_string());
-            }
-        },
-        HelperType::DestinationAddresses => match input.parse::<ipnetwork::IpNetwork>() {
-            Ok(ip) => {
-                if form.destinations.contains(&ip) {
-                    helper.error = Some("Address already added".to_string());
-                } else {
-                    form.destinations.push(ip);
-                    helper.input.clear();
-                }
-            }
-            Err(_) => {
-                helper.error = Some("Invalid IP/CIDR (e.g., 192.168.1.0/24)".to_string());
-            }
-        },
-        HelperType::Tags => {
-            let tag = validators::sanitize_label(input);
-            if tag.is_empty() {
-                helper.error = Some("Invalid tag".to_string());
-            } else if form.tags.len() >= 10 {
-                helper.error = Some("Maximum 10 tags allowed".to_string());
-            } else if form.tags.contains(&tag) {
-                helper.error = Some("Tag already added".to_string());
-            } else {
-                form.tags.push(tag);
-                helper.input.clear();
-            }
+/// Feedback of one helper add.
+#[derive(Debug, Default)]
+struct AddFeedback {
+    error: Option<String>,
+    notice: Option<String>,
+}
+
+/// "1 port" / "3 ports"
+fn count_noun(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("{count} {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
+/// Adds a port, a range, or a comma-separated list of them.
+fn add_ports(ports: &mut Vec<crate::core::firewall::PortEntry>, input: &str) -> AddFeedback {
+    let (entries, errors) = validators::parse_bulk_ports(input);
+    let mut added = 0;
+    let mut duplicates = 0;
+    for entry in entries {
+        if ports.contains(&entry) {
+            duplicates += 1;
+        } else {
+            ports.push(entry);
+            added += 1;
         }
     }
+    if let Some((value, reason)) = errors.first() {
+        let prefix = if added > 0 {
+            format!("Added {}; ", count_noun(added, "port", "ports"))
+        } else {
+            String::new()
+        };
+        return AddFeedback {
+            error: Some(format!("{prefix}'{value}': {reason}.")),
+            notice: None,
+        };
+    }
+    let notice = match (added, duplicates) {
+        (_, 0) => None,
+        (0, _) => Some("Already in the list".to_string()),
+        (added, duplicates) => Some(format!(
+            "Added {} ({} already in the list)",
+            count_noun(added, "port", "ports"),
+            duplicates
+        )),
+    };
+    AddFeedback {
+        error: None,
+        notice,
+    }
+}
+
+/// Adds one IP address or CIDR block.
+fn add_address(addresses: &mut Vec<ipnetwork::IpNetwork>, input: &str) -> AddFeedback {
+    match input.parse::<ipnetwork::IpNetwork>() {
+        Ok(ip) if addresses.contains(&ip) => AddFeedback {
+            error: None,
+            notice: Some("Already in the list".to_string()),
+        },
+        Ok(ip) => {
+            addresses.push(ip);
+            AddFeedback::default()
+        }
+        Err(_) => AddFeedback {
+            error: Some("Invalid IP/CIDR (e.g., 192.168.1.0/24).".to_string()),
+            notice: None,
+        },
+    }
+}
+
+/// Adds one tag, or several separated by commas. Characters a tag can't
+/// hold are removed, and the user is told.
+fn add_tags(tags: &mut Vec<String>, input: &str) -> AddFeedback {
+    let mut feedback = AddFeedback::default();
+    let mut changed = Vec::new();
+    for part in input.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let tag = validators::sanitize_label(part);
+        if tag.is_empty() {
+            feedback.error = Some(format!(
+                "'{part}' has no usable characters (letters, digits, space, - _ . :)."
+            ));
+            break;
+        }
+        if tags.contains(&tag) {
+            continue;
+        }
+        if tags.len() >= MAX_TAGS {
+            feedback.error = Some(format!("Maximum {MAX_TAGS} tags allowed."));
+            break;
+        }
+        if tag != part {
+            changed.push(tag.clone());
+        }
+        tags.push(tag);
+    }
+    if !changed.is_empty() {
+        feedback.notice = Some(format!(
+            "Unsupported characters were removed: added as '{}'",
+            changed.join("', '")
+        ));
+    }
+    feedback
 }
 
 pub(crate) fn handle_helper_remove_value(state: &mut State, index: usize) {
@@ -622,6 +726,7 @@ pub(crate) fn handle_helper_remove_value(state: &mut State, index: usize) {
             }
         }
     }
+    form.refresh_display();
 }
 
 // ============================================================================
@@ -679,7 +784,7 @@ mod tests {
     #[test]
     fn test_handle_add_rule_clicked() {
         let mut state = create_test_state();
-        handle_add_rule_clicked(&mut state);
+        let _ = handle_add_rule_clicked(&mut state);
         assert!(state.rule_form.is_some());
         assert_eq!(state.rule_form.as_ref().unwrap().label, "");
     }
@@ -701,7 +806,7 @@ mod tests {
         let id = rule.id;
         state.ruleset.rules.push(rule);
 
-        handle_edit_rule_clicked(&mut state, id);
+        let _ = handle_edit_rule_clicked(&mut state, id);
         handle_rule_form_label_changed(&mut state, "SSH renamed".to_string());
         let _ = handle_save_rule_form(&mut state);
 
@@ -739,7 +844,7 @@ mod tests {
         rule.rebuild_caches();
         let id = rule.id;
         state.ruleset.rules.push(rule);
-        handle_edit_rule_clicked(&mut state, id);
+        let _ = handle_edit_rule_clicked(&mut state, id);
         assert!(state.form_errors.as_ref().unwrap().port.is_some());
         // Saving is refused until fixed
         let _ = handle_save_rule_form(&mut state);
@@ -751,10 +856,10 @@ mod tests {
         let helper = || crate::app::RuleFormHelper {
             helper_type: Some(HelperType::Tags),
             input: "web".into(),
-            error: None,
+            ..Default::default()
         };
         let mut state = create_test_state();
-        handle_add_rule_clicked(&mut state);
+        let _ = handle_add_rule_clicked(&mut state);
         state.rule_form_helper = Some(helper());
         let _ = handle_save_rule_form(&mut state);
         assert!(state.rule_form.is_none(), "saved");
@@ -763,14 +868,14 @@ mod tests {
             "helper closed with the form"
         );
 
-        handle_add_rule_clicked(&mut state);
+        let _ = handle_add_rule_clicked(&mut state);
         state.rule_form_helper = Some(helper());
         handle_cancel_rule_form(&mut state);
         assert!(state.rule_form_helper.is_none());
 
         // A stale helper never reappears on the next form
         state.rule_form_helper = Some(helper());
-        handle_add_rule_clicked(&mut state);
+        let _ = handle_add_rule_clicked(&mut state);
         assert!(state.rule_form_helper.is_none());
     }
 
@@ -791,5 +896,239 @@ mod tests {
 
         handle_rule_form_label_changed(&mut state, "Test Label".to_string());
         assert_eq!(state.rule_form.as_ref().unwrap().label, "Test Label");
+    }
+
+    // ------------------------------------------------------------------
+    // Helper: commit on close, feedback, tags; discard prompt; edit lock
+    // ------------------------------------------------------------------
+
+    fn open_form_with_helper(state: &mut State, helper_type: HelperType) {
+        let _ = handle_add_rule_clicked(state);
+        let _ = handle_open_helper(state, helper_type);
+    }
+
+    fn type_in_helper(state: &mut State, text: &str) {
+        handle_helper_input_changed(state, text.to_string());
+    }
+
+    fn helper(state: &State) -> &RuleFormHelper {
+        state.rule_form_helper.as_ref().expect("helper open")
+    }
+
+    /// H1: "Done" (or Escape) with a typed but not yet added value adds it.
+    /// Dropping it would leave the list empty, i.e. "all ports" / "any
+    /// address": the rule would silently match more than the user typed.
+    #[test]
+    fn test_helper_done_commits_the_typed_value() {
+        let mut state = create_test_state();
+        open_form_with_helper(&mut state, HelperType::Ports);
+        type_in_helper(&mut state, "22");
+        handle_close_helper(&mut state);
+        assert!(state.rule_form_helper.is_none(), "closed");
+        let form = state.rule_form.as_ref().unwrap();
+        assert_eq!(
+            form.ports,
+            vec![crate::core::firewall::PortEntry::single(22)]
+        );
+        assert_eq!(form.display.ports_summary, "Port 22", "summary cached");
+
+        for (helper_type, typed) in [
+            (HelperType::SourceAddresses, "10.0.0.0/8"),
+            (HelperType::DestinationAddresses, "192.0.2.1"),
+        ] {
+            let _ = handle_open_helper(&mut state, helper_type);
+            type_in_helper(&mut state, typed);
+            // Escape sends the same message as Done
+            let _ = state.update(Message::CloseHelper);
+            assert!(state.rule_form_helper.is_none());
+        }
+        let form = state.rule_form.as_ref().unwrap();
+        assert_eq!(form.sources.len(), 1);
+        assert_eq!(form.destinations.len(), 1);
+        assert_eq!(form.display.sources_summary, "10.0.0.0/8");
+    }
+
+    #[test]
+    fn test_helper_done_with_an_invalid_value_stays_open() {
+        let mut state = create_test_state();
+        open_form_with_helper(&mut state, HelperType::Ports);
+        type_in_helper(&mut state, "99999");
+        handle_close_helper(&mut state);
+        let error = helper(&state).error.clone().expect("an error");
+        assert!(error.contains("clear the field to close"), "{error}");
+        assert_eq!(state.rule_form.as_ref().unwrap().ports.len(), 0);
+
+        // Partly valid bulk input: the good ports are added, it stays open
+        type_in_helper(&mut state, "80, 443, nope");
+        handle_close_helper(&mut state);
+        assert!(state.rule_form_helper.is_some());
+        assert_eq!(state.rule_form.as_ref().unwrap().ports.len(), 2);
+
+        // Clearing the input closes it
+        type_in_helper(&mut state, "");
+        handle_close_helper(&mut state);
+        assert!(state.rule_form_helper.is_none());
+    }
+
+    #[test]
+    fn test_helper_duplicates_are_a_notice_not_an_error() {
+        let mut state = create_test_state();
+        open_form_with_helper(&mut state, HelperType::Ports);
+        type_in_helper(&mut state, "22");
+        handle_helper_add_value(&mut state);
+        type_in_helper(&mut state, "22, 80");
+        handle_helper_add_value(&mut state);
+        let h = helper(&state);
+        assert!(h.error.is_none());
+        assert_eq!(
+            h.notice.as_deref(),
+            Some("Added 1 port (1 already in the list)")
+        );
+        assert_eq!(h.input, "");
+        // A duplicate typed when closing closes (nothing would be lost)
+        type_in_helper(&mut state, "80");
+        handle_close_helper(&mut state);
+        assert!(state.rule_form_helper.is_none());
+        assert_eq!(
+            state.rule_form.as_ref().unwrap().display.port_items,
+            vec!["22".to_string(), "80".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_tags_split_on_commas_and_say_what_was_changed() {
+        let mut state = create_test_state();
+        open_form_with_helper(&mut state, HelperType::Tags);
+        type_in_helper(&mut state, "web-server, production");
+        handle_helper_add_value(&mut state);
+        let form = state.rule_form.as_ref().unwrap();
+        assert_eq!(form.tags, vec!["web-server", "production"]);
+        assert_eq!(form.display.tags_summary, "2 tags");
+        assert!(helper(&state).notice.is_none());
+
+        type_in_helper(&mut state, "db$prod");
+        handle_helper_add_value(&mut state);
+        let h = helper(&state);
+        assert!(h.error.is_none());
+        assert!(h.notice.as_deref().unwrap().contains("'dbprod'"), "{h:?}");
+
+        type_in_helper(&mut state, "$$$");
+        handle_helper_add_value(&mut state);
+        assert!(helper(&state).error.is_some());
+        assert_eq!(state.rule_form.as_ref().unwrap().tags.len(), 3);
+
+        // Long tags are cut for the chips (cached, not formatted in view())
+        type_in_helper(&mut state, "a-very-long-tag-name-here");
+        handle_helper_add_value(&mut state);
+        let items = &state.rule_form.as_ref().unwrap().display.tag_items;
+        assert_eq!(items.last().map(String::as_str), Some("a-very-long-tag…"));
+    }
+
+    #[test]
+    fn test_removing_a_helper_value_refreshes_the_summary() {
+        let mut state = create_test_state();
+        open_form_with_helper(&mut state, HelperType::Ports);
+        type_in_helper(&mut state, "22, 80");
+        handle_helper_add_value(&mut state);
+        assert_eq!(
+            state.rule_form.as_ref().unwrap().display.ports_summary,
+            "2 ports configured"
+        );
+        handle_helper_remove_value(&mut state, 0);
+        assert_eq!(
+            state.rule_form.as_ref().unwrap().display.ports_summary,
+            "Port 80"
+        );
+    }
+
+    #[test]
+    fn test_cancel_asks_before_discarding_changes() {
+        let mut state = create_test_state();
+        let _ = handle_add_rule_clicked(&mut state);
+        // Unchanged (showing the advanced options is not a change): closes
+        handle_rule_form_toggle_advanced(&mut state, true);
+        handle_cancel_rule_form(&mut state);
+        assert!(state.rule_form.is_none());
+
+        let _ = handle_add_rule_clicked(&mut state);
+        handle_rule_form_label_changed(&mut state, "Web".into());
+        handle_cancel_rule_form(&mut state);
+        assert!(state.rule_form.is_some(), "asks first");
+        assert!(state.confirm_discard_form);
+        // Escape in the prompt keeps editing
+        let _ = state.update(Message::KeepEditingRuleForm);
+        assert!(!state.confirm_discard_form);
+        assert_eq!(state.rule_form.as_ref().unwrap().label, "Web");
+        handle_cancel_rule_form(&mut state);
+        let _ = state.update(Message::DiscardRuleForm);
+        assert!(state.rule_form.is_none());
+        assert!(!state.confirm_discard_form);
+        assert!(state.rule_form_initial.is_none());
+    }
+
+    #[test]
+    fn test_editing_an_unchanged_rule_closes_without_asking() {
+        let mut state = create_test_state();
+        let rule = crate::core::test_helpers::create_test_rule("SSH", Some(22));
+        let id = rule.id;
+        state.ruleset.rules.push(rule);
+        state.mark_profile_dirty();
+        let _ = handle_edit_rule_clicked(&mut state, id);
+        handle_cancel_rule_form(&mut state);
+        assert!(state.rule_form.is_none());
+    }
+
+    /// M2: while the apply flow owns the ruleset (no dialog shown during
+    /// Verifying/Confirming/...), the form can't be opened: it could not be
+    /// saved, and would hide "Commit Changes?".
+    #[test]
+    fn test_add_and_edit_are_refused_while_edits_are_locked() {
+        let mut state = create_test_state();
+        let rule = crate::core::test_helpers::create_test_rule("SSH", Some(22));
+        let id = rule.id;
+        state.ruleset.rules.push(rule);
+        state.mark_profile_dirty();
+        for status in [
+            crate::app::AppStatus::Verifying,
+            crate::app::AppStatus::Confirming,
+            crate::app::AppStatus::Reverting,
+            crate::app::AppStatus::SavingToSystem,
+        ] {
+            state.status = status;
+            let _ = state.update(Message::AddRuleClicked);
+            let _ = state.update(Message::EditRuleClicked(id));
+            assert!(state.rule_form.is_none());
+            assert!(
+                state
+                    .banners
+                    .back()
+                    .is_some_and(|b| b.message.contains("can't be changed"))
+            );
+        }
+        state.status = crate::app::AppStatus::Idle;
+        let _ = state.update(Message::EditRuleClicked(id));
+        assert!(state.rule_form.is_some());
+    }
+
+    #[test]
+    fn test_tag_filter_keeps_the_typed_search() {
+        let mut state = create_test_state();
+        let mut rule = crate::core::test_helpers::create_test_rule("SSH", Some(22));
+        rule.tags = vec!["admin".into()];
+        rule.rebuild_caches();
+        state.ruleset.rules.push(rule);
+        state.mark_profile_dirty();
+        handle_rule_search_changed(&mut state, "ss");
+        let admin = state.cached_all_tags.first().cloned();
+        handle_filter_by_tag(&mut state, admin.clone());
+        handle_filter_by_tag(&mut state, None);
+        assert_eq!(state.rule_search, "ss", "\"All\" keeps the search");
+        // The selected tag disappearing keeps it too
+        handle_filter_by_tag(&mut state, admin);
+        state.ruleset.rules[0].tags.clear();
+        state.ruleset.rules[0].rebuild_caches();
+        state.mark_profile_dirty();
+        assert!(state.filter_tag.is_none());
+        assert_eq!(state.rule_search, "ss");
     }
 }

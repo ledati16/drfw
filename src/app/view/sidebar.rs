@@ -127,8 +127,11 @@ fn inactive_badge(state: &State) -> Element<'_, Message> {
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
 
-    // 1. Profile Header (replaces branding for cleaner layout)
-    let is_dirty = state.profile_dirty || state.is_profile_dirty() || state.config_dirty;
+    // 1. Profile Header (replaces branding for cleaner layout). Only the
+    // profile counts: settings are saved separately and say so if they fail.
+    let is_dirty = state.profile_dirty || state.is_profile_dirty();
+    // The apply flow owns the ruleset: no form can be opened meanwhile
+    let edits_locked = crate::app::handlers::edits_locked(state);
 
     let profile_header = column![
         row![
@@ -269,6 +272,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
     let search_area = column![
         text_input("Search rules...", &state.rule_search)
+            .id(crate::app::focus::RULE_SEARCH)
             .on_input(Message::RuleSearchChanged)
             .padding(10)
             .size(13)
@@ -315,10 +319,14 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
         container(
             column![
-                text("No matching rules.")
-                    .size(13)
-                    .color(theme.fg_muted)
-                    .font(state.font_regular),
+                text(if state.ruleset.rules.is_empty() {
+                    "No rules yet. Add one with \"Add Access Rule\"."
+                } else {
+                    "No matching rules."
+                })
+                .size(13)
+                .color(theme.fg_muted)
+                .font(state.font_regular),
             ]
             .padding(40)
             .align_x(Alignment::Center),
@@ -346,6 +354,12 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             // When drag is active and this card is a potential drop target,
             // all click handlers should trigger RuleDropped instead of their normal action
             let is_drop_target = any_drag_active && !is_being_dragged;
+            // Click on the card: drop during a drag, else edit (not while locked)
+            let card_click = if is_drop_target {
+                Some(Message::RuleDropped(rule.id))
+            } else {
+                (!edits_locked).then_some(Message::EditRuleClicked(rule.id))
+            };
 
             let card_content: Element<'_, Message> = if is_deleting {
                 row![
@@ -560,11 +574,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         )
                         .delay(std::time::Duration::from_millis(1000)),
                     )
-                    .on_press(if is_drop_target {
-                        Message::RuleDropped(rule.id)
-                    } else {
-                        Message::EditRuleClicked(rule.id)
-                    })
+                    .on_press_maybe(card_click.clone())
                     .padding(0)
                     .style(button::text),
                     // Accent Line (Absorbs all remaining space)
@@ -657,11 +667,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     container(row(detail_items).spacing(8).align_y(Alignment::Center))
                         .width(Length::Fill),
                 )
-                .on_press(if is_drop_target {
-                    Message::RuleDropped(rule.id)
-                } else {
-                    Message::EditRuleClicked(rule.id)
-                })
+                .on_press_maybe(card_click.clone())
                 .padding([0, 8]) // Match outer padding
                 .style(button::text)
                 .width(Length::Fill);
@@ -674,11 +680,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                         container(row(tag_items).spacing(4).align_y(Alignment::Center))
                             .width(Length::Fill),
                     )
-                    .on_press(if is_drop_target {
-                        Message::RuleDropped(rule.id)
-                    } else {
-                        Message::EditRuleClicked(rule.id)
-                    })
+                    .on_press_maybe(card_click.clone())
                     .padding([0, 8])
                     .style(button::text)
                     .width(Length::Fill);
@@ -770,7 +772,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             .width(Length::Fill)
             .padding(14)
             .style(move |_, status| primary_button(theme, status))
-            .on_press(Message::AddRuleClicked)
+            .on_press_maybe((!edits_locked).then_some(Message::AddRuleClicked))
         )
         .padding(iced::Padding::new(0.0).top(16.0))
     ];

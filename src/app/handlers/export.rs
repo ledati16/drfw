@@ -11,7 +11,13 @@ use crate::app::{BannerSeverity, Message, State, diagnostics};
 use crate::audit;
 
 /// Handles exporting as JSON
-pub(crate) fn handle_export_as_json(state: &State) -> Task<Message> {
+///
+/// One file dialog at a time: the export buttons are disabled while one is
+/// open, and a second request is ignored.
+pub(crate) fn handle_export_as_json(state: &mut State) -> Task<Message> {
+    if std::mem::replace(&mut state.export_in_progress, true) {
+        return Task::none();
+    }
     let json = serde_json::to_string_pretty(&state.ruleset.to_nftables_json()).unwrap_or_default();
     Task::perform(
         async move {
@@ -35,8 +41,12 @@ pub(crate) fn handle_export_as_json(state: &State) -> Task<Message> {
     )
 }
 
-/// Handles exporting as nft text
-pub(crate) fn handle_export_as_nft(state: &State) -> Task<Message> {
+/// Handles exporting as nft text (one file dialog at a time, see
+/// [`handle_export_as_json`])
+pub(crate) fn handle_export_as_nft(state: &mut State) -> Task<Message> {
+    if std::mem::replace(&mut state.export_in_progress, true) {
+        return Task::none();
+    }
     let text = state.ruleset.to_nft_text();
     Task::perform(
         async move {
@@ -66,6 +76,7 @@ pub(crate) fn handle_export_result(
     result: Result<String, String>,
 ) -> Task<Message> {
     state.show_export_modal = false;
+    state.export_in_progress = false;
     match result {
         Ok(path) => {
             let msg = crate::app::helpers::truncate_path_smart(&path, 60);
@@ -230,5 +241,16 @@ mod tests {
         let banner = state.banners.back().expect("an error banner");
         assert_eq!(banner.severity, BannerSeverity::Error);
         assert!(banner.message.contains("Permission denied"));
+    }
+
+    #[test]
+    fn test_one_export_dialog_at_a_time() {
+        let mut state = create_test_state();
+        assert!(handle_export_as_json(&mut state).units() > 0);
+        assert!(state.export_in_progress);
+        assert_eq!(handle_export_as_nft(&mut state).units(), 0, "ignored");
+        assert_eq!(handle_export_as_json(&mut state).units(), 0, "ignored");
+        let _ = handle_export_result(&mut state, Err("Export cancelled".to_string()));
+        assert!(!state.export_in_progress);
     }
 }

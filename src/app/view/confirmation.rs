@@ -3,31 +3,31 @@
 use iced::widget::{button, checkbox, column, container, progress_bar, row, text};
 use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Shadow};
 
+use crate::app::handlers::SaveTested;
 use crate::app::ui_components::{
     card_container, danger_button, primary_button, secondary_button, section_header_container,
     themed_checkbox,
 };
-use crate::app::{AppStatus, Message};
+use crate::app::{AppStatus, Message, SaveSource};
 
 // ============================================================================
 // Helper Functions - Build modal body content
 // ============================================================================
 
 /// Build the body content for `AwaitingApply` state
-fn build_awaiting_body(
+fn build_awaiting_body<'a>(
     auto_revert_enabled: bool,
-    auto_revert_timeout: u64,
-    theme: &crate::theme::AppTheme,
+    timer_secs: &'a str,
+    theme: &'a crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
     let description_row = if auto_revert_enabled {
-        let timeout_val = auto_revert_timeout.min(120);
         container(row![
             text("Applying will activate a ")
                 .size(14)
                 .font(font)
                 .color(theme.fg_muted),
-            text(format!("{timeout_val}"))
+            text(timer_secs)
                 .size(14)
                 .font(iced::Font {
                     weight: iced::font::Weight::Bold,
@@ -128,12 +128,13 @@ fn build_applying_buttons(
 }
 
 /// Build the body content for `PendingConfirmation` state
-fn build_confirmation_body(
+fn build_confirmation_body<'a>(
+    remaining_text: &'a str,
     remaining: u32,
     animated_progress: f32,
-    theme: &crate::theme::AppTheme,
+    theme: &'a crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
     let progress = animated_progress;
 
     column![
@@ -148,7 +149,7 @@ fn build_confirmation_body(
                 .size(14)
                 .font(font)
                 .color(theme.accent),
-            text(format!("{remaining}"))
+            text(remaining_text)
                 .size(14)
                 .font(iced::Font {
                     weight: iced::font::Weight::Bold,
@@ -163,6 +164,12 @@ fn build_confirmation_body(
         .width(360)
         .align_x(Alignment::Center),
         text("Closing DRFW or losing the connection is safe: the rules still revert on time.")
+            .size(12)
+            .font(font)
+            .color(theme.fg_muted)
+            .width(360)
+            .align_x(Alignment::Center),
+        text("Keyboard: Ctrl+Enter confirms.")
             .size(12)
             .font(font)
             .color(theme.fg_muted)
@@ -343,33 +350,40 @@ fn build_confirmation_buttons(
 /// - `AwaitingApply`: "Commit Changes?" with enabled buttons
 /// - `Applying`: "Applying Rules..." with disabled buttons (no flash!)
 /// - `PendingConfirmation`: Countdown timer with progress bar
+///
+/// `timer_secs` and `countdown_text` are the timer length and the remaining
+/// seconds, formatted in `update()`.
 pub fn view_apply_flow_modal<'a>(
     status: &'a AppStatus,
     auto_revert_enabled: bool,
-    auto_revert_timeout: u64,
+    timer_secs: &'a str,
+    countdown_text: &'a str,
     countdown_remaining: u32,
     animated_progress: f32,
     theme: &'a crate::theme::AppTheme,
     font: iced::Font,
 ) -> Element<'a, Message> {
     // Determine content based on current status
-    let (icon, title_text, body, buttons) = match status {
+    let (title_text, body, buttons) = match status {
         AppStatus::AwaitingApply => (
-            text("🛡️").size(36),
             "Commit Changes?",
-            build_awaiting_body(auto_revert_enabled, auto_revert_timeout, theme, font),
+            build_awaiting_body(auto_revert_enabled, timer_secs, theme, font),
             build_awaiting_buttons(auto_revert_enabled, theme, font),
         ),
         AppStatus::Applying => (
-            text("⏳").size(36),
             "Applying Rules...",
             build_applying_body(theme, font),
             build_applying_buttons(auto_revert_enabled, theme, font),
         ),
         AppStatus::PendingConfirmation { .. } => (
-            text("⏳").size(36),
             "Confirm Safety",
-            build_confirmation_body(countdown_remaining, animated_progress, theme, font),
+            build_confirmation_body(
+                countdown_text,
+                countdown_remaining,
+                animated_progress,
+                theme,
+                font,
+            ),
             build_confirmation_buttons(theme, font),
         ),
         _ => {
@@ -381,7 +395,6 @@ pub fn view_apply_flow_modal<'a>(
     // Single shared card structure (no duplication!)
     container(
         column![
-            icon,
             container(text(title_text).size(24).font(font).color(theme.fg_primary))
                 .padding([4, 8])
                 .style(move |_| section_header_container(theme)),
@@ -482,21 +495,56 @@ pub fn view_save_to_system_modal<'a>(
         );
     }
 
-    let buttons = row![
-        button(text("Cancel").size(14).font(font))
-            .on_press(Message::SaveToSystemCancelled)
-            .padding([10, 20])
-            .style(move |_, status| secondary_button(theme, status)),
-        button(text("Save").size(14).font(font))
-            .on_press(Message::SaveToSystemConfirmed)
-            .padding([10, 24])
-            .style(move |_, status| primary_button(theme, status)),
-    ]
+    // Untested rules take effect at boot without the auto-revert safety net
+    if let Some(warning) = dialog.tested.warning() {
+        body = body.push(
+            container(
+                text(warning)
+                    .size(13)
+                    .font(font)
+                    .color(theme.danger)
+                    .width(400)
+                    .align_x(Alignment::Center),
+            )
+            .padding([6, 0]),
+        );
+    }
+
+    let cancel = button(text("Cancel").size(14).font(font))
+        .on_press(Message::SaveToSystemCancelled)
+        .padding([10, 20])
+        .style(move |_, status| secondary_button(theme, status));
+    let buttons = match dialog.tested {
+        SaveTested::Tested => row![
+            cancel,
+            button(text("Save").size(14).font(font))
+                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .padding([10, 24])
+                .style(move |_, status| primary_button(theme, status)),
+        ],
+        SaveTested::Differs => row![
+            cancel,
+            button(text("Save untested rules").size(14).font(font))
+                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .padding([10, 20])
+                .style(move |_, status| danger_button(theme, status)),
+            button(text("Save the last applied rules").size(14).font(font))
+                .on_press(Message::SaveToSystemConfirmed(SaveSource::LastConfirmed))
+                .padding([10, 24])
+                .style(move |_, status| primary_button(theme, status)),
+        ],
+        SaveTested::NothingApplied => row![
+            cancel,
+            button(text("Save untested rules").size(14).font(font))
+                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .padding([10, 20])
+                .style(move |_, status| danger_button(theme, status)),
+        ],
+    }
     .spacing(16);
 
     container(
         column![
-            text("💾").size(36),
             container(
                 text("Save to System")
                     .size(24)

@@ -40,7 +40,9 @@ must_use_candidate = "allow"
 # ═══════════════════════════════════════════════════════════════════════════
 # GUI Framework
 # ═══════════════════════════════════════════════════════════════════════════
-iced = { version = "0.14", features = ["tokio"] }  # Core GUI framework with async support
+# `advanced`: widget operations as tasks (focus queries and the scoped Tab
+# cycle in `app::focus`); it adds no dependencies
+iced = { version = "0.14", features = ["tokio", "advanced"] }  # Core GUI framework with async support
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Async Runtime

@@ -15,17 +15,17 @@ pub fn view_warning_modal<'a>(
 ) -> Element<'a, Message> {
     let (title, message, confirm_msg) = match warning {
         PendingWarning::EnableRpf => (
-            "⚠️ WARNING: Anti-Spoofing Mode",
+            "WARNING: Anti-Spoofing Mode",
             "Enabling this feature may break:\n\n    • Docker containers\n    • VPN connections (WireGuard, OpenVPN)\n    • Multi-homed systems\n    • AWS/GCP cloud instances\n\nOnly enable if:\n    ✓ You don't use Docker or VPNs\n    ✓ This is a single-interface server\n    ✓ You understand reverse path filtering\n\nAlternative: Use kernel RPF instead:\n  \n      sudo sysctl net.ipv4.conf.all.rp_filter=1",
             Message::ConfirmEnableRpf,
         ),
         PendingWarning::EnableServerMode => (
-            "⚠️ Server Mode: Egress Filtering",
+            "Server Mode: Egress Filtering",
             "This will BLOCK all outbound connections by default.\n\nYou'll need to explicitly allow:\n    • Web browsing (HTTP/HTTPS)\n    • DNS queries\n    • Software updates\n    • Any services your applications use\n\nThis mode is designed for servers, not desktop use.",
             Message::ConfirmServerMode,
         ),
         PendingWarning::EnableStrictIcmp => (
-            "⚠️ Strict ICMP Mode",
+            "Strict ICMP Mode",
             "This restricts ICMP to essential types only:\n\n    ✓ Ping (echo-request/echo-reply)\n    ✓ MTU discovery (packet-too-big)\n    ✓ Error reporting (destination-unreachable, time-exceeded, parameter-problem)\n    ✓ IPv6 neighbor discovery, router advertisements (SLAAC) and multicast listener queries\n\nThis may break:\n\n    • Network diagnostic tools (traceroute variations)\n    • Some games and applications\n    • Anything relying on other ICMP types (e.g. timestamp requests)",
             Message::ConfirmStrictIcmp,
         ),
@@ -66,9 +66,12 @@ pub fn view_warning_modal<'a>(
     .into()
 }
 
+/// Export dialog. While a file dialog is open (`in_progress`), the export
+/// buttons are disabled so a second one can't be opened.
 pub fn view_export_modal(
     theme: &crate::theme::AppTheme,
     regular_font: iced::Font,
+    in_progress: bool,
 ) -> Element<'_, Message> {
     container(
         column![
@@ -91,7 +94,7 @@ pub fn view_export_modal(
                             .size(14)
                             .font(regular_font)
                             .color(theme.fg_on_accent),
-                        text("Structured data format for automation and backup")
+                        text("nftables JSON for scripts and automation (cannot be imported back)")
                             .size(11)
                             .font(regular_font)
                             .color(theme.fg_on_accent),
@@ -99,7 +102,7 @@ pub fn view_export_modal(
                     .spacing(4)
                     .padding(16)
                 )
-                .on_press(Message::ExportAsJson)
+                .on_press_maybe((!in_progress).then_some(Message::ExportAsJson))
                 .style(move |_, status| primary_button(theme, status))
                 .width(Length::Fill),
                 button(
@@ -116,7 +119,7 @@ pub fn view_export_modal(
                     .spacing(4)
                     .padding(16)
                 )
-                .on_press(Message::ExportAsNft)
+                .on_press_maybe((!in_progress).then_some(Message::ExportAsNft))
                 .style(move |_, status| primary_button(theme, status))
                 .width(Length::Fill),
             ]
@@ -135,5 +138,52 @@ pub fn view_export_modal(
     )
     .max_width(500)
     .style(move |_| card_container(theme))
+    .into()
+}
+
+/// Dialog after saving on close failed: keep DRFW open (primary, Enter and
+/// Escape) or close and lose the changes.
+pub fn view_close_failed<'a>(
+    message: &'a str,
+    theme: &'a crate::theme::AppTheme,
+    regular_font: iced::Font,
+) -> Element<'a, Message> {
+    container(
+        column![
+            text("Changes not saved")
+                .size(20)
+                .font(regular_font)
+                .color(theme.danger),
+            text(message)
+                .size(14)
+                .font(regular_font)
+                .color(theme.fg_primary),
+            row![
+                button(text("Close anyway").size(14).font(regular_font))
+                    .on_press(Message::CloseAnyway)
+                    .padding([10, 20])
+                    .style(move |_, status| danger_button(theme, status)),
+                space::Space::new().width(Length::Fill),
+                button(text("Keep DRFW open").size(14).font(regular_font))
+                    .on_press(Message::CancelClose)
+                    .padding([10, 24])
+                    .style(move |_, status| primary_button(theme, status)),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(20)
+        .padding(30)
+        .max_width(520),
+    )
+    .style(move |_| {
+        let mut style = card_container(theme);
+        style.border = Border {
+            color: theme.danger,
+            width: 2.0,
+            radius: 8.0.into(),
+        };
+        style
+    })
     .into()
 }

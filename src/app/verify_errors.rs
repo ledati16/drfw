@@ -13,6 +13,8 @@ use crate::core::verify::VerifyResult;
 pub struct VerifyErrorsPanel {
     /// "nft rejected 2 rules." / "nft rejected the ruleset."
     pub summary: String,
+    /// What to do next ("... then apply again"), set by whoever verified
+    pub next_step: &'static str,
     pub rows: Vec<VerifyErrorRow>,
 }
 
@@ -52,6 +54,7 @@ impl VerifyErrorsPanel {
             .collect();
         let mut panel = Self {
             summary: format!("{}.", rejected_phrase(result)),
+            next_step: "Nothing was changed. Fix the rules below, then apply again.",
             rows,
         };
         panel.sync_with(ruleset);

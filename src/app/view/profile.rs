@@ -15,7 +15,7 @@ pub fn view_profile_switch_confirm(
 ) -> Element<'_, Message> {
     container(
         column![
-            text("⚠️ Unsaved Changes")
+            text("Unsaved Changes")
                 .size(20)
                 .font(font)
                 .color(theme.warning),
@@ -42,6 +42,68 @@ pub fn view_profile_switch_confirm(
         .spacing(20)
         .padding(30)
         .max_width(500),
+    )
+    .style(move |_| {
+        let mut style = card_container(theme);
+        style.border = Border {
+            color: theme.danger,
+            width: 2.0,
+            radius: 8.0.into(),
+        };
+        style
+    })
+    .into()
+}
+
+/// "Start fresh?" for a profile that could not be loaded. Without a backup
+/// copy of the file the warning is stronger: the old rules are lost for good.
+pub fn view_start_fresh_confirm<'a>(
+    issue: &'a crate::core::profiles::UnreadableProfile,
+    theme: &'a crate::theme::AppTheme,
+    font: iced::Font,
+) -> Element<'a, Message> {
+    let (explanation, confirm_label) = if issue.backup.is_some() {
+        (
+            "The profile will be replaced with an empty one. The copy of the old \
+             file stays where it was saved, so its rules can still be recovered.",
+            "Start fresh",
+        )
+    } else {
+        (
+            "No backup copy of this profile could be made. Starting fresh \
+             overwrites the file: its rules are lost for good. Consider copying \
+             the file somewhere safe first.",
+            "Delete old rules and start fresh",
+        )
+    };
+    container(
+        column![
+            text("Start fresh?").size(20).font(font).color(theme.danger),
+            text(&issue.reason)
+                .size(13)
+                .font(font)
+                .color(theme.fg_muted),
+            text(explanation)
+                .size(14)
+                .font(font)
+                .color(theme.fg_primary),
+            row![
+                button(text("Cancel").size(14).font(font))
+                    .on_press(Message::CancelStartFresh)
+                    .padding([10, 20])
+                    .style(move |_, status| secondary_button(theme, status)),
+                space::Space::new().width(Length::Fill),
+                button(text(confirm_label).size(14).font(font))
+                    .on_press(Message::ConfirmStartFresh)
+                    .padding([10, 20])
+                    .style(move |_, status| danger_button(theme, status)),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(16)
+        .padding(30)
+        .max_width(520),
     )
     .style(move |_| {
         let mut style = card_container(theme);
@@ -87,6 +149,7 @@ pub fn view_profile_manager<'a>(
 
                 let rename_row = row![
                     text_input("New name...", current)
+                        .id(crate::app::focus::PROFILE_RENAME)
                         .on_input(Message::ProfileNewNameChanged)
                         .on_submit(if is_valid_rename {
                             Message::ConfirmRenameProfile
@@ -239,6 +302,7 @@ pub fn view_profile_manager<'a>(
 
                 let create_row = row![
                     text_input("New profile name...", &mgr.new_name_input)
+                        .id(crate::app::focus::PROFILE_NEW_NAME)
                         .on_input(Message::NewProfileNameChanged)
                         .on_submit(if is_valid_name {
                             Message::SaveProfileAs(mgr.new_name_input.clone())
@@ -288,7 +352,7 @@ pub fn view_profile_manager<'a>(
             },
             row![
                 container(
-                    text(format!("{} profiles", state.available_profiles.len()))
+                    text(&state.profile_count_display)
                         .size(10)
                         .font(state.font_mono)
                         .color(theme.fg_muted)
