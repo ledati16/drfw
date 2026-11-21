@@ -46,6 +46,7 @@ pub(crate) fn handle_exposure_scanned(
     }
     if let Ok(scan) = &result {
         state.ssh_sessions.clone_from(&scan.sessions);
+        state.host_forwarding = scan.forwarding;
     }
     let Some(panel) = &mut state.exposure.panel else {
         return;
@@ -72,6 +73,8 @@ fn scan_blocking(env: Option<crate::core::lockout::SshSession>) -> std::io::Resu
     Ok(ExposureScan {
         sockets: host.sockets,
         sessions,
+        forwarding: crate::core::host_facts::forwarding_enabled(),
+        containers: crate::core::host_facts::ContainerFacts::read(),
     })
 }
 
@@ -138,6 +141,7 @@ mod tests {
             Ok(ExposureScan {
                 sockets: Vec::new(),
                 sessions: vec![session.clone()],
+                ..ExposureScan::default()
             }),
         );
         assert_eq!(state.ssh_sessions, [session]);
@@ -192,6 +196,7 @@ mod tests {
             Ok(ExposureScan {
                 sockets,
                 sessions: Vec::new(),
+                ..ExposureScan::default()
             }),
         );
         let row = |state: &State| state.exposure.panel.as_ref().unwrap().rows[0].clone();

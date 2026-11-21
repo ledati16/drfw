@@ -97,7 +97,7 @@ impl RetentionWarning {
         }
         if enables_block_forwarding {
             lines.push(
-                "Blocks forwarded traffic: breaks Docker, VMs and VPN routing unless Forward rules allow it."
+                "Blocks forwarded traffic: Docker, VMs and VPN routing stop working unless Forwarded rules allow them."
                     .to_string(),
             );
         }

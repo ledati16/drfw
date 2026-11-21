@@ -2022,6 +2022,152 @@ fn test_cli_exposure_json() {
     );
 }
 
+/// Writes `contents` to `file` under the `/proc` fixture `dir`.
+fn proc_file(dir: &std::path::Path, file: &str, contents: &[u8]) {
+    let path = dir.join(file);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+/// S3: Docker's published ports (from `docker-proxy` command lines in
+/// `/proc`) replace the verdict in `drfw exposure` and its JSON; the
+/// forwarding and container-network notices are printed when they apply.
+#[cfg(target_endian = "little")]
+#[test]
+fn test_cli_exposure_marks_docker_published_ports() {
+    let root = tempfile::tempdir().unwrap();
+    let proc = root.path().join("proc");
+    proc_fixture(&proc);
+    exposure_profile(root.path());
+    proc_file(
+        &proc,
+        "5000/cmdline",
+        [
+            "/usr/bin/docker-proxy",
+            "-proto",
+            "tcp",
+            "-host-ip",
+            "0.0.0.0",
+            "-host-port",
+            "8080",
+            "-container-ip",
+            "172.17.0.2",
+            "-container-port",
+            "80",
+        ]
+        .join("\0")
+        .as_bytes(),
+    );
+    proc_file(&proc, "sys/net/ipv4/ip_forward", b"1\n");
+
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web"], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = stdout_of(&output);
+    let web = out
+        .lines()
+        .find(|l| l.starts_with("TCP 8080"))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        web.contains("published by Docker: not filtered by DRFW's rules"),
+        "{out}"
+    );
+    assert!(!web.contains("OPEN TO EVERYONE"), "{out}");
+    assert!(
+        !web.contains("rule \"Web\""),
+        "not decided by a rule: {out}"
+    );
+    assert!(
+        out.contains("2 listening sockets, 0 open to everyone, 1 published by Docker."),
+        "{out}"
+    );
+    assert!(
+        out.contains(drfw::core::host_facts::FORWARDING_WARNING),
+        "{out}"
+    );
+    assert!(
+        !out.contains(drfw::core::host_facts::CONTAINER_NETWORKS_NOTE),
+        "a proxy was found: {out}"
+    );
+
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web", "--json"], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let web = &json["sockets"][0];
+    assert_eq!(web["port"], 8080);
+    assert_eq!(web["published_by_docker"], true);
+    assert_eq!(web["open_to_everyone"], false);
+    assert!(web["decided_by"].is_null());
+    assert_eq!(json["sockets"][1]["published_by_docker"], false);
+    assert_eq!(json["forwarding"]["ipv4"], true);
+    assert_eq!(json["forwarding"]["filtered"], false);
+    assert_eq!(
+        json["notes"],
+        serde_json::json!([drfw::core::host_facts::FORWARDING_WARNING])
+    );
+
+    // No proxy, but a Docker bridge: the general note; forwarding off
+    std::fs::remove_dir_all(proc.join("5000")).unwrap();
+    proc_file(&proc, "sys/net/ipv4/ip_forward", b"0\n");
+    proc_file(
+        &proc,
+        "net/dev",
+        b"Inter-|   Receive\n face |bytes\n    lo: 0 0\ndocker0: 0 0\n",
+    );
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web"], &[]);
+    let out = stdout_of(&output);
+    assert!(out.contains("OPEN TO EVERYONE: everyone"), "{out}");
+    assert!(
+        out.contains(drfw::core::host_facts::CONTAINER_NETWORKS_NOTE),
+        "{out}"
+    );
+    assert!(
+        !out.contains(drfw::core::host_facts::FORWARDING_WARNING),
+        "{out}"
+    );
+}
+
+/// S3: `drfw status` has a "Forwarding" line: off, the forwarding notice,
+/// or that the profile blocks forwarded traffic.
+#[test]
+fn test_cli_status_forwarding_line() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = create_test_ruleset();
+    write_profile(root.path(), "default", &ruleset);
+    let proc = root.path().join("proc");
+    std::fs::create_dir_all(&proc).unwrap();
+    let forwarding_line = |out: &str| -> String {
+        out.lines()
+            .find(|l| l.starts_with("Forwarding:"))
+            .unwrap_or_else(|| panic!("no Forwarding line: {out}"))
+            .to_string()
+    };
+
+    let output = run_drfw_in_proc(root.path(), &proc, &["status"], &[]);
+    assert!(output.status.success(), "{}", all_output(&output));
+    assert!(
+        forwarding_line(&stdout_of(&output)).ends_with("IP forwarding is off"),
+        "{}",
+        stdout_of(&output)
+    );
+
+    proc_file(&proc, "sys/net/ipv6/conf/all/forwarding", b"1\n");
+    let output = run_drfw_in_proc(root.path(), &proc, &["status"], &[]);
+    let line = forwarding_line(&stdout_of(&output));
+    assert!(
+        line.ends_with(drfw::core::host_facts::FORWARDING_WARNING),
+        "{line}"
+    );
+
+    ruleset.advanced_security.block_forwarding = true;
+    write_profile(root.path(), "default", &ruleset);
+    let output = run_drfw_in_proc(root.path(), &proc, &["status"], &[]);
+    let line = forwarding_line(&stdout_of(&output));
+    assert!(
+        line.contains("this profile blocks forwarded traffic"),
+        "{line}"
+    );
+}
+
 /// `drfw status` says whether the SSH session's client could reconnect.
 #[test]
 fn test_cli_status_ssh_line() {

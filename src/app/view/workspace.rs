@@ -122,7 +122,23 @@ pub fn view_workspace<'a>(
 
     let mut preview_header = column![nav_row, title_row].spacing(20);
     if state.auto_revert_notice_visible() {
-        preview_header = preview_header.push(auto_revert_notice(state));
+        preview_header = preview_header.push(one_time_notice(
+            state,
+            AUTO_REVERT_NOTICE,
+            ("Turn on", Message::AutoRevertNoticeAnswered(true)),
+            ("Keep off", Message::AutoRevertNoticeAnswered(false)),
+        ));
+    }
+    if state.local_discovery_notice_visible() {
+        preview_header = preview_header.push(one_time_notice(
+            state,
+            LOCAL_DISCOVERY_NOTICE,
+            (
+                "Turn on local network discovery",
+                Message::LocalDiscoveryNoticeAnswered(true),
+            ),
+            ("Not now", Message::LocalDiscoveryNoticeAnswered(false)),
+        ));
     }
 
     // Settings tab only needs vertical scrolling, other tabs need both
@@ -283,7 +299,22 @@ const NO_DIFF_HINT: &str = "No diff yet: nothing applied or kept";
 
 /// The one-time notice for configs that have auto-revert off (the old
 /// default): says what that means and asks once.
-fn auto_revert_notice(state: &State) -> Element<'_, Message> {
+const AUTO_REVERT_NOTICE: &str =
+    "Auto-revert is off: if an apply locks you out, DRFW won't roll it back.";
+
+/// The one-time notice for profiles from before local network discovery
+/// existed (Desktop mode, discovery off).
+const LOCAL_DISCOVERY_NOTICE: &str =
+    "Printers, TVs and other devices can't find this computer, and it can't find them.";
+
+/// A one-time info notice above the preview: the text and two answers
+/// (primary, secondary); either answer hides it for good.
+fn one_time_notice<'a>(
+    state: &'a State,
+    message: &'static str,
+    (primary_label, primary): (&'static str, Message),
+    (secondary_label, secondary): (&'static str, Message),
+) -> Element<'a, Message> {
     let theme = &state.theme;
     container(
         row![
@@ -294,17 +325,17 @@ fn auto_revert_notice(state: &State) -> Element<'_, Message> {
                     ..state.font_mono
                 })
                 .color(theme.info),
-            text("Auto-revert is off: if an apply locks you out, DRFW won't roll it back.")
+            text(message)
                 .size(13)
                 .font(state.font_regular)
                 .color(theme.fg_primary)
                 .width(Length::Fill),
-            button(text("Turn on").size(13).font(state.font_regular))
-                .on_press(Message::AutoRevertNoticeAnswered(true))
+            button(text(primary_label).size(13).font(state.font_regular))
+                .on_press(primary)
                 .padding([6, 14])
                 .style(move |_, status| primary_button(theme, status)),
-            button(text("Keep off").size(13).font(state.font_regular))
-                .on_press(Message::AutoRevertNoticeAnswered(false))
+            button(text(secondary_label).size(13).font(state.font_regular))
+                .on_press(secondary)
                 .padding([6, 14])
                 .style(move |_, status| secondary_button(theme, status)),
         ]

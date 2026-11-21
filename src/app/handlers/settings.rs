@@ -2,7 +2,8 @@
 //!
 //! Handles configuration changes:
 //! - Display settings (diff view, zebra striping)
-//! - Security settings (auto-revert, strict ICMP, RPF, forwarding)
+//! - Security settings (auto-revert, strict ICMP, RPF, forwarding, local
+//!   discovery, Server Mode with its essential rules)
 //! - Logging settings (event log, dropped packet logging)
 //! - Theme and font selection
 //! - Debounced auto-save
@@ -11,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use iced::Task;
 
-use crate::app::{Message, PendingWarning, State};
+use crate::app::{Message, PendingWarning, ServerEssentials, State};
+use crate::core::firewall::EgressProfile;
 
 /// Handles toggling diff view
 pub(crate) fn handle_toggle_diff(state: &mut State, enabled: bool) -> Task<Message> {
@@ -175,10 +177,51 @@ pub(crate) fn handle_confirm_enable_rpf(state: &mut State) -> Task<Message> {
     super::log_setting_change(state, "RPF (reverse path filtering) enabled")
 }
 
+/// Handles the "Local network discovery" toggle. Desktop mode only (the
+/// generator ignores it in Server Mode, where the toggle is disabled). A
+/// choice here also answers the one-time notice.
+pub(crate) fn handle_toggle_local_discovery(state: &mut State, enabled: bool) -> Task<Message> {
+    if state.ruleset.advanced_security.egress_profile == EgressProfile::Server {
+        return Task::none();
+    }
+    state.ruleset.advanced_security.local_discovery = enabled;
+    state.mark_profile_dirty();
+    if !state.local_discovery_notice_shown {
+        state.local_discovery_notice_shown = true;
+        state.mark_config_dirty();
+    }
+    super::log_setting_change(
+        state,
+        if enabled {
+            "Local network discovery enabled"
+        } else {
+            "Local network discovery disabled"
+        },
+    )
+}
+
+/// Handles the local discovery notice: "Turn on local network discovery"
+/// turns it on for the open profile, "Not now" leaves it; either way the
+/// notice is not shown again (saved with the debounced config save).
+pub(crate) fn handle_local_discovery_notice_answered(
+    state: &mut State,
+    turn_on: bool,
+) -> Task<Message> {
+    if !state.local_discovery_notice_visible() {
+        return Task::none();
+    }
+    if turn_on {
+        return handle_toggle_local_discovery(state, true);
+    }
+    state.local_discovery_notice_shown = true;
+    state.mark_config_dirty();
+    super::log_setting_change(state, "Local network discovery kept off (notice answered)")
+}
+
 /// Handles toggling forwarded-traffic blocking (forward chain policy)
 ///
-/// No warning modal: the settings row explains that blocking breaks
-/// Docker/VM/VPN routing, and the change only takes effect on Apply.
+/// No warning modal: the settings row explains that forwarded traffic then
+/// needs Forwarded rules, and the change only takes effect on Apply.
 pub(crate) fn handle_toggle_block_forwarding(state: &mut State, enabled: bool) -> Task<Message> {
     state.ruleset.advanced_security.block_forwarding = enabled;
     state.mark_profile_dirty();
@@ -281,10 +324,13 @@ pub(crate) fn handle_log_prefix_changed(state: &mut State, prefix: &str) -> Task
     }
 }
 
-/// Handles server mode toggle request (shows warning)
+/// Handles server mode toggle request (shows the warning, with the
+/// essential Output rules it offers to add)
 pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Task<Message> {
     if enabled {
-        state.pending_warning = Some(PendingWarning::EnableServerMode);
+        state.pending_warning = Some(PendingWarning::EnableServerMode(
+            ServerEssentials::for_ruleset(&state.ruleset),
+        ));
         Task::none()
     } else {
         state.ruleset.advanced_security.egress_profile =
@@ -294,12 +340,47 @@ pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Ta
     }
 }
 
-/// Handles confirming server mode
+/// Ticks or unticks one essential rule in the Server Mode dialog.
+pub(crate) fn handle_server_essential_toggled(state: &mut State, index: usize, ticked: bool) {
+    if let Some(PendingWarning::EnableServerMode(essentials)) = &mut state.pending_warning
+        && let Some(choice) = essentials.choices.get_mut(index)
+    {
+        choice.ticked = ticked;
+    }
+}
+
+/// Handles confirming server mode: switches the mode and adds the ticked
+/// essential rules as ordinary Output rules, in one undoable step (undo
+/// removes the rules; the mode stays, like every setting).
 pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
-    state.pending_warning = None;
-    state.ruleset.advanced_security.egress_profile = crate::core::firewall::EgressProfile::Server;
+    let added = match state.pending_warning.take() {
+        Some(PendingWarning::EnableServerMode(essentials)) => essentials.ticked_rules(),
+        _ => Vec::new(),
+    };
+    state.ruleset.advanced_security.egress_profile = EgressProfile::Server;
+    let room = crate::core::firewall::MAX_RULES.saturating_sub(state.ruleset.rules.len());
+    let count = added.len();
+    if count > 0 && count <= room {
+        let command = crate::command::AddRulesCommand {
+            rules: added,
+            description: "Add rules: Server Mode essentials".to_string(),
+        };
+        state
+            .command_history
+            .execute(Box::new(command), &mut state.ruleset);
+    } else if count > 0 {
+        state.push_banner(
+            "The essential rules were not added: the profile has too many rules.",
+            crate::app::BannerSeverity::Error,
+        );
+    }
     state.mark_profile_dirty();
-    super::log_setting_change(state, "Server mode enabled (server profile)")
+    let description = if count > 0 && count <= room {
+        format!("Server mode enabled (server profile), {count} essential rules added")
+    } else {
+        "Server mode enabled (server profile)".to_string()
+    };
+    super::log_setting_change(state, description)
 }
 
 /// Quiet period after the last settings change before the config is written.
@@ -632,5 +713,279 @@ mod tests {
         handle_auto_revert_timeout_changed(&mut state, 30);
         assert_eq!(state.settings_display.auto_revert_timeout, "30s");
         assert_eq!(state.settings_display.apply_timer_secs, "30");
+    }
+
+    // ── Local network discovery (S1) ──────────────────────────────────
+
+    #[test]
+    fn test_local_discovery_toggle_is_desktop_only() {
+        let mut state = create_test_state();
+        let _ = state.update(Message::ToggleLocalDiscovery(true));
+        assert!(state.ruleset.advanced_security.local_discovery);
+        assert!(state.profile_dirty, "saved with the profile");
+        assert!(
+            state.local_discovery_notice_shown,
+            "a choice answers the notice"
+        );
+        assert!(state.config_dirty);
+
+        let _ = handle_confirm_server_mode(&mut state);
+        let _ = state.update(Message::ToggleLocalDiscovery(false));
+        assert!(
+            state.ruleset.advanced_security.local_discovery,
+            "ignored in Server Mode (the toggle is disabled there)"
+        );
+    }
+
+    /// An existing profile (discovery off, from before the setting): the
+    /// notice shows once; "Turn on" enables it for this profile.
+    #[test]
+    fn test_local_discovery_notice_turn_on() {
+        let mut state = create_test_state();
+        assert!(state.local_discovery_notice_visible());
+        let _ = state.update(Message::LocalDiscoveryNoticeAnswered(true));
+        assert!(state.ruleset.advanced_security.local_discovery);
+        assert!(state.profile_dirty);
+        assert!(!state.local_discovery_notice_visible());
+        assert!(state.config_snapshot().local_discovery_notice_shown);
+    }
+
+    #[test]
+    fn test_local_discovery_notice_not_now() {
+        let mut state = create_test_state();
+        let _ = state.update(Message::LocalDiscoveryNoticeAnswered(false));
+        assert!(
+            !state.ruleset.advanced_security.local_discovery,
+            "unchanged"
+        );
+        assert!(!state.profile_dirty);
+        assert!(state.config_dirty, "saved with the debounced config save");
+        assert!(!state.local_discovery_notice_visible());
+        assert!(state.config_snapshot().local_discovery_notice_shown);
+        // Answered: a second answer changes nothing
+        let _ = state.update(Message::LocalDiscoveryNoticeAnswered(true));
+        assert!(!state.ruleset.advanced_security.local_discovery);
+    }
+
+    /// No notice where it would not help: discovery already on (new
+    /// profiles), Server Mode, or a read-only profile.
+    #[test]
+    fn test_local_discovery_notice_hidden_when_not_applicable() {
+        let mut state = create_test_state();
+        state.ruleset = crate::app::new_profile_ruleset();
+        assert!(!state.local_discovery_notice_visible(), "already on");
+
+        let mut state = create_test_state();
+        state.ruleset.advanced_security.egress_profile = EgressProfile::Server;
+        state.mark_profile_dirty();
+        assert!(!state.local_discovery_notice_visible(), "Server Mode");
+        let _ = state.update(Message::LocalDiscoveryNoticeAnswered(true));
+        assert!(!state.ruleset.advanced_security.local_discovery);
+
+        let mut state = create_test_state();
+        state.unreadable_profile = Some(crate::core::profiles::UnreadableProfile {
+            name: "test".into(),
+            reason: "broken".into(),
+            backup: None,
+        });
+        assert!(!state.local_discovery_notice_visible(), "read-only");
+    }
+
+    // ── Server Mode essentials (S2) ───────────────────────────────────
+
+    fn essentials(state: &State) -> &crate::app::ServerEssentials {
+        match &state.pending_warning {
+            Some(PendingWarning::EnableServerMode(essentials)) => essentials,
+            other => panic!("no Server Mode dialog: {other:?}"),
+        }
+    }
+
+    /// The dialog offers every essential rule, pre-ticked; confirming adds
+    /// the ticked ones as ordinary Output rules, and Ctrl+Z removes them
+    /// all at once.
+    #[test]
+    fn test_server_mode_adds_ticked_essentials_undoably() {
+        use crate::core::firewall::Chain;
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(crate::core::test_helpers::create_test_rule("SSH", Some(22)));
+        state.mark_profile_dirty();
+
+        let _ = state.update(Message::ServerModeToggled(true));
+        let offered: Vec<&str> = essentials(&state)
+            .choices
+            .iter()
+            .map(|c| c.rule.label.as_str())
+            .collect();
+        assert_eq!(
+            offered,
+            crate::core::templates::server_essentials()
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(essentials(&state).choices.iter().all(|c| c.ticked));
+        let checkboxes: Vec<&str> = essentials(&state)
+            .choices
+            .iter()
+            .map(|c| c.label.as_str())
+            .collect();
+        assert_eq!(
+            checkboxes,
+            [
+                "DNS (TCP+UDP: 53)",
+                "DNS over TLS (TCP: 853)",
+                "Time sync: NTP (UDP: 123)",
+                "Web and updates: HTTP and HTTPS (TCP: 80, 443)",
+                "Ping",
+            ]
+        );
+
+        // Untick the second one
+        let _ = state.update(Message::ServerEssentialToggled(1, false));
+        let unticked = essentials(&state).choices[1].rule.label.clone();
+        let _ = state.update(Message::ServerEssentialToggled(99, false));
+        let _ = state.update(Message::ConfirmServerMode);
+        assert!(state.pending_warning.is_none());
+        assert_eq!(
+            state.ruleset.advanced_security.egress_profile,
+            EgressProfile::Server
+        );
+        let total = crate::core::templates::server_essentials().len();
+        assert_eq!(state.ruleset.rules.len(), 1 + total - 1);
+        assert!(
+            state.ruleset.rules[1..]
+                .iter()
+                .all(|r| r.chain == Chain::Output && r.enabled)
+        );
+        assert!(!state.ruleset.rules.iter().any(|r| r.label == unticked));
+        assert!(state.profile_dirty);
+
+        let _ = state.update(Message::Undo);
+        assert_eq!(state.ruleset.rules.len(), 1, "one step removes them all");
+        assert_eq!(state.ruleset.rules[0].label, "SSH");
+        assert!(
+            state
+                .banners
+                .back()
+                .unwrap()
+                .message
+                .contains("Server Mode essentials")
+        );
+        let _ = state.update(Message::Redo);
+        assert_eq!(state.ruleset.rules.len(), total);
+    }
+
+    /// Nothing ticked: only the mode changes (no empty undo step). Rules the
+    /// profile already has (an Output rule of the same name) start unticked.
+    #[test]
+    fn test_server_mode_without_essentials() {
+        let mut state = create_test_state();
+        let _ = state.update(Message::ServerModeToggled(true));
+        let count = essentials(&state).choices.len();
+        for index in 0..count {
+            let _ = state.update(Message::ServerEssentialToggled(index, false));
+        }
+        let _ = state.update(Message::ConfirmServerMode);
+        assert_eq!(
+            state.ruleset.advanced_security.egress_profile,
+            EgressProfile::Server
+        );
+        assert_eq!(state.ruleset.rules.len(), 0);
+        assert!(!state.command_history.can_undo());
+
+        // An Output rule the user already has under a real essentials label
+        // ("Time sync: NTP") starts unticked; an Input rule of that name does not count
+        let mut state = create_test_state();
+        let mut ntp = crate::core::test_helpers::create_test_rule("Time sync: NTP", Some(123));
+        ntp.chain = crate::core::firewall::Chain::Output;
+        state.ruleset.rules.push(ntp);
+        state
+            .ruleset
+            .rules
+            .push(crate::core::test_helpers::create_test_rule("DNS", Some(53)));
+        state.mark_profile_dirty();
+        let _ = state.update(Message::ServerModeToggled(true));
+        let unticked: Vec<&str> = essentials(&state)
+            .choices
+            .iter()
+            .filter(|c| !c.ticked)
+            .map(|c| c.rule.label.as_str())
+            .collect();
+        assert_eq!(unticked, ["Time sync: NTP"]);
+        let _ = state.update(Message::CancelWarning);
+
+        // Back to Desktop and on again: the essentials added before are
+        // not offered twice
+        let mut state = create_test_state();
+        let _ = state.update(Message::ServerModeToggled(true));
+        let _ = state.update(Message::ConfirmServerMode);
+        let _ = state.update(Message::ServerModeToggled(false));
+        let _ = state.update(Message::ServerModeToggled(true));
+        assert!(essentials(&state).choices.iter().all(|c| !c.ticked));
+        let _ = state.update(Message::CancelWarning);
+        assert_eq!(
+            state.ruleset.advanced_security.egress_profile,
+            EgressProfile::Desktop,
+            "cancelled"
+        );
+    }
+
+    // ── Forwarded rules (S7) ──────────────────────────────────────────
+
+    /// A Forwarded rule is listed with a "FWD" badge and inactive (dimmed,
+    /// with its reason) until forwarded traffic is blocked.
+    #[test]
+    fn test_forward_rules_are_inactive_until_forwarding_is_blocked() {
+        use crate::app::InactiveReason;
+        use crate::core::firewall::Chain;
+        let mut state = create_test_state();
+        let mut forward = crate::core::test_helpers::create_test_rule("Routed", Some(80));
+        forward.chain = Chain::Forward;
+        forward.interface = Some("eth0".into());
+        forward.output_interface = Some("wg0".into());
+        state.ruleset.rules.push(forward);
+        state.mark_profile_dirty();
+
+        assert_eq!(
+            state.inactive_reason(&state.ruleset.rules[0]),
+            Some(InactiveReason::ForwardingNotBlocked)
+        );
+        assert!(
+            state.cached_rule_badges[0].starts_with(crate::app::FORWARD_BADGE_PREFIX),
+            "{}",
+            state.cached_rule_badges[0]
+        );
+        assert!(
+            !state
+                .cached_rule_issues
+                .contains_key(&state.ruleset.rules[0].id),
+            "both interfaces are valid on a Forwarded rule"
+        );
+
+        let _ = state.update(Message::ToggleBlockForwarding(true));
+        assert_eq!(state.inactive_reason(&state.ruleset.rules[0]), None);
+        assert!(state.cached_rule_badges[0].starts_with(crate::app::FORWARD_BADGE_PREFIX));
+
+        // Server Mode keeps the FWD badge (not an arrow)
+        let _ = handle_confirm_server_mode(&mut state);
+        assert!(state.cached_rule_badges[0].starts_with(crate::app::FORWARD_BADGE_PREFIX));
+    }
+
+    #[test]
+    fn test_settings_texts_say_what_they_do() {
+        let mut state = create_test_state();
+        handle_icmp_rate_limit_changed(&mut state, 10);
+        assert_eq!(
+            state.settings_display.icmp_rate_desc,
+            "Limit incoming ping requests to 10 per second (0 = off)"
+        );
+        handle_icmp_rate_limit_changed(&mut state, 0);
+        assert_eq!(
+            state.settings_display.icmp_rate_desc,
+            "Limit incoming ping requests per second (0 = off)"
+        );
     }
 }

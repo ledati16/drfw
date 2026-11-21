@@ -111,11 +111,15 @@ section_header_container(theme)     // Subtle label backgrounds
 modal_backdrop(theme)               // Semi-transparent overlay
 attention_card_container(theme)     // Card with 2px danger border (open to everyone)
 warning_attention_card_container(theme) // Same in warning (open on some interfaces)
-info_notice_container(theme)        // Same in info (inline workspace notices)
+info_notice_container(theme)        // Same in info (one-time workspace notices, Exposure notes)
 danger_badge_container(theme)       // Solid pill badge, danger ("OPEN TO EVERYONE")
 warning_badge_container(theme)      // Solid pill badge, warning ("OPEN ON wg0")
 ```
 Badges always carry text: the color only repeats what the words say.
+One-time notices above the preview (auto-revert off, local network
+discovery off) go through `workspace::one_time_notice`: an "INFO" label, the
+sentence, a primary and a secondary answer; either answer hides it for good
+(a config flag).
 
 ### Implementation Notes
 **Buttons:** All button functions use a unified `ButtonStyleConfig` system internally to avoid code duplication. Each button type is defined as a const configuration with specific colors, shadows, and interaction states. **Do not create new button functions**—modify existing configurations or add new const configs to the system.

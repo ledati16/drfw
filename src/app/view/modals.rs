@@ -1,12 +1,45 @@
 //! Modal dialogs (warnings and export)
 
-use iced::widget::{button, column, container, row, space, text};
+use iced::widget::{button, checkbox, column, container, row, space, text};
 use iced::{Alignment, Border, Element, Length};
 
 use crate::app::ui_components::{
     card_container, danger_button, primary_button, secondary_button, section_header_container,
+    themed_checkbox,
 };
 use crate::app::{Message, PendingWarning};
+
+/// The RPF warning (true of the strict reverse path check DRFW generates:
+/// after established/related, so new packets only, keyed by the routing
+/// mark; see README "Anti-spoofing").
+const RPF_WARNING: &str = "Drop new connections whose source address could not have arrived \
+on that interface (strict reverse path filtering). Useful with rules that trust a source \
+address, such as \"SSH from 192.168.1.0/24 only\".\n\n\
+Only new connections are checked, and the routing mark VPNs set is honoured, so Docker and \
+libvirt bridges, split-tunnel VPNs and full-tunnel VPN clients (wg-quick, a Tailscale exit \
+node) keep working.\n\n\
+It may block:\n\n    \
+• Peers that contact a full-tunnel VPN host first over its underlying network (not through \
+the tunnel)\n    \
+• Asymmetric routing: new connections from an address that arrive on another interface \
+than the route back to it";
+
+/// The Server Mode warning, above the essential-rule checkboxes.
+const SERVER_MODE_WARNING: &str = "Outgoing connections are blocked unless a rule allows \
+them. Replies to accepted connections, loopback, IPv6 neighbor discovery and DHCP keep \
+working, so an open SSH session is not cut off.\n\n\
+Without rules this computer can't look up names, set its clock or download updates. \
+Add these Output rules now (ordinary rules you can edit or delete later):";
+
+/// The Strict ICMP warning (the strict sets include IPv6 router
+/// solicitations and the MLD reports, so nothing a network needs is lost).
+const STRICT_ICMP_WARNING: &str = "This allows only the ICMP types networks need:\n\n    \
+✓ Ping (echo-request/echo-reply)\n    \
+✓ MTU discovery (packet-too-big)\n    \
+✓ Error reporting (destination-unreachable, time-exceeded, parameter-problem)\n    \
+✓ IPv6 neighbor and router discovery (SLAAC) and multicast listener (MLD) messages\n\n\
+Ping, traceroute and MTU discovery keep working. Only rarely used types are blocked, such \
+as timestamp and address-mask requests and other exotic ICMP.";
 
 pub fn view_warning_modal<'a>(
     warning: &'a PendingWarning,
@@ -16,54 +49,81 @@ pub fn view_warning_modal<'a>(
     let (title, message, confirm_msg) = match warning {
         PendingWarning::EnableRpf => (
             "WARNING: Anti-Spoofing Mode",
-            "Enabling this feature may break:\n\n    • Docker containers\n    • VPN connections (WireGuard, OpenVPN)\n    • Multi-homed systems\n    • AWS/GCP cloud instances\n\nOnly enable if:\n    ✓ You don't use Docker or VPNs\n    ✓ This is a single-interface server\n    ✓ You understand reverse path filtering\n\nAlternative: Use kernel RPF instead:\n  \n      sudo sysctl net.ipv4.conf.all.rp_filter=1",
+            RPF_WARNING,
             Message::ConfirmEnableRpf,
         ),
-        PendingWarning::EnableServerMode => (
+        PendingWarning::EnableServerMode(_) => (
             "Server Mode: Egress Filtering",
-            "This will BLOCK all outbound connections by default.\n\nYou'll need to explicitly allow:\n    • Web browsing (HTTP/HTTPS)\n    • DNS queries\n    • Software updates\n    • Any services your applications use\n\nThis mode is designed for servers, not desktop use.",
+            SERVER_MODE_WARNING,
             Message::ConfirmServerMode,
         ),
         PendingWarning::EnableStrictIcmp => (
             "Strict ICMP Mode",
-            "This restricts ICMP to essential types only:\n\n    ✓ Ping (echo-request/echo-reply)\n    ✓ MTU discovery (packet-too-big)\n    ✓ Error reporting (destination-unreachable, time-exceeded, parameter-problem)\n    ✓ IPv6 neighbor discovery, router advertisements (SLAAC) and multicast listener queries\n\nThis may break:\n\n    • Network diagnostic tools (traceroute variations)\n    • Some games and applications\n    • Anything relying on other ICMP types (e.g. timestamp requests)",
+            STRICT_ICMP_WARNING,
             Message::ConfirmStrictIcmp,
         ),
     };
 
-    container(
-        column![
-            text(title).size(20).font(regular_font).color(theme.danger),
-            text(message)
-                .size(14)
-                .color(theme.fg_primary)
-                .font(regular_font),
-            row![
-                button(text("Cancel").size(14).font(regular_font))
-                    .on_press(Message::CancelWarning)
-                    .padding([10, 20])
-                    .style(move |_, status| secondary_button(theme, status)),
-                button(text("Yes, I understand").size(14).font(regular_font))
-                    .on_press(confirm_msg)
-                    .padding([10, 24])
-                    .style(move |_, status| danger_button(theme, status)),
-            ]
-            .spacing(12),
+    let mut content = column![
+        text(title).size(20).font(regular_font).color(theme.danger),
+        text(message)
+            .size(14)
+            .color(theme.fg_primary)
+            .font(regular_font),
+    ]
+    .spacing(20);
+
+    // Server Mode: the essential Output rules, pre-ticked (labels built
+    // when the dialog opened)
+    if let PendingWarning::EnableServerMode(essentials) = warning {
+        content = content.push(
+            column(
+                essentials
+                    .choices
+                    .iter()
+                    .enumerate()
+                    .map(|(index, choice)| {
+                        checkbox(choice.ticked)
+                            .label(choice.label.as_str())
+                            .on_toggle(move |ticked| Message::ServerEssentialToggled(index, ticked))
+                            .size(16)
+                            .text_size(14)
+                            .font(regular_font)
+                            .spacing(8)
+                            .style(move |_, status| themed_checkbox(theme, status))
+                            .into()
+                    }),
+            )
+            .spacing(8)
+            .padding([0, 16]),
+        );
+    }
+
+    content = content.push(
+        row![
+            button(text("Cancel").size(14).font(regular_font))
+                .on_press(Message::CancelWarning)
+                .padding([10, 20])
+                .style(move |_, status| secondary_button(theme, status)),
+            button(text("Yes, I understand").size(14).font(regular_font))
+                .on_press(confirm_msg)
+                .padding([10, 24])
+                .style(move |_, status| danger_button(theme, status)),
         ]
-        .spacing(20)
-        .padding(30)
-        .max_width(600),
-    )
-    .style(move |_| {
-        let mut style = card_container(theme);
-        style.border = Border {
-            color: theme.danger,
-            width: 2.0,
-            radius: 8.0.into(),
-        };
-        style
-    })
-    .into()
+        .spacing(12),
+    );
+
+    container(content.padding(30).max_width(600))
+        .style(move |_| {
+            let mut style = card_container(theme);
+            style.border = Border {
+                color: theme.danger,
+                width: 2.0,
+                radius: 8.0.into(),
+            };
+            style
+        })
+        .into()
 }
 
 /// Export dialog. While a file dialog is open (`in_progress`), the export

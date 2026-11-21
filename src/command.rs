@@ -7,6 +7,7 @@
 //!
 //! Each modification to the firewall ruleset is encapsulated as a [`Command`]:
 //! - [`AddRuleCommand`]: Adds a new rule
+//! - [`AddRulesCommand`]: Adds several rules at once (templates, Server Mode essentials)
 //! - [`DeleteRuleCommand`]: Removes an existing rule
 //! - [`EditRuleCommand`]: Modifies an existing rule
 //! - [`ToggleRuleCommand`]: Enables/disables a rule
@@ -116,6 +117,35 @@ impl Command for AddRuleCommand {
 
     fn description(&self) -> String {
         format!("Add rule: {}", self.rule.label)
+    }
+
+    fn box_clone(&self) -> Box<dyn Command> {
+        Box::new(self.clone())
+    }
+}
+
+/// Adds several rules at the end of the ruleset as one undoable step (a
+/// template, the Server Mode essentials); undo removes them all.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddRulesCommand {
+    pub rules: Vec<Rule>,
+    /// What the undo/redo banner says ("Add rules: Server Mode essentials")
+    pub description: String,
+}
+
+impl Command for AddRulesCommand {
+    fn execute(&self, ruleset: &mut FirewallRuleset) {
+        ruleset.rules.extend(self.rules.iter().cloned());
+    }
+
+    fn undo(&self, ruleset: &mut FirewallRuleset) {
+        ruleset
+            .rules
+            .retain(|r| !self.rules.iter().any(|added| added.id == r.id));
+    }
+
+    fn description(&self) -> String {
+        self.description.clone()
     }
 
     fn box_clone(&self) -> Box<dyn Command> {
@@ -367,6 +397,28 @@ mod tests {
 
         cmd.undo(&mut ruleset);
         assert_eq!(ruleset.rules.len(), 0);
+    }
+
+    #[test]
+    fn test_add_rules_command_undoes_all_at_once() {
+        let mut ruleset = FirewallRuleset::new();
+        let kept = create_test_rule("Kept");
+        ruleset.rules.push(kept.clone());
+        let cmd = AddRulesCommand {
+            rules: vec![create_test_rule("A"), create_test_rule("B")],
+            description: "Add rules: test".to_string(),
+        };
+        let mut history = CommandHistory::default();
+        history.execute(Box::new(cmd), &mut ruleset);
+        let labels: Vec<&str> = ruleset.rules.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, ["Kept", "A", "B"]);
+        assert_eq!(
+            history.undo(&mut ruleset).as_deref(),
+            Some("Add rules: test")
+        );
+        assert_eq!(ruleset.rules, vec![kept]);
+        history.redo(&mut ruleset);
+        assert_eq!(ruleset.rules.len(), 3);
     }
 
     #[test]

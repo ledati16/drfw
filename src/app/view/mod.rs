@@ -219,6 +219,7 @@ fn dialog(state: &State) -> Option<Element<'_, Message>> {
             state.font_mono,
             state.ruleset.advanced_security.egress_profile
                 == crate::core::firewall::EgressProfile::Server,
+            state.ruleset.advanced_security.block_forwarding,
             state.confirm_discard_form,
         ));
     }

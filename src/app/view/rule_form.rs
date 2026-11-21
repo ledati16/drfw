@@ -46,8 +46,12 @@ pub fn view_rule_form<'a>(
     regular_font: iced::Font,
     mono_font: iced::Font,
     server_mode: bool,
+    block_forwarding: bool,
     confirm_discard: bool,
 ) -> Element<'a, Message> {
+    // Forwarded rules match both the interface a packet arrives on and the
+    // one it leaves on
+    let both_interfaces = server_mode || form.chain == crate::core::firewall::Chain::Forward;
     let title_text = if form.id.is_some() {
         "Edit Rule"
     } else {
@@ -70,11 +74,13 @@ pub fn view_rule_form<'a>(
     let interface_error = errors.and_then(|e| e.interface.as_ref());
     // Errors without a visible field: label/tags/rule limit, and an output
     // interface on a rule loaded from disk while Server Mode (and its field) is off
-    let general_error = errors.and_then(|e| e.general.as_ref()).or(if server_mode {
-        None
-    } else {
-        output_interface_error
-    });
+    let general_error = errors
+        .and_then(|e| e.general.as_ref())
+        .or(if both_interfaces {
+            None
+        } else {
+            output_interface_error
+        });
 
     // Summary strings for multi-value fields (cached in the form)
     let display = &form.display;
@@ -205,14 +211,16 @@ pub fn view_rule_form<'a>(
                     (interface_error, output_interface_error),
                     theme,
                     regular_font,
-                    server_mode,
+                    both_interfaces,
                 ),
             ]
             .spacing(6);
 
-            // Chain selection: visible in Server Mode, and for an Output rule
-            // in Desktop mode (which is inactive there) so it can be changed
-            if server_mode || form.chain == crate::core::firewall::Chain::Output {
+            // Chain selection: visible in Server Mode (Output) and with
+            // forwarding blocked (Forwarded), and for a rule whose chain is
+            // inactive in this mode so it can be changed
+            let choices = chain_choices(server_mode, block_forwarding, form.chain);
+            if choices.len() > 1 {
                 context_col = context_col.push(
                     column![
                         container(
@@ -223,12 +231,16 @@ pub fn view_rule_form<'a>(
                         )
                         .padding([2, 6])
                         .style(move |_| section_header_container(theme)),
-                        pick_list(&CHAINS[..], Some(form.chain), Message::RuleFormChainChanged)
-                            .width(Length::Fill)
-                            .padding(8)
-                            .font(regular_font)
-                            .style(move |_, status| themed_pick_list(theme, status))
-                            .menu_style(move |_| themed_pick_list_menu(theme))
+                        pick_list(
+                            choices,
+                            Some(ChainChoice(form.chain)),
+                            |choice: ChainChoice| { Message::RuleFormChainChanged(choice.0) }
+                        )
+                        .width(Length::Fill)
+                        .padding(8)
+                        .font(regular_font)
+                        .style(move |_, status| themed_pick_list(theme, status))
+                        .menu_style(move |_| themed_pick_list_menu(theme))
                     ]
                     .spacing(4),
                 );
@@ -401,9 +413,9 @@ fn view_interface_fields<'a>(
     (interface_error, output_interface_error): (Option<&'a String>, Option<&'a String>),
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
-    server_mode: bool,
+    both_interfaces: bool,
 ) -> Element<'a, Message> {
-    let input_label = if server_mode {
+    let input_label = if both_interfaces {
         "INPUT INTERFACE"
     } else {
         "INTERFACE"
@@ -443,7 +455,7 @@ fn view_interface_fields<'a>(
             input_iface_col.push(text(err).size(12).font(regular_font).color(theme.danger));
     }
 
-    if server_mode {
+    if both_interfaces {
         let mut output_iface_col = column![
             container(
                 text("OUTPUT INTERFACE")
@@ -496,10 +508,53 @@ const TIME_UNITS: [crate::core::firewall::TimeUnit; 4] = [
     crate::core::firewall::TimeUnit::Hour,
     crate::core::firewall::TimeUnit::Day,
 ];
-const CHAINS: [crate::core::firewall::Chain; 2] = [
-    crate::core::firewall::Chain::Input,
-    crate::core::firewall::Chain::Output,
+/// A chain as the form's picker names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChainChoice(crate::core::firewall::Chain);
+
+impl std::fmt::Display for ChainChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            crate::core::firewall::Chain::Input => "Input (incoming)",
+            crate::core::firewall::Chain::Output => "Output (outgoing)",
+            crate::core::firewall::Chain::Forward => "Forwarded (routed through)",
+        })
+    }
+}
+
+const CHOICES_INPUT: [ChainChoice; 1] = [ChainChoice(crate::core::firewall::Chain::Input)];
+const CHOICES_INPUT_OUTPUT: [ChainChoice; 2] = [
+    ChainChoice(crate::core::firewall::Chain::Input),
+    ChainChoice(crate::core::firewall::Chain::Output),
 ];
+const CHOICES_INPUT_FORWARD: [ChainChoice; 2] = [
+    ChainChoice(crate::core::firewall::Chain::Input),
+    ChainChoice(crate::core::firewall::Chain::Forward),
+];
+const CHOICES_ALL: [ChainChoice; 3] = [
+    ChainChoice(crate::core::firewall::Chain::Input),
+    ChainChoice(crate::core::firewall::Chain::Output),
+    ChainChoice(crate::core::firewall::Chain::Forward),
+];
+
+/// The chains the picker offers: Input always; Output in Server Mode,
+/// Forwarded with forwarding blocked; and the rule's own chain even where it
+/// is inactive, so it can be seen and changed.
+fn chain_choices(
+    server_mode: bool,
+    block_forwarding: bool,
+    current: crate::core::firewall::Chain,
+) -> &'static [ChainChoice] {
+    use crate::core::firewall::Chain;
+    let output = server_mode || current == Chain::Output;
+    let forward = block_forwarding || current == Chain::Forward;
+    match (output, forward) {
+        (false, false) => &CHOICES_INPUT,
+        (true, false) => &CHOICES_INPUT_OUTPUT,
+        (false, true) => &CHOICES_INPUT_FORWARD,
+        (true, true) => &CHOICES_ALL,
+    }
+}
 
 /// Helper text under the "Per source address" checkboxes (Accept rules only:
 /// the form hides them for Drop/Reject, which validation refuses).
@@ -787,4 +842,47 @@ fn view_advanced_section<'a>(
     }
 
     adv_col.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::firewall::Chain;
+
+    fn offered(server: bool, block: bool, current: Chain) -> Vec<Chain> {
+        chain_choices(server, block, current)
+            .iter()
+            .map(|c| c.0)
+            .collect()
+    }
+
+    #[test]
+    fn test_chain_picker_offers_forwarded_only_when_blocking() {
+        assert_eq!(offered(false, false, Chain::Input), [Chain::Input]);
+        assert_eq!(
+            offered(false, true, Chain::Input),
+            [Chain::Input, Chain::Forward]
+        );
+        assert_eq!(
+            offered(true, false, Chain::Input),
+            [Chain::Input, Chain::Output]
+        );
+        assert_eq!(
+            offered(true, true, Chain::Input),
+            [Chain::Input, Chain::Output, Chain::Forward]
+        );
+        // A rule's own (inactive) chain stays selectable
+        assert_eq!(
+            offered(false, false, Chain::Forward),
+            [Chain::Input, Chain::Forward]
+        );
+        assert_eq!(
+            offered(false, false, Chain::Output),
+            [Chain::Input, Chain::Output]
+        );
+        assert_eq!(
+            ChainChoice(Chain::Forward).to_string(),
+            "Forwarded (routed through)"
+        );
+    }
 }

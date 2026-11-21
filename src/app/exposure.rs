@@ -16,6 +16,7 @@ use crate::app::{Baseline, BaselineKind};
 use crate::core::evaluate::InputChain;
 use crate::core::exposure::{SocketExposure, SocketInfo, evaluate_socket};
 use crate::core::firewall::FirewallRuleset;
+use crate::core::host_facts::{ContainerFacts, ForwardingState};
 use crate::core::lockout::SshSession;
 
 /// What one Exposure scan found.
@@ -25,6 +26,10 @@ pub struct ExposureScan {
     /// SSH sessions (`SSH_CONNECTION` and `/proc`), see
     /// [`crate::core::lockout::detect_sessions`]
     pub sessions: Vec<SshSession>,
+    /// Whether the kernel forwards traffic (the forwarding notice)
+    pub forwarding: ForwardingState,
+    /// Docker published ports and container networks (the Docker marking)
+    pub containers: ContainerFacts,
 }
 
 /// One "SSH: …" line of the panel.
@@ -41,6 +46,9 @@ pub struct SshLine {
 /// interfaces only get "OPEN ON <interfaces>"
 /// ([`crate::core::exposure::SocketExposure::open_on_badge`]).
 pub const OPEN_BADGE: &str = "OPEN TO EVERYONE";
+
+/// Badge text for the host side of a port Docker publishes (warning color).
+pub const DOCKER_BADGE: &str = "PUBLISHED BY DOCKER";
 
 /// Open/closed state of the Exposure panel, with the scan bookkeeping.
 #[derive(Debug, Default)]
@@ -122,6 +130,12 @@ pub struct ExposurePanel {
     sockets: Vec<SocketInfo>,
     /// The last scan's SSH sessions (re-evaluated on ruleset changes)
     sessions: Vec<SshSession>,
+    /// The last scan's forwarding state and container facts
+    forwarding: ForwardingState,
+    containers: ContainerFacts,
+    /// Info notices above the list (forwarding, container networks),
+    /// rebuilt with the rows
+    pub notes: Vec<&'static str>,
     /// One line per SSH session, under the editor rules
     pub ssh_lines: Vec<SshLine>,
     /// Why the last scan failed (user-facing)
@@ -184,6 +198,8 @@ pub enum ReachTone {
     Closed,
     /// Bound to loopback
     LocalOnly,
+    /// The host side of a port Docker publishes: not decided by the rules
+    PublishedByDocker,
 }
 
 /// One reachability answer, pre-formatted.
@@ -205,6 +221,16 @@ pub struct ReachView {
 
 impl ReachView {
     fn new(exposure: &SocketExposure, editor: &FirewallRuleset) -> Self {
+        if exposure.docker_published {
+            return Self {
+                text: DOCKER_TEXT.to_string(),
+                tone: ReachTone::PublishedByDocker,
+                badge: Some(DOCKER_BADGE.to_string()),
+                rank: exposure.rank(),
+                rule_text: String::new(),
+                edit_rule_id: None,
+            };
+        }
         let open_on = exposure.open_on_badge();
         let tone = if exposure.local_only {
             ReachTone::LocalOnly
@@ -245,11 +271,14 @@ impl ReachView {
     fn highlight(&self) -> Highlight {
         match self.tone {
             ReachTone::Open => Highlight::Everyone,
-            ReachTone::OpenOnInterfaces => Highlight::Interfaces,
+            ReachTone::OpenOnInterfaces | ReachTone::PublishedByDocker => Highlight::Interfaces,
             ReachTone::Restricted | ReachTone::Closed | ReachTone::LocalOnly => Highlight::None,
         }
     }
 }
+
+/// The row text for a port Docker publishes (instead of "Reachable from: …").
+const DOCKER_TEXT: &str = "Published by Docker: not filtered by DRFW's rules";
 
 impl ExposurePanel {
     /// A panel waiting for its first scan.
@@ -258,6 +287,9 @@ impl ExposurePanel {
             scanning: true,
             sockets: Vec::new(),
             sessions: Vec::new(),
+            forwarding: ForwardingState::default(),
+            containers: ContainerFacts::default(),
+            notes: Vec::new(),
             ssh_lines: Vec::new(),
             error: None,
             applied: AppliedState::Unknown,
@@ -280,11 +312,15 @@ impl ExposurePanel {
             Ok(scan) => {
                 self.sockets = scan.sockets;
                 self.sessions = scan.sessions;
+                self.forwarding = scan.forwarding;
+                self.containers = scan.containers;
                 self.error = None;
             }
             Err(message) => {
                 self.sockets.clear();
                 self.sessions.clear();
+                self.forwarding = ForwardingState::default();
+                self.containers = ContainerFacts::default();
                 self.error = Some(message);
             }
         }
@@ -315,10 +351,19 @@ impl ExposurePanel {
             .sockets
             .iter()
             .map(|socket| {
-                let editor_view = ReachView::new(&evaluate_socket(&editor_chain, socket), editor);
+                // A port Docker publishes is not decided by either ruleset
+                let docker = self.containers.publishes(socket);
+                let evaluate = |chain: &InputChain| {
+                    let mut exposure = evaluate_socket(chain, socket);
+                    if docker {
+                        exposure.mark_published_by_docker();
+                    }
+                    exposure
+                };
+                let editor_view = ReachView::new(&evaluate(&editor_chain), editor);
                 let applied_view = applied_chain
                     .as_ref()
-                    .map(|chain| ReachView::new(&evaluate_socket(chain, socket), editor))
+                    .map(|chain| ReachView::new(&evaluate(chain), editor))
                     .filter(|view| {
                         view.text != editor_view.text || view.rule_text != editor_view.rule_text
                     });
@@ -353,10 +398,20 @@ impl ExposurePanel {
             })
             .collect();
 
+        self.notes = crate::core::host_facts::forwarding_warning(self.forwarding, editor)
+            .into_iter()
+            .chain(self.containers.note())
+            .collect();
+
         let total = self.rows.len();
         let count = |level: Highlight| self.rows.iter().filter(|r| r.highlight == level).count();
         let open = count(Highlight::Everyone);
-        let open_on = count(Highlight::Interfaces);
+        let docker = self
+            .rows
+            .iter()
+            .filter(|r| r.editor.tone == ReachTone::PublishedByDocker)
+            .count();
+        let open_on = count(Highlight::Interfaces) - docker;
         self.summary = match (&self.error, total) {
             (Some(_), _) => "No sockets to show.".to_string(),
             (None, 0) => "No listening sockets found.".to_string(),
@@ -365,6 +420,9 @@ impl ExposurePanel {
                 let mut summary = format!("{total} listening {sockets} · {open} open to everyone");
                 if open_on > 0 {
                     let _ = write!(summary, " · {open_on} open on some interfaces only");
+                }
+                if docker > 0 {
+                    let _ = write!(summary, " · {docker} published by Docker");
                 }
                 summary
             }
@@ -411,6 +469,7 @@ mod tests {
         ExposureScan {
             sockets,
             sessions: Vec::new(),
+            ..ExposureScan::default()
         }
     }
 
@@ -462,6 +521,94 @@ mod tests {
         let closed = &by_port("UDP 5353").editor;
         assert_eq!(closed.tone, ReachTone::Closed);
         assert_eq!(closed.edit_rule_id, None, "a built-in rule is not editable");
+    }
+
+    /// S3: a port Docker publishes is marked as such (not "open to
+    /// everyone" or "nobody": the rules do not decide it), under both the
+    /// editor and the applied rules; forwarding and container-network notes
+    /// follow the editor rules.
+    #[test]
+    fn test_docker_published_ports_and_notes() {
+        use crate::core::host_facts::{
+            CONTAINER_NETWORKS_NOTE, FORWARDING_WARNING, ForwardingState, PublishedPort,
+        };
+        let mut editor = FirewallRuleset::new();
+        editor.rules.push(rule("web", Protocol::Tcp, 8080, &[]));
+        let applied = FirewallRuleset::new();
+        let published = ContainerFacts {
+            published: vec![PublishedPort {
+                transport: Transport::Tcp,
+                host_ip: Some("0.0.0.0".parse().unwrap()),
+                host_port: 8080,
+                container_ip: Some("172.17.0.2".parse().unwrap()),
+                container_port: Some(80),
+            }],
+            bridges: true,
+        };
+        let mut panel = ExposurePanel::scanning();
+        panel.set_scan(
+            Ok(ExposureScan {
+                sockets: sockets(),
+                forwarding: ForwardingState {
+                    ipv4: true,
+                    ipv6: false,
+                },
+                containers: published,
+                ..ExposureScan::default()
+            }),
+            &editor,
+            Some(applied_baseline(&applied)),
+        );
+        let web = panel
+            .rows
+            .iter()
+            .find(|r| r.port_proto == "TCP 8080")
+            .unwrap();
+        assert_eq!(web.editor.tone, ReachTone::PublishedByDocker);
+        assert_eq!(web.editor.badge.as_deref(), Some(DOCKER_BADGE));
+        assert_eq!(
+            web.editor.text,
+            "Published by Docker: not filtered by DRFW's rules"
+        );
+        assert_eq!(web.editor.edit_rule_id, None);
+        assert!(web.applied.is_none(), "the same under both rulesets");
+        assert_eq!(web.highlight, Highlight::Interfaces);
+        assert_eq!(
+            panel.summary,
+            "4 listening sockets · 0 open to everyone · 1 published by Docker"
+        );
+        assert_eq!(panel.notes, [FORWARDING_WARNING], "a proxy was found");
+
+        // Forwarding blocked in the editor: no forwarding note; container
+        // networks without a proxy: the general note
+        editor.advanced_security.block_forwarding = true;
+        panel.set_scan(
+            Ok(ExposureScan {
+                sockets: sockets(),
+                forwarding: ForwardingState {
+                    ipv4: true,
+                    ipv6: true,
+                },
+                containers: ContainerFacts {
+                    published: Vec::new(),
+                    bridges: true,
+                },
+                ..ExposureScan::default()
+            }),
+            &editor,
+            None,
+        );
+        assert_eq!(panel.notes, [CONTAINER_NETWORKS_NOTE]);
+        let web = panel
+            .rows
+            .iter()
+            .find(|r| r.port_proto == "TCP 8080")
+            .unwrap();
+        assert_eq!(web.editor.tone, ReachTone::Open);
+
+        // A failed scan forgets them
+        panel.set_scan(Err("no".into()), &editor, None);
+        assert_eq!(panel.notes.len(), 0);
     }
 
     #[test]
@@ -627,6 +774,7 @@ mod tests {
             Ok(ExposureScan {
                 sockets: sockets(),
                 sessions: vec![session],
+                ..ExposureScan::default()
             }),
             &editor,
             None,
@@ -664,5 +812,37 @@ mod tests {
         panel.set_scan(Ok(ExposureScan::default()), &editor, None);
         assert_eq!(panel.error, None);
         assert_eq!(panel.summary, "No listening sockets found.");
+    }
+
+    /// With local network discovery on, the mDNS socket is "local network
+    /// (discovery)", shown like a restricted socket (not open, not counted);
+    /// ordinary UDP sockets are not reachable through discovery replies.
+    #[test]
+    fn test_local_discovery_is_not_counted_as_open() {
+        let mut editor = FirewallRuleset::new();
+        editor.advanced_security.local_discovery = true;
+        let mut list = sockets();
+        list.extend(build_socket_list(
+            vec![socket(Transport::Udp, "0.0.0.0", 51820)],
+            &HashMap::new(),
+            1000,
+            false,
+            |_| None,
+        ));
+        let mut panel = ExposurePanel::scanning();
+        panel.set_scan(Ok(scan(list)), &editor, None);
+        assert_eq!(panel.summary, "5 listening sockets · 0 open to everyone");
+        let by_port = |p: &str| panel.rows.iter().find(|r| r.port_proto == p).unwrap();
+        let mdns = &by_port("UDP 5353").editor;
+        assert_eq!(mdns.tone, ReachTone::Restricted);
+        assert_eq!(
+            mdns.text,
+            format!("Reachable from: {}", crate::core::exposure::LOCAL_DISCOVERY)
+        );
+        assert_eq!(mdns.badge, None);
+        assert_eq!(mdns.rule_text, "built-in rule \"allow mdns\"");
+        let other = &by_port("UDP 51820").editor;
+        assert_eq!(other.tone, ReachTone::Closed);
+        assert_eq!(other.text, "Reachable from: nobody");
     }
 }

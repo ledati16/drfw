@@ -45,8 +45,9 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Connection limiting**: Max simultaneous connections per rule
 - **Per-source limits** (Accept rules only): Optionally give every client IP (IPv6: every /64) its own rate or connection budget, so one client that uses up its budget does not use up everyone else's. Up to 65535 clients are tracked per rule; a flood from more distinct (e.g. spoofed) addresses than that blocks *new* clients until it stops, while known clients keep their budgets. Not offered for Drop/Reject rules: there a full table would let new sources through
 - **Per-rule logging**: Toggle to log matched packets with auto-generated prefix
-- **Chain selection**: Input or Output (Output only in Server Mode)
-- **Output interface**: Filter outbound traffic by interface (Server Mode only)
+- **Chain selection**: Input, Output (in Server Mode) or Forwarded (with **Block forwarding**: traffic routed through this computer)
+- **Output interface**: Filter by the interface traffic leaves on (Output rules in Server Mode, Forwarded rules)
+- **Rule templates**: "Add from template" (the ▾ next to **Add Access Rule**) offers ready rules for the network interfaces this computer has: DHCP and DNS for VM guests on a libvirt bridge (`virbr*`), and for Tailscale (`tailscale0`) "Tailscale: direct connections" (UDP 41641) and "Trust tailscale0". They become ordinary rules you can edit or delete, and Ctrl+Z removes them again
 
 ### Safety Features
 - **Rule validation**: Every rule is checked by one validator (ports, ranges, address families, interfaces, limits, ...). Invalid rules are kept in the profile and marked INVALID, but nothing is applied or saved while an applied rule is invalid
@@ -67,39 +68,67 @@ DRFW is a **stateful firewall** with sensible defaults that require no configura
 | Rule | Purpose |
 |------|---------|
 | Allow loopback | Local services always work (`127.0.0.1`) |
-| Drop invalid packets | Malformed connections rejected early |
+| Drop invalid packets | Malformed and out-of-state packets are dropped early |
+| Block ICMP redirects | Nobody on the network can re-route your connections. Checked before "established/related", so a redirect that quotes an open connection is dropped too |
+| Limit incoming pings *(setting: ICMP rate limiting)* | Ping requests over N per second are dropped (IPv4 and IPv6 each) |
 | Allow established/related | Return traffic for your connections works automatically |
-| Allow DHCPv6 replies | IPv6 address configuration keeps working |
-| Block ICMP redirects | Prevents classic MITM attacks |
+| Drop loopback addresses from the network | Packets from or to `127.0.0.0/8` that arrive on anything but `lo` are dropped |
+| Anti-spoofing *(setting: RPF)* | New packets whose source address could not have arrived on that interface are dropped |
+| Allow DHCP and DHCPv6 replies | IPv4 and IPv6 address configuration and renewal keep working |
 | *(your rules)* | In the order you give them |
+| Allow IGMP | Multicast group membership keeps working (IPTV, UPnP/SSDP on switches with IGMP snooping) |
+| Allow local discovery *(setting, Desktop mode)* | mDNS, SSDP/UPnP and WS-Discovery, and the replies to this computer's own discovery queries: printers, TVs and speakers can find it, and it can find them. On for profiles the GUI creates; see **Local network discovery** below |
 | Allow ICMP | Ping and network diagnostics work |
-| Default deny | Everything else is blocked (INPUT chain) |
+| Default deny | Everything else is refused: unicast packets get a rate-limited "administratively prohibited" reply (5/s), then everything left is dropped (INPUT chain policy) |
 
-That is also the order in which they are checked. Your rules come before "Allow ICMP",
-so a Drop or Reject rule (say, "drop everything from 203.0.113.7") also stops that
-host's pings. They come after "Allow established/related", as in any stateful firewall:
+That is also the order in which they are checked. Your rules come before "Allow IGMP",
+local discovery and "Allow ICMP", so a Drop or Reject rule (say, "drop everything from
+203.0.113.7") also stops that host's pings. They come after "Allow established/related", as in any stateful firewall:
 a Drop rule stops **new** connections; connections that are already open (and ICMP
-errors that belong to them) keep working until they close.
+errors that belong to them) keep working until they close. The ping limit comes before
+your rules, so no rule can exempt a source from it. "Log dropped packets" logs, rate
+limited, what reaches the end of the chain, unicast only (broadcast and multicast noise
+is not logged).
 
 A Drop/Reject rule with both a rate limit and a connection limit drops what is over
 either limit (it becomes two rules in the preview, one per limit).
 
 Forwarded (routed) traffic is accepted by default so Docker, libvirt and VPN
-routing keep working; see **Block forwarding** below.
+routing keep working; see **Block forwarding** below. DRFW does not filter it then:
+when IP forwarding is on, `drfw status`, the Exposure view and the "Commit Changes?"
+dialog say "This computer forwards traffic between its networks (IP forwarding is on).
+DRFW does not filter forwarded traffic; containers, VMs or other networks may be
+reachable through it." Ports Docker publishes travel that way too (DNAT, then the
+forward chain), past every input rule: Exposure and `drfw exposure` mark their sockets
+"published by Docker: not filtered by DRFW's rules" instead of a verdict, and say so in
+general when Docker or Podman networks exist but no `docker-proxy` is found.
 
 These base rules are **not configurable** — they represent security best practices that 99%+ of users need. Without stateful filtering, you'd need explicit rules for every connection's return traffic.
+
+### Local network discovery
+
+"Local network discovery" (Settings → Network) lets this computer find and be found by
+printers, TVs, speakers and other computers on your network: it accepts mDNS
+(224.0.0.251 / ff02::fb, UDP 5353), SSDP/UPnP and WS-Discovery multicast, and, for
+10 seconds, unicast replies from private or link-local addresses to the ports this
+computer just sent a discovery query from. Profiles the GUI creates (the first one,
+"New empty profile", "Start fresh") have it on; profiles that existed before keep it
+off, and the GUI asks once: "Printers, TVs and other devices can't find this computer,
+and it can't find them. [Turn on local network discovery] [Not now]". It is a Desktop
+mode setting (Server Mode ignores it). Turn it off on networks you don't trust: every
+device on the link can then reach the mDNS responder.
 
 ### Advanced Security Settings
 All disabled by default for maximum compatibility:
 
 | Setting | Purpose | Warning |
 |---------|---------|---------|
-| **Strict ICMP** | Allow only ping + MTU discovery | Breaks network diagnostics |
-| **ICMP Rate Limiting** | Prevent ping floods (IPv6 neighbor discovery, router advertisements and MLD queries are never limited) | May affect monitoring tools |
-| **Anti-spoofing (RPF)** | Drop packets with spoofed source IPs | **Breaks Docker, VPNs, complex routing** |
+| **Strict ICMP** | Allow only the ICMP types networks need: ping, error reports, MTU discovery, IPv6 neighbor and router discovery, and multicast listener (MLD) messages | Ping, traceroute and MTU discovery keep working. Only rarely used types are blocked, such as timestamp and address-mask requests and other exotic ICMP |
+| **ICMP Rate Limiting** | Limit incoming ping requests to N per second | Ping requests over the limit are dropped, per IP family, even within a running ping; fast monitoring pings may see loss. Checked before your rules, so a rule cannot exempt a source. Other ICMP (errors, IPv6 neighbor discovery) is never limited |
+| **Anti-spoofing (RPF)** | Drop new connections whose source address could not have arrived on that interface. Useful with rules that trust a source address | May block peers that contact a full-tunnel VPN first. Docker and libvirt bridges, split-tunnel VPNs and full-tunnel VPN clients (wg-quick, a Tailscale exit node) keep working |
 | **Dropped Packet Logging** | Log filtered traffic to syslog | Can fill logs quickly |
-| **Server Mode** | Block all outbound by default | Requires explicit egress rules |
-| **Block forwarding** | Forward chain policy drop (established/related still accepted) | **Breaks Docker, libvirt and VPN routing**; for routers that want default-deny forwarding |
+| **Server Mode** | Block outgoing connections unless a rule allows them | For locked-down servers; you must allow DNS, time sync and updates yourself (offered when you switch it on) |
+| **Block forwarding** | Forward chain policy drop (established/related still accepted); forwarded traffic then needs Forwarded rules | **Docker, libvirt and VPN routing stop** until Forwarded rules allow them; for routers that want default-deny forwarding |
 
 ### Desktop vs Server Mode
 
@@ -107,11 +136,16 @@ All disabled by default for maximum compatibility:
 |---|---|---|
 | Incoming | Default deny + your rules | Default deny + your rules |
 | Outgoing | Everything allowed | Default deny + your OUTPUT rules |
-| Always allowed outgoing | - | Loopback, replies to accepted connections, IPv6 neighbor discovery, DHCP/DHCPv6 client requests |
-| Rule chain choice | Input only | Input or Output |
+| Always allowed outgoing | - | Loopback, replies to accepted connections, IPv6 neighbor discovery, IGMP and MLD multicast membership reports, DHCP/DHCPv6 client requests |
+| Rule chain choice | Input (and Forwarded with **Block forwarding**) | Input or Output (and Forwarded with **Block forwarding**) |
 
 Server Mode keeps loopback, established connections and address renewal (DHCP)
-working, so switching it on does not cut off an SSH session or lose the lease.
+working, so switching it on does not cut off an SSH session or lose the lease. It does
+not allow anything else: without rules the computer can't look up names, set its clock
+or download updates. When you switch it on, the GUI offers these as ordinary Output
+rules, pre-ticked: DNS (TCP+UDP 53), DNS over TLS (TCP 853), time sync (NTP, UDP 123),
+web and updates (TCP 80, 443) and ping. The ticked ones are added in one step (Ctrl+Z
+removes them again) and can be edited or deleted like any other rule.
 OUTPUT rules in a profile are ignored (and not validated as applied) in Desktop
 mode.
 
@@ -123,7 +157,7 @@ mode.
 - **Diff view**: See exactly what changes before applying
 - **In-app notifications**: Success, warning, and error banners
 - **Diagnostics viewer**: Built-in event log browser with filter and search, times in local time (with the date for older events)
-- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback). Sockets open to everyone are flagged (in red; those open to everyone on some interfaces only, such as a VPN, in amber), rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this. It also says, for each current SSH session, whether its client could open a new connection under the editor's rules (see [SSH lockout check](#ssh-lockout-check)). `drfw exposure` prints the same from the command line
+- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback); with local network discovery on, the mDNS, SSDP and WS-Discovery sockets read "local network (discovery)", which is not counted as exposure. Sockets open to everyone are flagged (in red; those open to everyone on some interfaces only, such as a VPN, in amber), rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this. Sockets that are the host side of a port Docker publishes are marked PUBLISHED BY DOCKER ("published by Docker: not filtered by DRFW's rules") instead of a verdict, and notices say when IP forwarding is on and not blocked, or when Docker or Podman networks exist without a `docker-proxy` to show their ports. It also says, for each current SSH session, whether its client could open a new connection under the editor's rules (see [SSH lockout check](#ssh-lockout-check)). `drfw exposure` prints the same from the command line
 - **Keyboard shortcuts**: Ctrl+N (new rule), Ctrl+S (apply), Ctrl+E (export), F1 (help)
 
 ### Profile Management
@@ -138,7 +172,7 @@ Full command-line support for scripting and automation:
 drfw              # Launch GUI
 drfw --help       # Show all commands
 drfw list         # List all profiles
-drfw status       # Active profile, rule/invalid counts, mode, pending auto-revert, boot config + service
+drfw status       # Active profile, rule/invalid counts, mode, forwarding, pending auto-revert, boot config + service
 drfw check <profile>                 # Validate + nft --check without privileges; changes nothing
 drfw apply <profile>                 # Apply with 15s auto-revert safety
 drfw apply <profile> --confirm 30    # Apply with 30s timeout (5-120)
@@ -173,6 +207,9 @@ drfw exposure [profile] --json       # ... as JSON, for scripts
   guard](#retention-guard)) and before rules that would lock out a current SSH session's
   client (see [SSH lockout check](#ssh-lockout-check)); without a terminal they need
   `--yes`. A rate- or connection-limited SSH rule is only noted, without a question.
+- `drfw status` also has a "Forwarding" line: "IP forwarding is off", the forwarding
+  notice above when the kernel forwards and the profile does not block forwarded
+  traffic, or that the profile blocks it.
 - `drfw status` also has an "SSH" line per SSH session: "you are connected from X to port
   22; new connections from X would be accepted by rule "SSH"" (or BLOCKED, and by what),
   under the rules of the active profile.
@@ -181,13 +218,20 @@ drfw exposure [profile] --json       # ... as JSON, for scripts
   can reach are marked `OPEN TO EVERYONE` (in red on a terminal; plain text when piped);
   those every address can reach only through some interfaces (for example a rule for
   `tailscale0`: everyone on the tailnet, not the internet) are marked
-  `OPEN ON tailscale0` (in yellow) and listed after them.
+  `OPEN ON tailscale0` (in yellow) and listed after them. With local network discovery
+  on, the mDNS, SSDP and WS-Discovery sockets (UDP 5353, 1900, 3702) read "local network
+  (discovery)": devices on the link reach them, which is not counted as exposure. The
+  accept of replies to this computer's own discovery queries is left out of every other
+  socket's answer: it only holds for a port that just sent a query, never a service's.
   The SSH lines of `drfw status` follow. `--json` prints an object with `profile`,
   `sockets` (one object per socket: `transport`, `port`, `families`, `bind`,
   `bind_display`, `local_only`, `uid`, `process`, `processes`, `reachable_from`,
   `open_to_everyone` (every address, on any interface), `scope` = `any`/`interfaces`/null
   (where every address can connect from), `interfaces` (for `scope` = `interfaces`),
-  `nobody`, `decided_by`, `decided_by_rule_id`) and `ssh_sessions`
+  `nobody`, `published_by_docker`, `local_discovery` (reached through local network
+  discovery), `decided_by`, `decided_by_rule_id`), `forwarding`
+  (`ipv4`, `ipv6`, `filtered`: false when forwarded traffic passes unfiltered), `notes`
+  (the forwarding and container-network notices that apply) and `ssh_sessions`
   (`client`, `client_port`, `server`, `server_port`, `source`, `interface` (the one that
   owns `server`, or null), `new_connections` = `accepted`/`limited`/`may_be_blocked`/
   `blocked`, `outcome`). It evaluates the profile's rules,
@@ -456,7 +500,7 @@ Interface](#cli-interface).
 - Protocol: TCP, Port: `25565`, Source: `192.168.1.0/24`
 
 **Allow all Tailscale VPN traffic:**
-- Protocol: Any, Interface: `tailscale0`
+- Protocol: Any, Interface: `tailscale0` (the template "Trust tailscale0")
 
 **Allow all Docker container traffic:**
 - Protocol: Any, Interface: `docker*` (wildcard)
@@ -494,7 +538,14 @@ because nobody is there to confirm.
 
 ### VPN Compatibility
 
-DRFW creates its own nftables table (`drfw`) at **priority -10**, evaluated before other applications. VPN rules from Tailscale, WireGuard, etc. are preserved but DRFW has priority.
+DRFW creates its own nftables table (`drfw`) at **priority -10**, evaluated before other
+applications' tables, which it leaves alone. Its accepts can still be overruled by a later
+table, but its drops are final: a packet DRFW drops never reaches the rules of Tailscale,
+WireGuard or Docker. Tailscale's own accepts (everything on `tailscale0`, and its UDP
+port) therefore do nothing while DRFW is active. Add a rule for `tailscale0` (Protocol
+Any, Interface `tailscale0`; the template "Trust tailscale0"), and UDP 41641 if peers
+behind strict NATs should connect directly instead of through a relay (the template
+"Tailscale: direct connections").
 
 **Common VPN interfaces:**
 
@@ -506,7 +557,11 @@ DRFW creates its own nftables table (`drfw`) at **priority -10**, evaluated befo
 | Docker | `docker0` |
 | libvirt/KVM | `virbr0` |
 
-**Warning:** Do NOT enable "Anti-spoofing (RPF)" if you use Docker or VPNs.
+**Note:** "Anti-spoofing (RPF)" checks only new connections and honours the routing
+mark VPNs set, so Docker and libvirt bridges, split-tunnel VPNs and full-tunnel VPN
+clients (wg-quick with all traffic through the tunnel, a Tailscale exit node) keep
+working. It may block a peer that contacts a full-tunnel VPN host first over its
+underlying network (not through the tunnel).
 
 ## Recovery
 

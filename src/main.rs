@@ -765,6 +765,23 @@ fn system_config_status(path: &str) -> String {
     }
 }
 
+/// The "Forwarding:" line of `drfw status`: off, blocked by the profile, or
+/// the forwarding notice ([`core::host_facts::FORWARDING_WARNING`]).
+fn forwarding_status(
+    forwarding: core::host_facts::ForwardingState,
+    ruleset: &core::firewall::FirewallRuleset,
+) -> String {
+    if let Some(warning) = core::host_facts::forwarding_warning(forwarding, ruleset) {
+        warning.to_string()
+    } else if forwarding.any() {
+        "IP forwarding is on; this profile blocks forwarded traffic unless a Forwarded rule \
+         allows it"
+            .to_string()
+    } else {
+        "IP forwarding is off".to_string()
+    }
+}
+
 /// `drfw status`: what an unprivileged user can know without asking for a
 /// password. Never fails; each line reports its own problem.
 async fn print_status_report() {
@@ -793,6 +810,10 @@ async fn print_status_report() {
                 core::firewall::EgressProfile::Server => "Server (outgoing traffic needs rules)",
             };
             status_line("Mode", mode);
+            status_line(
+                "Forwarding",
+                &forwarding_status(core::host_facts::forwarding_enabled(), &ruleset),
+            );
             let sessions = current_ssh_sessions().await;
             print_ssh_status(&ruleset, &sessions);
         }
@@ -1234,6 +1255,7 @@ fn exposure_json(
     profile: &str,
     rows: &[core::exposure::ExposureRow],
     checks: &[core::lockout::SessionCheck],
+    notes: &ExposureNotes,
 ) -> serde_json::Value {
     let sockets: Vec<serde_json::Value> = rows
         .iter()
@@ -1258,6 +1280,8 @@ fn exposure_json(
                 "scope": open_scope_json(exposure),
                 "interfaces": exposure.open_on_interfaces,
                 "nobody": exposure.nobody,
+                "published_by_docker": exposure.docker_published,
+                "local_discovery": exposure.local_discovery,
                 "decided_by": (!exposure.decided_by_display.is_empty())
                     .then_some(&exposure.decided_by_display),
                 "decided_by_rule_id": exposure
@@ -1288,7 +1312,43 @@ fn exposure_json(
         "profile": profile,
         "sockets": sockets,
         "ssh_sessions": sessions,
+        "forwarding": {
+            "ipv4": notes.forwarding.ipv4,
+            "ipv6": notes.forwarding.ipv6,
+            "filtered": notes.forwarding_warning.is_none(),
+        },
+        "notes": notes.lines(),
     })
+}
+
+/// What `drfw exposure` says besides the rows: the forwarding notice and the
+/// container-network note, when they apply.
+struct ExposureNotes {
+    forwarding: core::host_facts::ForwardingState,
+    forwarding_warning: Option<&'static str>,
+    containers: Option<&'static str>,
+}
+
+impl ExposureNotes {
+    fn new(
+        forwarding: core::host_facts::ForwardingState,
+        containers: &core::host_facts::ContainerFacts,
+        ruleset: &core::firewall::FirewallRuleset,
+    ) -> Self {
+        Self {
+            forwarding,
+            forwarding_warning: core::host_facts::forwarding_warning(forwarding, ruleset),
+            containers: containers.note(),
+        }
+    }
+
+    /// The notes that apply, in print order.
+    fn lines(&self) -> Vec<&'static str> {
+        self.forwarding_warning
+            .into_iter()
+            .chain(self.containers)
+            .collect()
+    }
 }
 
 /// The `drfw exposure` table: one line per socket (columns padded to the
@@ -1309,6 +1369,8 @@ fn exposure_table(rows: &[core::exposure::ExposureRow], color: bool) -> Vec<Stri
         .map(|row| {
             let reach = if row.exposure.local_only {
                 "local only".to_string()
+            } else if row.exposure.docker_published {
+                row.exposure.summary.clone()
             } else if row.exposure.open_to_everyone {
                 format!("{OPEN_MARKER}: {}", row.exposure.summary)
             } else if let Some(badge) = row.exposure.open_on_badge() {
@@ -1375,29 +1437,38 @@ async fn print_exposure(
     name: Option<String>,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fmt::Write as _;
+
     let name = match name {
         Some(name) => name,
         None => config::load_config().await.active_profile,
     };
     let ruleset = core::profiles::load_profile(&name).await?;
     let env = core::lockout::session_from_env();
-    let (scan, sessions) = tokio::task::spawn_blocking(move || {
+    let (scan, sessions, forwarding, containers) = tokio::task::spawn_blocking(move || {
         core::exposure::scan_host().map(|scan| {
             let found = core::lockout::sessions_from_scan(&scan);
             let sessions =
                 core::lockout::with_interfaces(core::lockout::merge_sessions(env, found));
-            (scan, sessions)
+            (
+                scan,
+                sessions,
+                core::host_facts::forwarding_enabled(),
+                core::host_facts::ContainerFacts::read(),
+            )
         })
     })
     .await?
     .map_err(|e| format!("cannot read the listening sockets: {e}"))?;
-    let rows = core::exposure::exposure_rows(&ruleset, &scan.sockets);
+    let mut rows = core::exposure::exposure_rows(&ruleset, &scan.sockets);
+    let published = core::exposure::mark_docker_published(&mut rows, &containers);
     let checks = core::lockout::check_sessions(&ruleset, &sessions);
+    let notes = ExposureNotes::new(forwarding, &containers, &ruleset);
 
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&exposure_json(&name, &rows, &checks))?
+            serde_json::to_string_pretty(&exposure_json(&name, &rows, &checks, &notes))?
         );
         return Ok(());
     }
@@ -1421,15 +1492,20 @@ async fn print_exposure(
             .count();
         let noun = if rows.len() == 1 { "socket" } else { "sockets" };
         println!();
-        if open_on == 0 {
-            println!("{} listening {noun}, {open} open to everyone.", rows.len());
-        } else {
-            println!(
-                "{} listening {noun}, {open} open to everyone, {open_on} open to everyone on \
-                 some interfaces only.",
-                rows.len()
+        let mut summary = format!("{} listening {noun}, {open} open to everyone", rows.len());
+        if open_on > 0 {
+            let _ = write!(
+                summary,
+                ", {open_on} open to everyone on some interfaces only"
             );
         }
+        if published > 0 {
+            let _ = write!(summary, ", {published} published by Docker");
+        }
+        println!("{summary}.");
+    }
+    for note in notes.lines() {
+        println!("{note}");
     }
     for check in &checks {
         let text = format!("SSH: {}", check.summary());
@@ -1748,7 +1824,17 @@ mod tests {
         assert!(colored[2].contains('\x1b') || std::env::var_os("NO_COLOR").is_some());
 
         let ruleset = core::firewall::FirewallRuleset::new();
-        let json = exposure_json("p", &rows, &core::lockout::check_sessions(&ruleset, &[]));
+        let notes = ExposureNotes::new(
+            core::host_facts::ForwardingState::default(),
+            &core::host_facts::ContainerFacts::default(),
+            &ruleset,
+        );
+        let json = exposure_json(
+            "p",
+            &rows,
+            &core::lockout::check_sessions(&ruleset, &[]),
+            &notes,
+        );
         let ssh = &json["sockets"][0];
         assert_eq!(ssh["scope"], "any");
         assert_eq!(ssh["interfaces"], serde_json::json!([]));
@@ -1798,8 +1884,29 @@ mod tests {
         let rows = exposure_fixture();
         let ruleset = core::firewall::FirewallRuleset::new();
         let checks = core::lockout::check_sessions(&ruleset, &[session]);
-        let json = exposure_json("web", &rows, &checks);
+        let notes = ExposureNotes::new(
+            core::host_facts::ForwardingState {
+                ipv4: true,
+                ipv6: false,
+            },
+            &core::host_facts::ContainerFacts {
+                published: Vec::new(),
+                bridges: true,
+            },
+            &ruleset,
+        );
+        let json = exposure_json("web", &rows, &checks, &notes);
         assert_eq!(json["profile"], "web");
+        assert_eq!(json["forwarding"]["ipv4"], true);
+        assert_eq!(json["forwarding"]["filtered"], false);
+        assert_eq!(
+            json["notes"],
+            serde_json::json!([
+                core::host_facts::FORWARDING_WARNING,
+                core::host_facts::CONTAINER_NETWORKS_NOTE
+            ])
+        );
+        assert_eq!(json["sockets"][0]["published_by_docker"], false);
         let ssh = &json["sockets"][0];
         assert_eq!(ssh["transport"], "tcp");
         assert_eq!(ssh["port"], 22);
@@ -1824,6 +1931,68 @@ mod tests {
         assert_eq!(session["server_port"], 2222);
         assert_eq!(session["source"], "environment");
         assert_eq!(session["new_connections"], "blocked");
+    }
+
+    /// With local network discovery on, the mDNS socket reads "local network
+    /// (discovery)" (not open) in the table and the JSON, and an ordinary
+    /// UDP socket stays "nobody".
+    #[test]
+    fn test_exposure_local_discovery_in_table_and_json() {
+        use drfw::core::evaluate::Transport;
+        use drfw::core::exposure::{LOCAL_DISCOVERY, ListeningSocket, build_socket_list};
+
+        let socket = |port, inode| ListeningSocket {
+            transport: Transport::Udp,
+            ipv6_socket: false,
+            local: "0.0.0.0".parse().unwrap(),
+            port,
+            uid: 1000,
+            inode,
+        };
+        let sockets = build_socket_list(
+            vec![socket(5353, 1), socket(40000, 2)],
+            &std::collections::HashMap::new(),
+            1000,
+            false,
+            |_| None,
+        );
+        let mut ruleset = core::firewall::FirewallRuleset::new();
+        ruleset.advanced_security.local_discovery = true;
+        let rows = core::exposure::exposure_rows(&ruleset, &sockets);
+        let lines = exposure_table(&rows, false);
+        let mdns = lines.iter().find(|l| l.starts_with("UDP 5353")).unwrap();
+        assert!(
+            mdns.contains(LOCAL_DISCOVERY) && !mdns.contains("OPEN"),
+            "{mdns}"
+        );
+        assert!(mdns.ends_with("built-in rule \"allow mdns\""), "{mdns}");
+        let other = lines.iter().find(|l| l.starts_with("UDP 40000")).unwrap();
+        assert!(other.contains("nobody"), "{other}");
+
+        let notes = ExposureNotes::new(
+            core::host_facts::ForwardingState::default(),
+            &core::host_facts::ContainerFacts::default(),
+            &ruleset,
+        );
+        let json = exposure_json("p", &rows, &[], &notes);
+        let find = |port: u16| {
+            json["sockets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["port"] == port)
+                .unwrap()
+                .clone()
+        };
+        let mdns = find(5353);
+        assert_eq!(mdns["reachable_from"], LOCAL_DISCOVERY);
+        assert_eq!(mdns["local_discovery"], true);
+        assert_eq!(mdns["nobody"], false);
+        assert_eq!(mdns["open_to_everyone"], false);
+        assert!(mdns["scope"].is_null());
+        let other = find(40000);
+        assert_eq!(other["local_discovery"], false);
+        assert_eq!(other["nobody"], true);
     }
 
     #[test]

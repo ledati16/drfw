@@ -14,7 +14,7 @@ use crate::app::ui_components::{
     popup_container, primary_button, secondary_button, section_header_container, sidebar_container,
     tag_button, themed_checkbox, themed_horizontal_rule, themed_scrollable, themed_text_input,
 };
-use crate::app::{Message, State};
+use crate::app::{InactiveReason, Message, State};
 
 /// Persistent notice for a profile that could not be loaded (read-only), with
 /// the explanation and the "Start fresh" action. Empty when not read-only.
@@ -90,12 +90,23 @@ const INACTIVE_OUTPUT_TOOLTIP: &str = "Desktop mode allows all outgoing traffic,
      (Output chain) rules are not applied. Enable Server Mode in Settings to use them, \
      or edit the rule to make it inbound.";
 
-/// Small "INACTIVE IN DESKTOP MODE" badge with a tooltip explaining why.
-fn inactive_badge(state: &State) -> Element<'_, Message> {
+/// Explains why a Forwarded rule does nothing while forwarding is not blocked.
+const INACTIVE_FORWARD_TOOLTIP: &str = "Forwarded traffic is accepted while \"Block forwarded \
+     traffic\" is off, so Forwarded rules are not applied. Turn it on in Settings to use them.";
+
+/// Small "INACTIVE …" badge with a tooltip explaining why.
+fn inactive_badge(state: &State, reason: InactiveReason) -> Element<'_, Message> {
     let theme = &state.theme;
+    let (label, explanation) = match reason {
+        InactiveReason::DesktopMode => ("INACTIVE IN DESKTOP MODE", INACTIVE_OUTPUT_TOOLTIP),
+        InactiveReason::ForwardingNotBlocked => (
+            "INACTIVE (FORWARDING NOT BLOCKED)",
+            INACTIVE_FORWARD_TOOLTIP,
+        ),
+    };
     tooltip(
         container(
-            text("INACTIVE IN DESKTOP MODE")
+            text(label)
                 .size(9)
                 .font(state.font_mono)
                 .color(theme.warning)
@@ -111,7 +122,7 @@ fn inactive_badge(state: &State) -> Element<'_, Message> {
             ..Default::default()
         }),
         container(
-            text(INACTIVE_OUTPUT_TOOLTIP)
+            text(explanation)
                 .size(12)
                 .font(state.font_regular)
                 .color(theme.fg_primary),
@@ -122,6 +133,59 @@ fn inactive_badge(state: &State) -> Element<'_, Message> {
         tooltip::Position::Bottom,
     )
     .into()
+}
+
+/// The "Add from template" menu: one button per template that applies to
+/// this computer's interfaces (entries and their text built when the menu
+/// opened), or a note that none does.
+fn template_menu<'a>(
+    state: &'a State,
+    menu: &'a crate::app::templates::TemplateMenu,
+    edits_locked: bool,
+) -> Element<'a, Message> {
+    let theme = &state.theme;
+    let mut items = column![
+        container(
+            text("ADD FROM TEMPLATE")
+                .size(9)
+                .font(state.font_mono)
+                .color(theme.fg_muted)
+        )
+        .padding([2, 6])
+        .style(move |_| section_header_container(theme)),
+    ]
+    .spacing(6);
+    if menu.entries.is_empty() {
+        items = items.push(
+            text(crate::app::templates::NO_TEMPLATES)
+                .size(11)
+                .font(state.font_regular)
+                .color(theme.fg_muted),
+        );
+    }
+    for (index, entry) in menu.entries.iter().enumerate() {
+        items = items.push(
+            button(
+                column![
+                    text(&entry.title).size(13).font(state.font_regular),
+                    text(entry.detail)
+                        .size(11)
+                        .font(state.font_regular)
+                        .color(theme.fg_muted),
+                ]
+                .spacing(2),
+            )
+            .width(Length::Fill)
+            .padding([8, 10])
+            .style(move |_, status| secondary_button(theme, status))
+            .on_press_maybe((!edits_locked).then_some(Message::AddTemplate(index))),
+        );
+    }
+    container(items)
+        .padding(8)
+        .width(Length::Fill)
+        .style(move |_| inset_container(theme))
+        .into()
 }
 
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
@@ -344,7 +408,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             };
             // Listed but not applied (Output rule in Desktop mode): dimmed like
             // a disabled rule, with a badge explaining why
-            let is_inactive = state.rule_is_inactive(rule);
+            let inactive = state.inactive_reason(rule);
+            let is_inactive = inactive.is_some();
             let looks_enabled = rule.enabled && !is_inactive;
             let is_editing = state.rule_form.as_ref().and_then(|f| f.id) == Some(rule.id);
             let is_deleting = state.deleting_id == Some(rule.id);
@@ -653,8 +718,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 }
 
                 // Output rule in Desktop mode: listed but not applied
-                if is_inactive {
-                    detail_items.push(inactive_badge(state));
+                if let Some(reason) = inactive {
+                    detail_items.push(inactive_badge(state, reason));
                 }
 
                 // 3. Spacer (Fills middle to push protocol to right)
@@ -757,25 +822,58 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         column(rule_cards).spacing(8).into()
     };
 
-    // 6. Sidebar Footer (Pinned Action)
-    let footer = column![
-        rule::horizontal(1).style(move |_| themed_horizontal_rule(theme)),
+    // 6. Sidebar Footer (Pinned Action), with the template menu above it
+    let menu_open = state.template_menu.is_some();
+    let mut footer = column![rule::horizontal(1).style(move |_| themed_horizontal_rule(theme))];
+    if let Some(menu) = &state.template_menu {
+        footer = footer.push(
+            container(template_menu(state, menu, edits_locked))
+                .padding(iced::Padding::new(0.0).top(12.0)),
+        );
+    }
+    footer = footer.push(
         container(
-            button(
-                row![
-                    text("+").size(18).font(state.font_regular),
-                    text("Add Access Rule").size(14).font(state.font_regular)
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            )
-            .width(Length::Fill)
-            .padding(14)
-            .style(move |_, status| primary_button(theme, status))
-            .on_press_maybe((!edits_locked).then_some(Message::AddRuleClicked))
+            row![
+                button(
+                    row![
+                        text("+").size(18).font(state.font_regular),
+                        text("Add Access Rule").size(14).font(state.font_regular)
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding(14)
+                .style(move |_, status| primary_button(theme, status))
+                .on_press_maybe((!edits_locked).then_some(Message::AddRuleClicked)),
+                tooltip(
+                    button(
+                        text(if menu_open { "▴" } else { "▾" })
+                            .size(16)
+                            .font(state.font_regular)
+                    )
+                    .padding([14, 12])
+                    .style(move |_, status| secondary_button(theme, status))
+                    .on_press_maybe(
+                        (!edits_locked).then_some(Message::ToggleTemplateMenu(!menu_open))
+                    ),
+                    container(
+                        text("Add from template")
+                            .size(12)
+                            .font(state.font_regular)
+                            .color(theme.fg_primary)
+                    )
+                    .padding([6, 10])
+                    .style(move |_| popup_container(theme)),
+                    tooltip::Position::Top
+                )
+                .delay(std::time::Duration::from_millis(500)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
         )
-        .padding(iced::Padding::new(0.0).top(16.0))
-    ];
+        .padding(iced::Padding::new(0.0).top(16.0)),
+    );
 
     container(
         column![

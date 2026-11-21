@@ -112,6 +112,9 @@ pub struct ApplySession {
     retention: Option<RetentionWarning>,
     /// The SSH lockout check's warning for this apply (same timing)
     lockout: Option<LockoutWarning>,
+    /// The forwarding notice for this apply (one line, or empty): the kernel
+    /// forwards and `verified` does not block it. Information only.
+    forwarding_note: Vec<String>,
 }
 
 impl ApplySession {
@@ -127,6 +130,12 @@ impl ApplySession {
         self.lockout.as_ref()
     }
 
+    /// The forwarding notice lines (empty when there is none), shown in the
+    /// "Commit Changes?" dialog; never needs a confirmation.
+    pub fn forwarding_note(&self) -> &[String] {
+        &self.forwarding_note
+    }
+
     /// Applying takes "Apply anyway" (Enter is refused): the retention guard
     /// warns, or the lockout check does (its notes alone do not).
     pub fn needs_confirmation(&self) -> bool {
@@ -137,11 +146,21 @@ impl ApplySession {
                 .is_some_and(LockoutWarning::needs_confirmation)
     }
 
-    /// Computes both warnings for `verified` from the current record and
-    /// sessions.
-    fn check(&mut self, kept: Option<&FirewallRuleset>, sessions: &[SshSession]) {
+    /// Computes both warnings and the forwarding notice for `verified` from
+    /// the current record, sessions and forwarding state.
+    fn check(
+        &mut self,
+        kept: Option<&FirewallRuleset>,
+        sessions: &[SshSession],
+        forwarding: crate::core::host_facts::ForwardingState,
+    ) {
         self.retention = RetentionWarning::check(kept, &self.verified);
         self.lockout = LockoutWarning::check(&self.verified, sessions);
+        self.forwarding_note =
+            crate::core::host_facts::forwarding_warning(forwarding, &self.verified)
+                .map(str::to_string)
+                .into_iter()
+                .collect();
     }
 
     /// The record of this ruleset once it is kept (the same one
@@ -175,6 +194,8 @@ pub struct ApplyContext {
     pub record_generation: u64,
     pub record: Option<ConfirmedRecord>,
     pub sessions: Vec<SshSession>,
+    /// Whether the kernel forwards traffic (for the forwarding notice)
+    pub forwarding: crate::core::host_facts::ForwardingState,
 }
 
 /// Re-reads the kept record and the SSH sessions on the blocking pool.
@@ -187,6 +208,7 @@ fn reload_context_task(state: &State) -> Task<Message> {
                 record_generation,
                 record: ConfirmedRecord::load_blocking(),
                 sessions: crate::core::lockout::detect_sessions(env),
+                forwarding: crate::core::host_facts::forwarding_enabled(),
             })
             .await
             .map_err(|e| tracing::error!("Reloading the kept record failed: {e}"))
@@ -205,6 +227,7 @@ pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyConte
         state.replace_confirmed_record(context.record);
     }
     state.ssh_sessions = context.sessions;
+    state.host_forwarding = context.forwarding;
     match state.status {
         AppStatus::Verifying | AppStatus::AwaitingApply => {
             let kept = state
@@ -212,7 +235,7 @@ pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyConte
                 .as_ref()
                 .and_then(ConfirmedRecord::ruleset);
             if let Some(session) = state.apply_session.as_mut() {
-                session.check(kept, &state.ssh_sessions);
+                session.check(kept, &state.ssh_sessions, state.host_forwarding);
             }
         }
         AppStatus::AwaitingSaveToSystem => check_save_dialog(state),
@@ -358,6 +381,7 @@ pub(crate) fn starts_rule_edit(message: &Message) -> bool {
     matches!(
         message,
         Message::AddRuleClicked
+            | Message::ToggleTemplateMenu(true)
             | Message::EditRuleClicked(_)
             | Message::DeleteRuleRequested(_)
             | Message::RuleDragStart(_)
@@ -373,6 +397,7 @@ pub(crate) fn is_ruleset_edit(message: &Message) -> bool {
     matches!(
         message,
         Message::SaveRuleForm
+            | Message::AddTemplate(_)
             | Message::ToggleRuleEnabled(_)
             | Message::DeleteRule(_)
             | Message::RuleDropped(_)
@@ -384,6 +409,8 @@ pub(crate) fn is_ruleset_edit(message: &Message) -> bool {
             | Message::ToggleRpfRequested(_)
             | Message::ConfirmEnableRpf
             | Message::ToggleBlockForwarding(_)
+            | Message::ToggleLocalDiscovery(_)
+            | Message::LocalDiscoveryNoticeAnswered(true)
             | Message::ToggleDroppedLogging(_)
             | Message::LogRateChanged(_)
             | Message::LogPrefixChanged(_)
@@ -448,8 +475,13 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
         previous_applied: None,
         retention: None,
         lockout: None,
+        forwarding_note: Vec::new(),
     };
-    session.check(kept_ruleset(state), &state.ssh_sessions);
+    session.check(
+        kept_ruleset(state),
+        &state.ssh_sessions,
+        state.host_forwarding,
+    );
     state.apply_session = Some(session);
     state.status = AppStatus::Verifying;
     Task::batch([verify, reload_context_task(state)])
@@ -2103,6 +2135,7 @@ mod tests {
             record_generation: state.confirmed_record_generation,
             record,
             sessions,
+            forwarding: crate::core::host_facts::ForwardingState::default(),
         }
     }
 
@@ -2134,6 +2167,46 @@ mod tests {
         assert!(last_banner(&state).0.contains("Apply anyway"));
         let _ = state.update(Message::ProceedToApplyAnyway);
         assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    /// S3: with IP forwarding on and forwarding not blocked, the "Commit
+    /// Changes?" dialog notes that forwarded traffic is not filtered. A note
+    /// only: Enter still applies. The re-read context refreshes it.
+    #[test]
+    fn test_forwarding_note_in_apply_dialog() {
+        use crate::core::host_facts::{FORWARDING_WARNING, ForwardingState};
+        let on = ForwardingState {
+            ipv4: false,
+            ipv6: true,
+        };
+        let mut state = create_test_state();
+        state.host_forwarding = on;
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        let session = state.apply_session.as_ref().expect("session");
+        assert_eq!(session.forwarding_note(), [FORWARDING_WARNING]);
+        assert!(!session.needs_confirmation(), "information only");
+
+        // The reloaded context says forwarding is off now: no note
+        let reloaded = ApplyContext {
+            forwarding: ForwardingState::default(),
+            ..context(&state, None, Vec::new())
+        };
+        handle_apply_context_loaded(&mut state, reloaded);
+        assert_eq!(state.host_forwarding, ForwardingState::default());
+        let session = state.apply_session.as_ref().expect("session");
+        assert_eq!(session.forwarding_note().len(), 0);
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::Applying);
+
+        // Forwarding on, but the rules block forwarded traffic: no note
+        let mut state = create_test_state();
+        state.host_forwarding = on;
+        state.ruleset.advanced_security.block_forwarding = true;
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(&mut state);
+        let session = state.apply_session.as_ref().expect("session");
+        assert_eq!(session.forwarding_note().len(), 0);
     }
 
     #[test]

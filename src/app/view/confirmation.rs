@@ -52,15 +52,20 @@ fn warning_block<'a>(
     .into()
 }
 
+/// Heading of the forwarding notice in the "Commit Changes?" dialog.
+const FORWARDING_HEADING: &str = "Note: forwarded traffic is not filtered";
+
 /// The blocks for the warnings that are present (retention guard first),
-/// then the lockout check's note (info style: it needs no confirmation).
+/// then the lockout check's note and the forwarding notice (info style:
+/// they need no confirmation).
 fn confirmation_blocks<'a>(
     retention: Option<&'a RetentionWarning>,
     lockout: Option<&'a LockoutWarning>,
+    forwarding_note: &'a [String],
     theme: &'a crate::theme::AppTheme,
     font: iced::Font,
 ) -> Vec<Element<'a, Message>> {
-    let mut blocks = Vec::with_capacity(3);
+    let mut blocks = Vec::with_capacity(4);
     if let Some(warning) = retention {
         blocks.push(warning_block(
             RETENTION_HEADING,
@@ -86,6 +91,16 @@ fn confirmation_blocks<'a>(
             LockoutWarning::NOTE_HEADING,
             theme.info,
             &note.notes,
+            400.0,
+            theme,
+            font,
+        ));
+    }
+    if !forwarding_note.is_empty() {
+        blocks.push(warning_block(
+            FORWARDING_HEADING,
+            theme.info,
+            forwarding_note,
             400.0,
             theme,
             font,
@@ -471,6 +486,7 @@ pub fn view_apply_flow_modal<'a>(
             let blocks = confirmation_blocks(
                 session.and_then(crate::app::handlers::ApplySession::retention),
                 session.and_then(crate::app::handlers::ApplySession::lockout),
+                session.map_or(&[], crate::app::handlers::ApplySession::forwarding_note),
                 theme,
                 font,
             );
@@ -652,6 +668,7 @@ pub fn view_save_to_system_modal<'a>(
     body = body.extend(confirmation_blocks(
         dialog.retention.as_ref(),
         dialog.lockout.as_ref(),
+        &[],
         theme,
         font,
     ));

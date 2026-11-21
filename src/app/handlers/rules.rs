@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use crate::app::{Message, RuleForm, State};
 use crate::command::{
-    AddRuleCommand, DeleteRuleCommand, EditRuleCommand, ReorderRuleCommand, ToggleRuleCommand,
+    AddRuleCommand, AddRulesCommand, DeleteRuleCommand, EditRuleCommand, ReorderRuleCommand,
+    ToggleRuleCommand,
 };
 use crate::core::firewall::{Chain, MAX_RULES, Protocol};
 use crate::core::rule_constraints::{protocol_supports_ports, reject_type_valid_for_protocol};
@@ -58,7 +59,70 @@ fn close_rule_form(state: &mut State) {
 
 /// Handles opening the "Add New Rule" form
 pub(crate) fn handle_add_rule_clicked(state: &mut State) -> Task<Message> {
+    state.template_menu = None;
     open_rule_form(state, RuleForm::default(), None)
+}
+
+/// Opens or closes the "Add from template" menu. Opening lists the
+/// interfaces again (they come and go) and builds the entries for those
+/// that call for a template.
+pub(crate) fn handle_toggle_template_menu(state: &mut State, open: bool) {
+    state.template_menu = open.then(|| {
+        crate::app::templates::TemplateMenu::for_interfaces(&crate::utils::list_interfaces())
+    });
+}
+
+/// Adds the rules of template menu entry `index` as one undoable step
+/// (ordinary rules: they can be edited or deleted like any other) and
+/// closes the menu.
+pub(crate) fn handle_add_template(state: &mut State, index: usize) -> Task<Message> {
+    use crate::app::BannerSeverity;
+
+    let Some(entry) = state
+        .template_menu
+        .take()
+        .and_then(|mut menu| (index < menu.entries.len()).then(|| menu.entries.swap_remove(index)))
+    else {
+        return Task::none();
+    };
+    let rules = entry.rules();
+    if state.ruleset.rules.len() + rules.len() > MAX_RULES {
+        state.push_banner(
+            format!("This profile already has the maximum of {MAX_RULES} rules"),
+            BannerSeverity::Error,
+        );
+        return Task::none();
+    }
+    let count = rules.len();
+    let logged: Vec<(String, String, String)> = rules
+        .iter()
+        .map(|r| {
+            (
+                r.label.clone(),
+                r.protocol.to_string(),
+                r.port_display.clone(),
+            )
+        })
+        .collect();
+    let command = AddRulesCommand {
+        rules,
+        description: format!("Add template: {}", entry.title),
+    };
+    state
+        .command_history
+        .execute(Box::new(command), &mut state.ruleset);
+    state.mark_profile_dirty();
+    let noun = if count == 1 { "rule" } else { "rules" };
+    state.push_banner(
+        format!("Added {count} {noun} from the template \"{}\"", entry.title),
+        BannerSeverity::Success,
+    );
+    let enable_event_log = state.enable_event_log;
+    super::audit_task(async move {
+        for (label, protocol, ports) in logged {
+            audit::log_rule_created(enable_event_log, &label, &protocol, Some(ports)).await;
+        }
+    })
 }
 
 /// Handles opening the "Edit Rule" form
@@ -1130,5 +1194,99 @@ mod tests {
         state.mark_profile_dirty();
         assert!(state.filter_tag.is_none());
         assert_eq!(state.rule_search, "ss");
+    }
+
+    // ── Rule templates (S6) ───────────────────────────────────────────
+
+    fn menu_for(state: &mut State, interfaces: &[&str]) {
+        let names: Vec<String> = interfaces.iter().map(ToString::to_string).collect();
+        state.template_menu = Some(crate::app::templates::TemplateMenu::for_interfaces(&names));
+    }
+
+    /// Choosing a template adds its rules as ordinary, editable rules in one
+    /// undoable step and closes the menu.
+    #[test]
+    fn test_template_inserts_ordinary_rules_undoably() {
+        let mut state = create_test_state();
+        menu_for(&mut state, &["eth0", "virbr0", "tailscale0"]);
+        let titles: Vec<String> = state
+            .template_menu
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.title.clone())
+            .collect();
+        assert_eq!(titles.len(), 3, "{titles:?}");
+        let vm = titles
+            .iter()
+            .position(|t| t.starts_with("VM guests"))
+            .unwrap();
+
+        let _ = state.update(Message::AddTemplate(vm));
+        assert!(state.template_menu.is_none(), "closed");
+        assert_eq!(state.ruleset.rules.len(), 2, "UDP 53/67 and TCP 53");
+        assert!(
+            state
+                .ruleset
+                .rules
+                .iter()
+                .all(|r| r.interface.as_deref() == Some("virbr0") && r.chain == Chain::Input)
+        );
+        assert!(state.profile_dirty);
+        assert!(state.banners.back().unwrap().message.contains("VM guests"));
+
+        // Ordinary rules: they open in the editor like any other
+        let id = state.ruleset.rules[0].id;
+        let _ = state.update(Message::EditRuleClicked(id));
+        assert!(state.rule_form.is_some());
+        let _ = state.update(Message::CancelRuleForm);
+
+        let _ = state.update(Message::Undo);
+        assert_eq!(state.ruleset.rules.len(), 0, "one step");
+        let _ = state.update(Message::Redo);
+        assert_eq!(state.ruleset.rules.len(), 2);
+    }
+
+    #[test]
+    fn test_template_menu_closed_or_stale_index_does_nothing() {
+        let mut state = create_test_state();
+        let _ = state.update(Message::AddTemplate(0));
+        assert_eq!(state.ruleset.rules.len(), 0);
+        menu_for(&mut state, &["eth0"]);
+        assert_eq!(state.template_menu.as_ref().unwrap().entries.len(), 0);
+        let _ = state.update(Message::AddTemplate(0));
+        assert_eq!(state.ruleset.rules.len(), 0);
+        assert!(!state.command_history.can_undo());
+
+        // Opening it reads the interfaces; closing drops the entries;
+        // Escape closes it too
+        let _ = state.update(Message::ToggleTemplateMenu(true));
+        assert!(state.template_menu.is_some());
+        let _ = state.update(Message::ToggleTemplateMenu(false));
+        assert!(state.template_menu.is_none());
+        menu_for(&mut state, &["tailscale0"]);
+        assert_eq!(
+            crate::app::handlers::ui_state::escape_message(&state).map(|m| format!("{m:?}")),
+            Some("ToggleTemplateMenu(false)".to_string())
+        );
+    }
+
+    /// While an apply owns the ruleset, templates are refused like edits.
+    #[test]
+    fn test_template_refused_while_edits_are_locked() {
+        let mut state = create_test_state();
+        menu_for(&mut state, &["tailscale0"]);
+        state.status = crate::app::AppStatus::AwaitingApply;
+        let _ = state.update(Message::AddTemplate(0));
+        assert_eq!(state.ruleset.rules.len(), 0);
+        let _ = state.update(Message::ToggleTemplateMenu(true));
+        assert!(
+            state
+                .template_menu
+                .as_ref()
+                .is_some_and(|m| m.entries.len() == 2),
+            "not reopened (rebuilt) while locked"
+        );
     }
 }

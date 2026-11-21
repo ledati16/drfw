@@ -37,6 +37,8 @@ pub(crate) fn edits_profile(message: &Message) -> bool {
     matches!(
         message,
         Message::AddRuleClicked
+            | Message::ToggleTemplateMenu(true)
+            | Message::AddTemplate(_)
             | Message::EditRuleClicked(_)
             | Message::SaveRuleForm
             | Message::ToggleRuleEnabled(_)
@@ -52,6 +54,8 @@ pub(crate) fn edits_profile(message: &Message) -> bool {
             | Message::ToggleRpfRequested(_)
             | Message::ConfirmEnableRpf
             | Message::ToggleBlockForwarding(_)
+            | Message::ToggleLocalDiscovery(_)
+            | Message::LocalDiscoveryNoticeAnswered(true)
             | Message::ToggleDroppedLogging(_)
             | Message::LogRateChanged(_)
             | Message::LogPrefixChanged(_)
@@ -91,6 +95,7 @@ fn reset_editing_state(state: &mut State) {
     state.deleting_id = None;
     state.pending_warning = None;
     state.confirm_start_fresh = false;
+    state.template_menu = None;
     state.clear_drag_state();
 }
 
@@ -219,7 +224,8 @@ pub(crate) fn handle_start_fresh_profile(state: &mut State) -> Task<Message> {
     let Some(issue) = state.unreadable_profile.take() else {
         return Task::none();
     };
-    state.ruleset = FirewallRuleset::default();
+    // A new profile in all but name: it starts like one (`new_profile_ruleset`)
+    state.ruleset = crate::app::new_profile_ruleset();
     state.cached_disk_profile = Some(FirewallRuleset::default());
     state.profile_save_error = None;
     state.profile_generation += 1;
@@ -242,6 +248,21 @@ pub(crate) fn handle_start_fresh_profile(state: &mut State) -> Task<Message> {
     })
 }
 
+/// The rules a profile created in the profile manager starts with: a copy
+/// of the open profile, or, for "New empty profile", the GUI's new-profile
+/// defaults ([`crate::app::new_profile_ruleset`]: local discovery on).
+fn new_profile_contents(state: &State) -> FirewallRuleset {
+    let creating_empty = state
+        .profile_manager
+        .as_ref()
+        .is_some_and(|mgr| mgr.creating_empty);
+    if creating_empty {
+        crate::app::new_profile_ruleset()
+    } else {
+        state.ruleset.clone()
+    }
+}
+
 /// Handles creating a profile from the current rules, or an empty one.
 ///
 /// Refuses invalid names and names that already exist (ignoring case); the
@@ -252,15 +273,7 @@ pub(crate) fn handle_save_profile_as(state: &mut State, name: String) -> Task<Me
         return Task::none();
     }
 
-    let creating_empty = state
-        .profile_manager
-        .as_ref()
-        .is_some_and(|mgr| mgr.creating_empty);
-    let ruleset = if creating_empty {
-        FirewallRuleset::default()
-    } else {
-        state.ruleset.clone()
-    };
+    let ruleset = new_profile_contents(state);
     // The new profile becomes the active one: write the current profile's
     // edits that autosave has not written yet, or they would be lost.
     let flush = (state.profile_dirty && state.unreadable_profile.is_none())
@@ -1328,6 +1341,46 @@ mod tests {
                 .message
                 .contains("Started fresh")
         );
+    }
+
+    /// S1: profiles the GUI creates empty ("New empty profile", "Start
+    /// fresh") start with local network discovery on; a copy keeps the
+    /// current setting, and loading an existing profile never changes it.
+    #[test]
+    fn test_new_profiles_start_with_local_discovery() {
+        let mut state = create_test_state();
+        assert!(
+            !state.ruleset.advanced_security.local_discovery,
+            "an existing profile keeps what it has"
+        );
+        handle_open_profile_manager(&mut state);
+        assert!(
+            !new_profile_contents(&state)
+                .advanced_security
+                .local_discovery,
+            "a copy of the current rules"
+        );
+        if let Some(mgr) = &mut state.profile_manager {
+            mgr.creating_empty = true;
+        }
+        let empty = new_profile_contents(&state);
+        assert!(empty.advanced_security.local_discovery, "new empty profile");
+        assert_eq!(empty.rules.len(), 0);
+        assert_eq!(
+            empty.advanced_security.egress_profile,
+            crate::core::firewall::EgressProfile::Desktop
+        );
+
+        state.unreadable_profile = Some(unreadable(None));
+        let _ = handle_start_fresh_profile(&mut state);
+        assert!(
+            state.ruleset.advanced_security.local_discovery,
+            "start fresh"
+        );
+
+        // An old profile loaded from disk (field missing): off
+        let old: FirewallRuleset = serde_json::from_str(r#"{"rules": []}"#).unwrap();
+        assert!(!old.advanced_security.local_discovery);
     }
 
     #[test]

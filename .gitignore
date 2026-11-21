@@ -8,6 +8,7 @@ cargo-test-fuzz-target
 
 # Exceptions: Keep tracking these specific files
 !CLAUDE.md
+!CHANGELOG.md
 !README.md
 !STYLE.md
 !contrib/README.md

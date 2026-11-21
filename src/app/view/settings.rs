@@ -11,6 +11,28 @@ use crate::app::ui_components::{
 use crate::app::{FontPickerTarget, Message, State};
 use crate::core::firewall::EgressProfile;
 
+/// Description of the "Local network discovery" row.
+const LOCAL_DISCOVERY_DESC: &str = "Find and be found by printers, TVs, speakers and other \
+     computers on your network (mDNS, UPnP). Turn off on networks you don't trust.";
+
+/// The same row in Server Mode, where the setting is not used.
+const LOCAL_DISCOVERY_SERVER_NOTE: &str = "Not available in Server Mode: outgoing \
+     connections there only follow your Output rules. Switch to Desktop mode to use it.";
+
+/// Description of the "Anti-spoofing (RPF)" row (new packets only, with the
+/// routing mark: see README "Anti-spoofing").
+const RPF_DESC: &str = "Drop new connections whose source address could not have arrived on \
+     that interface. Useful with rules that trust a source address. May block peers that \
+     contact a full-tunnel VPN first.";
+
+/// Description of the "Block forwarded traffic" row.
+const BLOCK_FORWARDING_DESC: &str = "Drop routed traffic unless a Forwarded rule allows it. \
+     Docker, VMs and VPN routing then need such rules; mainly for routers";
+
+/// Description of the "Server Mode" row.
+const SERVER_MODE_DESC: &str = "Block outgoing connections unless a rule allows them. For \
+     locked-down servers; you must allow DNS, time sync and updates yourself.";
+
 pub fn view_settings(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
     let advanced = &state.ruleset.advanced_security;
@@ -199,6 +221,41 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
         .style(move |_| card_container(theme))
     };
 
+    let network_card = {
+        let server_mode = advanced.egress_profile == EgressProfile::Server;
+        let mut discovery = toggler(advanced.local_discovery && !server_mode)
+            .width(Length::Shrink)
+            .style(move |_, status| themed_toggler(theme, status));
+        if !server_mode {
+            discovery = discovery.on_toggle(Message::ToggleLocalDiscovery);
+        }
+        container(column![
+            container(
+                text("NETWORK")
+                    .size(12)
+                    .font(state.font_regular)
+                    .color(theme.fg_muted)
+            )
+            .padding([8, 12])
+            .width(Length::Fill)
+            .style(move |_| section_header_container(theme)),
+            column![render_settings_row(
+                "Local network discovery",
+                if server_mode {
+                    LOCAL_DISCOVERY_SERVER_NOTE
+                } else {
+                    LOCAL_DISCOVERY_DESC
+                },
+                discovery.into(),
+                theme,
+                state.font_regular,
+            )]
+            .spacing(16)
+            .padding(16)
+        ])
+        .style(move |_| card_container(theme))
+    };
+
     let security_card = {
         let mut security_items: Vec<Element<'_, Message>> = vec![
             text("These settings may break common applications. Defaults are suitable for most users.")
@@ -208,7 +265,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
                 .into(),
             render_settings_row(
                 "Strict ICMP filtering",
-                "Only allow essential ICMP types (ping, MTU discovery)",
+                "Only allow the ICMP types networks need (ping, errors, MTU discovery, IPv6 neighbor and router discovery, MLD)",
                 toggler(advanced.strict_icmp)
                     .on_toggle(Message::ToggleStrictIcmpRequested)
                     .width(Length::Shrink)
@@ -219,7 +276,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
             ),
             render_settings_row(
                 "ICMP rate limiting",
-                "Limit incoming ICMP packets to prevent floods (0 = off)",
+                &state.settings_display.icmp_rate_desc,
                 row![
                     slider(0..=50, advanced.icmp_rate_limit, Message::IcmpRateLimitChanged)
                         .width(Length::Fill)
@@ -232,7 +289,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
             ),
             render_settings_row(
                 "Anti-spoofing (RPF)",
-                "Drop packets with spoofed source addresses",
+                RPF_DESC,
                 toggler(advanced.enable_rpf)
                     .on_toggle(Message::ToggleRpfRequested)
                     .width(Length::Shrink)
@@ -243,7 +300,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
             ),
             render_settings_row(
                 "Block forwarded traffic",
-                "Drop routed traffic. Breaks Docker, VMs and VPN routing; only for routers",
+                BLOCK_FORWARDING_DESC,
                 toggler(advanced.block_forwarding)
                     .on_toggle(Message::ToggleBlockForwarding)
                     .width(Length::Shrink)
@@ -313,7 +370,7 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
 
         security_items.push(render_settings_row(
             "Server Mode",
-            "Block all outbound connections by default (recommended for servers)",
+            SERVER_MODE_DESC,
             toggler(advanced.egress_profile == EgressProfile::Server)
                 .on_toggle(Message::ServerModeToggled)
                 .width(Length::Shrink)
@@ -340,14 +397,14 @@ pub fn view_settings(state: &State) -> Element<'_, Message> {
         .style(move |_| card_container(theme))
     };
 
-    column![appearance_card, behavior_card, security_card,]
+    column![appearance_card, behavior_card, network_card, security_card,]
         .spacing(24)
         .into()
 }
 
 pub fn render_settings_row<'a>(
     title: &'static str,
-    desc: &'static str,
+    desc: &'a str,
     control: Element<'a, Message>,
     theme: &crate::theme::AppTheme,
     font: iced::Font,

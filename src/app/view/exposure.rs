@@ -11,8 +11,8 @@ use crate::app::exposure::{
     AppliedState, ExposurePanel, ExposureRowView, Highlight, ReachTone, ReachView,
 };
 use crate::app::ui_components::{
-    attention_card_container, card_container, danger_badge_container, primary_button,
-    secondary_button, section_header_container, themed_scrollable,
+    attention_card_container, card_container, danger_badge_container, info_notice_container,
+    primary_button, secondary_button, section_header_container, themed_scrollable,
     warning_attention_card_container, warning_badge_container,
 };
 use crate::theme::AppTheme;
@@ -28,7 +28,7 @@ const LABEL_COLUMN_WIDTH: f32 = 64.0;
 fn tone_color(theme: &AppTheme, tone: ReachTone) -> Color {
     match tone {
         ReachTone::Open => theme.danger,
-        ReachTone::OpenOnInterfaces => theme.warning,
+        ReachTone::OpenOnInterfaces | ReachTone::PublishedByDocker => theme.warning,
         ReachTone::Restricted => theme.fg_primary,
         ReachTone::Closed => theme.success,
         ReachTone::LocalOnly => theme.fg_muted,
@@ -50,7 +50,10 @@ fn reach_line<'a>(
     .spacing(8)
     .align_y(Alignment::Center);
     if let Some(badge) = &view.badge {
-        let warning = view.tone == ReachTone::OpenOnInterfaces;
+        let warning = matches!(
+            view.tone,
+            ReachTone::OpenOnInterfaces | ReachTone::PublishedByDocker
+        );
         line = line.push(
             container(text(badge).size(10).font(mono_font))
                 .padding([2, 8])
@@ -211,6 +214,33 @@ pub fn view_exposure_modal<'a>(
                     .into()
             }))
             .spacing(4),
+        );
+    }
+
+    // Forwarding and container networks: what the rows cannot show
+    for note in &panel.notes {
+        body = body.push(
+            container(
+                row![
+                    text("INFO")
+                        .size(10)
+                        .font(iced::Font {
+                            weight: iced::font::Weight::Bold,
+                            ..mono_font
+                        })
+                        .color(theme.info),
+                    text(*note)
+                        .size(13)
+                        .font(regular_font)
+                        .color(theme.fg_primary)
+                        .width(Length::Fill),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
+            )
+            .padding([10, 16])
+            .width(Length::Fill)
+            .style(move |_| info_notice_container(theme)),
         );
     }
 

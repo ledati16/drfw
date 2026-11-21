@@ -542,7 +542,7 @@ pub(crate) fn layer_inputs(layer: TopLayer) -> &'static [&'static str] {
 ///
 /// The apply countdown and a running apply are deliberately not closable by
 /// Escape: keeping or rolling back firewall rules needs an explicit choice.
-fn escape_message(state: &State) -> Option<Message> {
+pub(crate) fn escape_message(state: &State) -> Option<Message> {
     use crate::app::AppStatus;
 
     match top_layer(state) {
@@ -585,7 +585,11 @@ fn escape_message(state: &State) -> Option<Message> {
         TopLayer::SaveToSystem => Some(Message::SaveToSystemCancelled),
         TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
         TopLayer::Exposure => Some(Message::ToggleExposure(false)),
-        TopLayer::Base => state.deleting_id.is_some().then_some(Message::CancelDelete),
+        TopLayer::Base if state.deleting_id.is_some() => Some(Message::CancelDelete),
+        TopLayer::Base => state
+            .template_menu
+            .is_some()
+            .then_some(Message::ToggleTemplateMenu(false)),
     }
 }
 
@@ -641,7 +645,7 @@ fn enter_message(state: &State) -> Option<Message> {
             .then_some(Message::ConfirmStartFresh),
         TopLayer::Warning => state.pending_warning.as_ref().map(|warning| match warning {
             crate::app::PendingWarning::EnableRpf => Message::ConfirmEnableRpf,
-            crate::app::PendingWarning::EnableServerMode => Message::ConfirmServerMode,
+            crate::app::PendingWarning::EnableServerMode(_) => Message::ConfirmServerMode,
             crate::app::PendingWarning::EnableStrictIcmp => Message::ConfirmStrictIcmp,
         }),
         TopLayer::RuleForm => Some(if state.confirm_discard_form {
@@ -1409,7 +1413,9 @@ mod tests {
         assert_eq!(enter(&mut state), None);
         state.status = AppStatus::Idle;
 
-        state.pending_warning = Some(PendingWarning::EnableServerMode);
+        state.pending_warning = Some(PendingWarning::EnableServerMode(
+            crate::app::ServerEssentials::for_ruleset(&state.ruleset),
+        ));
         assert_eq!(enter(&mut state).as_deref(), Some("ConfirmServerMode"));
         state.pending_warning = None;
 

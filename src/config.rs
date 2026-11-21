@@ -31,6 +31,12 @@ pub struct AppConfig {
     /// value. Missing in older configs: `false`.
     #[serde(default)]
     pub auto_revert_notice_shown: bool,
+    /// The GUI's one-time "local network discovery" notice was answered (or
+    /// the user changed the setting themselves). Profiles from before the
+    /// setting existed have it off; the notice offers it once instead of
+    /// changing them. Missing in older configs: `false`.
+    #[serde(default)]
+    pub local_discovery_notice_shown: bool,
     /// Timeout in seconds for auto-revert countdown (default: 15s, max: 3600s)
     ///
     /// Clamped to 3600 seconds (1 hour) to prevent integer overflow in countdown calculations.
@@ -58,6 +64,7 @@ impl Default for AppConfig {
             show_zebra_striping: true,
             auto_revert_enabled: true, // Lockout protection on by default
             auto_revert_notice_shown: false,
+            local_discovery_notice_shown: false,
             auto_revert_timeout_secs: 15,
             enable_event_log: true, // Useful for troubleshooting, local-only so no privacy concern
             reduced_colors: false,  // Full syntax highlighting by default
@@ -241,6 +248,10 @@ mod tests {
                 .unwrap();
         assert!(!old.auto_revert_enabled);
         assert!(!old.auto_revert_notice_shown);
+        assert!(
+            !old.local_discovery_notice_shown,
+            "the discovery notice too"
+        );
         let mut answered = old;
         answered.auto_revert_notice_shown = true;
         let round_trip: AppConfig =

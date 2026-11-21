@@ -6,6 +6,7 @@ mod forms;
 mod handlers;
 mod helpers;
 pub mod syntax_cache;
+mod templates;
 pub mod ui_components;
 mod verify_errors;
 mod view;
@@ -189,6 +190,9 @@ pub struct State {
     /// The user answered the "Auto-revert is off" notice (or changed the
     /// setting themselves); persisted, so the notice shows at most once
     pub auto_revert_notice_shown: bool,
+    /// The user answered the "local network discovery" notice (or changed
+    /// the setting themselves); persisted, so the notice shows at most once
+    pub local_discovery_notice_shown: bool,
     pub auto_revert_timeout_secs: u64,
     pub enable_event_log: bool,
     pub reduced_colors: bool,
@@ -288,6 +292,12 @@ pub struct State {
     pub close_error: Option<String>,
     /// The Exposure panel (listening sockets and who can reach them)
     pub exposure: exposure::ExposureState,
+    /// Whether the kernel forwards traffic (read at startup, and again off
+    /// the UI thread when Apply starts or Exposure scans); for the
+    /// forwarding notice of the apply dialog
+    pub host_forwarding: crate::core::host_facts::ForwardingState,
+    /// The "Add from template" menu, when open (entries built on open)
+    pub template_menu: Option<templates::TemplateMenu>,
 }
 
 /// Value labels of the settings tab sliders (and the apply dialog's timer),
@@ -300,6 +310,8 @@ pub struct SettingsDisplay {
     pub apply_timer_secs: String,
     /// "5/s", or "Off" for 0 (no ICMP rate limit)
     pub icmp_rate: String,
+    /// The ICMP rate limit row's description, with the current value
+    pub icmp_rate_desc: String,
     /// "10/m"
     pub log_rate: String,
 }
@@ -536,8 +548,71 @@ pub struct ProfileManagerState {
 #[allow(clippy::enum_variant_names)]
 pub enum PendingWarning {
     EnableRpf,
-    EnableServerMode,
+    /// Server Mode, with the essential Output rules it offers to add
+    EnableServerMode(ServerEssentials),
     EnableStrictIcmp,
+}
+
+/// The Server Mode dialog's checkboxes: the rules of
+/// [`crate::core::templates::server_essentials`] (fresh ids, built when the
+/// dialog opens), each ticked unless the profile already has an Output rule
+/// of that name. Confirming adds the ticked ones as one undoable step.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerEssentials {
+    pub choices: Vec<EssentialChoice>,
+}
+
+/// One checkbox of [`ServerEssentials`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EssentialChoice {
+    pub rule: crate::core::firewall::Rule,
+    /// "DNS (TCP+UDP: 53)", "Ping": built with the dialog
+    pub label: String,
+    pub ticked: bool,
+}
+
+impl ServerEssentials {
+    /// The essentials for `ruleset`.
+    pub fn for_ruleset(ruleset: &FirewallRuleset) -> Self {
+        let choices = crate::core::templates::server_essentials()
+            .into_iter()
+            .map(|rule| {
+                let present = ruleset.rules.iter().any(|r| {
+                    r.chain == crate::core::firewall::Chain::Output && r.label == rule.label
+                });
+                // "DNS (TCP+UDP: 53)"; a rule without ports ("Ping") by name
+                let label = if rule.ports.is_empty() {
+                    rule.label.clone()
+                } else {
+                    format!("{} ({})", rule.label, rule.badge_display)
+                };
+                EssentialChoice {
+                    label,
+                    ticked: !present,
+                    rule,
+                }
+            })
+            .collect();
+        Self { choices }
+    }
+
+    /// The ticked rules, in dialog order.
+    pub fn ticked_rules(&self) -> Vec<crate::core::firewall::Rule> {
+        self.choices
+            .iter()
+            .filter(|c| c.ticked)
+            .map(|c| c.rule.clone())
+            .collect()
+    }
+}
+
+/// Why a listed rule is not applied (dimmed in the sidebar, with a badge).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InactiveReason {
+    /// An Output rule in Desktop mode (outgoing traffic is allowed)
+    DesktopMode,
+    /// A Forwarded rule while forwarded traffic is not blocked
+    ForwardingNotBlocked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -612,6 +687,10 @@ pub enum AppStatus {
 #[derive(Debug, Clone)]
 pub enum Message {
     AddRuleClicked,
+    /// Open (listing the interfaces) or close the "Add from template" menu
+    ToggleTemplateMenu(bool),
+    /// Add the rules of the template menu's entry (index)
+    AddTemplate(usize),
     EditRuleClicked(uuid::Uuid),
     /// Cancel/Escape in the rule form (asks first if it was changed)
     CancelRuleForm,
@@ -689,6 +768,11 @@ pub enum Message {
     ConfirmEnableRpf,
     /// Block forwarded traffic (forward chain policy drop)
     ToggleBlockForwarding(bool),
+    /// "Local network discovery" in Settings (Desktop mode only)
+    ToggleLocalDiscovery(bool),
+    /// The one-time local discovery notice: `true` = "Turn on local network
+    /// discovery", `false` = "Not now"
+    LocalDiscoveryNoticeAnswered(bool),
     CancelWarning,
     ToggleDroppedLogging(bool),
     LogRateChanged(u32),
@@ -696,6 +780,8 @@ pub enum Message {
     CheckHoverPending,
     LogPrefixChanged(String),
     ServerModeToggled(bool),
+    /// A checkbox of the Server Mode dialog's essential rules (index, ticked)
+    ServerEssentialToggled(usize, bool),
     ConfirmServerMode,
     ToggleDiagnostics(bool),
     /// Open/close the "Verification Errors" panel
@@ -845,6 +931,7 @@ impl State {
         let show_zebra_striping = config.show_zebra_striping;
         let auto_revert_enabled = config.auto_revert_enabled;
         let auto_revert_notice_shown = config.auto_revert_notice_shown;
+        let local_discovery_notice_shown = config.local_discovery_notice_shown;
         // Clamp timeout to prevent integer overflow (max 1 hour = 3600 seconds)
         let auto_revert_timeout_secs = config.auto_revert_timeout_secs.min(3600);
         let enable_event_log = config.enable_event_log;
@@ -856,6 +943,16 @@ impl State {
         regular_font_choice.set_provisional_handle();
         mono_font_choice.set_provisional_handle();
 
+        // First run: the default profile is created by the GUI, so it starts
+        // like every profile the GUI creates (see `new_profile_ruleset`)
+        if crate::core::profiles::list_profiles_blocking().is_ok_and(|p| p.is_empty())
+            && let Err(e) = crate::utils::block_on_async(crate::core::profiles::save_profile(
+                crate::core::profiles::DEFAULT_PROFILE_NAME,
+                &new_profile_ruleset(),
+            ))
+        {
+            tracing::error!("Failed to create the default profile: {}", e);
+        }
         // Startup guarantee: Ensure at least one profile exists
         // Handles first run, manual deletion, or filesystem corruption
         if let Err(e) = crate::core::profiles::ensure_profile_exists_blocking() {
@@ -933,6 +1030,7 @@ impl State {
             show_zebra_striping,
             auto_revert_enabled,
             auto_revert_notice_shown,
+            local_discovery_notice_shown,
             auto_revert_timeout_secs,
             enable_event_log,
             reduced_colors,
@@ -989,6 +1087,9 @@ impl State {
             close_after_rename: false,
             close_error: None,
             exposure: exposure::ExposureState::default(),
+            // Two tiny /proc files; read once here, refreshed off the UI thread
+            host_forwarding: crate::core::host_facts::forwarding_enabled(),
+            template_menu: None,
         };
 
         // Initialize all caches properly via centralized logic
@@ -1076,6 +1177,7 @@ impl State {
             show_zebra_striping: true,
             auto_revert_enabled: true,
             auto_revert_notice_shown: false,
+            local_discovery_notice_shown: false,
             auto_revert_timeout_secs: 15,
             enable_event_log: false,
             reduced_colors: false,
@@ -1132,6 +1234,8 @@ impl State {
             close_after_rename: false,
             close_error: None,
             exposure: exposure::ExposureState::default(),
+            host_forwarding: crate::core::host_facts::ForwardingState::default(),
+            template_menu: None,
         };
 
         state.set_available_profiles(vec!["test".to_string()]);
@@ -1373,6 +1477,14 @@ impl State {
         } else {
             format!("{}/s", advanced.icmp_rate_limit)
         };
+        display.icmp_rate_desc = if advanced.icmp_rate_limit == 0 {
+            "Limit incoming ping requests per second (0 = off)".to_string()
+        } else {
+            format!(
+                "Limit incoming ping requests to {} per second (0 = off)",
+                advanced.icmp_rate_limit
+            )
+        };
         display.log_rate = format!("{}/m", advanced.log_rate_per_minute);
     }
 
@@ -1383,23 +1495,19 @@ impl State {
     }
 
     /// Sidebar protocol/port badge per rule; the chain arrow (↓/↑) is shown
-    /// only in Server Mode, where the chain matters.
+    /// only in Server Mode, where the chain matters. Forwarded rules always
+    /// say "FWD" (there is no mode in which their chain goes without saying).
     fn update_rule_badges(&mut self) {
+        use crate::core::firewall::Chain;
         let server_mode = self.ruleset.advanced_security.egress_profile
             == crate::core::firewall::EgressProfile::Server;
         self.cached_rule_badges.clear();
         self.cached_rule_badges
-            .extend(self.ruleset.rules.iter().map(|rule| {
-                if server_mode {
-                    let arrow = match rule.chain {
-                        crate::core::firewall::Chain::Input => '↓',
-                        crate::core::firewall::Chain::Output => '↑',
-                        crate::core::firewall::Chain::Forward => '→',
-                    };
-                    format!("{arrow}{}", rule.badge_display)
-                } else {
-                    rule.badge_display.clone()
-                }
+            .extend(self.ruleset.rules.iter().map(|rule| match rule.chain {
+                Chain::Forward => format!("{FORWARD_BADGE_PREFIX}{}", rule.badge_display),
+                Chain::Input if server_mode => format!("↓{}", rule.badge_display),
+                Chain::Output if server_mode => format!("↑{}", rule.badge_display),
+                Chain::Input | Chain::Output => rule.badge_display.clone(),
             }));
     }
 
@@ -1466,13 +1574,33 @@ impl State {
         );
     }
 
-    /// `true` if `rule` is listed but not applied in the current mode:
-    /// Output-chain rules only take effect in Server Mode (the generator skips
-    /// them in Desktop mode). The sidebar shows such rules dimmed with a badge.
+    /// Why `rule` is listed but not applied in the current mode, if it is:
+    /// an enabled rule that [`Rule::takes_effect`] says the generator skips.
+    /// Output-chain rules only take effect in Server Mode, Forwarded rules
+    /// only with "Block forwarded traffic". A disabled rule has no reason
+    /// here: it is already shown as disabled. The sidebar shows such rules
+    /// dimmed with a badge.
+    ///
+    /// [`Rule::takes_effect`]: crate::core::firewall::Rule::takes_effect
+    pub(crate) fn inactive_reason(
+        &self,
+        rule: &crate::core::firewall::Rule,
+    ) -> Option<InactiveReason> {
+        use crate::core::firewall::Chain;
+        if !rule.enabled || rule.takes_effect(&self.ruleset.advanced_security) {
+            return None;
+        }
+        match rule.chain {
+            Chain::Output => Some(InactiveReason::DesktopMode),
+            Chain::Forward => Some(InactiveReason::ForwardingNotBlocked),
+            Chain::Input => None,
+        }
+    }
+
+    /// `true` if `rule` is listed but not applied ([`Self::inactive_reason`]).
+    #[cfg(test)]
     pub(crate) fn rule_is_inactive(&self, rule: &crate::core::firewall::Rule) -> bool {
-        self.ruleset.advanced_security.egress_profile
-            == crate::core::firewall::EgressProfile::Desktop
-            && rule.chain == crate::core::firewall::Chain::Output
+        self.inactive_reason(rule).is_some()
     }
 
     pub(crate) fn clear_drag_state(&mut self) {
@@ -1501,6 +1629,18 @@ impl State {
     /// not answered the notice or changed the setting.
     pub fn auto_revert_notice_visible(&self) -> bool {
         !self.auto_revert_enabled && !self.auto_revert_notice_shown
+    }
+
+    /// The one-time "local network discovery" notice is shown: the open
+    /// profile is in Desktop mode with discovery off (a profile from before
+    /// the setting existed), it can be edited, and the user has not answered
+    /// the notice or changed the setting.
+    pub fn local_discovery_notice_visible(&self) -> bool {
+        let advanced = &self.ruleset.advanced_security;
+        !self.local_discovery_notice_shown
+            && self.unreadable_profile.is_none()
+            && advanced.egress_profile == crate::core::firewall::EgressProfile::Desktop
+            && !advanced.local_discovery
     }
 
     /// The ruleset differs from what DRFW last applied (or that is unknown).
@@ -1638,6 +1778,7 @@ impl State {
             show_zebra_striping: self.show_zebra_striping,
             auto_revert_enabled: self.auto_revert_enabled,
             auto_revert_notice_shown: self.auto_revert_notice_shown,
+            local_discovery_notice_shown: self.local_discovery_notice_shown,
             auto_revert_timeout_secs: self.auto_revert_timeout_secs,
             enable_event_log: self.enable_event_log,
             reduced_colors: self.reduced_colors,
@@ -1688,6 +1829,8 @@ impl State {
         match message {
             // Rules domain
             Message::AddRuleClicked => return handlers::handle_add_rule_clicked(self),
+            Message::ToggleTemplateMenu(open) => handlers::handle_toggle_template_menu(self, open),
+            Message::AddTemplate(index) => return handlers::handle_add_template(self, index),
             Message::EditRuleClicked(id) => return handlers::handle_edit_rule_clicked(self, id),
             Message::CancelRuleForm => handlers::handle_cancel_rule_form(self),
             Message::KeepEditingRuleForm => handlers::handle_keep_editing_rule_form(self),
@@ -1812,6 +1955,15 @@ impl State {
                 return handlers::handle_toggle_rpf_requested(self, enabled);
             }
             Message::ConfirmEnableRpf => return handlers::handle_confirm_enable_rpf(self),
+            Message::ToggleLocalDiscovery(enabled) => {
+                return handlers::handle_toggle_local_discovery(self, enabled);
+            }
+            Message::LocalDiscoveryNoticeAnswered(turn_on) => {
+                return handlers::handle_local_discovery_notice_answered(self, turn_on);
+            }
+            Message::ServerEssentialToggled(index, ticked) => {
+                handlers::handle_server_essential_toggled(self, index, ticked);
+            }
             Message::ToggleBlockForwarding(enabled) => {
                 return handlers::handle_toggle_block_forwarding(self, enabled);
             }
@@ -2038,6 +2190,19 @@ impl State {
 }
 
 /// Builds the app theme for `choice`, with reduced syntax colors if enabled.
+/// Start of the sidebar badge of a Forwarded rule ("FWD TCP: 80").
+pub(crate) const FORWARD_BADGE_PREFIX: &str = "FWD ";
+
+/// The ruleset of a profile the GUI creates (first run, "New empty
+/// profile", "Start fresh"): the defaults, in Desktop mode, with local
+/// network discovery on. Profiles that exist keep what they have (the
+/// field's serde default is off); the one-time notice offers it to them.
+pub(crate) fn new_profile_ruleset() -> FirewallRuleset {
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.advanced_security.local_discovery = true;
+    ruleset
+}
+
 fn build_theme(choice: crate::theme::ThemeChoice, reduced_colors: bool) -> crate::theme::AppTheme {
     let theme = choice.to_theme();
     if reduced_colors {
