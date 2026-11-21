@@ -8,6 +8,9 @@ what the generated ruleset contains, and what the GUI and CLI tell you about it.
 
 ### Upgrading
 
+- **Restart DRFW after upgrading the package.** A DRFW window that was already open
+  keeps running the old code, and the new root helper refuses its Save to System
+  requests ("not JSON"). Applying is unaffected; restarting fixes saving.
 - **Apply once after upgrading, and keep it** (confirm it in time, or apply with
   auto-revert off / `--no-confirm`). The ruleset DRFW generates around your rules
   changed (see [Changed baseline rules](#changed-baseline-rules)), and only an apply by
@@ -60,6 +63,15 @@ what the generated ruleset contains, and what the GUI and CLI tell you about it.
   DRFW window within about five minutes do not ask; another window or a new CLI run
   does. Without the helper installed (a build run from the source tree) DRFW elevates
   `/bin/sh` as before and asks every time.
+- **DRFW can never change other tools' tables, even within those five minutes.** The
+  root helper accepts only DRFW's own nftables JSON for the `inet drfw` table: adding
+  and deleting that table and adding its chains, rules and sets, with only the keys and
+  rule statements DRFW generates. `flush ruleset`, other tables or families (Docker,
+  libvirt, Tailscale, `ip filter`, …), `insert`/`replace`/`list`/`reset`, and rulesets
+  in text form are refused (exit 1, nothing runs), for apply, check and Save to System
+  alike. Save to System now sends the same JSON and the helper renders the boot file
+  itself, byte for byte the text the preview shows, so the boot config can only load
+  `inet drfw` too.
 - **The first-apply lockout is fixed.** The old "snapshot" was taken inside the apply,
   so on a first apply it captured the new drop policies without any rules, and a
   revert left the machine offline. A revert now restores the previous table exactly,

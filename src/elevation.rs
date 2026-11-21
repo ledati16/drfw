@@ -19,8 +19,10 @@
 //! [`crate::distro::HELPER_PATH`] as a regular file owned by root, with no
 //! group- or world-writable file or directory on the way, DRFW elevates it:
 //! `pkexec <helper> apply|save-config|check …`. The helper validates the
-//! request again as root (this build's fixed paths, nonce, uid, payload) and
-//! then runs the same fixed script, or `nft` for the check. Otherwise
+//! request again as root (this build's fixed paths, nonce, uid, payload: only
+//! DRFW's JSON for the `inet drfw` table, see [`crate::core::root_payload`])
+//! and then runs the same fixed script, or `nft` for the check. For
+//! save-config it gets the JSON and renders the file itself. Otherwise
 //! (development builds, `cargo run`), DRFW elevates `/bin/sh -c <script>`
 //! and `nft` directly, exactly as before the helper existed.
 //!
@@ -677,12 +679,38 @@ pub(crate) const SAVE_CONFIG_SCRIPT_NAME: &str = "drfw-save-config";
 /// Absolute shell path: elevation tools must not resolve `sh` through `PATH`.
 pub(crate) const SHELL_PATH: &str = "/bin/sh";
 
+/// What a save-config command reads on stdin ([`SaveConfigCommand::input`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveConfigInput {
+    /// The root helper: the JSON [`SavePayload`] itself; the helper checks
+    /// it (only the `inet drfw` table) and renders the file as root
+    ///
+    /// [`SavePayload`]: crate::core::root_payload::SavePayload
+    Payload,
+    /// [`SAVE_CONFIG_SCRIPT`] without the helper: the `nft -f` text,
+    /// rendered by DRFW from the same payload ([`SavePayload::render`])
+    ///
+    /// [`SavePayload::render`]: crate::core::root_payload::SavePayload::render
+    Text,
+}
+
+/// The save-config command and what to write to its stdin.
+#[derive(Debug)]
+pub struct SaveConfigCommand {
+    /// The (elevated) command
+    pub command: Command,
+    /// What it reads on stdin
+    pub input: SaveConfigInput,
+}
+
 /// Creates the (elevated) command that installs a new system nftables config.
 ///
 /// Runs [`SAVE_CONFIG_SCRIPT`] with a single elevation prompt: through the
 /// helper (`<helper> save-config <target> <nft> <service>`) when it is
-/// installed, else with `/bin/sh`. The caller writes the file content to the
-/// command's stdin. The helper accepts only this build's target and service.
+/// installed, else with `/bin/sh`. The caller writes [`SaveConfigCommand::input`]
+/// to the command's stdin: the JSON save payload for the helper (which renders
+/// the file itself, and only for the `inet drfw` table), the rendered text for
+/// the script. The helper accepts only this build's target and service.
 ///
 /// # Arguments
 ///
@@ -707,16 +735,16 @@ pub(crate) const SHELL_PATH: &str = "/bin/sh";
 /// use drfw::elevation::create_elevated_save_config_command;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut cmd =
+/// let mut save =
 ///     create_elevated_save_config_command(drfw::SYSTEM_NFT_PATH, Some(drfw::SYSTEM_NFT_SERVICE))?;
-/// cmd.stdin(std::process::Stdio::piped());
+/// save.command.stdin(std::process::Stdio::piped());
 /// # Ok(())
 /// # }
 /// ```
 pub fn create_elevated_save_config_command(
     target: &str,
     enable_service: Option<&str>,
-) -> Result<Command, ElevationError> {
+) -> Result<SaveConfigCommand, ElevationError> {
     save_config_command(
         test_nft_command().as_deref(),
         target,
@@ -733,18 +761,25 @@ fn save_config_command(
     target: &str,
     enable_service: Option<&str>,
     elevation: impl FnOnce() -> Result<ElevationPlan, ElevationError>,
-) -> Result<Command, ElevationError> {
+) -> Result<SaveConfigCommand, ElevationError> {
     let service = enable_service.unwrap_or_default();
     let (plan, nft) = match test_nft {
         Some(nft) => (ElevationPlan::direct(), nft),
         None => (elevation()?, crate::distro::NFT_COMMAND),
     };
-    Ok(plan.script_command(
-        crate::helper::SAVE_CONFIG,
-        SAVE_CONFIG_SCRIPT,
-        SAVE_CONFIG_SCRIPT_NAME,
-        &[target, nft, service],
-    ))
+    Ok(SaveConfigCommand {
+        command: plan.script_command(
+            crate::helper::SAVE_CONFIG,
+            SAVE_CONFIG_SCRIPT,
+            SAVE_CONFIG_SCRIPT_NAME,
+            &[target, nft, service],
+        ),
+        input: if plan.helper {
+            SaveConfigInput::Payload
+        } else {
+            SaveConfigInput::Text
+        },
+    })
 }
 
 // ============================================================================
@@ -1787,10 +1822,12 @@ mod tests {
         ));
 
         for service in [Some(crate::SYSTEM_NFT_SERVICE), None] {
-            let cmd =
+            let save =
                 save_config_command(None, crate::SYSTEM_NFT_PATH, service, || Ok(pkexec_helper))
                     .expect("helper");
-            let args = helper_args(&cmd);
+            // The helper renders the file itself: it gets the JSON payload
+            assert_eq!(save.input, SaveConfigInput::Payload);
+            let args = helper_args(&save.command);
             assert_eq!(
                 args,
                 [
@@ -1859,7 +1896,9 @@ mod tests {
             || panic!("mock mode never needs elevation"),
         )
         .expect("mock mode");
-        let (program, args) = argv(&cmd);
+        // The script reads the text DRFW rendered
+        assert_eq!(cmd.input, SaveConfigInput::Text);
+        let (program, args) = argv(&cmd.command);
         assert_eq!(program, SHELL_PATH);
         // Fixed script, then $0, target and nft command as separate argv entries
         assert_eq!(
@@ -1882,7 +1921,8 @@ mod tests {
             })
         })
         .expect("elevated");
-        let (program, args) = argv(&cmd);
+        assert_eq!(cmd.input, SaveConfigInput::Text);
+        let (program, args) = argv(&cmd.command);
         assert_eq!(program, "pkexec");
         assert_eq!(
             args,

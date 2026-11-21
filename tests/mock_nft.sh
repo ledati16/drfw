@@ -89,8 +89,9 @@ case "$1" in
         # Accepts any readable file whose first line is the DRFW shebang. The
         # nft path in it is the compile-time DRFW_NFT_PATH (default
         # /usr/sbin/nft; packagers set e.g. /usr/bin/nft), so accept any path.
+        # A chain with `hook bogus` is refused (the tests' "nft rejects it").
         if [ "$2" = "-f" ] && [ -r "$3" ]; then
-            if head -n 1 "$3" | grep -qE '^#!/[^ ]*/nft -f$'; then
+            if head -n 1 "$3" | grep -qE '^#!/[^ ]*/nft -f$' && ! grep -q 'hook bogus' "$3"; then
                 exit 0
             fi
             echo "Error: syntax error (mock)" >&2

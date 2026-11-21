@@ -91,6 +91,11 @@ jobs:
       - name: Build stress_gen
         run: cargo build --locked --features stress_gen --bin stress_gen
 
+      # stress_gen's own tests (every scenario passes the validator and the
+      # root helper's payload check); not part of the default `cargo test`
+      - name: Test stress_gen
+        run: cargo test --locked --features stress_gen --bin stress_gen
+
       - name: Run tests
         env:
           # Fail (instead of skip) if real-nft tests cannot run here

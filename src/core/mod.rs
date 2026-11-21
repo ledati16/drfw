@@ -13,6 +13,7 @@
 //! - [`lockout`]: Whether new rules would keep you from reconnecting over SSH
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
+//! - [`root_payload`]: What a ruleset sent to root may contain (only the `inet drfw` table)
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
 //! - [`verify`]: `nft --check` of a generated ruleset (syntax and kernel support)
 //! - [`error`]: Error types for firewall operations
@@ -37,6 +38,7 @@ pub mod nft_errors;
 pub mod nft_text;
 pub mod profiles;
 pub mod retention;
+pub mod root_payload;
 pub mod rule_constraints;
 pub mod system_config;
 pub mod templates;

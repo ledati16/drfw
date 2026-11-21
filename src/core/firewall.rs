@@ -2219,9 +2219,9 @@ impl PerSourceKind {
 }
 
 /// nftables address family of the drfw table.
-const NFT_FAMILY: &str = "inet";
+pub(crate) const NFT_FAMILY: &str = "inet";
 /// Name of the drfw table.
-const NFT_TABLE: &str = "drfw";
+pub(crate) const NFT_TABLE: &str = "drfw";
 /// Priority of drfw's base chains (runs just before the default filter priority 0).
 const CHAIN_PRIORITY: i32 = -10;
 
@@ -2319,6 +2319,16 @@ const SECTION_LOCAL: &str = "Local network";
 const SECTION_ICMP: &str = "ICMP";
 const SECTION_USER: &str = "User rules";
 const SECTION_END: &str = "End of chain";
+/// Every section a command can be in (the save payload names them, see
+/// [`crate::core::root_payload::SavePayload`]).
+pub(crate) const SECTIONS: [&str; 6] = [
+    SECTION_SETUP,
+    SECTION_BASE,
+    SECTION_LOCAL,
+    SECTION_ICMP,
+    SECTION_USER,
+    SECTION_END,
+];
 
 /// What produced a generated command.
 ///

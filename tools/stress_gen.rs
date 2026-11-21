@@ -1510,3 +1510,56 @@ fn main() {
 
     println!("\nDone! Profile ready for testing.");
 }
+
+#[cfg(test)]
+mod tests {
+    use drfw::core::firewall::EgressProfile;
+    use drfw::core::root_payload::{SavePayload, check_ruleset_json};
+
+    use super::*;
+
+    /// Every scenario's profile (with the default settings, and with every
+    /// setting on) is DRFW's own table only: the root helper's check accepts
+    /// its JSON, and the save payload renders exactly the preview text.
+    /// `cargo test --features stress_gen --bin stress_gen`.
+    #[test]
+    fn test_scenarios_pass_the_root_payload_check() {
+        for (seed, scenario) in [
+            Scenario::Minimal,
+            Scenario::Typical,
+            Scenario::Enterprise,
+            Scenario::Chaos,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
+            let (mut ruleset, _) = generate_ruleset(
+                &mut rng,
+                scenario.count(),
+                scenario.edge_cases(),
+                scenario.edge_case_probability(),
+            );
+            for all_settings in [false, true] {
+                if all_settings {
+                    let advanced = &mut ruleset.advanced_security;
+                    advanced.strict_icmp = true;
+                    advanced.icmp_rate_limit = 10;
+                    advanced.enable_rpf = true;
+                    advanced.log_dropped = true;
+                    advanced.egress_profile = EgressProfile::Server;
+                    advanced.block_forwarding = true;
+                    advanced.local_discovery = true;
+                }
+                let name = format!("{} (all settings: {all_settings})", scenario.name());
+                let json = serde_json::to_vec(&ruleset.to_nftables_json()).expect("json");
+                assert_eq!(check_ruleset_json(&json), Ok(()), "{name}");
+                assert_eq!(
+                    SavePayload::of_ruleset(&ruleset).render(),
+                    Ok(ruleset.to_nft_text()),
+                    "{name}"
+                );
+            }
+        }
+    }
+}

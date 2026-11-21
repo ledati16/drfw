@@ -41,6 +41,7 @@ use crate::core::confirmed::{ConfirmedRecord, RecordKind};
 use crate::core::firewall::FirewallRuleset;
 use crate::core::lockout::{LockoutWarning, SshSession};
 use crate::core::retention::RetentionWarning;
+use crate::core::root_payload::SavePayload;
 use crate::core::system_config::EnableOutcome;
 use crate::core::verify::{VerifyError, VerifyResult};
 use crate::elevation::AuthError;
@@ -1132,7 +1133,9 @@ pub(crate) fn handle_save_to_system_enable_toggled(state: &mut State, enabled: b
 
 /// Handles user confirming Save to System - proceeds with file write
 ///
-/// One elevated invocation writes the text to a temp file next to the target,
+/// One elevated invocation renders the ruleset's JSON (as root, through the
+/// helper, which accepts only the `inet drfw` table) and writes the text to a
+/// temp file next to the target,
 /// checks it with `nft -c -f`, backs up the existing file, atomically renames
 /// the new one into place and, if the checkbox is checked, enables the boot
 /// service (see `elevation::SAVE_CONFIG_SCRIPT`). The earlier JSON
@@ -1149,18 +1152,20 @@ pub(crate) fn handle_save_to_system_confirmed(
     if state.status != AppStatus::AwaitingSaveToSystem || state.context_pending() {
         return Task::none();
     }
-    let text = match source {
-        SaveSource::Editor => state.ruleset.to_nft_text(),
-        // The text of exactly the recorded JSON bytes, not the ruleset
-        // rendered again (a newer DRFW may generate it differently)
+    // JSON, never text: root renders the file (the editor's is exactly the
+    // preview, `to_nft_text`) and refuses anything but the `inet drfw` table
+    let payload = match source {
+        SaveSource::Editor => SavePayload::of_ruleset(&state.ruleset),
+        // Exactly the recorded JSON bytes, not the ruleset generated again
+        // (a newer DRFW may generate it differently)
         SaveSource::LastConfirmed => {
             let Some(record) = state.confirmed_record.as_ref() else {
                 tracing::error!("Save of the last confirmed rules without any");
                 return Task::none();
             };
-            match record.nft_text() {
-                Ok(text) => text,
-                Err(e) => return fail_last_kept_save(state, e),
+            match record.save_payload() {
+                Ok(payload) => payload,
+                Err(e) => return fail_last_kept_save(state, e.to_string()),
             }
         }
     };
@@ -1172,7 +1177,7 @@ pub(crate) fn handle_save_to_system_confirmed(
     Task::perform(
         async move {
             let output = crate::core::system_config::write_config_file_and_enable(
-                &text,
+                &payload,
                 crate::SYSTEM_NFT_PATH,
                 enable,
             )

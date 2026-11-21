@@ -1213,7 +1213,8 @@ async fn save_profile(
     };
 
     println!("Saving '{name}' to {target}...");
-    let output = write_config_file_and_enable(&ruleset.to_nft_text(), &target, service).await;
+    let payload = core::root_payload::SavePayload::of_ruleset(&ruleset);
+    let output = write_config_file_and_enable(&payload, &target, service).await;
     let output = match output {
         Ok(output) if output.status.success() => output,
         Ok(output) => {

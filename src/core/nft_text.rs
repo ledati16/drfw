@@ -168,10 +168,32 @@ pub fn render_json(json: &str) -> Result<String, String> {
         .get("nftables")
         .and_then(Value::as_array)
         .ok_or("no \"nftables\" command list")?;
+    render_list(list, None)
+}
+
+/// Renders a JSON command list, with the section of each command when
+/// `sections` (one per command) is given, else without section comments.
+/// With the sections of `FirewallRuleset::build_commands`, the text is
+/// exactly `FirewallRuleset::to_nft_text`'s (the rendering never depends on
+/// a command's origin). The root helper renders Save to System's file with
+/// it ([`crate::core::root_payload`]).
+///
+/// # Errors
+///
+/// `sections` has another length than `list`, or a command or expression
+/// is outside the supported subset (the first such error).
+pub(crate) fn render_list(
+    list: &[Value],
+    sections: Option<&[&'static str]>,
+) -> Result<String, String> {
+    if sections.is_some_and(|sections| sections.len() != list.len()) {
+        return Err("not one section per command".to_string());
+    }
     let commands: Vec<NftCommand> = list
         .iter()
-        .map(|command| NftCommand {
-            section: NO_SECTION,
+        .enumerate()
+        .map(|(i, command)| NftCommand {
+            section: sections.map_or(NO_SECTION, |sections| sections[i]),
             origin: CommandOrigin::Setup,
             value: command.clone(),
         })

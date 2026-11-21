@@ -257,8 +257,27 @@ for active, `exec.path` = `HELPER_PATH`). In order, it:
    (`check_payload`: no `\` at all, every `"` closed on its line, no `include` in any
    case outside strings). This matters for JSON too: `nft --json -f` parses input
    that is not valid JSON as text, and `include "<file>"` makes root nft echo that
-   file in its errors.
-4. Puts the payload in a memfd as stdin, clears the environment (`PATH=SAFE_PATH`,
+   file in its errors. Kept as defense in depth (step 4 refuses text anyway).
+4. **Only `inet drfw`** (`core::root_payload`, `helper::child_input`): `apply` and
+   `check` take only DRFW's nftables JSON (`check_ruleset_json`): canonical bytes
+   (`serde_json` compact; no duplicate keys or whitespace another parser could read
+   differently), top level exactly `{"nftables":[…]}`, every command `add`/`delete`
+   (`flush` too, for older records) `table {family:"inet",name:"drfw"}` or `add`
+   `chain`/`rule`/`set` with family `inet` and table `drfw` (exact strings), only the
+   keys `build_commands` writes (`TABLE_KEYS`, `CHAIN_KEYS`, `RULE_KEYS`, `SET_KEYS`),
+   and every rule expression one `nft_text` can render (DRFW's subset: no `dup`,
+   `queue`, `jump`, nat, …). No `flush ruleset`, `metainfo`, `insert`, `replace`,
+   `destroy`, `list`, `reset`, other table or family, or text. `save-config` takes
+   a `SavePayload` (the same JSON plus optional `"sections"`, each one of the fixed
+   `firewall::SECTIONS` headings), checks it the same way, **renders the file as
+   root** (`render_save_payload`, byte-identical to `to_nft_text()`, the preview) and
+   gives the script that text (which must pass `check_payload` too). Callers send
+   JSON only: `system_config::write_config_file_and_enable(&SavePayload, …)`; without
+   the helper (`SaveConfigInput::Text`) DRFW renders the same payload itself. Not
+   covered (and not needed): the revert guard's own batch (`nft list table inet
+   drfw`, saved and replayed as root inside `APPLY_SCRIPT`). Adding a command shape
+   to `build_commands` means allowing it in `root_payload` (its tests fail otherwise).
+5. Puts the payload (for `save-config`: the rendered text) in a memfd as stdin, clears the environment (`PATH=SAFE_PATH`,
    `/usr/sbin:/usr/bin:/sbin:/bin`, nothing else), `cd /`, and `exec`s `/bin/sh -c
    <the same script>` or `nft`. Process tree, signals and exit codes stay the scripts'.
 
@@ -267,8 +286,9 @@ polkit keeps the authorization for the *subject*, the process that ran `pkexec` 
 start time), for ~5 minutes. Cached `/bin/sh` = any root command; cached `nft` = root
 `nft -c -f <any file>` (a file-read primitive). Cached helper = only what DRFW does
 anyway: apply a ruleset with a revert guard, write `SYSTEM_NFT_PATH`, enable
-`SYSTEM_NFT_SERVICE`, check a ruleset. No path, service, nft binary or environment
-variable can be chosen, and the `include` file read is refused. Whoever can drive the
+`SYSTEM_NFT_SERVICE`, check a ruleset, all only for the `inet drfw` table (other
+tools' tables, `flush ruleset` and text are refused, step 4). No path, service, nft
+binary or environment variable can be chosen, and the `include` file read is refused. Whoever can drive the
 GUI process could already ask for all of that; the window only spares the prompt.
 
 **Test mode** (`cfg(debug_assertions)` only; release builds do not read the variables):
@@ -277,7 +297,10 @@ GUI process could already ask for all of that; the window only spares the prompt
 `getuid()`. It refuses when `PKEXEC_UID`/`SUDO_UID` is set or as root of the initial
 user namespace (`/proc/self/uid_map` identity), so it runs as the test user or as root
 of `unshare -rn` only. Tests: `tests/helper.rs` (binary, `tests/env_nft.sh` as nft),
-`tests/real_nft.rs` (apply/save/check in a namespace), unit tests in `helper.rs`.
+`tests/real_nft.rs` (apply/save/check in a namespace, `inet docker` surviving refused
+and normal requests), unit tests in `helper.rs` and `core/root_payload.rs` (allow/deny
+table, byte identity with the preview; the proptest in `core/tests.rs` and the
+`stress_gen` test, `cargo test --features stress_gen --bin stress_gen`).
 **Never** add a test-mode path that works in release builds, a way to pass a path or
 service through argv, or an argument that reaches nft as `-f <file>`.
 
@@ -401,7 +424,9 @@ apply again: that reopens the window in which live rules have no guard.
 
 ### Save to System
 `SAVE_CONFIG_SCRIPT` (argv: target = `drfw::SYSTEM_NFT_PATH`, nft = `NFT_COMMAND`,
-optional service = `drfw::SYSTEM_NFT_SERVICE`; all validated in the script first):
+optional service = `drfw::SYSTEM_NFT_SERVICE`; all validated in the script first;
+stdin = the text the helper rendered from the JSON `SavePayload`, or without the
+helper the same text rendered by DRFW):
 create the target's directory if missing, write stdin to a temp file next to the
 target, `nft -c -f` **that exact file**, copy the old target to `.drfw-bak` (and, once,
 to `.drfw-orig`, never overwritten), sync, then rename into place. Any failure up to

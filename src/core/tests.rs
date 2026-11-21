@@ -815,6 +815,49 @@ mod property_tests {
             prop_assert!(user_rules.len() <= max_copies, "{} copies", user_rules.len());
         }
 
+        /// Whatever the rules and settings, DRFW's output passes the root
+        /// helper's table check, and the save payload root renders is
+        /// exactly the preview text.
+        #[test]
+        fn test_generated_rulesets_pass_the_root_payload_check(
+            rules in prop::collection::vec(
+                (arb_rule(), any::<bool>(), any::<bool>(), any::<bool>()),
+                0..6,
+            ),
+            settings in any::<[bool; 7]>(),
+        ) {
+            use crate::core::firewall::{Chain, EgressProfile};
+            use crate::core::root_payload::{SavePayload, check_ruleset_json};
+            let mut ruleset = FirewallRuleset::new();
+            for (mut rule, per_source, conn_per_source, forward) in rules {
+                if let Some(limit) = &mut rule.rate_limit {
+                    limit.per_source = per_source;
+                }
+                rule.connection_limit_per_source = conn_per_source;
+                if forward {
+                    rule.chain = Chain::Forward;
+                }
+                rule.rebuild_caches();
+                ruleset.rules.push(rule);
+            }
+            let [strict_icmp, icmp_limit, rpf, log_dropped, server, block_forwarding, discovery] =
+                settings;
+            let advanced = &mut ruleset.advanced_security;
+            advanced.strict_icmp = strict_icmp;
+            advanced.icmp_rate_limit = if icmp_limit { 10 } else { 0 };
+            advanced.enable_rpf = rpf;
+            advanced.log_dropped = log_dropped;
+            advanced.egress_profile = if server { EgressProfile::Server } else { EgressProfile::Desktop };
+            advanced.block_forwarding = block_forwarding;
+            advanced.local_discovery = discovery;
+
+            let json = serde_json::to_vec(&ruleset.to_nftables_json()).expect("json");
+            prop_assert_eq!(check_ruleset_json(&json), Ok(()));
+            prop_assert_eq!(crate::helper::check_payload(&json), Ok(()));
+            let rendered = SavePayload::of_ruleset(&ruleset).render();
+            prop_assert_eq!(rendered, Ok(ruleset.to_nft_text()));
+        }
+
         /// Text output never contains a statement line that is not part of a
         /// rule we generated (no injection through quoted strings).
         #[test]

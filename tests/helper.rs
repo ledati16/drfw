@@ -12,6 +12,8 @@
 //! - the child's environment: only the fixed `PATH`, working directory `/`;
 //! - a table of bad requests (every subcommand) and an `include` payload are
 //!   refused before anything runs, with exit status 1 (never 126/127);
+//! - payloads for other tables or in text form are refused for every
+//!   request; save-config hands the script the text it rendered;
 //! - `drfw print-polkit-policy`: the action file for this build.
 
 mod common;
@@ -73,6 +75,9 @@ fn assert_refused(output: &Output, reason: &str, context: &str) {
         stdout(output)
     );
 }
+
+/// The smallest payload the helper accepts: `add table inet drfw`.
+const DRFW_TABLE: &[u8] = br#"{"nftables":[{"add":{"table":{"family":"inet","name":"drfw"}}}]}"#;
 
 fn running_as_root() -> bool {
     nix::unistd::geteuid().is_root()
@@ -149,7 +154,7 @@ fn test_child_environment_is_sanitized() {
         return;
     }
     let nft = env_nft();
-    let payload = br#"{"nftables":[{"add":{"table":{"family":"inet","name":"drfw"}}}]}"#;
+    let payload = DRFW_TABLE;
     let output = run_helper(
         &["check"],
         &[
@@ -269,7 +274,7 @@ fn test_bad_requests_are_refused() {
         assert_refused(&output, reason, &format!("{args:?}"));
     }
     // The same environment runs a valid request
-    let output = run_helper(&["check"], &env, b"{}");
+    let output = run_helper(&["check"], &env, DRFW_TABLE);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(stdout(&output).starts_with("args=--json --check -f -\n"));
 }
@@ -294,6 +299,108 @@ fn test_include_payload_is_refused() {
         let output = run_helper(&["check"], &env, payload);
         assert_refused(&output, "the ruleset", &String::from_utf8_lossy(payload));
     }
+}
+
+/// Payloads for other tables, the whole ruleset or in text form are refused
+/// for every request before anything runs; a valid save payload reaches the
+/// script as the text the helper rendered (`tests/env_nft.sh` stands in for
+/// `nft`, so the script's `nft -c` passes and the file is installed).
+#[test]
+fn test_payloads_outside_the_drfw_table_are_refused() {
+    if !test_mode_available() || !common::script_paths_usable() {
+        return;
+    }
+    let nft = env_nft();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("nftables.conf");
+    let target = target.to_str().expect("utf-8 path");
+    let state = dir.path().join("state");
+    let state = state.to_str().expect("utf-8 path");
+    let env = [
+        ("DRFW_HELPER_TEST_MODE", "1"),
+        ("DRFW_HELPER_TEST_NFT", nft.as_str()),
+        ("DRFW_HELPER_TEST_TARGET", target),
+        ("DRFW_HELPER_TEST_STATE_DIR", state),
+    ];
+    let uid = nix::unistd::getuid().as_raw().to_string();
+    let nonce = "0123456789abcdef0123456789abcdef";
+    let requests: [Vec<&str>; 3] = [
+        vec!["check"],
+        vec![
+            "apply",
+            state,
+            "30",
+            nonce,
+            "/run/user/1000",
+            nft.as_str(),
+            "setsid",
+            uid.as_str(),
+        ],
+        vec!["save-config", target, nft.as_str(), ""],
+    ];
+    let ruleset = drfw::core::firewall::FirewallRuleset::new();
+    let with = |extra: serde_json::Value| {
+        let mut json = ruleset.to_nftables_json();
+        json["nftables"]
+            .as_array_mut()
+            .expect("command list")
+            .push(extra);
+        json.to_string().into_bytes()
+    };
+    let refused: Vec<(Vec<u8>, &str)> = vec![
+        (
+            with(serde_json::json!({ "flush": { "ruleset": null } })),
+            "is not allowed",
+        ),
+        (
+            with(
+                serde_json::json!({ "delete": { "table": { "family": "inet", "name": "docker" } } }),
+            ),
+            "is not allowed",
+        ),
+        (
+            with(
+                serde_json::json!({ "delete": { "table": { "family": "ip", "name": "filter" } } }),
+            ),
+            "is not allowed",
+        ),
+        (
+            with(serde_json::json!({ "add": { "chain": {
+                "family": "inet", "table": "docker", "name": "x",
+            } } })),
+            "is not allowed",
+        ),
+        (
+            b"flush ruleset
+"
+            .to_vec(),
+            "not JSON",
+        ),
+        (ruleset.to_nft_text().into_bytes(), "not JSON"),
+    ];
+    for request in &requests {
+        for (payload, reason) in &refused {
+            let output = run_helper(request, &env, payload);
+            assert_refused(
+                &output,
+                reason,
+                &format!("{request:?} {}", String::from_utf8_lossy(payload)),
+            );
+        }
+    }
+    assert!(
+        !std::path::Path::new(target).exists() && !std::path::Path::new(state).exists(),
+        "a refused request wrote something"
+    );
+
+    // A valid save: the script gets the rendered text (the preview)
+    let payload = drfw::core::root_payload::SavePayload::of_ruleset(&ruleset);
+    let output = run_helper(&requests[2], &env, payload.as_bytes());
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(target).expect("saved file"),
+        ruleset.to_nft_text()
+    );
 }
 
 #[test]

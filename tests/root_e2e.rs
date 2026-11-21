@@ -54,12 +54,11 @@ fn save_target() -> String {
     std::env::var("DRFW_E2E_SAVE_TARGET").unwrap_or_else(|_| drfw::SYSTEM_NFT_PATH.to_string())
 }
 
-async fn profile_text() -> String {
+async fn profile() -> drfw::core::firewall::FirewallRuleset {
     let name = std::env::var("DRFW_E2E_SAVE_PROFILE").expect("DRFW_E2E_SAVE_PROFILE is not set");
-    let ruleset = drfw::core::profiles::load_profile(&name)
+    drfw::core::profiles::load_profile(&name)
         .await
-        .unwrap_or_else(|e| panic!("cannot load profile {name}: {e}"));
-    ruleset.to_nft_text()
+        .unwrap_or_else(|e| panic!("cannot load profile {name}: {e}"))
 }
 
 fn print_output(output: &std::process::Output) {
@@ -134,8 +133,10 @@ async fn e2e_save_profile() {
         return;
     }
     let target = save_target();
-    let text = profile_text().await;
-    let output = drfw::core::system_config::write_config_file(&text, &target)
+    let ruleset = profile().await;
+    let text = ruleset.to_nft_text();
+    let payload = drfw::core::root_payload::SavePayload::of_ruleset(&ruleset);
+    let output = drfw::core::system_config::write_config_file(&payload, &target)
         .await
         .expect("cannot run the save script");
     print_output(&output);
@@ -157,12 +158,18 @@ async fn e2e_save_broken_is_rejected() {
     }
     let target = save_target();
     let before = std::fs::read(&target).ok();
-    // A real header and table, then a line nft cannot parse
-    let text = format!(
-        "{}\nthis is not an nftables statement {{\n",
-        profile_text().await
+    // The profile plus a chain DRFW's checks allow (its own table) but nft
+    // rejects: an unknown hook
+    let mut json = profile().await.to_nftables_json();
+    json["nftables"].as_array_mut().expect("command list").push(
+        serde_json::json!({ "add": { "chain": {
+            "family": "inet", "table": "drfw", "name": "bogus",
+            "type": "filter", "hook": "bogus", "prio": 0, "policy": "accept",
+        } } }),
     );
-    let output = drfw::core::system_config::write_config_file(&text, &target)
+    let payload = drfw::core::root_payload::SavePayload::of_recorded_json(&json.to_string())
+        .expect("allowed payload");
+    let output = drfw::core::system_config::write_config_file(&payload, &target)
         .await
         .expect("cannot run the save script");
     print_output(&output);

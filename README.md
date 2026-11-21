@@ -427,6 +427,18 @@ password for `/bin/sh` (any root command) or for root `nft` (`nft -c -f <file>` 
 the content of any file) would not be. A DRFW run from the source tree, with no
 installed helper, elevates `/bin/sh` with the same fixed scripts and asks every time.
 
+**DRFW can never change other tools' tables.** The root helper enforces it, so it holds
+during those five minutes too, whatever runs inside the DRFW window: a ruleset is
+accepted only as DRFW's own nftables JSON for the `inet drfw` table (replacing that
+table, adding its chains, rules and sets, with only the rule statements DRFW
+generates). `flush ruleset`, any other table or family (Docker's, libvirt's,
+Tailscale's, `ip filter`, …) and rulesets in text form are refused before anything
+runs, for apply, check and Save to System alike. For Save to System the helper renders
+the boot file itself from that JSON (exactly the text the preview shows), so the boot
+config only ever loads `inet drfw` as well. (The revert guard's own restore batch is
+`nft list table inet drfw`, saved and replayed as root inside the apply script; it
+never comes from DRFW's process.)
+
 **Works over SSH.** The watcher runs as root on its own (a `drfw-revert-*`
 systemd unit, or a `setsid` process without systemd) and times out on the
 monotonic clock. If you lock yourself out, the terminal closes, the SSH
@@ -569,7 +581,9 @@ nftables.service at boot** checkbox is offered, checked by default. Saving runs 
 fixed, elevated script (one prompt) that:
 
 1. writes the new file next to the target, then runs `nft -c -f` on **exactly those
-   bytes** — a file nft rejects never replaces the current one;
+   bytes** — a file nft rejects never replaces the current one. With the root helper
+   installed, DRFW sends the rules as JSON and the helper renders the file itself (the
+   same text as the preview), after checking that they touch only the `inet drfw` table;
 2. copies the current file to `/etc/nftables.conf.drfw-bak` (the previous save);
 3. the first time only, copies it to `/etc/nftables.conf.drfw-orig`, which is never
    overwritten, so your distribution's or hand-written config can always be recovered;

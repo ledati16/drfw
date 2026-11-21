@@ -26,9 +26,12 @@
 //!   rejected rulesets, and SIGHUP/SIGINT/SIGTERM/SIGKILL right after the
 //!   new rules went live.
 //! - The root helper `drfw-helper` (debug-build test mode): apply with
-//!   confirm and timeout, Save to System and the check through it, and
-//!   refused requests (foreign state dir, foreign uid, `include` payloads)
-//!   that change nothing.
+//!   confirm and timeout, Save to System (from the JSON save payload, the
+//!   file byte for byte the preview text) and the check through it, refused
+//!   requests (foreign state dir, foreign uid, `include` payloads) that
+//!   change nothing, and payloads for other tables (`flush ruleset`, delete
+//!   `inet docker`) refused for apply, check and save while `inet docker`
+//!   survives every request untouched.
 //!
 //! The probe, the `nft` binary (the one the library runs unprivileged, put
 //! first on the scripts' `PATH`) and the rule builder come from
@@ -43,6 +46,7 @@ use drfw::core::firewall::{
     Action, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol, RateLimit, RejectType,
     Rule, TimeUnit,
 };
+use drfw::core::root_payload::SavePayload;
 use ipnetwork::IpNetwork;
 use proptest::prelude::*;
 
@@ -900,7 +904,8 @@ fn test_save_config_script_with_real_nft() {
     let text = ruleset.to_nft_text();
     let output = runtime
         .block_on(drfw::core::system_config::write_config_file(
-            &text, target_str,
+            &SavePayload::of_ruleset(&ruleset),
+            target_str,
         ))
         .expect("run save script");
     assert!(
@@ -925,10 +930,11 @@ fn test_save_config_script_with_real_nft() {
     );
     assert!(!tmp.exists());
 
-    // 2. Invalid content: rejected by nft -c, target and backup untouched
+    // 2. Invalid content (allowed by DRFW's checks, an unknown hook): rejected
+    //    by nft -c, target and backup untouched
     let output = runtime
         .block_on(drfw::core::system_config::write_config_file(
-            "table inet drfw { chain input { bogus } }\n",
+            &bogus_hook_payload(),
             target_str,
         ))
         .expect("run save script");
@@ -948,7 +954,7 @@ fn test_save_config_script_with_real_nft() {
     let second_text = second.to_nft_text();
     let output = runtime
         .block_on(drfw::core::system_config::write_config_file(
-            &second_text,
+            &SavePayload::of_ruleset(&second),
             target_str,
         ))
         .expect("run save script");
@@ -969,6 +975,19 @@ fn test_save_config_script_with_real_nft() {
         ".drfw-orig must never be overwritten"
     );
     assert_eq!(mode_of(&orig), 0o600);
+}
+
+/// A save payload DRFW's checks allow (only its own table) that nft rejects:
+/// the default rules plus a chain with an unknown hook.
+fn bogus_hook_payload() -> SavePayload {
+    let mut json = FirewallRuleset::new().to_nftables_json();
+    json["nftables"].as_array_mut().expect("command list").push(
+        serde_json::json!({ "add": { "chain": {
+            "family": "inet", "table": "drfw", "name": "bogus",
+            "type": "filter", "hook": "bogus", "prio": 0, "policy": "accept",
+        } } }),
+    );
+    SavePayload::of_recorded_json(&json.to_string()).expect("allowed payload")
 }
 
 fn set_mode(path: &Path, mode: u32) {
@@ -1601,7 +1620,8 @@ const HELPER: &str = env!("CARGO_BIN_EXE_drfw-helper");
 /// - `helper ARGS…`: runs `drfw-helper` in test mode
 /// - `helper_apply FILE TIMEOUT NONCE`: `helper apply` with FILE on stdin and
 ///   exactly the arguments DRFW builds
-/// - `helper_save FILE`: `helper save-config` of FILE to `$PWD/nftables.conf`
+/// - `helper_save FILE`: `helper save-config` of FILE (a JSON save payload)
+///   to `$PWD/nftables.conf`
 const HELPER_HELPERS: &str = r#"
 helper() {
     env DRFW_HELPER_TEST_MODE=1 DRFW_HELPER_TEST_STATE_DIR="$PWD/state" \
@@ -1776,9 +1796,10 @@ fn test_helper_refusals_change_nothing() {
     );
 }
 
-/// Save to System through the helper: installs a valid config (backup
-/// kept), rejects an invalid one with exit 3 and an `include` with exit 1,
-/// both leaving the file untouched.
+/// Save to System through the helper: from the JSON save payload it installs
+/// exactly the preview text (`to_nft_text`, backup kept); a payload nft
+/// rejects exits 3, text (the old form) and an `include` exit 1, all leaving
+/// the file untouched.
 #[test]
 fn test_helper_save_config_and_check() {
     if !helper_test_mode_available()
@@ -1789,31 +1810,27 @@ fn test_helper_save_config_and_check() {
         return;
     }
     let dir = work_dir();
-    let text = kitchen_sink_ruleset().to_nft_text();
-    std::fs::write(dir.path().join("good.nft"), &text).expect("write good");
-    std::fs::write(
-        dir.path().join("bad.nft"),
-        "table inet drfw { chain input { bogus } }\n",
-    )
-    .expect("write bad");
-    std::fs::write(
-        dir.path().join("include.nft"),
-        format!("{text}include \"/etc/hostname\"\n"),
-    )
-    .expect("write include");
+    let ruleset = kitchen_sink_ruleset();
+    let text = ruleset.to_nft_text();
+    let payload = SavePayload::of_ruleset(&ruleset);
+    std::fs::write(dir.path().join("good.save"), payload.as_bytes()).expect("write good");
+    std::fs::write(dir.path().join("bad.save"), bogus_hook_payload().as_bytes())
+        .expect("write bad");
+    std::fs::write(dir.path().join("text.nft"), &text).expect("write text");
+    let mut include = payload.as_bytes().to_vec();
+    include.extend_from_slice(b"\ninclude \"/etc/hostname\"\n");
+    std::fs::write(dir.path().join("include.save"), include).expect("write include");
     std::fs::write(dir.path().join("nftables.conf"), "# old config\n").expect("write old");
-    write_json(dir.path(), "good.json", &kitchen_sink_ruleset());
-    std::fs::write(
-        dir.path().join("bad.json"),
-        r#"{"nftables":[{"add":{"bogus":{}}}]}"#,
-    )
-    .expect("write bad json");
+    write_json(dir.path(), "good.json", &ruleset);
+    std::fs::write(dir.path().join("bad.json"), bogus_hook_payload().as_bytes())
+        .expect("write bad json");
     run_helper_session(
         dir.path(),
-        "helper_save good.nft > save_good.out 2>&1; echo $? > rc_good.out
+        "helper_save good.save > save_good.out 2>&1; echo $? > rc_good.out
          cp nftables.conf after_good.conf
-         helper_save bad.nft > save_bad.out 2>&1; echo $? > rc_bad.out
-         helper_save include.nft > save_include.out 2>&1; echo $? > rc_include.out
+         helper_save bad.save > save_bad.out 2>&1; echo $? > rc_bad.out
+         helper_save text.nft > save_text.out 2>&1; echo $? > rc_text.out
+         helper_save include.save > save_include.out 2>&1; echo $? > rc_include.out
          helper check < good.json > check_good.out 2>&1; echo $? > rc_check_good.out
          helper check < bad.json > check_bad.out 2>&1; echo $? > rc_check_bad.out
          nft list tables > tables.out",
@@ -1824,6 +1841,7 @@ fn test_helper_save_config_and_check() {
         "{}",
         read(dir.path(), "save_good.out")
     );
+    // Rendered as root, byte for byte the GUI's preview
     assert_eq!(read(dir.path(), "after_good.conf"), text);
     assert_eq!(read(dir.path(), "nftables.conf.drfw-bak"), "# old config\n");
     assert!(
@@ -1831,15 +1849,156 @@ fn test_helper_save_config_and_check() {
         "{}",
         read(dir.path(), "save_good.out")
     );
-    assert_eq!(read(dir.path(), "rc_bad.out"), "3\n");
+    assert_eq!(
+        read(dir.path(), "rc_bad.out"),
+        "3\n",
+        "{}",
+        read(dir.path(), "save_bad.out")
+    );
+    assert_eq!(read(dir.path(), "rc_text.out"), "1\n");
+    assert!(read(dir.path(), "save_text.out").contains("not JSON"));
     assert_eq!(read(dir.path(), "rc_include.out"), "1\n");
     assert!(read(dir.path(), "save_include.out").contains("include statement"));
-    // Neither failure touched the installed file
+    // None of the failures touched the installed file
     assert_eq!(read(dir.path(), "nftables.conf"), text);
     assert_eq!(read(dir.path(), "rc_check_good.out"), "0\n");
     assert_ne!(read(dir.path(), "rc_check_bad.out"), "0\n");
     // A check never changes the ruleset
     assert!(!read(dir.path(), "tables.out").contains("table inet drfw"));
+}
+
+/// The helper never changes another tool's table: with `inet docker`
+/// present, applies, checks and saves that would flush the ruleset or delete
+/// that table are refused (exit 1) and change nothing; a normal apply and
+/// save work and leave `inet docker` exactly as it was. The same payloads
+/// given to plain root `nft` do delete it (the control at the end).
+#[test]
+fn test_helper_only_touches_the_drfw_table() {
+    if !helper_test_mode_available()
+        || !real_nft_available()
+        || !common::script_paths_usable()
+        || !nft_is_absolute()
+    {
+        return;
+    }
+    let dir = work_dir();
+    let ruleset = kitchen_sink_ruleset();
+    let appended = |extra: serde_json::Value| {
+        let mut json = ruleset.to_nftables_json();
+        json["nftables"]
+            .as_array_mut()
+            .expect("command list")
+            .push(extra);
+        json.to_string()
+    };
+    let flush = appended(serde_json::json!({ "flush": { "ruleset": null } }));
+    let delete_docker = appended(serde_json::json!({ "delete": {
+        "table": { "family": "inet", "name": "docker" }
+    } }));
+    std::fs::write(dir.path().join("flush.json"), &flush).expect("write");
+    std::fs::write(dir.path().join("delete_docker.json"), &delete_docker).expect("write");
+    write_json(dir.path(), "good.json", &ruleset);
+    std::fs::write(
+        dir.path().join("good.save"),
+        SavePayload::of_ruleset(&ruleset).as_bytes(),
+    )
+    .expect("write");
+    std::fs::write(dir.path().join("nftables.conf"), "# old config\n").expect("write old");
+    run_helper_session(
+        dir.path(),
+        &format!(
+            r#"nft add table inet docker
+             nft add chain inet docker fwd '{{ type filter hook forward priority 0; policy accept; }}'
+             nft add rule inet docker fwd ip saddr 172.17.0.0/16 accept comment '"docker rule"'
+             nft -j list table inet docker > docker_before.json
+             for p in flush delete_docker; do
+                 helper_apply $p.json 4 {NONCE_A} > apply_$p.out 2> apply_$p.err
+                 echo $? > rc_apply_$p.out
+                 helper check < $p.json > check_$p.out 2> check_$p.err
+                 echo $? > rc_check_$p.out
+                 helper_save $p.json > save_$p.out 2> save_$p.err
+                 echo $? > rc_save_$p.out
+             done
+             nft list tables > tables_refused.out
+             nft -j list table inet docker > docker_refused.json
+             cp nftables.conf conf_refused.out
+             ls -A > files_refused.out
+             helper_apply good.json {PENDING_TIMEOUT_SECS} {NONCE_B} > apply_good.out
+             echo $? > rc_apply_good.out
+             nft list tables > tables_applied.out
+             touch confirm/drfw-confirm-{NONCE_B}
+             wait_status {NONCE_B} > status_good.out
+             wait_watcher_exit apply_good.out
+             helper_save good.save > save_good.out 2>&1
+             echo $? > rc_save_good.out
+             "$DRFW_NFT" -c -f nftables.conf > nft_c.out 2>&1
+             echo $? > rc_nft_c.out
+             nft -j list table inet docker > docker_after.json
+             nft -j -f delete_docker.json
+             nft list tables > tables_control.out"#
+        ),
+    );
+    for p in ["flush", "delete_docker"] {
+        for request in ["apply", "check", "save"] {
+            let rc = read(dir.path(), &format!("rc_{request}_{p}.out"));
+            let err = read(dir.path(), &format!("{request}_{p}.err"));
+            assert_eq!(rc, "1\n", "{request} {p}: {err}");
+            assert!(
+                err.starts_with("drfw: drfw-helper: ") && err.contains("is not allowed"),
+                "{request} {p}: {err}"
+            );
+            assert_eq!(read(dir.path(), &format!("{request}_{p}.out")), "");
+        }
+    }
+    // Nothing changed: no drfw table, docker's as before, config and
+    // state directory untouched
+    let tables = read(dir.path(), "tables_refused.out");
+    assert!(tables.contains("table inet docker"), "{tables}");
+    assert!(!tables.contains("table inet drfw"), "{tables}");
+    let before = listing(dir.path(), "docker_before.json");
+    assert!(
+        listing_difference(&before, &listing(dir.path(), "docker_refused.json")).is_none(),
+        "a refused request changed inet docker"
+    );
+    assert_eq!(read(dir.path(), "conf_refused.out"), "# old config\n");
+    assert!(
+        !read(dir.path(), "files_refused.out")
+            .lines()
+            .any(|f| f == "state"),
+        "a refused apply created its state directory"
+    );
+    // A normal apply and save work, and leave inet docker alone
+    assert_eq!(read(dir.path(), "rc_apply_good.out"), "0\n");
+    let tables = read(dir.path(), "tables_applied.out");
+    assert!(
+        tables.contains("table inet docker") && tables.contains("table inet drfw"),
+        "{tables}"
+    );
+    assert_eq!(read(dir.path(), "status_good.out"), "confirmed\n");
+    assert_eq!(
+        read(dir.path(), "rc_save_good.out"),
+        "0\n",
+        "{}",
+        read(dir.path(), "save_good.out")
+    );
+    assert_eq!(read(dir.path(), "nftables.conf"), ruleset.to_nft_text());
+    assert_eq!(
+        read(dir.path(), "rc_nft_c.out"),
+        "0\n",
+        "{}",
+        read(dir.path(), "nft_c.out")
+    );
+    let after = listing(dir.path(), "docker_after.json");
+    assert!(
+        listing_difference(&before, &after).is_none(),
+        "the apply changed inet docker: {}",
+        listing_difference(&before, &after).unwrap_or_default()
+    );
+    // Control: plain root nft runs the same payload and deletes the table
+    assert!(
+        !read(dir.path(), "tables_control.out").contains("table inet docker"),
+        "the refused payload does nothing even in nft; the test would prove nothing"
+    );
 }
 
 // ============================================================================

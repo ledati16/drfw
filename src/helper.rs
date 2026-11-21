@@ -11,15 +11,34 @@
 //! Exactly what DRFW already elevated, nothing else. Three requests, each the
 //! same argv DRFW passed to the fixed scripts before, payload on stdin:
 //!
-//! | Request | Runs |
-//! |---------|------|
-//! | `apply <state_dir> <timeout> <nonce> <confirm_dir> <nft> <launcher> <uid>` | [`crate::elevation::APPLY_SCRIPT`] |
-//! | `save-config <target> <nft> <service or "">` | [`crate::elevation::SAVE_CONFIG_SCRIPT`] |
-//! | `check` | `<nft> --json --check -f -` |
+//! | Request | stdin | Runs |
+//! |---------|-------|------|
+//! | `apply <state_dir> <timeout> <nonce> <confirm_dir> <nft> <launcher> <uid>` | nftables JSON | [`crate::elevation::APPLY_SCRIPT`] |
+//! | `save-config <target> <nft> <service or "">` | [`SavePayload`] JSON | [`crate::elevation::SAVE_CONFIG_SCRIPT`] on the text the helper renders |
+//! | `check` | nftables JSON | `<nft> --json --check -f -` |
 //!
 //! The scripts are the audited text compiled into this binary; the helper
 //! `exec`s `/bin/sh -c <script> <name> <validated args…>`, so the process
 //! tree, signal handling and exit codes are the scripts' own.
+//!
+//! # Only DRFW's own table
+//!
+//! The ruleset on stdin may only touch the `inet drfw` table: `apply` and
+//! `check` take DRFW's nftables JSON and nothing else
+//! ([`check_ruleset_json`]: `add`/`delete` of that table, `add` of its
+//! chains, rules and sets, only the keys and expressions DRFW generates; no
+//! `flush ruleset`, no other table or family, no text). `save-config` takes
+//! the same JSON ([`SavePayload`]), checked the same way, and the helper
+//! renders the file to install itself ([`render_save_payload`], the
+//! renderer of DRFW's preview), so the boot file can only load `inet drfw`
+//! too. A remembered authorization therefore cannot be used to change
+//! Docker's, libvirt's or any other tool's tables. The revert guard's own
+//! batch (`nft list table inet drfw`, saved and replayed as root inside
+//! `APPLY_SCRIPT`) does not come from stdin and is not checked here.
+//!
+//! [`SavePayload`]: crate::core::root_payload::SavePayload
+//! [`check_ruleset_json`]: crate::core::root_payload::check_ruleset_json
+//! [`render_save_payload`]: crate::core::root_payload::render_save_payload
 //!
 //! # What it refuses (exit 1, `drfw: drfw-helper: …` on stderr)
 //!
@@ -37,7 +56,11 @@
 //!   `include` statement ([`check_payload`]): root `nft` would read any file
 //!   named there and echo its lines in error messages. This also applies to
 //!   the JSON requests: `nft --json -f` parses input that is not valid JSON
-//!   as nftables text.
+//!   as nftables text. (Kept as defense in depth: the table check below
+//!   already refuses anything but JSON; the rendered save file is checked
+//!   too.)
+//! - A payload that is not DRFW's JSON for the `inet drfw` table (see
+//!   above).
 //!
 //! The environment is never passed on: the child gets `PATH=`[`SAFE_PATH`]
 //! and nothing else, and runs in `/`. Nothing from argv or stdin is ever put
@@ -458,6 +481,35 @@ pub fn check_payload(payload: &[u8]) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// The child's stdin for a validated request, from the payload read on the
+/// helper's stdin: for `apply` and `check` the payload itself, for
+/// `save-config` the `nft -f` text rendered from it.
+///
+/// Every payload must pass [`check_payload`] and touch only DRFW's table
+/// ([`check_ruleset_json`](crate::core::root_payload::check_ruleset_json),
+/// [`render_save_payload`](crate::core::root_payload::render_save_payload));
+/// the rendered text must pass [`check_payload`] as well.
+///
+/// # Errors
+///
+/// A [`Refusal`] saying which check the payload failed.
+pub fn child_input(request: Request<'_>, payload: Vec<u8>) -> Result<Vec<u8>, Refusal> {
+    use crate::core::root_payload::{check_ruleset_json, render_save_payload};
+    check_payload(&payload)?;
+    let scope = |e: crate::core::root_payload::PayloadError| Refusal::new(e.to_string());
+    match request {
+        Request::Apply(_) | Request::Check => {
+            check_ruleset_json(&payload).map_err(scope)?;
+            Ok(payload)
+        }
+        Request::SaveConfig(_) => {
+            let text = render_save_payload(&payload).map_err(scope)?;
+            check_payload(text.as_bytes())?;
+            Ok(text.into_bytes())
+        }
+    }
+}
+
 /// The child the helper becomes: the script with its arguments, or `nft`.
 /// Its environment is only `PATH` (the config's), its directory `/`.
 pub fn command_for(request: Request<'_>, config: &HelperConfig) -> Command {
@@ -544,8 +596,8 @@ fn exec_request() -> Refusal {
         Err(refusal) => return refusal,
     };
     let stdin = match read_payload(std::io::stdin().lock())
-        .and_then(|payload| check_payload(&payload).map(|()| payload))
-        .and_then(|payload| payload_stdin(&payload))
+        .and_then(|payload| child_input(request, payload))
+        .and_then(|input| payload_stdin(&input))
     {
         Ok(stdin) => stdin,
         Err(refusal) => return refusal,
@@ -962,6 +1014,47 @@ mod tests {
         let json = serde_json::to_vec(&ruleset.to_nftables_json()).expect("json");
         assert_eq!(check_payload(&json), Ok(()));
         assert_eq!(check_payload(ruleset.to_nft_text().as_bytes()), Ok(()));
+    }
+
+    /// `apply` and `check` pass DRFW's JSON through unchanged and refuse
+    /// anything touching another table (or text); `save-config` turns the
+    /// JSON into exactly the preview's text, and refuses the same things.
+    #[test]
+    fn test_child_input_only_drfw_table() {
+        use crate::core::root_payload::SavePayload;
+        let ruleset = crate::core::test_helpers::create_test_ruleset();
+        let json = serde_json::to_vec(&ruleset.to_nftables_json()).expect("json");
+        let save_args = [String::new(), String::new(), String::new()];
+        let save = Request::SaveConfig(&save_args);
+        for request in [Request::Apply(&[]), Request::Check] {
+            assert_eq!(child_input(request, json.clone()), Ok(json.clone()));
+        }
+        let payload = SavePayload::of_ruleset(&ruleset);
+        assert_eq!(
+            child_input(save, payload.as_bytes().to_vec()),
+            Ok(ruleset.to_nft_text().into_bytes())
+        );
+
+        let mut flush = ruleset.to_nftables_json();
+        flush["nftables"]
+            .as_array_mut()
+            .expect("list")
+            .push(serde_json::json!({ "flush": { "ruleset": null } }));
+        let flush = serde_json::to_vec(&flush).expect("json");
+        let docker = br#"{"nftables":[{"delete":{"table":{"family":"inet","name":"docker"}}}]}"#;
+        let text = ruleset.to_nft_text();
+        let refused: [&[u8]; 4] = [&flush, docker, text.as_bytes(), b"flush ruleset\n"];
+        for payload in refused {
+            for request in [Request::Apply(&[]), Request::Check, save] {
+                assert!(
+                    child_input(request, payload.to_vec()).is_err(),
+                    "{request:?}: {}",
+                    String::from_utf8_lossy(payload)
+                );
+            }
+        }
+        // The save payload's sections are not part of an apply
+        assert!(child_input(Request::Apply(&[]), payload.as_bytes().to_vec()).is_err());
     }
 
     #[test]

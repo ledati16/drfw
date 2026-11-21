@@ -31,6 +31,7 @@ use std::env;
 use std::sync::Once;
 
 use drfw::core::firewall::FirewallRuleset;
+use drfw::core::root_payload::SavePayload;
 use drfw::core::verify;
 
 use crate::common::{
@@ -238,6 +239,8 @@ async fn test_profile_load_rebuilds_caches() {
 
 /// Save to System write path with the mock nft (`-c -f FILE` accepts files that
 /// start with the DRFW shebang). Real-nft coverage is in `tests/real_nft.rs`.
+/// Without the helper DRFW renders the payload itself: the file is exactly
+/// `to_nft_text()`.
 #[tokio::test]
 async fn test_save_config_file_with_mock_nft() {
     use std::os::unix::fs::PermissionsExt;
@@ -252,8 +255,10 @@ async fn test_save_config_file_with_mock_nft() {
     let backup = dir.path().join("nftables.conf.drfw-bak");
 
     // No existing file: written, no backup reported
-    let text = create_test_ruleset().to_nft_text();
-    let output = drfw::core::system_config::write_config_file(&text, target_str)
+    let ruleset = create_test_ruleset();
+    let text = ruleset.to_nft_text();
+    let payload = SavePayload::of_ruleset(&ruleset);
+    let output = drfw::core::system_config::write_config_file(&payload, target_str)
         .await
         .unwrap();
     assert!(
@@ -272,8 +277,9 @@ async fn test_save_config_file_with_mock_nft() {
     );
     assert!(!backup.exists());
 
-    // Rejected content: original untouched, no backup, no temp file left
-    let output = drfw::core::system_config::write_config_file("not nft\n", target_str)
+    // Rejected content (the mock refuses `hook bogus`): original untouched,
+    // no backup, no temp file left
+    let output = drfw::core::system_config::write_config_file(&bogus_hook_payload(), target_str)
         .await
         .unwrap();
     assert_eq!(output.status.code(), Some(3));
@@ -281,8 +287,12 @@ async fn test_save_config_file_with_mock_nft() {
     assert!(!backup.exists());
     assert!(!dir.path().join(".nftables.conf.drfw-tmp").exists());
 
+    // Payloads for other tables are refused before anything runs
+    let docker = r#"{"nftables":[{"delete":{"table":{"family":"inet","name":"docker"}}}]}"#;
+    assert!(SavePayload::of_recorded_json(docker).is_err());
+
     // Second successful save backs up the previous file
-    let output = drfw::core::system_config::write_config_file(&text, target_str)
+    let output = drfw::core::system_config::write_config_file(&payload, target_str)
         .await
         .unwrap();
     assert!(output.status.success());
@@ -291,6 +301,20 @@ async fn test_save_config_file_with_mock_nft() {
         Some(backup.clone())
     );
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+}
+
+/// A payload DRFW's checks allow (only its own table) that nft rejects: a
+/// chain with an unknown hook (`tests/mock_nft.sh` refuses `hook bogus` too).
+fn bogus_hook_payload() -> SavePayload {
+    let mut json = create_test_ruleset().to_nftables_json();
+    json["nftables"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({ "add": { "chain": {
+            "family": "inet", "table": "drfw", "name": "bogus",
+            "type": "filter", "hook": "bogus", "prio": 0, "policy": "accept",
+        } } }));
+    SavePayload::of_recorded_json(&json.to_string()).unwrap()
 }
 
 /// Guarded apply with the mock nft: the real apply script and a real
@@ -661,8 +685,11 @@ async fn run_save_script(
 ) -> std::process::Output {
     use tokio::io::AsyncWriteExt;
     setup_mock_nft();
-    let mut child = drfw::elevation::create_elevated_save_config_command(target, service)
-        .unwrap()
+    let save = drfw::elevation::create_elevated_save_config_command(target, service).unwrap();
+    // Without the helper the script reads the rendered text
+    assert_eq!(save.input, drfw::elevation::SaveConfigInput::Text);
+    let mut command = save.command;
+    let mut child = command
         .env("PATH", path_with(fake_bin))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

@@ -171,16 +171,37 @@ impl ConfirmedRecord {
         &self.nftables
     }
 
-    /// The `nft -f` text of exactly the recorded JSON
-    /// ([`crate::core::nft_text::render_json`]): what Save to System should
-    /// write for "the last kept rules". Unlike rendering [`Self::ruleset`]
-    /// again, it cannot change when a newer DRFW generates rules differently.
+    /// The `nft -f` text of exactly the recorded JSON (rendered like
+    /// [`crate::core::nft_text::render_json`], from [`Self::save_payload`]):
+    /// what Save to System writes for "the last kept rules". Unlike
+    /// rendering [`Self::ruleset`] again, it cannot change when a newer DRFW
+    /// generates rules differently.
     ///
     /// # Errors
     ///
-    /// The recorded JSON cannot be rendered (see `render_json`).
+    /// The recorded JSON cannot be rendered, or is refused by
+    /// [`Self::save_payload`].
     pub fn nft_text(&self) -> Result<String, String> {
-        crate::core::nft_text::render_json(&self.nftables)
+        self.save_payload()
+            .and_then(|payload| payload.render())
+            .map_err(|e| e.to_string())
+    }
+
+    /// What Save to System sends for "the last kept rules": exactly the
+    /// recorded JSON ([`SavePayload::of_recorded_json`]); it installs
+    /// [`Self::nft_text`].
+    ///
+    /// # Errors
+    ///
+    /// The recorded JSON is not DRFW's JSON for the `inet drfw` table
+    /// (root would refuse it).
+    ///
+    /// [`SavePayload::of_recorded_json`]: crate::core::root_payload::SavePayload::of_recorded_json
+    pub fn save_payload(
+        &self,
+    ) -> Result<crate::core::root_payload::SavePayload, crate::core::root_payload::PayloadError>
+    {
+        crate::core::root_payload::SavePayload::of_recorded_json(&self.nftables)
     }
 
     /// The ruleset that was applied, if the record has it.

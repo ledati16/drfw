@@ -8,12 +8,20 @@
 //! file, atomic rename and, if asked, `systemctl enable` of the boot service
 //! in the same prompt. See the script's docs for the exact steps.
 //!
+//! Callers pass a [`SavePayload`] (the ruleset's JSON), never text. Through
+//! the root helper the payload itself goes to root, which checks that it
+//! only touches the `inet drfw` table and renders the file there; without
+//! the helper (development builds) DRFW renders the same text from the same
+//! payload and the script gets that.
+//!
 //! [`FirewallRuleset::to_nft_text`]: crate::core::firewall::FirewallRuleset::to_nft_text
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::core::error::{Error, Result};
+use crate::core::root_payload::SavePayload;
+use crate::elevation::{SaveConfigCommand, SaveConfigInput};
 
 /// Maximum time for the whole save, including the authentication dialog.
 const SAVE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -33,7 +41,7 @@ pub enum EnableOutcome {
     Failed(String),
 }
 
-/// Runs the save script for `target` with `content` on stdin.
+/// Runs the save script for `target`, installing the file `payload` renders.
 ///
 /// Returns the raw process output; callers interpret the exit status (the
 /// elevation tools use 126/127 for cancelled/failed authentication, the
@@ -42,13 +50,17 @@ pub enum EnableOutcome {
 ///
 /// # Arguments
 ///
-/// * `content` - Complete file content (normally `FirewallRuleset::to_nft_text()`)
+/// * `payload` - The ruleset to save ([`SavePayload::of_ruleset`], or
+///   [`SavePayload::of_recorded_json`] for the last kept rules); the file is
+///   [`SavePayload::render`]
 /// * `target` - Path to replace (normally [`crate::SYSTEM_NFT_PATH`])
 ///
 /// # Errors
 ///
 /// - [`Error::Elevation`] if no elevation method is available
 /// - [`Error::Io`] if the process cannot be spawned or its stdin written
+/// - [`Error::Internal`] without the helper, if the payload cannot be
+///   rendered (with the helper, the helper refuses it: exit status 1)
 /// - [`Error::Internal`] if the operation times out (e.g. the authentication
 ///   dialog was left open)
 ///
@@ -56,8 +68,11 @@ pub enum EnableOutcome {
 ///
 /// With `DRFW_NFT_COMMAND` set, runs unelevated and uses that command for the
 /// syntax check (see [`crate::elevation::create_elevated_save_config_command`]).
-pub async fn write_config_file(content: &str, target: &str) -> Result<std::process::Output> {
-    write_config_file_and_enable(content, target, None).await
+pub async fn write_config_file(
+    payload: &SavePayload,
+    target: &str,
+) -> Result<std::process::Output> {
+    write_config_file_and_enable(payload, target, None).await
 }
 
 /// [`write_config_file`], then (as root, in the same prompt) `systemctl
@@ -70,14 +85,24 @@ pub async fn write_config_file(content: &str, target: &str) -> Result<std::proce
 ///
 /// The same as [`write_config_file`].
 pub async fn write_config_file_and_enable(
-    content: &str,
+    payload: &SavePayload,
     target: &str,
     enable_service: Option<&str>,
 ) -> Result<std::process::Output> {
     use tokio::io::AsyncWriteExt;
 
-    let mut child = crate::elevation::create_elevated_save_config_command(target, enable_service)
-        .map_err(|e| Error::Elevation(e.to_string()))?
+    let SaveConfigCommand { mut command, input } =
+        crate::elevation::create_elevated_save_config_command(target, enable_service)
+            .map_err(|e| Error::Elevation(e.to_string()))?;
+    // One payload either way: root renders it (helper), or DRFW does (script)
+    let content = match input {
+        SaveConfigInput::Payload => payload.as_bytes().to_vec(),
+        SaveConfigInput::Text => payload
+            .render()
+            .map_err(|e| Error::Internal(e.to_string()))?
+            .into_bytes(),
+    };
+    let mut child = command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -89,7 +114,7 @@ pub async fn write_config_file_and_enable(
             // A script that exits before reading (rejected arguments, failed
             // authentication) closes the pipe: its exit status and stderr
             // explain why, not the broken pipe
-            if let Err(e) = stdin.write_all(content.as_bytes()).await
+            if let Err(e) = stdin.write_all(&content).await
                 && e.kind() != std::io::ErrorKind::BrokenPipe
             {
                 return Err(e);
