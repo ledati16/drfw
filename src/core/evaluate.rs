@@ -9,21 +9,36 @@
 //! # Model
 //!
 //! The evaluator walks a model of the input chain that
-//! [`FirewallRuleset::to_nftables_json`] generates, in this order:
+//! [`FirewallRuleset::to_nftables_json`] generates, in the generator's order:
 //!
 //! 1. optional anti-spoofing (RPF) drop
 //! 2. loopback accept (`iifname "lo"`)
 //! 3. `ct state invalid` drop and `ct state established,related` accept:
 //!    never match a **new** connection, so they are not modelled
 //! 4. `DHCPv6` client replies accept (UDP 547 → 546 from `fe80::/10`)
-//! 5. ICMP redirect drops
+//! 5. ICMP and `ICMPv6` redirect drops
 //! 6. **user rules**, in profile order
-//! 7. ICMP accepts
-//! 8. the rate-limited `reject` of unicast packets, then the chain's drop policy
+//! 7. with an ICMP rate limit: the `ICMPv6` neighbor discovery accept that
+//!    the limit never applies to
+//! 8. the ICMP and `ICMPv6` accepts (all types, or the essential types in
+//!    strict mode), within the ICMP rate limit when one is set
+//! 9. (the optional drop logging: logs, decides nothing; not modelled)
+//! 10. the rate-limited `reject` of unicast packets, then the chain's drop
+//!     policy
 //!
-//! The ICMP sections (5, 7) never match TCP or UDP, so for the probes this
-//! evaluator answers their position relative to the user rules does not
-//! change any verdict.
+//! A test compares this order, base rule by base rule, with the generated
+//! ruleset for every combination of the settings that change it.
+//!
+//! # TCP and UDP only
+//!
+//! [`Probe`]s are new TCP or UDP connections; ICMP messages are not
+//! evaluated. The ICMP rules (5, 7, 8) are modelled so the chain mirrors the
+//! generator, but they never match a TCP or UDP probe, and neither do user
+//! rules for ICMP. Answering for ICMP would need the message type as part of
+//! the probe (strict mode and the neighbor discovery exemption depend on it),
+//! and checking it against the kernel would need raw sockets; neither is
+//! needed by the Exposure view or the lockout check, which ask about TCP/UDP
+//! services.
 //!
 //! A user rule is modelled the way the generator emits it: disabled rules and
 //! OUTPUT rules are skipped (Server/Desktop mode only changes the output
@@ -80,6 +95,21 @@ pub const BASE_RPF: &str = "drop packets with spoofed source addresses (RPF)";
 pub const BASE_LOOPBACK: &str = "allow from loopback";
 /// Comment of the generated `DHCPv6` client replies accept.
 pub const BASE_DHCPV6: &str = "allow dhcpv6 client replies";
+/// Comment of the generated ICMP redirect drop.
+pub const BASE_ICMP_REDIRECT: &str = "drop icmp redirects";
+/// Comment of the generated `ICMPv6` redirect drop.
+pub const BASE_ICMPV6_REDIRECT: &str = "drop icmpv6 redirects";
+/// Comment of the generated `ICMPv6` neighbor discovery accept (only with an
+/// ICMP rate limit; it is exempt from the limit).
+pub const BASE_ICMPV6_ND: &str = "allow icmpv6 neighbor discovery (not rate limited)";
+/// Comment of the generated ICMP accept (default mode).
+pub const BASE_ICMP: &str = "allow icmp";
+/// Comment of the generated `ICMPv6` accept (default mode).
+pub const BASE_ICMPV6: &str = "allow icmp v6";
+/// Comment of the generated ICMP accept in strict mode.
+pub const BASE_ICMP_STRICT: &str = "allow essential icmp (strict mode)";
+/// Comment of the generated `ICMPv6` accept in strict mode.
+pub const BASE_ICMPV6_STRICT: &str = "allow essential icmpv6 (strict mode)";
 /// Name of the generated rate-limited reject at the end of the input chain
 /// (it has no comment in the ruleset).
 pub const BASE_FINAL_REJECT: &str = "rate-limited reject";
@@ -669,6 +699,15 @@ impl Node {
         }
     }
 
+    /// A base rule for ICMP (or `ICMPv6`) of one family: never matches a
+    /// TCP/UDP probe, modelled to keep the generator's order.
+    fn icmp(decider: &'static str, family: IpFamily, action: Action) -> Self {
+        let mut node = Self::base(decider, action);
+        node.family = Some(family);
+        node.protocols = ProtoMatch::Icmp;
+        node
+    }
+
     /// Whether the node matches the probe's fixed fields (everything but the
     /// source): `None` if not, else the conditions it still depends on.
     fn matches(&self, probe: &Probe, family: IpFamily) -> Option<Vec<Condition>> {
@@ -719,7 +758,7 @@ impl InputChain {
     /// Models the input chain [`FirewallRuleset::to_nftables_json`] generates.
     pub fn new(ruleset: &FirewallRuleset) -> Self {
         let advanced = &ruleset.advanced_security;
-        let mut nodes = Vec::with_capacity(8 + ruleset.rules.len());
+        let mut nodes = Vec::with_capacity(12 + ruleset.rules.len());
 
         if advanced.enable_rpf {
             let mut rpf = Node::base(BASE_RPF, Action::Drop);
@@ -740,13 +779,39 @@ impl InputChain {
                 .map(IpNetwork::V6);
         dhcpv6.sources = Some(AddrSet::from_networks(true, link_local.as_ref().ok()));
         nodes.push(dhcpv6);
-        // (ICMP redirect drops: never TCP/UDP)
+        nodes.push(Node::icmp(BASE_ICMP_REDIRECT, IpFamily::V4, Action::Drop));
+        nodes.push(Node::icmp(BASE_ICMPV6_REDIRECT, IpFamily::V6, Action::Drop));
 
         for rule in &ruleset.rules {
             push_user_rule(&mut nodes, rule);
         }
 
-        // (ICMP accepts: never TCP/UDP)
+        // ICMP accepts come after the user rules (a user Drop rule stops ICMP
+        // too); the neighbor discovery accept is exempt from the ICMP limit
+        let icmp_rate = (advanced.icmp_rate_limit > 0).then_some(Condition::Rate {
+            limit: RateLimit {
+                count: advanced.icmp_rate_limit,
+                unit: TimeUnit::Second,
+                burst: None,
+                per_source: false,
+            },
+            over: false,
+        });
+        if icmp_rate.is_some() {
+            nodes.push(Node::icmp(BASE_ICMPV6_ND, IpFamily::V6, Action::Accept));
+        }
+        let (icmp, icmpv6) = if advanced.strict_icmp {
+            (BASE_ICMP_STRICT, BASE_ICMPV6_STRICT)
+        } else {
+            (BASE_ICMP, BASE_ICMPV6)
+        };
+        for (comment, family) in [(icmp, IpFamily::V4), (icmpv6, IpFamily::V6)] {
+            let mut node = Node::icmp(comment, family, Action::Accept);
+            node.conditions.extend(icmp_rate.clone());
+            nodes.push(node);
+        }
+
+        // (drop logging, if enabled: logs only)
         let mut reject = Node::base(BASE_FINAL_REJECT, Action::Reject);
         reject.conditions = vec![
             Condition::Unicast,
@@ -1440,22 +1505,115 @@ mod tests {
         assert_eq!(first(&evaluate_inbound(&rs, &p)), Action::Accept);
     }
 
-    /// The base rules named by the evaluator exist in the generated ruleset
-    /// (guards against the generator renaming them).
-    #[test]
-    fn test_base_rule_names_match_the_generator() {
-        let mut rs = ruleset(vec![]);
-        rs.advanced_security.enable_rpf = true;
-        let text = rs.to_nft_text();
-        for comment in [BASE_RPF, BASE_LOOPBACK, BASE_DHCPV6] {
-            assert!(text.contains(comment), "{comment} missing:\n{text}");
+    /// Marker for "the user rules" in the order comparison below.
+    const USER_RULES: &str = "(user rules)";
+
+    /// Generated input-chain rules that never decide a new connection, so
+    /// the model leaves them out.
+    const NOT_MODELLED: [&str; 4] = [
+        "early drop of invalid connections",
+        "allow tracked connections",
+        "log dropped packets (rate limited)",
+        "final counter",
+    ];
+
+    /// The modelled chain as base rule names, the user rules as one marker.
+    fn modelled_order(chain: &InputChain) -> Vec<&'static str> {
+        let mut order: Vec<&'static str> = Vec::new();
+        for node in &chain.nodes {
+            let name = match node.decider {
+                Decider::BaseRule(name) => name,
+                _ => USER_RULES,
+            };
+            if order.last() != Some(&name) {
+                order.push(name);
+            }
         }
-        assert!(text.contains("limit rate 5/second"), "{text}");
-        let origins: Vec<_> = rs.build_commands().into_iter().map(|c| c.origin).collect();
-        assert!(
-            origins.contains(&crate::core::firewall::CommandOrigin::BaseRule(
-                BASE_FINAL_REJECT
-            ))
-        );
+        order
+    }
+
+    /// The generated input chain in the same form, named by the generator's
+    /// own comments (the command origins).
+    fn generated_order(ruleset: &FirewallRuleset) -> Vec<&'static str> {
+        use crate::core::firewall::CommandOrigin;
+        let mut order: Vec<&'static str> = Vec::new();
+        for command in ruleset.build_commands() {
+            if command.value["add"]["rule"]["chain"] != "input" {
+                continue;
+            }
+            let name = match command.origin {
+                CommandOrigin::BaseRule(name) if NOT_MODELLED.contains(&name) => continue,
+                CommandOrigin::BaseRule(name) => name,
+                CommandOrigin::UserRule(_) => USER_RULES,
+                other => panic!("unexpected input rule origin {other:?}"),
+            };
+            if order.last() != Some(&name) {
+                order.push(name);
+            }
+        }
+        order
+    }
+
+    /// The modelled chain has the generator's base rules, by their real
+    /// comments, in the generator's order relative to each other and to the
+    /// user rules, for every setting that changes the chain.
+    #[test]
+    fn test_chain_order_matches_the_generator() {
+        for bits in 0..16u8 {
+            let mut rs = ruleset(vec![rule("web", Protocol::Tcp, &[80], &[])]);
+            let advanced = &mut rs.advanced_security;
+            advanced.enable_rpf = bits & 1 != 0;
+            advanced.strict_icmp = bits & 2 != 0;
+            advanced.icmp_rate_limit = if bits & 4 == 0 { 0 } else { 10 };
+            advanced.log_dropped = bits & 8 != 0;
+            let modelled = modelled_order(&InputChain::new(&rs));
+            assert_eq!(modelled, generated_order(&rs), "settings {bits:04b}");
+            assert!(modelled.contains(&USER_RULES));
+            // The names are the comments in the ruleset (the final reject has
+            // none; its origin names it)
+            let text = rs.to_nft_text();
+            for name in &modelled {
+                if *name != USER_RULES && *name != BASE_FINAL_REJECT {
+                    assert!(text.contains(&format!("comment \"{name}\"")), "{name}");
+                }
+            }
+        }
+        // Server mode only changes the output chain
+        let mut rs = ruleset(vec![rule("web", Protocol::Tcp, &[80], &[])]);
+        rs.advanced_security.egress_profile = crate::core::firewall::EgressProfile::Server;
+        assert_eq!(modelled_order(&InputChain::new(&rs)), generated_order(&rs));
+    }
+
+    /// The ICMP rules sit after the user rules (as generated), with the
+    /// neighbor discovery exemption first when ICMP is rate limited; none of
+    /// them changes a TCP/UDP verdict.
+    #[test]
+    fn test_icmp_section_follows_user_rules_and_never_decides_tcp_udp() {
+        let mut rs = ruleset(vec![]);
+        rs.advanced_security.icmp_rate_limit = 5;
+        let order = modelled_order(&InputChain::new(&rs));
+        let at = |name: &str| order.iter().position(|n| *n == name).unwrap();
+        assert!(at(BASE_ICMPV6_REDIRECT) < at(BASE_ICMPV6_ND));
+        assert!(at(BASE_ICMPV6_ND) < at(BASE_ICMP));
+        assert!(at(BASE_ICMPV6) < at(BASE_FINAL_REJECT));
+
+        let mut all = rule("everything", Protocol::Any, &[], &[]);
+        all.action = Action::Drop;
+        let mut with_drop = rs.clone();
+        with_drop.rules.push(all);
+        for (transport, port) in [(Transport::Tcp, 22), (Transport::Udp, 53)] {
+            for source in ["10.0.0.1", "fd00::1"] {
+                let p = probe(transport, port, source);
+                assert_eq!(first(&evaluate_inbound(&rs, &p)), Action::Reject, "{p:?}");
+                assert_eq!(
+                    evaluate_inbound(&with_drop, &p),
+                    Verdict::Dropped(Decider::UserRule {
+                        id: with_drop.rules[0].id,
+                        label: "everything".into()
+                    }),
+                    "{p:?}"
+                );
+            }
+        }
     }
 }

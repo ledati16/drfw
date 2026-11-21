@@ -600,17 +600,18 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/app/verify_errors.rs` | Unit tests for the "Verification Errors" panel model | Row titles, summary/banner wording, "Edit Rule" only for rules that still exist |
 | `src/distro.rs` | Compile-time validators, service unit template | `is_valid_absolute_path()`, `is_valid_service_name()`, `service_unit()` |
 | `src/core/boot.rs` | `systemctl` output mapping | `enablement_from_output()`, `BootStatus` summaries and checkbox rules |
-| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts; which applies write the kept-ruleset record), CLI `status`/`check`/`save`/`print-service-unit`, the retention guard of `apply`/`save` and the `--help` exit codes (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
+| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts; which applies write the kept-ruleset record), CLI `status` (incl. the SSH line)/`check`/`save`/`exposure` (table and `--json` shape on a `/proc` fixture)/`print-service-unit`, the retention guard and the SSH lockout check of `apply`/`save` (exit 9, `--yes`; `SSH_CONNECTION` on the child only) and the `--help` exit codes (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
 | `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
-| `src/core/evaluate.rs` | Unit tests for the rule evaluator | Chain model (order, family copies, skipped rules), limits/conditions as `Limited`, reachability sets (subtracted drops, `AllExcept`, conditional access, caveats), base rule names match the generator |
+| `src/core/evaluate.rs` | Unit tests for the rule evaluator | Chain model (order, family copies, skipped rules), limits/conditions as `Limited`, reachability sets (subtracted drops, `AllExcept`, conditional access, caveats), **the modelled chain has the generator's base rules (by their real comments) in the generator's order** for every setting that changes it, ICMP section after the user rules |
 | `src/core/addr_set.rs` | Unit tests for the address-set arithmetic | Union/intersection/difference/complement, CIDR decomposition |
-| `src/core/exposure.rs` | Unit tests for socket discovery | `/proc/net` parsing (IPv4, IPv6, v4-mapped, UDP), inode → process mapping on a fixture tree, dual-stack heuristic, exposure rows |
-| `src/app/exposure.rs` | Unit tests for the Exposure panel model | Row order and badges, editor vs applied answers, scan errors |
+| `src/core/exposure.rs` | Unit tests for socket discovery | `/proc/net` parsing (IPv4, IPv6, v4-mapped, UDP, established connections), inode → process mapping and `scan_host_in` on a fixture tree, dual-stack heuristic, exposure rows |
+| `src/core/lockout.rs` | Unit tests for the SSH lockout check | `SSH_CONNECTION` parsing (IPv4, IPv6, zones, mapped, malformed), which `/proc` connections count as SSH, merging, blocked / may-be-blocked / accepted, Server-mode output order (established accepted before user rules) |
+| `src/app/exposure.rs` | Unit tests for the Exposure panel model | Row order and badges, editor vs applied answers, scan errors, "SSH:" lines |
 | `tests/evaluate.rs` | Evaluator property tests; kernel agreement in two `unshare -rn` namespaces over veth (own binary re-executed as server/client helpers) | Per-source verdicts agree with the reachability sets (proptest); **the evaluator agrees with real nft** on random rulesets and probes (proptest) and directed cases |
 | `tests/verify_errors.rs` | Error attribution against real `nft` in `unshare -rn`, and `drfw check` output (own binary) | A rejected ruleset names the rule that caused each error (also with per-source sets), CLI prints mapped errors without color codes |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
-| `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse, exit codes distinct and documented |
+| `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse, exit codes distinct and documented, `drfw exposure` table and JSON |
 | `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup, `CHRONO_TIMESTAMPS`) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
 | `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
@@ -646,6 +647,8 @@ use crate::core::test_helpers::ENV_VAR_MUTEX;
 | `DRFW_NFT_COMMAND` | Path to nft binary or mock script (skips elevation) | All tests that use nft operations |
 | `DRFW_TEST_DATA_DIR` | Overrides data directory (`~/.local/share/drfw/`) | Tests that access profiles |
 | `DRFW_TEST_STATE_DIR` | Overrides state directory (`~/.local/state/drfw/`) | Tests that access the audit log |
+| `DRFW_TEST_PROC_DIR` | Read instead of `/proc` by the socket and SSH session scan (`core::exposure::proc_root`) | CLI tests of `exposure`/`status`/`apply`/`save`: a fixture tree, or a missing dir for "no sessions" (the CLI test helpers always set one) |
+| `SSH_CONNECTION` | The session the SSH lockout check protects (not a DRFW variable) | Set on the **child** only; the CLI test helpers remove it so the runner's own SSH session never leaks in. GUI handler tests never read it (`State::new_for_testing` has no session; set `state.ssh_sessions`) |
 | `DRFW_REQUIRE_REAL_NFT` | `1` makes `tests/real_nft.rs` fail instead of skipping when `unshare -rn nft` is unavailable | CI (set); never in packaging `check()` |
 
 For tests that run the `drfw` binary (`env!("CARGO_BIN_EXE_drfw")`), set these on the
@@ -1096,7 +1099,13 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - Exposure view (`core::exposure`, GUI "Exposure"): listening sockets read
   unprivileged from `/proc/net`, each evaluated against the editor and the
   applied rules ("reachable from: everyone / sources / nobody / local only");
-  process names only for the user's own processes (no root for this)
+  process names only for the user's own processes (no root for this); also the
+  SSH line per session (below). `drfw exposure [profile] [--json]` prints the same
+- SSH lockout check (`core::lockout`): before Apply / Save to System, sessions from
+  `SSH_CONNECTION` and `/proc/net/tcp*` (sshd-owned or to an sshd port) are
+  evaluated as new connections; blocked or "blocked in some cases" needs "Apply
+  anyway" / "Save anyway" (GUI, the retention guard's pattern) or `--yes` (CLI,
+  exit 9). Also a line in `drfw status` and the Exposure panel
 
 ### Not Implemented (Intentional)
 - **Per-rule ICMP type filtering:** 99% of users don't understand 20+ ICMP types; ICMPv6 filtering is dangerous (the global strict ICMP mode allows a fixed set of essential types)

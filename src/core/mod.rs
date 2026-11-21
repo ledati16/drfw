@@ -9,6 +9,7 @@
 //! - [`confirmed`]: The record of the last ruleset applied and kept
 //! - [`evaluate`]: What the generated input chain does with a new connection
 //! - [`exposure`]: Listening sockets and who can reach them through the rules
+//! - [`lockout`]: Whether new rules would keep you from reconnecting over SSH
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
@@ -27,6 +28,7 @@ pub mod error;
 pub mod evaluate;
 pub mod exposure;
 pub mod firewall;
+pub mod lockout;
 pub mod nft_errors;
 pub mod nft_text;
 pub mod profiles;

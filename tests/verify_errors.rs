@@ -260,6 +260,8 @@ fn run_drfw(root: &std::path::Path, args: &[&str]) -> std::process::Output {
         .env("DRFW_TEST_DATA_DIR", root)
         .env("DRFW_TEST_STATE_DIR", root)
         .env("DRFW_NFT_COMMAND", &nft)
+        .env_remove("SSH_CONNECTION")
+        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .output()
         .expect("run drfw")
 }

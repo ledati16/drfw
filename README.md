@@ -57,6 +57,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **One generator**: Apply (JSON), the preview, `drfw export` and Save to System (text) all render the same command list, so what you see is what is applied and what boots
 - **No silent data loss**: A damaged or newer-version profile/config is copied aside and opened read-only, never overwritten
 - **Undo/Redo**: Full history for all rule modifications (Ctrl+Z / Ctrl+Shift+Z)
+- **SSH lockout check**: Before Apply and Save to System, DRFW checks whether the new rules would keep the client of a current SSH session from reconnecting, and asks for an explicit confirmation if so (see [SSH lockout check](#ssh-lockout-check))
 
 See [Safety Model](#safety-model) for how Apply, Confirm and the revert guard work.
 
@@ -122,7 +123,7 @@ mode.
 - **Diff view**: See exactly what changes before applying
 - **In-app notifications**: Success, warning, and error banners
 - **Diagnostics viewer**: Built-in event log browser with filter and search, times in local time (with the date for older events)
-- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback). Sockets open to everyone are flagged, rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this
+- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback). Sockets open to everyone are flagged, rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this. It also says, for each current SSH session, whether its client could open a new connection under the editor's rules (see [SSH lockout check](#ssh-lockout-check)). `drfw exposure` prints the same from the command line
 - **Keyboard shortcuts**: Ctrl+N (new rule), Ctrl+S (apply), Ctrl+E (export), F1 (help)
 
 ### Profile Management
@@ -142,11 +143,13 @@ drfw check <profile>                 # Validate + nft --check without privileges
 drfw apply <profile>                 # Apply with 15s auto-revert safety
 drfw apply <profile> --confirm 30    # Apply with 30s timeout (5-120)
 drfw apply <profile> --no-confirm    # Apply without auto-revert (until reboot)
-drfw apply <profile> --yes           # ... even if the retention guard warns
+drfw apply <profile> --yes           # ... even if the retention guard or the SSH lockout check warns
 drfw save <profile>                  # Save to System: the boot config (one prompt)
 drfw save <profile> --enable-at-boot # ... and enable the boot service if needed
 drfw export <profile> --format nft   # Export as nftables text (default)
 drfw export <profile> --format json  # Export as nftables JSON
+drfw exposure [profile]              # Who can reach the listening services (default: active profile)
+drfw exposure [profile] --json       # ... as JSON, for scripts
 ```
 
 - `drfw check` exits with 0 when the profile can be applied and 1 otherwise. It
@@ -167,7 +170,22 @@ drfw export <profile> --format json  # Export as nftables JSON
   confirm, `drfw save web`. It warns when the boot service is not enabled;
   `--enable-at-boot` enables it in the same prompt.
 - `drfw apply` and `drfw save` ask before a big change (see [Retention
-  guard](#retention-guard)); without a terminal they need `--yes`.
+  guard](#retention-guard)) and before rules that would lock out a current SSH session's
+  client (see [SSH lockout check](#ssh-lockout-check)); without a terminal they need
+  `--yes`.
+- `drfw status` also has an "SSH" line per SSH session: "you are connected from X to port
+  22; new connections from X would be accepted by rule "SSH"" (or BLOCKED, and by what),
+  under the rules of the active profile.
+- `drfw exposure` prints the Exposure view as a table: socket (protocol, port, family),
+  process, bind address, who can reach it, and the deciding rule. Sockets every address
+  can reach are marked `OPEN TO EVERYONE` (in red on a terminal; plain text when piped).
+  The SSH lines of `drfw status` follow. `--json` prints an object with `profile`,
+  `sockets` (one object per socket: `transport`, `port`, `families`, `bind`,
+  `bind_display`, `local_only`, `uid`, `process`, `processes`, `reachable_from`,
+  `open_to_everyone`, `nobody`, `decided_by`, `decided_by_rule_id`) and `ssh_sessions`
+  (`client`, `client_port`, `server`, `server_port`, `source`, `new_connections` =
+  `accepted`/`may_be_blocked`/`blocked`, `outcome`). It evaluates the profile's rules,
+  not the kernel's (listing those needs root).
 - During the `drfw apply` countdown, if another apply replaces the pending one, the
   countdown stops at once and reports it.
 
@@ -184,7 +202,7 @@ Exit codes (also in `drfw --help`):
 | 6 | `apply`: the outcome is **unknown**: the new rules may be active (e.g. the apply was interrupted after authentication) |
 | 7 | `save`: not saved, the rules are not the ones last applied and confirmed (use `--yes`) |
 | 8 | `save`: saved, but the boot service could not be enabled |
-| 9 | `apply`/`save`: not done, the retention guard asks for a confirmation (use `--yes`) |
+| 9 | `apply`/`save`: not done, the retention guard or the SSH lockout check asks for a confirmation (use `--yes`) |
 
 A timed-out revert exits 0: that is the dead-man switch doing its job. Codes 3 to 6 mean
 "look at the firewall now"; scripts must not treat them like 1.
@@ -327,6 +345,31 @@ Changes?" or Save to System dialog; applying then takes a click on **Apply anywa
 (Enter does not do it), and saving the editor's rules a click on a red button. The CLI
 prints the same lines and asks y/N on a terminal; without one it needs `--yes` (exit
 code 9 otherwise, nothing changed). With no record yet, only the two mode changes ask.
+
+### SSH lockout check
+
+Open SSH sessions survive any apply: established connections are accepted before any
+of your rules (and before the output rules in Server mode, so Server mode cannot cut a
+session's replies either). The risk is the **next** connection. Before **Apply** and
+**Save to System** (GUI, `drfw apply`, `drfw save`) DRFW finds the current SSH sessions
+into this computer without privileges and asks the rules about to be used what they do
+with a new connection from each session's client address to the session's port:
+
+- the session DRFW runs in, from `SSH_CONNECTION`;
+- other sessions, from the established TCP connections in `/proc/net/tcp{,6}`: those
+  held by a process named `sshd*`/`dropbear` (your own sessions are found this way), and
+  those to port 22 (or to a port a readable `sshd` listens on) whose process belongs to
+  another user. Other users' sessions on a non-standard port whose server is not
+  readable are not found.
+
+If a new connection would be dropped or rejected, or is accepted only under a
+condition with a drop or reject behind it (a rate or connection limit, an interface the
+check cannot know), the "Commit Changes?" (or Save to System) dialog shows why and takes
+a click on **Apply anyway** (or the red save button); the CLI prints the same lines and
+asks y/N on a terminal, or needs `--yes` (exit code 9, nothing changed). The interface
+of a session is not known, so a rule that allows SSH only on one interface counts as
+"blocked in some cases". The Exposure view and `drfw status` show the same per-session
+answer.
 
 ## Save to System
 
@@ -632,6 +675,9 @@ src/
 │   ├── apply_guard.rs  # Apply + root-side revert guard
 │   ├── confirmed.rs    # Record of the last ruleset applied and kept
 │   ├── retention.rs    # Confirmation before a big change
+│   ├── evaluate.rs     # What the input chain does with a new connection
+│   ├── exposure.rs     # Listening sockets (/proc) and who can reach them
+│   ├── lockout.rs      # SSH sessions and the lockout check
 │   ├── system_config.rs # Save to System
 │   ├── boot.rs         # Boot persistence (`systemctl is-enabled`, unprivileged)
 │   └── profiles.rs     # Profile persistence
@@ -641,7 +687,8 @@ src/
 ├── audit.rs            # Audit logging
 └── elevation.rs        # Privilege escalation, fixed apply/watcher/save scripts
 tests/
-├── integration_tests.rs # Mock-nft flows, save script + fake systemctl, CLI binary (`status`, `check`)
+├── integration_tests.rs # Mock-nft flows, save script + fake systemctl, CLI binary (`status`, `check`, `apply`, `save`, `exposure`)
+├── evaluate.rs          # Rule evaluator vs. the real kernel (unshare -rn)
 ├── profile_storage.rs   # Profile/config files on disk
 └── real_nft.rs          # Real nft in an unprivileged namespace (unshare -rn)
 ```

@@ -1,14 +1,14 @@
 //! Exposure panel handlers: open/close, scan and refresh
 //!
 //! The socket scan reads `/proc` and is run on the blocking pool, never on
-//! the UI thread. Results carry the generation of their request; a result
+//! the UI thread. It also finds the SSH sessions (kept in
+//! `State::ssh_sessions` for the lockout check). Results carry the generation of their request; a result
 //! for a closed panel or an older request is ignored.
 
 use iced::Task;
 
-use crate::app::exposure::ExposurePanel;
+use crate::app::exposure::{ExposurePanel, ExposureScan};
 use crate::app::{Message, State};
-use crate::core::exposure::SocketInfo;
 
 /// User-facing message when the sockets cannot be read.
 const SCAN_FAILED: &str = "Could not read the list of listening sockets.";
@@ -39,10 +39,13 @@ pub(crate) fn handle_refresh_exposure(state: &mut State) -> Task<Message> {
 pub(crate) fn handle_exposure_scanned(
     state: &mut State,
     generation: u64,
-    result: Result<Vec<SocketInfo>, String>,
+    result: Result<ExposureScan, String>,
 ) {
     if generation != state.exposure.generation {
         return;
+    }
+    if let Ok(scan) = &result {
+        state.ssh_sessions.clone_from(&scan.sessions);
     }
     let Some(panel) = &mut state.exposure.panel else {
         return;
@@ -50,14 +53,27 @@ pub(crate) fn handle_exposure_scanned(
     panel.set_scan(result, &state.ruleset, state.last_applied_ruleset.as_ref());
 }
 
+/// Reads the sockets and SSH sessions (blocking): `env` is the
+/// `SSH_CONNECTION` session of this process.
+fn scan_blocking(env: Option<crate::core::lockout::SshSession>) -> std::io::Result<ExposureScan> {
+    let host = crate::core::exposure::scan_host()?;
+    let sessions =
+        crate::core::lockout::merge_sessions(env, crate::core::lockout::sessions_from_scan(&host));
+    Ok(ExposureScan {
+        sockets: host.sockets,
+        sessions,
+    })
+}
+
 /// Starts a scan on the blocking pool under a new generation.
 fn start_scan(state: &mut State) -> Task<Message> {
     state.exposure.generation = state.exposure.generation.wrapping_add(1);
     let generation = state.exposure.generation;
+    let env = state.ssh_env_session.clone();
     Task::perform(
-        async {
-            match tokio::task::spawn_blocking(crate::core::exposure::scan_listening_sockets).await {
-                Ok(Ok(sockets)) => Ok(sockets),
+        async move {
+            match tokio::task::spawn_blocking(move || scan_blocking(env)).await {
+                Ok(Ok(scan)) => Ok(scan),
                 Ok(Err(e)) => {
                     tracing::warn!("Listening socket scan failed: {e}");
                     Err(SCAN_FAILED.to_string())
@@ -85,7 +101,7 @@ mod tests {
         assert!(panel.scanning);
         let generation = state.exposure.generation;
 
-        handle_exposure_scanned(&mut state, generation, Ok(Vec::new()));
+        handle_exposure_scanned(&mut state, generation, Ok(ExposureScan::default()));
         let panel = state.exposure.panel.as_ref().expect("open");
         assert!(!panel.scanning);
         assert_eq!(panel.summary, "No listening sockets found.");
@@ -93,8 +109,31 @@ mod tests {
         let _ = handle_toggle_exposure(&mut state, false);
         assert!(state.exposure.panel.is_none());
         // A late result for the closed panel is ignored
-        handle_exposure_scanned(&mut state, generation, Ok(Vec::new()));
+        handle_exposure_scanned(&mut state, generation, Ok(ExposureScan::default()));
         assert!(state.exposure.panel.is_none());
+    }
+
+    /// The scan's SSH sessions become the known ones (for the lockout
+    /// check) and the panel's "SSH:" lines.
+    #[test]
+    fn test_scan_stores_ssh_sessions() {
+        let mut state = create_test_state();
+        let _ = handle_toggle_exposure(&mut state, true);
+        let session =
+            crate::core::lockout::parse_ssh_connection("10.0.0.5 50000 10.0.0.1 22").unwrap();
+        let generation = state.exposure.generation;
+        handle_exposure_scanned(
+            &mut state,
+            generation,
+            Ok(ExposureScan {
+                sockets: Vec::new(),
+                sessions: vec![session.clone()],
+            }),
+        );
+        assert_eq!(state.ssh_sessions, [session]);
+        let panel = state.exposure.panel.as_ref().expect("open");
+        assert_eq!(panel.ssh_lines.len(), 1);
+        assert!(panel.ssh_lines[0].warning, "no rule allows port 22");
     }
 
     #[test]
@@ -136,7 +175,14 @@ mod tests {
             |_| None,
         );
         let latest = state.exposure.generation;
-        handle_exposure_scanned(&mut state, latest, Ok(sockets));
+        handle_exposure_scanned(
+            &mut state,
+            latest,
+            Ok(ExposureScan {
+                sockets,
+                sessions: Vec::new(),
+            }),
+        );
         let row = |state: &State| state.exposure.panel.as_ref().unwrap().rows[0].clone();
         assert!(!row(&state).highlight);
 

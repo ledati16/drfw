@@ -23,11 +23,21 @@
 //!   lets local programs in, and nothing else can reach them.
 //! - Connected UDP sockets (which only take datagrams from their peer) are
 //!   not listed.
+//!
+//! [`scan_host`] also returns the established TCP connections with their
+//! processes, for the SSH session detection of [`crate::core::lockout`].
+//!
+//! # Test override
+//!
+//! `DRFW_TEST_PROC_DIR`, when set, replaces `/proc` for every file read here
+//! (`net/tcp*`, `net/udp*`, `<pid>/fd`, `<pid>/comm`,
+//! `sys/net/ipv6/bindv6only`), so tests run on fixtures instead of the
+//! machine's own sockets.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::evaluate::{
     Decider, InputChain, IpFamily, Probe, ProbeSource, Reachability, Transport, Verdict,
@@ -36,8 +46,21 @@ use super::firewall::FirewallRuleset;
 
 /// TCP state LISTEN in `/proc/net/tcp*`.
 const TCP_LISTEN: &str = "0A";
+/// TCP state ESTABLISHED in `/proc/net/tcp*`.
+const TCP_ESTABLISHED: &str = "01";
 /// Socket state of a bound, unconnected UDP socket (`TCP_CLOSE`).
 const UDP_UNCONNECTED: &str = "07";
+
+/// Environment variable that replaces `/proc` (see the module docs).
+pub const TEST_PROC_DIR_VAR: &str = "DRFW_TEST_PROC_DIR";
+
+/// The directory read as `/proc`: `DRFW_TEST_PROC_DIR` when set and not
+/// empty, otherwise `/proc`.
+pub fn proc_root() -> PathBuf {
+    std::env::var_os(TEST_PROC_DIR_VAR)
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| PathBuf::from("/proc"), PathBuf::from)
+}
 
 /// One socket line of `/proc/net/{tcp,tcp6,udp,udp6}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +76,51 @@ pub struct ListeningSocket {
     pub inode: u64,
 }
 
+/// An established TCP connection from `/proc/net/tcp{,6}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EstablishedSocket {
+    /// Local address as the kernel reports it (may be IPv4-mapped IPv6)
+    pub local: IpAddr,
+    pub local_port: u16,
+    /// The peer (may be IPv4-mapped IPv6)
+    pub remote: IpAddr,
+    pub remote_port: u16,
+    /// Owner of the socket
+    pub uid: u32,
+    pub inode: u64,
+}
+
+/// The fields of one `/proc/net` socket line this module uses.
+struct ProcNetLine<'a> {
+    local: IpAddr,
+    local_port: u16,
+    remote: IpAddr,
+    remote_port: u16,
+    state: &'a str,
+    uid: u32,
+    inode: u64,
+}
+
+/// Splits one `/proc/net/{tcp,udp}{,6}` line; `None` for the header and
+/// malformed lines.
+fn parse_line(line: &str, ipv6: bool) -> Option<ProcNetLine<'_>> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 10 {
+        return None;
+    }
+    let (local, local_port) = parse_endpoint(fields[1], ipv6)?;
+    let (remote, remote_port) = parse_endpoint(fields[2], ipv6)?;
+    Some(ProcNetLine {
+        local,
+        local_port,
+        remote,
+        remote_port,
+        state: fields[3],
+        uid: fields[7].parse().ok()?,
+        inode: fields[9].parse().ok()?,
+    })
+}
+
 /// Parses the contents of one `/proc/net/{tcp,tcp6,udp,udp6}` file.
 ///
 /// Returns TCP sockets in state LISTEN, or UDP sockets that are bound and not
@@ -64,33 +132,43 @@ pub fn parse_proc_net(contents: &str, transport: Transport, ipv6: bool) -> Vec<L
     contents
         .lines()
         .skip(1) // header
-        .filter_map(|line| parse_proc_net_line(line, transport, ipv6))
+        .filter_map(|line| {
+            let line = parse_line(line, ipv6)?;
+            let listening = match transport {
+                Transport::Tcp => line.state == TCP_LISTEN,
+                Transport::Udp => line.state == UDP_UNCONNECTED && line.remote_port == 0,
+            };
+            listening.then_some(ListeningSocket {
+                transport,
+                ipv6_socket: ipv6,
+                local: line.local,
+                port: line.local_port,
+                uid: line.uid,
+                inode: line.inode,
+            })
+        })
         .collect()
 }
 
-fn parse_proc_net_line(line: &str, transport: Transport, ipv6: bool) -> Option<ListeningSocket> {
-    let fields: Vec<&str> = line.split_whitespace().collect();
-    if fields.len() < 10 {
-        return None;
-    }
-    let (local, port) = parse_endpoint(fields[1], ipv6)?;
-    let (_, remote_port) = parse_endpoint(fields[2], ipv6)?;
-    let state = fields[3];
-    let listening = match transport {
-        Transport::Tcp => state == TCP_LISTEN,
-        Transport::Udp => state == UDP_UNCONNECTED && remote_port == 0,
-    };
-    if !listening {
-        return None;
-    }
-    Some(ListeningSocket {
-        transport,
-        ipv6_socket: ipv6,
-        local,
-        port,
-        uid: fields[7].parse().ok()?,
-        inode: fields[9].parse().ok()?,
-    })
+/// Parses the established connections of one `/proc/net/tcp{,6}` file
+/// (state `01`). Malformed lines are skipped; byte order as for
+/// [`parse_proc_net`].
+pub fn parse_proc_net_established(contents: &str, ipv6: bool) -> Vec<EstablishedSocket> {
+    contents
+        .lines()
+        .skip(1) // header
+        .filter_map(|line| {
+            let line = parse_line(line, ipv6)?;
+            (line.state == TCP_ESTABLISHED).then_some(EstablishedSocket {
+                local: line.local,
+                local_port: line.local_port,
+                remote: line.remote,
+                remote_port: line.remote_port,
+                uid: line.uid,
+                inode: line.inode,
+            })
+        })
+        .collect()
 }
 
 /// Parses `0100007F:0016` (IPv4) or 32 hex digits + port (IPv6).
@@ -222,7 +300,18 @@ pub struct SocketInfo {
     pub family_display: &'static str,
 }
 
-/// Reads the listening sockets of this computer and their processes.
+/// What [`scan_host`] found: the listening sockets and the established TCP
+/// connections, with their processes where readable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostScan {
+    pub sockets: Vec<SocketInfo>,
+    /// Established TCP connections and the processes holding them (empty if
+    /// not readable)
+    pub established: Vec<(EstablishedSocket, Vec<ProcessInfo>)>,
+}
+
+/// Reads the listening sockets and established TCP connections of this
+/// computer, and their processes (from [`proc_root`]).
 ///
 /// Blocking (reads `/proc`); run it off the UI thread.
 ///
@@ -230,8 +319,18 @@ pub struct SocketInfo {
 ///
 /// Fails only if none of the four `/proc/net` files can be read (e.g. `/proc`
 /// is not mounted); a missing `tcp6`/`udp6` (IPv6 disabled) is fine.
-pub fn scan_listening_sockets() -> std::io::Result<Vec<SocketInfo>> {
+pub fn scan_host() -> std::io::Result<HostScan> {
+    scan_host_in(&proc_root())
+}
+
+/// [`scan_host`] with `root` read as `/proc`.
+///
+/// # Errors
+///
+/// As [`scan_host`].
+pub fn scan_host_in(root: &Path) -> std::io::Result<HostScan> {
     let mut raw = Vec::new();
+    let mut established = Vec::new();
     let mut last_error = None;
     let mut any_read = false;
     for (file, transport, ipv6) in [
@@ -240,10 +339,13 @@ pub fn scan_listening_sockets() -> std::io::Result<Vec<SocketInfo>> {
         ("udp", Transport::Udp, false),
         ("udp6", Transport::Udp, true),
     ] {
-        match std::fs::read_to_string(Path::new("/proc/net").join(file)) {
+        match std::fs::read_to_string(root.join("net").join(file)) {
             Ok(contents) => {
                 any_read = true;
                 raw.extend(parse_proc_net(&contents, transport, ipv6));
+                if transport == Transport::Tcp {
+                    established.extend(parse_proc_net_established(&contents, ipv6));
+                }
             }
             Err(e) => last_error = Some(e),
         }
@@ -251,18 +353,26 @@ pub fn scan_listening_sockets() -> std::io::Result<Vec<SocketInfo>> {
     if !any_read && let Some(e) = last_error {
         return Err(e);
     }
-    let wanted: HashSet<u64> = raw.iter().map(|s| s.inode).collect();
-    let owners = map_socket_owners(Path::new("/proc"), &wanted);
-    let v6only_default =
-        std::fs::read_to_string("/proc/sys/net/ipv6/bindv6only").is_ok_and(|v| v.trim() == "1");
+    let wanted: HashSet<u64> = raw
+        .iter()
+        .map(|s| s.inode)
+        .chain(established.iter().map(|c| c.inode))
+        .collect();
+    let owners = map_socket_owners(root, &wanted);
+    let v6only_default = std::fs::read_to_string(root.join("sys/net/ipv6/bindv6only"))
+        .is_ok_and(|v| v.trim() == "1");
     let own_uid = nix::unistd::getuid().as_raw();
-    Ok(build_socket_list(
-        raw,
-        &owners,
-        own_uid,
-        v6only_default,
-        user_name,
-    ))
+    let established = established
+        .into_iter()
+        .map(|connection| {
+            let processes = owners.get(&connection.inode).cloned().unwrap_or_default();
+            (connection, processes)
+        })
+        .collect();
+    Ok(HostScan {
+        sockets: build_socket_list(raw, &owners, own_uid, v6only_default, user_name),
+        established,
+    })
 }
 
 /// The login name of `uid`, if known.
@@ -502,7 +612,9 @@ pub struct ExposureRow {
 ///
 /// ```no_run
 /// let ruleset = drfw::core::firewall::FirewallRuleset::new();
-/// let sockets = drfw::core::exposure::scan_listening_sockets().unwrap_or_default();
+/// let sockets = drfw::core::exposure::scan_host()
+///     .unwrap_or_default()
+///     .sockets;
 /// for row in drfw::core::exposure::exposure_rows(&ruleset, &sockets) {
 ///     println!(
 ///         "{} {} {}: {} ({})",
@@ -619,6 +731,99 @@ mod tests {
         assert_eq!(v6.len(), 1, "the connected socket is skipped");
         assert_eq!(v6[0].local.to_string(), "fe80::1");
         assert_eq!(v6[0].port, 546);
+    }
+
+    /// Established connections only (state 01), IPv4 and IPv6, with
+    /// IPv4-mapped peers kept as the kernel prints them.
+    #[cfg(target_endian = "little")]
+    #[test]
+    fn test_parse_established_connections() {
+        let v4 = parse_proc_net_established(TCP, false);
+        assert_eq!(
+            v4,
+            [EstablishedSocket {
+                local: "192.168.0.5".parse().unwrap(),
+                local_port: 50000,
+                remote: "192.168.0.11".parse().unwrap(),
+                remote_port: 443,
+                uid: 1000,
+                inode: 778,
+            }],
+            "listeners and the garbage line are skipped"
+        );
+        let tcp6 = format!(
+            "{}\n{}\n{}\n",
+            TCP6.lines().next().unwrap(),
+            "   0: B80D0120000000000000000001000000:0016 B80D0120000000000000000002000000:D431 01 00000000:00000000 02:000A7E2F 00000000     0        0 4242 2 0000000000000000 20 4 29 10 -1",
+            "   1: 0000000000000000FFFF00000100000A:0016 0000000000000000FFFF00000500000A:E290 01 00000000:00000000 02:000A7E2F 00000000     0        0 4243 2 0000000000000000 20 4 29 10 -1",
+        );
+        let v6 = parse_proc_net_established(&tcp6, true);
+        let found: Vec<(String, u16, String, u16)> = v6
+            .iter()
+            .map(|c| {
+                (
+                    c.local.to_string(),
+                    c.local_port,
+                    c.remote.to_string(),
+                    c.remote_port,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "2001:db8::1".to_string(),
+                    22,
+                    "2001:db8::2".to_string(),
+                    54321
+                ),
+                (
+                    "::ffff:10.0.0.1".to_string(),
+                    22,
+                    "::ffff:10.0.0.5".to_string(),
+                    58000
+                ),
+            ]
+        );
+        assert_eq!(
+            parse_proc_net_established(TCP6, true),
+            Vec::new(),
+            "listeners only"
+        );
+        assert_eq!(
+            parse_proc_net_established(
+                "header
+not a line
+",
+                false
+            ),
+            Vec::new()
+        );
+    }
+
+    /// `scan_host_in` reads a `/proc`-like tree: sockets, connections and
+    /// their processes.
+    #[cfg(all(unix, target_endian = "little"))]
+    #[test]
+    fn test_scan_host_on_fixture_tree() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("net")).unwrap();
+        std::fs::write(root.join("net/tcp"), TCP).unwrap();
+        std::fs::create_dir_all(root.join("4000/fd")).unwrap();
+        std::fs::write(root.join("4000/comm"), "firefox\n").unwrap();
+        symlink("socket:[778]", root.join("4000/fd/3")).unwrap();
+
+        let scan = scan_host_in(root).unwrap();
+        assert_eq!(scan.sockets.len(), 3, "{:?}", scan.sockets);
+        assert_eq!(scan.established.len(), 1);
+        let (connection, processes) = &scan.established[0];
+        assert_eq!(connection.remote_port, 443);
+        assert_eq!(processes[0].name, "firefox");
+        assert!(scan_host_in(&root.join("missing")).is_err());
     }
 
     #[test]

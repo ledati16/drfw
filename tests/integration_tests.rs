@@ -713,6 +713,8 @@ fn run_drfw_with_nft(root: &std::path::Path, nft: &str, args: &[&str]) -> std::p
         .env("DRFW_TEST_DATA_DIR", root)
         .env("DRFW_TEST_STATE_DIR", root)
         .env("DRFW_NFT_COMMAND", nft)
+        .env_remove("SSH_CONNECTION")
+        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .output()
         .expect("run drfw")
 }
@@ -1048,6 +1050,8 @@ fn run_drfw_status_with_path(root: &std::path::Path, path: &str) -> String {
         .env("DRFW_TEST_STATE_DIR", root)
         .env("DRFW_NFT_COMMAND", get_mock_nft_path())
         .env("PATH", path)
+        .env_remove("SSH_CONNECTION")
+        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .output()
         .expect("run drfw");
     assert!(output.status.success(), "{}", all_output(&output));
@@ -1179,6 +1183,16 @@ fn run_drfw_save(
     fake_bin: &std::path::Path,
     args: &[&str],
 ) -> std::process::Output {
+    run_drfw_save_with(root, fake_bin, args, &[])
+}
+
+/// [`run_drfw_save`] with extra environment variables for the child only.
+fn run_drfw_save_with(
+    root: &std::path::Path,
+    fake_bin: &std::path::Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
         .arg("save")
         .args(args)
@@ -1187,6 +1201,9 @@ fn run_drfw_save(
         .env("DRFW_NFT_COMMAND", get_mock_nft_path())
         .env("DRFW_TEST_SYSTEM_NFT_PATH", root.join("nftables.conf"))
         .env("PATH", path_with(fake_bin))
+        .env_remove("SSH_CONNECTION")
+        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
+        .envs(env.iter().copied())
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run drfw")
@@ -1314,6 +1331,15 @@ fn test_cli_save_confirmed_rules_need_no_yes() {
 /// Runs `drfw apply <args>` against `root` (mock nft, private runtime dir,
 /// guard state under `root`, stdin closed: not a terminal).
 fn run_drfw_apply(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    run_drfw_apply_with(root, args, &[])
+}
+
+/// [`run_drfw_apply`] with extra environment variables for the child only.
+fn run_drfw_apply_with(
+    root: &std::path::Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Output {
     use std::os::unix::fs::PermissionsExt;
     let runtime = root.join("run");
     std::fs::create_dir_all(&runtime).unwrap();
@@ -1326,6 +1352,9 @@ fn run_drfw_apply(root: &std::path::Path, args: &[&str]) -> std::process::Output
         .env("DRFW_NFT_COMMAND", get_mock_nft_path())
         .env("DRFW_GUARD_STATE_DIR", root.join("guard"))
         .env("XDG_RUNTIME_DIR", &runtime)
+        .env_remove("SSH_CONNECTION")
+        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
+        .envs(env.iter().copied())
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run drfw")
@@ -1443,6 +1472,290 @@ fn test_cli_save_retention_guard() {
     assert!(out.contains("Removes 3 of the 4 enabled rules"), "{out}");
     assert!(out.contains("Blocks forwarded traffic"), "{out}");
     assert!(root.path().join("nftables.conf").exists());
+}
+
+// ============================================================================
+// SSH lockout check and `drfw exposure` (SSH_CONNECTION and the /proc
+// fixture are set on the child only)
+// ============================================================================
+
+/// An SSH session from 10.0.0.5 to port 22 of 10.0.0.1.
+const SSH_SESSION: (&str, &str) = ("SSH_CONNECTION", "10.0.0.5 50000 10.0.0.1 22");
+
+/// `drfw apply` from an SSH session refuses rules that would block a new
+/// connection from the session's client: exit 9 off a terminal, nothing
+/// applied; --yes goes ahead; a rule for SSH needs no confirmation.
+#[test]
+fn test_cli_apply_lockout_check() {
+    let root = tempfile::tempdir().unwrap();
+    let ruleset = web_profile_with(root.path(), 2);
+    let output = run_drfw_apply_with(root.path(), &["web", "--no-confirm"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("could lock you out of SSH"), "{out}");
+    assert!(
+        out.contains("You are connected from 10.0.0.5 to port 22"),
+        "{out}"
+    );
+    assert!(out.contains("BLOCKED: rejected by"), "{out}");
+    assert!(out.contains("Open sessions stay connected"), "{out}");
+    assert!(out.contains("not applied: pass --yes"), "{out}");
+    assert!(!out.contains("Applying ruleset"), "{out}");
+    assert!(
+        drfw::core::confirmed::ConfirmedRecord::load_from_blocking(root.path()).is_none(),
+        "nothing applied"
+    );
+
+    let output = run_drfw_apply_with(
+        root.path(),
+        &["web", "--no-confirm", "--yes"],
+        &[SSH_SESSION],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(all_output(&output).contains("could lock you out of SSH"));
+    let record =
+        drfw::core::confirmed::ConfirmedRecord::load_from_blocking(root.path()).expect("applied");
+    assert!(record.matches(&ruleset.to_nftables_json()));
+
+    // Allowing SSH: no question
+    let mut with_ssh = ruleset.clone();
+    with_ssh.rules.push(create_test_rule("SSH", Some(22)));
+    write_profile(root.path(), "web", &with_ssh);
+    let output = run_drfw_apply_with(root.path(), &["web", "--no-confirm"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(!all_output(&output).contains("lock you out"));
+
+    // Without a session (and no /proc sessions) there is nothing to check
+    write_profile(root.path(), "web", &ruleset);
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(!all_output(&output).contains("lock you out"));
+}
+
+/// `drfw save` runs the same check (the saved rules load at the next boot).
+#[test]
+fn test_cli_save_lockout_check() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    web_profile_with(root.path(), 1);
+    // Applied and kept (so the save is "tested"), from outside the session
+    let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+
+    let output = run_drfw_save_with(root.path(), bin.path(), &["web"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("could lock you out of SSH"), "{out}");
+    assert!(out.contains("not saved: pass --yes"), "{out}");
+    assert!(!root.path().join("nftables.conf").exists());
+
+    let output = run_drfw_save_with(root.path(), bin.path(), &["web", "--yes"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(root.path().join("nftables.conf").exists());
+}
+
+/// Runs `drfw <args>` with `proc` as `/proc` and extra environment.
+fn run_drfw_in_proc(
+    root: &std::path::Path,
+    proc: &std::path::Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .args(args)
+        .env("DRFW_TEST_DATA_DIR", root)
+        .env("DRFW_TEST_STATE_DIR", root)
+        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
+        .env_remove("SSH_CONNECTION")
+        .env("DRFW_TEST_PROC_DIR", proc)
+        .envs(env.iter().copied())
+        .output()
+        .expect("run drfw")
+}
+
+/// A `/proc` fixture: root's server listening on TCP 22 with an established
+/// connection from 10.0.0.5, and nginx (pid 4242, readable) on TCP 8080.
+/// Addresses in host byte order (little-endian).
+fn proc_fixture(dir: &std::path::Path) {
+    use std::os::unix::fs::symlink;
+    let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 900001 1 0 100 0 0 10 0
+   1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 900002 1 0 100 0 0 10 0
+   2: 0100000A:0016 0500000A:C350 01 00000000:00000000 02:000A7E2F 00000000     0        0 900003 2 0 20 4 29 10 -1
+";
+    std::fs::create_dir_all(dir.join("net")).unwrap();
+    std::fs::write(dir.join("net/tcp"), tcp).unwrap();
+    std::fs::create_dir_all(dir.join("4242/fd")).unwrap();
+    std::fs::write(dir.join("4242/comm"), "nginx\n").unwrap();
+    symlink("socket:[900002]", dir.join("4242/fd/5")).unwrap();
+}
+
+/// A profile `web` allowing TCP 8080 from everyone.
+fn exposure_profile(root: &std::path::Path) {
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.rules.push(create_test_rule("Web", Some(8080)));
+    write_profile(root, "web", &ruleset);
+}
+
+#[cfg(target_endian = "little")]
+#[test]
+fn test_cli_exposure_table() {
+    let root = tempfile::tempdir().unwrap();
+    let proc = root.path().join("proc");
+    proc_fixture(&proc);
+    exposure_profile(root.path());
+
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web"], &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = stdout_of(&output);
+    assert!(out.contains("profile 'web'"), "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    let header = lines
+        .iter()
+        .position(|l| l.starts_with("PORT"))
+        .expect("header");
+    for column in ["FAMILY", "PROCESS", "BIND", "REACHABLE FROM", "DECIDED BY"] {
+        assert!(lines[header].contains(column), "{out}");
+    }
+    // Open to everyone first, marked in text, no escape codes off a terminal
+    let web = lines[header + 1];
+    assert!(web.starts_with("TCP 8080"), "{out}");
+    assert!(web.contains("nginx"), "{out}");
+    assert!(web.contains("OPEN TO EVERYONE: everyone"), "{out}");
+    assert!(web.ends_with("rule \"Web\""), "{out}");
+    let ssh = lines[header + 2];
+    assert!(ssh.starts_with("TCP 22"), "{out}");
+    assert!(ssh.contains("nobody"), "{out}");
+    assert!(
+        ssh.contains("built-in rule \"rate-limited reject\""),
+        "{out}"
+    );
+    assert!(
+        out.contains("2 listening sockets, 1 open to everyone."),
+        "{out}"
+    );
+    // The established connection to root's port 22 is assumed SSH
+    assert!(
+        out.contains("SSH: a connection (assumed SSH) from 10.0.0.5 to port 22"),
+        "{out}"
+    );
+    assert!(!out.contains('\x1b'), "{out}");
+
+    // Missing profile: error, exit 1
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "missing"], &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
+    // Unreadable /proc: error, exit 1
+    let output = run_drfw_in_proc(
+        root.path(),
+        &root.path().join("none"),
+        &["exposure", "web"],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
+    assert!(all_output(&output).contains("cannot read the listening sockets"));
+}
+
+#[cfg(target_endian = "little")]
+#[test]
+fn test_cli_exposure_json() {
+    let root = tempfile::tempdir().unwrap();
+    let proc = root.path().join("proc");
+    proc_fixture(&proc);
+    exposure_profile(root.path());
+    // No name: the active profile
+    std::fs::write(
+        root.path().join("config.json"),
+        r#"{"active_profile": "web"}"#,
+    )
+    .unwrap();
+
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "--json"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(json["profile"], "web");
+    let sockets = json["sockets"].as_array().unwrap();
+    assert_eq!(sockets.len(), 2);
+    let web = &sockets[0];
+    for key in [
+        "transport",
+        "port",
+        "families",
+        "bind",
+        "bind_display",
+        "local_only",
+        "uid",
+        "process",
+        "processes",
+        "reachable_from",
+        "open_to_everyone",
+        "nobody",
+        "decided_by",
+        "decided_by_rule_id",
+    ] {
+        assert!(web.get(key).is_some(), "{key} missing: {web}");
+    }
+    assert_eq!(web["transport"], "tcp");
+    assert_eq!(web["port"], 8080);
+    assert_eq!(web["families"], serde_json::json!(["ipv4"]));
+    assert_eq!(web["process"], "nginx");
+    assert_eq!(web["processes"][0]["pid"], 4242);
+    assert_eq!(web["open_to_everyone"], true);
+    assert_eq!(web["decided_by"], "rule \"Web\"");
+    assert_eq!(sockets[1]["port"], 22);
+    assert_eq!(sockets[1]["nobody"], true);
+    assert!(sockets[1]["decided_by_rule_id"].is_null());
+
+    // The SSH_CONNECTION session and the one in /proc are the same session
+    let sessions = json["ssh_sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0]["client"], "10.0.0.5");
+    assert_eq!(sessions[0]["client_port"], 50000);
+    assert_eq!(sessions[0]["server"], "10.0.0.1");
+    assert_eq!(sessions[0]["server_port"], 22);
+    assert_eq!(sessions[0]["source"], "environment");
+    assert_eq!(sessions[0]["new_connections"], "blocked");
+    assert!(
+        sessions[0]["outcome"]
+            .as_str()
+            .unwrap()
+            .starts_with("BLOCKED")
+    );
+}
+
+/// `drfw status` says whether the SSH session's client could reconnect.
+#[test]
+fn test_cli_status_ssh_line() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = create_test_ruleset(); // allows TCP 22
+    write_profile(root.path(), "default", &ruleset);
+    let no_proc = root.path().join("no-proc");
+
+    let output = run_drfw_in_proc(root.path(), &no_proc, &["status"], &[SSH_SESSION]);
+    assert!(output.status.success(), "{}", all_output(&output));
+    let out = stdout_of(&output);
+    let line = out
+        .lines()
+        .find(|l| l.starts_with("SSH:"))
+        .unwrap_or_else(|| panic!("no SSH line: {out}"));
+    assert!(
+        line.contains(
+            "you are connected from 10.0.0.5 to port 22; new connections from 10.0.0.5 would be accepted by rule \"Test SSH\""
+        ),
+        "{line}"
+    );
+
+    ruleset.rules.clear();
+    write_profile(root.path(), "default", &ruleset);
+    let output = run_drfw_in_proc(root.path(), &no_proc, &["status"], &[SSH_SESSION]);
+    let out = stdout_of(&output);
+    assert!(out.contains("would be BLOCKED: rejected by"), "{out}");
+
+    let output = run_drfw_in_proc(root.path(), &no_proc, &["status"], &[]);
+    let out = stdout_of(&output);
+    assert!(
+        out.contains("SSH:              no SSH session into this computer found"),
+        "{out}"
+    );
 }
 
 #[test]

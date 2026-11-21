@@ -11,6 +11,22 @@
 //! The ruleset is snapshotted when the user clicks Apply: exactly that
 //! snapshot is verified and applied, and ruleset edits are refused until the
 //! apply flow is over, so nothing unverified can slip in.
+//!
+//! # Confirmations
+//!
+//! Two checks can make "Commit Changes?" (and Save to System, for the
+//! editor's rules) need an explicit "Apply anyway" / "Save anyway": the
+//! retention guard ([`crate::core::retention`]) and the SSH lockout check
+//! ([`crate::core::lockout`]). Both are computed in `update()` when Apply is
+//! clicked (or the save dialog opens) from what is known then: the kept
+//! record loaded earlier and the SSH sessions last found (at least the
+//! `SSH_CONNECTION` session, read at startup). At the same time the record and
+//! the sessions are re-read off the UI thread, next to the verification (or
+//! the boot query), since a `drfw apply` in a terminal may have replaced the
+//! record meanwhile. When they arrive (`Message::ApplyContextLoaded`) both
+//! warnings are computed again for a dialog that is still open; for a closed
+//! one only the record and sessions are stored. A reload started before this
+//! GUI replaced the record itself is older and is not stored.
 
 use std::time::Instant;
 
@@ -23,6 +39,7 @@ use crate::core::apply_guard::{ApplyError, GuardError, GuardHandle, GuardOutcome
 use crate::core::boot::BootStatus;
 use crate::core::confirmed::{ConfirmedRecord, RecordKind};
 use crate::core::firewall::FirewallRuleset;
+use crate::core::lockout::{LockoutWarning, SshSession};
 use crate::core::retention::RetentionWarning;
 use crate::core::system_config::EnableOutcome;
 use crate::core::verify::{VerifyError, VerifyResult};
@@ -90,8 +107,11 @@ pub struct ApplySession {
     /// `last_applied_ruleset` before this apply, restored if it is reverted
     previous_applied: Option<FirewallRuleset>,
     /// Why this apply needs an explicit "Apply anyway" (compared with the
-    /// last ruleset applied and kept), computed when Apply was clicked
+    /// last ruleset applied and kept), computed when Apply was clicked and
+    /// again when the record is re-read
     retention: Option<RetentionWarning>,
+    /// The SSH lockout check's warning for this apply (same timing)
+    lockout: Option<LockoutWarning>,
 }
 
 impl ApplySession {
@@ -99,6 +119,25 @@ impl ApplySession {
     /// "Commit Changes?" dialog).
     pub fn retention(&self) -> Option<&RetentionWarning> {
         self.retention.as_ref()
+    }
+
+    /// The SSH lockout check's warning for this apply, if any (shown in the
+    /// "Commit Changes?" dialog).
+    pub fn lockout(&self) -> Option<&LockoutWarning> {
+        self.lockout.as_ref()
+    }
+
+    /// Applying takes "Apply anyway" (Enter is refused): the retention guard
+    /// or the lockout check warns.
+    pub fn needs_confirmation(&self) -> bool {
+        self.retention.is_some() || self.lockout.is_some()
+    }
+
+    /// Computes both warnings for `verified` from the current record and
+    /// sessions.
+    fn check(&mut self, kept: Option<&FirewallRuleset>, sessions: &[SshSession]) {
+        self.retention = RetentionWarning::check(kept, &self.verified);
+        self.lockout = LockoutWarning::check(&self.verified, sessions);
     }
 
     /// The record of this ruleset once it is kept (the same one
@@ -116,6 +155,66 @@ fn kept_ruleset(state: &State) -> Option<&FirewallRuleset> {
         .confirmed_record
         .as_ref()
         .and_then(ConfirmedRecord::ruleset)
+}
+
+/// Replaces the kept-ruleset record with one this GUI just kept; a reload
+/// from disk started before is then older (see the module docs).
+fn set_confirmed_record(state: &mut State, record: Option<ConfirmedRecord>) {
+    state.confirmed_record = record;
+    state.confirmed_record_generation = state.confirmed_record_generation.wrapping_add(1);
+}
+
+/// The kept record and the SSH sessions, re-read from disk and `/proc`.
+#[derive(Debug, Clone)]
+pub struct ApplyContext {
+    /// `State::confirmed_record_generation` when the reload started
+    pub record_generation: u64,
+    pub record: Option<ConfirmedRecord>,
+    pub sessions: Vec<SshSession>,
+}
+
+/// Re-reads the kept record and the SSH sessions on the blocking pool.
+fn reload_context_task(state: &State) -> Task<Message> {
+    let record_generation = state.confirmed_record_generation;
+    let env = state.ssh_env_session.clone();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || ApplyContext {
+                record_generation,
+                record: ConfirmedRecord::load_blocking(),
+                sessions: crate::core::lockout::detect_sessions(env),
+            })
+            .await
+            .map_err(|e| tracing::error!("Reloading the kept record failed: {e}"))
+            .ok()
+            .map(Box::new)
+        },
+        Message::ApplyContextLoaded,
+    )
+}
+
+/// Handles the re-read record and sessions: stores them (the record only if
+/// this GUI did not replace it meanwhile) and recomputes the warnings of an
+/// open "Commit Changes?" or Save to System dialog.
+pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyContext) {
+    if context.record_generation == state.confirmed_record_generation {
+        state.confirmed_record = context.record;
+    }
+    state.ssh_sessions = context.sessions;
+    match state.status {
+        AppStatus::Verifying | AppStatus::AwaitingApply => {
+            let kept = state
+                .confirmed_record
+                .as_ref()
+                .and_then(ConfirmedRecord::ruleset);
+            if let Some(session) = state.apply_session.as_mut() {
+                session.check(kept, &state.ssh_sessions);
+            }
+        }
+        AppStatus::AwaitingSaveToSystem => check_save_dialog(state),
+        // Closed (or past the question): nothing to update
+        _ => {}
+    }
 }
 
 /// Longest banner text for apply errors.
@@ -335,19 +434,21 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
 
     let verified = state.ruleset.clone();
     let json = verified.to_nftables_json();
-    let retention = RetentionWarning::check(kept_ruleset(state), &verified);
-    let task = Task::perform(
+    let verify = Task::perform(
         verify_and_locate(verified.clone(), json.clone()),
         Message::VerifyCompleted,
     );
-    state.apply_session = Some(ApplySession {
+    let mut session = ApplySession {
         verified,
         json,
         previous_applied: None,
-        retention,
-    });
+        retention: None,
+        lockout: None,
+    };
+    session.check(kept_ruleset(state), &state.ssh_sessions);
+    state.apply_session = Some(session);
     state.status = AppStatus::Verifying;
-    task
+    Task::batch([verify, reload_context_task(state)])
 }
 
 /// Handles verification completion
@@ -389,20 +490,21 @@ pub(crate) fn handle_cancel_apply(state: &mut State) {
 }
 
 /// Handles proceeding to apply after successful verification ("Apply" or
-/// Enter). Refused while the retention guard warns: that takes the "Apply
-/// anyway" button ([`handle_proceed_to_apply_anyway`]).
+/// Enter). Refused while the retention guard or the lockout check warns:
+/// that takes the "Apply anyway" button ([`handle_proceed_to_apply_anyway`]).
 pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
     proceed_to_apply(state, false)
 }
 
-/// Handles "Apply anyway": the user confirmed the retention guard's warning.
+/// Handles "Apply anyway": the user confirmed the warnings (retention guard,
+/// lockout check).
 pub(crate) fn handle_proceed_to_apply_anyway(state: &mut State) -> Task<Message> {
     proceed_to_apply(state, true)
 }
 
-/// Starts the elevated apply of the verified snapshot. `retention_confirmed`:
-/// the user explicitly accepted the retention guard's warning.
-fn proceed_to_apply(state: &mut State, retention_confirmed: bool) -> Task<Message> {
+/// Starts the elevated apply of the verified snapshot. `confirmed`: the user
+/// explicitly accepted the warnings shown ("Apply anyway").
+fn proceed_to_apply(state: &mut State, confirmed: bool) -> Task<Message> {
     if state.status != AppStatus::AwaitingApply {
         return Task::none();
     }
@@ -411,7 +513,7 @@ fn proceed_to_apply(state: &mut State, retention_confirmed: bool) -> Task<Messag
         state.status = AppStatus::Idle;
         return Task::none();
     };
-    if session.retention.is_some() && !retention_confirmed {
+    if session.needs_confirmation() && !confirmed {
         // The dialog stays open; only its "Apply anyway" button continues
         const HINT: &str = "Review the warning, then click \"Apply anyway\" to apply these rules.";
         if state.banners.back().is_none_or(|b| b.message != HINT) {
@@ -484,10 +586,11 @@ pub(crate) fn handle_apply_result(
         // Auto-revert is off: the user chose to keep these rules
         // unconditionally (`apply_guarded` persisted the same record)
         state.status = AppStatus::Idle;
-        state.confirmed_record = state
+        let record = state
             .apply_session
             .take()
             .and_then(|s| s.kept_record(RecordKind::Unguarded));
+        set_confirmed_record(state, record);
         state.push_banner(
             "Firewall rules applied successfully!",
             BannerSeverity::Success,
@@ -641,7 +744,10 @@ pub(crate) fn handle_guard_finished(
     match result {
         Ok(GuardOutcome::Confirmed) => {
             // The guard persisted the same record (`GuardHandle::wait_outcome`)
-            state.confirmed_record = session.and_then(|s| s.kept_record(RecordKind::Confirmed));
+            set_confirmed_record(
+                state,
+                session.and_then(|s| s.kept_record(RecordKind::Confirmed)),
+            );
             state.push_banner("Changes confirmed!", BannerSeverity::Success);
             audit_task(audit::log_auto_revert_confirmed(
                 enable_event_log,
@@ -778,6 +884,9 @@ pub struct SaveToSystemDialog {
     pub earlier_session: Option<&'static str>,
     /// The retention guard's warning for saving the editor's rules
     pub retention: Option<RetentionWarning>,
+    /// The SSH lockout check's warning for saving the editor's rules (they
+    /// load at the next boot)
+    pub lockout: Option<LockoutWarning>,
     /// What `systemctl` said; `None` while it is being asked
     pub boot: Option<BootStatus>,
     /// The line shown in the dialog
@@ -817,12 +926,19 @@ impl SaveToSystemDialog {
         (self.offer_enable && self.enable_at_boot).then_some(crate::SYSTEM_NFT_SERVICE)
     }
 
+    /// Saving the editor's rules takes "Save anyway": the retention guard or
+    /// the lockout check warns about them.
+    pub fn editor_needs_confirmation(&self) -> bool {
+        self.retention.is_some() || self.lockout.is_some()
+    }
+
     /// The dialog's primary (highlighted, Enter) choice: the tested rules.
     /// `None` when only untested rules could be saved, or when the retention
-    /// guard warns about the editor's rules; that takes a click.
+    /// guard or the lockout check warns about the editor's rules; that takes
+    /// a click.
     pub fn primary_source(&self) -> Option<SaveSource> {
         match self.tested {
-            SaveTested::Tested if self.retention.is_none() => Some(SaveSource::Editor),
+            SaveTested::Tested if !self.editor_needs_confirmation() => Some(SaveSource::Editor),
             SaveTested::Differs => Some(SaveSource::LastConfirmed),
             SaveTested::Tested | SaveTested::NothingApplied => None,
         }
@@ -863,19 +979,14 @@ pub(crate) fn handle_save_to_system_verify_result(
             state.status = AppStatus::AwaitingSaveToSystem;
             clear_verify_errors(state);
             state.save_dialog = SaveToSystemDialog::checking();
-            let record = state.confirmed_record.as_ref();
-            state.save_dialog.tested = SaveTested::of(&state.ruleset.to_nftables_json(), record);
-            state.save_dialog.earlier_session = record
-                .filter(|r| {
-                    !r.from_this_boot() && state.save_dialog.tested != SaveTested::NothingApplied
-                })
-                .map(|_| EARLIER_SESSION_NOTE);
-            state.save_dialog.retention =
-                RetentionWarning::check(kept_ruleset(state), &state.ruleset);
-            Task::perform(
-                crate::core::boot::query_boot_status(),
-                Message::SaveToSystemBootChecked,
-            )
+            check_save_dialog(state);
+            Task::batch([
+                Task::perform(
+                    crate::core::boot::query_boot_status(),
+                    Message::SaveToSystemBootChecked,
+                ),
+                reload_context_task(state),
+            ])
         }
         Ok(verify_result) => {
             state.status = AppStatus::Idle;
@@ -887,6 +998,20 @@ pub(crate) fn handle_save_to_system_verify_result(
             verify_error_feedback(state, &e)
         }
     }
+}
+
+/// Fills the parts of the open Save to System dialog that depend on the kept
+/// record and the SSH sessions (when it opens, and when they are re-read).
+fn check_save_dialog(state: &mut State) {
+    let record = state.confirmed_record.as_ref();
+    let dialog = &mut state.save_dialog;
+    dialog.tested = SaveTested::of(&state.ruleset.to_nftables_json(), record);
+    dialog.earlier_session = record
+        .filter(|r| !r.from_this_boot() && dialog.tested != SaveTested::NothingApplied)
+        .map(|_| EARLIER_SESSION_NOTE);
+    dialog.retention =
+        RetentionWarning::check(record.and_then(ConfirmedRecord::ruleset), &state.ruleset);
+    dialog.lockout = LockoutWarning::check(&state.ruleset, &state.ssh_sessions);
 }
 
 /// Handles the boot persistence answer for the open Save to System dialog
@@ -1950,6 +2075,199 @@ mod tests {
         };
         assert!(dialog.retention.is_some());
         assert_eq!(dialog.primary_source(), None);
+    }
+
+    // =========================================================================
+    // SSH lockout check and the reloaded record
+    // =========================================================================
+
+    /// An SSH session from 10.0.0.5 to port 22 of this computer.
+    fn ssh_session() -> SshSession {
+        crate::core::lockout::parse_ssh_connection("10.0.0.5 50000 10.0.0.1 22").unwrap()
+    }
+
+    fn context(
+        state: &State,
+        record: Option<ConfirmedRecord>,
+        sessions: Vec<SshSession>,
+    ) -> ApplyContext {
+        ApplyContext {
+            record_generation: state.confirmed_record_generation,
+            record,
+            sessions,
+        }
+    }
+
+    fn record_of(ruleset: &FirewallRuleset) -> ConfirmedRecord {
+        ConfirmedRecord::new(&ruleset.to_nftables_json(), ruleset, RecordKind::Confirmed).unwrap()
+    }
+
+    #[test]
+    fn test_lockout_warning_needs_apply_anyway() {
+        let mut state = create_test_state();
+        state.ssh_sessions = vec![ssh_session()];
+        // Nothing allows port 22: the client could not reconnect
+        state.ruleset.rules.push(create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        let session = state.apply_session.as_ref().expect("session");
+        assert!(session.retention().is_none());
+        let warning = session.lockout().expect("lockout").clone();
+        assert!(session.needs_confirmation());
+        assert!(
+            warning.lines[0].starts_with("You are connected from 10.0.0.5 to port 22"),
+            "{warning:?}"
+        );
+        assert!(warning.lines[0].contains("BLOCKED"), "{warning:?}");
+
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::AwaitingApply, "Enter is refused");
+        assert!(last_banner(&state).0.contains("Apply anyway"));
+        let _ = state.update(Message::ProceedToApplyAnyway);
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    #[test]
+    fn test_lockout_check_quiet_when_ssh_is_allowed() {
+        let mut state = create_test_state();
+        state.ssh_sessions = vec![ssh_session()];
+        state.ruleset.rules.push(create_test_rule("SSH", Some(22)));
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert!(!state.apply_session.as_ref().unwrap().needs_confirmation());
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    /// The sessions found off the UI thread replace the known ones and the
+    /// open dialog's warning follows them, both ways.
+    #[test]
+    fn test_lockout_recomputed_when_sessions_arrive() {
+        let mut state = create_test_state();
+        let _ = handle_apply_clicked(&mut state);
+        assert!(state.apply_session.as_ref().unwrap().lockout().is_none());
+        let found = context(&state, None, vec![ssh_session()]);
+        let _ = state.update(Message::ApplyContextLoaded(Some(Box::new(found))));
+        assert_eq!(state.ssh_sessions, [ssh_session()]);
+        assert!(state.apply_session.as_ref().unwrap().lockout().is_some());
+
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        let gone = context(&state, None, Vec::new());
+        handle_apply_context_loaded(&mut state, gone);
+        assert!(!state.apply_session.as_ref().unwrap().needs_confirmation());
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::Applying);
+        // A failed reload changes nothing
+        let _ = state.update(Message::ApplyContextLoaded(None));
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    #[test]
+    fn test_lockout_in_save_dialog() {
+        let mut state = state_with_kept_rules(2);
+        state.ssh_sessions = vec![ssh_session()];
+        open_save_dialog(&mut state);
+        assert_eq!(state.save_dialog.tested, SaveTested::Tested);
+        assert!(state.save_dialog.retention.is_none());
+        assert!(
+            state.save_dialog.lockout.is_some(),
+            "the saved rules block SSH"
+        );
+        assert!(state.save_dialog.editor_needs_confirmation());
+        assert_eq!(state.save_dialog.primary_source(), None, "takes a click");
+    }
+
+    /// A `drfw apply` in a terminal kept other rules while the GUI was open:
+    /// the record re-read when Apply starts replaces the stale one and the
+    /// retention guard follows it.
+    #[test]
+    fn test_record_reloaded_when_apply_starts() {
+        let mut state = state_with_kept_rules(1);
+        let mut on_disk = FirewallRuleset::new();
+        for i in 0..5 {
+            on_disk
+                .rules
+                .push(create_test_rule(&format!("cli{i}"), Some(2000 + i)));
+        }
+        let _ = handle_apply_clicked(&mut state);
+        assert!(state.apply_session.as_ref().unwrap().retention().is_none());
+        let reloaded = context(&state, Some(record_of(&on_disk)), Vec::new());
+        let _ = state.update(Message::ApplyContextLoaded(Some(Box::new(reloaded))));
+        let kept = kept_ruleset(&state).expect("reloaded");
+        assert_eq!(kept.rules.len(), 5);
+        let retention = state
+            .apply_session
+            .as_ref()
+            .unwrap()
+            .retention()
+            .expect("5 of 5 removed");
+        assert_eq!(retention.removed_count, 5);
+    }
+
+    /// The reloaded record updates an open Save to System dialog; one that
+    /// arrives after the dialog closed is only stored.
+    #[test]
+    fn test_record_reloaded_for_save_dialog_and_after_it_closed() {
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        open_save_dialog(&mut state);
+        assert_eq!(state.save_dialog.tested, SaveTested::NothingApplied);
+        let reloaded = context(&state, Some(record_of(&state.ruleset)), Vec::new());
+        handle_apply_context_loaded(&mut state, reloaded);
+        assert_eq!(
+            state.save_dialog.tested,
+            SaveTested::Tested,
+            "kept from a terminal"
+        );
+        assert_eq!(state.save_dialog.primary_source(), Some(SaveSource::Editor));
+
+        handle_save_to_system_cancelled(&mut state);
+        let mut other = FirewallRuleset::new();
+        other.rules.push(create_test_rule("Other", Some(81)));
+        let late = context(&state, Some(record_of(&other)), vec![ssh_session()]);
+        handle_apply_context_loaded(&mut state, late);
+        assert_eq!(state.status, AppStatus::Idle);
+        assert_eq!(state.save_dialog.tested, SaveTested::default());
+        assert!(
+            state.save_dialog.lockout.is_none(),
+            "closed dialog untouched"
+        );
+        assert!(
+            state
+                .confirmed_record
+                .as_ref()
+                .unwrap()
+                .matches(&other.to_nftables_json())
+        );
+        assert_eq!(state.ssh_sessions, [ssh_session()]);
+    }
+
+    /// A reload started before this GUI kept rules itself is older: it must
+    /// not overwrite the new record.
+    #[test]
+    fn test_stale_record_reload_does_not_overwrite_a_newer_keep() {
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        let old_reload = context(&state, None, vec![ssh_session()]);
+        apply_and_confirm(&mut state);
+        assert!(state.confirmed_record.is_some(), "kept");
+        handle_apply_context_loaded(&mut state, old_reload);
+        assert!(
+            state
+                .confirmed_record
+                .as_ref()
+                .is_some_and(|r| r.matches(&state.ruleset.to_nftables_json())),
+            "the record kept by this GUI stays"
+        );
+        assert_eq!(
+            state.ssh_sessions,
+            [ssh_session()],
+            "sessions are always fresh"
+        );
     }
 
     /// The "may be active" banner fits the banner; the full explanation is in

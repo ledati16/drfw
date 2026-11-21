@@ -9,20 +9,22 @@ use crate::app::ui_components::{
     section_header_container, themed_checkbox,
 };
 use crate::app::{AppStatus, Message, SaveSource};
+use crate::core::lockout::LockoutWarning;
 use crate::core::retention::RetentionWarning;
 
 /// Heading of the retention guard's warning in both dialogs.
 const RETENTION_HEADING: &str = "This is a big change. Check it before you continue:";
 
-/// The retention guard's warning: why this ruleset needs an explicit
-/// confirmation (every line prepared in `update()`).
-fn retention_block<'a>(
-    warning: &'a RetentionWarning,
+/// A warning that needs an explicit confirmation (retention guard, SSH
+/// lockout check): a heading and its lines, all prepared in `update()`.
+fn warning_block<'a>(
+    heading: &'a str,
+    lines: &'a [String],
     width: f32,
     theme: &'a crate::theme::AppTheme,
     font: iced::Font,
 ) -> Element<'a, Message> {
-    let lines = warning.lines.iter().map(|line| {
+    let lines = lines.iter().map(|line| {
         text(line)
             .size(13)
             .font(font)
@@ -31,7 +33,7 @@ fn retention_block<'a>(
     });
     container(
         column![
-            text(RETENTION_HEADING)
+            text(heading)
                 .size(13)
                 .font(iced::Font {
                     weight: iced::font::Weight::Bold,
@@ -46,6 +48,35 @@ fn retention_block<'a>(
     .width(width)
     .style(move |_| inset_container_bordered(theme))
     .into()
+}
+
+/// The blocks for the warnings that are present (retention guard first).
+fn confirmation_blocks<'a>(
+    retention: Option<&'a RetentionWarning>,
+    lockout: Option<&'a LockoutWarning>,
+    theme: &'a crate::theme::AppTheme,
+    font: iced::Font,
+) -> Vec<Element<'a, Message>> {
+    let mut blocks = Vec::with_capacity(2);
+    if let Some(warning) = retention {
+        blocks.push(warning_block(
+            RETENTION_HEADING,
+            &warning.lines,
+            400.0,
+            theme,
+            font,
+        ));
+    }
+    if let Some(warning) = lockout {
+        blocks.push(warning_block(
+            LockoutWarning::HEADING,
+            &warning.lines,
+            400.0,
+            theme,
+            font,
+        ));
+    }
+    blocks
 }
 
 // ============================================================================
@@ -103,15 +134,16 @@ fn build_awaiting_body<'a>(
     .into()
 }
 
-/// Build the buttons for `AwaitingApply` state. With a retention warning the
-/// apply button is "Apply anyway" (danger style, click only: Enter is refused)
+/// Build the buttons for `AwaitingApply` state. With a warning (retention
+/// guard, lockout check) the apply button is "Apply anyway" (danger style,
+/// click only: Enter is refused)
 fn build_awaiting_buttons(
     auto_revert_enabled: bool,
-    retention: bool,
+    needs_confirmation: bool,
     theme: &crate::theme::AppTheme,
     font: iced::Font,
 ) -> Element<'_, Message> {
-    let apply = if retention {
+    let apply = if needs_confirmation {
         button(text("Apply anyway").size(14).font(font))
             .on_press(Message::ProceedToApplyAnyway)
             .padding([10, 24])
@@ -400,11 +432,11 @@ fn build_confirmation_buttons(
 /// - `PendingConfirmation`: Countdown timer with progress bar
 ///
 /// `timer_secs` and `countdown_text` are the timer length and the remaining
-/// seconds, formatted in `update()`; `retention` is the retention guard's
-/// warning for this apply (computed when Apply was clicked).
+/// seconds, formatted in `update()`; `session` holds the warnings for this
+/// apply (retention guard, lockout check), computed in `update()`.
 pub fn view_apply_flow_modal<'a>(
     status: &'a AppStatus,
-    retention: Option<&'a RetentionWarning>,
+    session: Option<&'a crate::app::handlers::ApplySession>,
     auto_revert_enabled: bool,
     timer_secs: &'a str,
     countdown_text: &'a str,
@@ -417,17 +449,27 @@ pub fn view_apply_flow_modal<'a>(
     let (title_text, body, buttons) = match status {
         AppStatus::AwaitingApply => {
             let body = build_awaiting_body(auto_revert_enabled, timer_secs, theme, font);
-            let body = match retention {
-                Some(warning) => column![body, retention_block(warning, 400.0, theme, font)]
+            let blocks = confirmation_blocks(
+                session.and_then(crate::app::handlers::ApplySession::retention),
+                session.and_then(crate::app::handlers::ApplySession::lockout),
+                theme,
+                font,
+            );
+            let body = if blocks.is_empty() {
+                body
+            } else {
+                column![body]
+                    .extend(blocks)
                     .spacing(16)
                     .align_x(Alignment::Center)
-                    .into(),
-                None => body,
+                    .into()
             };
+            let needs_confirmation =
+                session.is_some_and(crate::app::handlers::ApplySession::needs_confirmation);
             (
                 "Commit Changes?",
                 body,
-                build_awaiting_buttons(auto_revert_enabled, retention.is_some(), theme, font),
+                build_awaiting_buttons(auto_revert_enabled, needs_confirmation, theme, font),
             )
         }
         AppStatus::Applying => (
@@ -586,13 +628,17 @@ pub fn view_save_to_system_modal<'a>(
         .on_press(Message::SaveToSystemCancelled)
         .padding([10, 20])
         .style(move |_, status| secondary_button(theme, status));
-    // Saving the editor's rules despite the retention guard takes a click
-    if let Some(retention) = &dialog.retention {
-        body = body.push(retention_block(retention, 400.0, theme, font));
-    }
+    // Saving the editor's rules despite the retention guard or the lockout
+    // check takes a click
+    body = body.extend(confirmation_blocks(
+        dialog.retention.as_ref(),
+        dialog.lockout.as_ref(),
+        theme,
+        font,
+    ));
 
     let buttons = match dialog.tested {
-        SaveTested::Tested if dialog.retention.is_some() => row![
+        SaveTested::Tested if dialog.editor_needs_confirmation() => row![
             cancel,
             button(text("Save anyway").size(14).font(font))
                 .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))

@@ -48,6 +48,8 @@
 //! drfw save my-profile                 # Save to System (boot config)
 //! drfw save my-profile --enable-at-boot
 //! drfw export my-profile --format nft  # Export as nftables config
+//! drfw exposure                        # Who can reach the listening services
+//! drfw exposure my-profile --json
 //! ```
 //!
 //! `drfw apply` changes the running kernel ruleset only; it does not persist
@@ -91,8 +93,10 @@ mod exit_code {
     /// `drfw save` saved the file, but the boot service could not be enabled
     pub const NOT_ENABLED: u8 = 8;
     /// `drfw apply`/`drfw save` refused by the retention guard (most of the
-    /// kept rules removed, Server mode or forward blocking turned on) without
-    /// `--yes` (or the question was answered no); nothing was changed
+    /// kept rules removed, Server mode or forward blocking turned on) or the
+    /// SSH lockout check (new connections from a current SSH session's
+    /// client would be blocked) without `--yes` (or the question was
+    /// answered no); nothing was changed
     pub const RETENTION: u8 = 9;
 }
 
@@ -111,7 +115,8 @@ Exit codes:
      confirmed with `drfw apply` (pass --yes to save anyway)
   8  save: saved, but the boot service could not be enabled
   9  apply/save: not done: the ruleset removes most of the rules last
-     applied and kept, or turns on Server mode or forward blocking
+     applied and kept, turns on Server mode or forward blocking, or would
+     block new SSH connections from a current session's client
      (pass --yes to go ahead)";
 
 /// A CLI failure with its exit code (see [`exit_code`]). An empty message
@@ -468,9 +473,11 @@ enum Commands {
     /// Use --no-confirm to disable.
     ///
     /// A ruleset that removes most of the rules last applied and kept (at
-    /// least 3 and 40 % of the enabled ones; disabled counts as removed), or
-    /// turns on Server mode or forward blocking, needs --yes (or an answer on
-    /// a terminal).
+    /// least 3 and 40 % of the enabled ones; disabled counts as removed),
+    /// turns on Server mode or forward blocking, or would block (or may
+    /// block) new SSH connections from the client of a current SSH session,
+    /// needs --yes (or an answer on a terminal). Open sessions survive any
+    /// apply; the check is about reconnecting.
     #[command(after_help = EXIT_CODES_HELP)]
     Apply {
         /// Name of the profile to apply
@@ -483,7 +490,7 @@ enum Commands {
         #[arg(long, conflicts_with = "confirm")]
         no_confirm: bool,
         /// Apply even if it removes most of the rules last applied and kept,
-        /// or turns on Server mode or forward blocking
+        /// turns on Server mode or forward blocking, or could lock out SSH
         #[arg(short, long)]
         yes: bool,
     },
@@ -500,8 +507,9 @@ enum Commands {
     /// running rules. The saved rules load at the next boot WITHOUT a
     /// dead-man switch, so a profile that is not the one last applied and
     /// kept with `drfw apply` (or the GUI) needs --yes (or an answer on a
-    /// terminal). So does one that removes most of the kept rules, or turns
-    /// on Server mode or forward blocking.
+    /// terminal). So does one that removes most of the kept rules, turns on
+    /// Server mode or forward blocking, or would block new SSH connections
+    /// from the client of a current SSH session.
     #[command(after_help = EXIT_CODES_HELP)]
     Save {
         /// Name of the profile to save
@@ -510,7 +518,8 @@ enum Commands {
         #[arg(long)]
         enable_at_boot: bool,
         /// Save even if this exact ruleset is not the one last applied and
-        /// kept on this machine, or the retention guard warns
+        /// kept on this machine, or the retention guard or the SSH lockout
+        /// check warns
         #[arg(short, long)]
         yes: bool,
     },
@@ -530,6 +539,22 @@ enum Commands {
         /// Export format
         #[arg(short, long, value_enum, default_value_t = ExportFormat::Nft)]
         format: ExportFormat,
+    },
+    /// Show who can reach the services listening on this computer
+    ///
+    /// Lists the listening TCP/UDP sockets (read from /proc, no privileges)
+    /// and, for each, who could open a new connection to it under a
+    /// profile's rules (default: the active profile) and the rule that
+    /// decides. The processes of other users' sockets need root to name and
+    /// show as "unknown". The rules are the profile's, not necessarily the
+    /// ones running now (listing those needs root). Also says whether the
+    /// clients of current SSH sessions could reconnect.
+    Exposure {
+        /// Name of the profile to evaluate (default: the active profile)
+        name: Option<String>,
+        /// Print JSON (for scripts) instead of a table
+        #[arg(long)]
+        json: bool,
     },
     /// Print the systemd unit `drfw.service` for this build (for packagers)
     ///
@@ -619,9 +644,11 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 return Err("Verification failed".into());
             }
             let record = core::confirmed::ConfirmedRecord::load().await;
-            retention_guard(
+            let sessions = current_ssh_sessions().await;
+            confirmation_guard(
                 &ruleset,
                 record.as_ref(),
+                &sessions,
                 yes,
                 ("Apply anyway?", "not applied"),
             )
@@ -681,6 +708,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
         // Handled in main() before the runtime starts
         Commands::PrintServiceUnit => print!("{}", drfw::distro::service_unit()),
         Commands::Check { name } => check_profile(&name).await?,
+        Commands::Exposure { name, json } => print_exposure(name, json).await?,
         Commands::Export { name, format } => {
             let ruleset = core::profiles::load_profile(&name).await?;
             match format {
@@ -765,6 +793,8 @@ async fn print_status_report() {
                 core::firewall::EgressProfile::Server => "Server (outgoing traffic needs rules)",
             };
             status_line("Mode", mode);
+            let sessions = current_ssh_sessions().await;
+            print_ssh_status(&ruleset, &sessions);
         }
         Err(e) => status_line("Rules", &format!("profile cannot be loaded: {e}")),
     }
@@ -852,31 +882,59 @@ async fn ask_yes_no(question: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// The retention guard for `drfw apply` and `drfw save` (see
-/// `core::retention`): prints why `ruleset` is a big change compared with
-/// the rules last applied and kept, then asks on a terminal unless `yes`.
+/// The SSH sessions into this computer (`SSH_CONNECTION` and `/proc`; see
+/// `core::lockout`).
+async fn current_ssh_sessions() -> Vec<core::lockout::SshSession> {
+    let env = core::lockout::session_from_env();
+    let fallback = env.clone();
+    tokio::task::spawn_blocking(move || core::lockout::detect_sessions(env))
+        .await
+        .unwrap_or_else(|_| fallback.into_iter().collect())
+}
+
+/// The confirmation for `drfw apply` and `drfw save`: the retention guard
+/// (`core::retention`: `ruleset` is a big change compared with the rules
+/// last applied and kept) and the SSH lockout check (`core::lockout`: new
+/// connections from a current session's client would be blocked). Prints
+/// every warning, then asks once on a terminal unless `yes`.
 /// `(question, refused)` are e.g. `("Apply anyway?", "not applied")`.
 ///
 /// # Errors
 ///
 /// [`exit_code::RETENTION`] when it warns, `yes` is not set and stdin is not
 /// a terminal, or the answer is not yes.
-async fn retention_guard(
+async fn confirmation_guard(
     ruleset: &core::firewall::FirewallRuleset,
     record: Option<&core::confirmed::ConfirmedRecord>,
+    sessions: &[core::lockout::SshSession],
     yes: bool,
     (question, refused): (&str, &str),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let kept = record.and_then(core::confirmed::ConfirmedRecord::ruleset);
-    let Some(warning) = core::retention::RetentionWarning::check(kept, ruleset) else {
+    let retention = core::retention::RetentionWarning::check(kept, ruleset);
+    let lockout = core::lockout::LockoutWarning::check(ruleset, sessions);
+    if retention.is_none() && lockout.is_none() {
         return Ok(());
-    };
-    eprintln!(
-        "{} This is a big change compared with the rules last applied and kept:",
-        paint("WARNING:", Color::Red, Stream::Stderr.colored())
-    );
-    for line in &warning.lines {
-        eprintln!("  {line}");
+    }
+    let warn = Stream::Stderr.colored();
+    if let Some(warning) = &retention {
+        eprintln!(
+            "{} This is a big change compared with the rules last applied and kept:",
+            paint("WARNING:", Color::Red, warn)
+        );
+        for line in &warning.lines {
+            eprintln!("  {line}");
+        }
+    }
+    if let Some(warning) = &lockout {
+        eprintln!(
+            "{} {}",
+            paint("WARNING:", Color::Red, warn),
+            core::lockout::LockoutWarning::HEADING
+        );
+        for line in &warning.lines {
+            eprintln!("  {line}");
+        }
     }
     if yes {
         return Ok(());
@@ -1003,9 +1061,11 @@ async fn save_profile(
             }
         }
     }
-    retention_guard(
+    let sessions = current_ssh_sessions().await;
+    confirmation_guard(
         &ruleset,
         record.as_ref(),
+        &sessions,
         yes,
         ("Save anyway?", "not saved"),
     )
@@ -1091,6 +1151,247 @@ async fn save_profile(
             exit_code::NOT_ENABLED,
             "saved, but the boot service could not be enabled",
         ));
+    }
+    Ok(())
+}
+
+/// The "SSH" lines of `drfw status`: for each SSH session, whether its
+/// client could open a new connection under `ruleset` (the active profile).
+fn print_ssh_status(
+    ruleset: &core::firewall::FirewallRuleset,
+    sessions: &[core::lockout::SshSession],
+) {
+    let checks = core::lockout::check_sessions(ruleset, sessions);
+    if checks.is_empty() {
+        status_line("SSH", "no SSH session into this computer found");
+        return;
+    }
+    let color = Stream::Stdout.colored();
+    for (i, check) in checks.iter().enumerate() {
+        let text = check.summary();
+        let text = if check.access == core::lockout::Access::Accepted {
+            text
+        } else {
+            paint(&text, Color::Red, color)
+        };
+        if i == 0 {
+            status_line("SSH", &text);
+        } else {
+            println!("{:STATUS_LABEL_WIDTH$}{text}", "");
+        }
+    }
+}
+
+/// Marker of sockets every address can reach (`drfw exposure`): text, not
+/// color alone.
+const OPEN_MARKER: &str = "OPEN TO EVERYONE";
+
+/// Lowercase name of a transport for `--json`.
+const fn transport_json(transport: core::evaluate::Transport) -> &'static str {
+    match transport {
+        core::evaluate::Transport::Tcp => "tcp",
+        core::evaluate::Transport::Udp => "udp",
+    }
+}
+
+/// Lowercase name of an address family for `--json`.
+const fn family_json(family: core::evaluate::IpFamily) -> &'static str {
+    match family {
+        core::evaluate::IpFamily::V4 => "ipv4",
+        core::evaluate::IpFamily::V6 => "ipv6",
+    }
+}
+
+/// The `drfw exposure --json` document: the profile, one object per socket
+/// and one per SSH session check.
+fn exposure_json(
+    profile: &str,
+    rows: &[core::exposure::ExposureRow],
+    checks: &[core::lockout::SessionCheck],
+) -> serde_json::Value {
+    let sockets: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let socket = &row.socket;
+            let exposure = &row.exposure;
+            serde_json::json!({
+                "transport": transport_json(socket.transport),
+                "port": socket.port,
+                "families": socket.families.iter().map(|&f| family_json(f)).collect::<Vec<_>>(),
+                "bind": socket.bind.to_string(),
+                "bind_display": socket.bind_display,
+                "local_only": exposure.local_only,
+                "uid": socket.uid,
+                "process": socket.process_display,
+                "processes": socket.processes.iter().map(|p| serde_json::json!({
+                    "pid": p.pid,
+                    "name": p.name,
+                })).collect::<Vec<_>>(),
+                "reachable_from": exposure.summary,
+                "open_to_everyone": exposure.open_to_everyone,
+                "nobody": exposure.nobody,
+                "decided_by": (!exposure.decided_by_display.is_empty())
+                    .then_some(&exposure.decided_by_display),
+                "decided_by_rule_id": exposure
+                    .decided_by
+                    .as_ref()
+                    .and_then(core::evaluate::Decider::rule_id)
+                    .map(|id| id.to_string()),
+            })
+        })
+        .collect();
+    let sessions: Vec<serde_json::Value> = checks
+        .iter()
+        .map(|check| {
+            let session = &check.session;
+            serde_json::json!({
+                "client": session.client.to_string(),
+                "client_port": session.client_port,
+                "server": session.server.to_string(),
+                "server_port": session.server_port,
+                "source": session.source.as_str(),
+                "new_connections": check.access.as_str(),
+                "outcome": check.outcome,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "profile": profile,
+        "sockets": sockets,
+        "ssh_sessions": sessions,
+    })
+}
+
+/// The `drfw exposure` table: one line per socket (columns padded to the
+/// widest cell), the open-to-everyone ones first and marked with
+/// [`OPEN_MARKER`] (in red on a terminal).
+fn exposure_table(rows: &[core::exposure::ExposureRow], color: bool) -> Vec<String> {
+    const HEADERS: [&str; 6] = [
+        "PORT",
+        "FAMILY",
+        "PROCESS",
+        "BIND",
+        "REACHABLE FROM",
+        "DECIDED BY",
+    ];
+    let cells: Vec<[String; 6]> = rows
+        .iter()
+        .map(|row| {
+            let reach = if row.exposure.local_only {
+                "local only".to_string()
+            } else if row.exposure.open_to_everyone {
+                format!("{OPEN_MARKER}: {}", row.exposure.summary)
+            } else {
+                row.exposure.summary.clone()
+            };
+            [
+                format!(
+                    "{} {}",
+                    row.socket.transport.display_name(),
+                    row.socket.port
+                ),
+                row.socket.family_display.to_string(),
+                row.socket.process_display.clone(),
+                row.socket.bind_display.clone(),
+                reach,
+                row.exposure.decided_by_display.clone(),
+            ]
+        })
+        .collect();
+    let mut widths = HEADERS.map(str::len);
+    for row in &cells {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let line = |cells: &[String]| -> String {
+        let mut out = String::new();
+        for (i, (cell, width)) in cells.iter().zip(widths).enumerate() {
+            if i + 1 == cells.len() {
+                out.push_str(cell);
+            } else {
+                let pad = width - cell.chars().count() + 2;
+                let cell = match cell.strip_prefix(OPEN_MARKER) {
+                    Some(rest) => format!("{}{rest}", paint(OPEN_MARKER, Color::Red, color)),
+                    None => cell.clone(),
+                };
+                out.push_str(&cell);
+                out.extend(std::iter::repeat_n(' ', pad));
+            }
+        }
+        out.trim_end().to_string()
+    };
+    let mut lines = Vec::with_capacity(cells.len() + 1);
+    lines.push(line(&HEADERS.map(str::to_string)));
+    lines.extend(cells.iter().map(|row| line(row)));
+    lines
+}
+
+/// `drfw exposure`: the listening sockets and who can reach them under the
+/// rules of profile `name` (default: the active profile), plus the SSH
+/// session check. Reads `/proc` only; changes nothing.
+///
+/// # Errors
+///
+/// The profile cannot be loaded, or the sockets cannot be read.
+async fn print_exposure(
+    name: Option<String>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let name = match name {
+        Some(name) => name,
+        None => config::load_config().await.active_profile,
+    };
+    let ruleset = core::profiles::load_profile(&name).await?;
+    let env = core::lockout::session_from_env();
+    let scan = tokio::task::spawn_blocking(core::exposure::scan_host)
+        .await?
+        .map_err(|e| format!("cannot read the listening sockets: {e}"))?;
+    let sessions = core::lockout::merge_sessions(env, core::lockout::sessions_from_scan(&scan));
+    let rows = core::exposure::exposure_rows(&ruleset, &scan.sockets);
+    let checks = core::lockout::check_sessions(&ruleset, &sessions);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&exposure_json(&name, &rows, &checks))?
+        );
+        return Ok(());
+    }
+
+    let color = Stream::Stdout.colored();
+    println!(
+        "Who can open a new connection under the rules of profile '{name}' \
+         (open connections are always accepted):"
+    );
+    println!();
+    if rows.is_empty() {
+        println!("No listening sockets found.");
+    } else {
+        for line in exposure_table(&rows, color) {
+            println!("{line}");
+        }
+        let open = rows.iter().filter(|r| r.exposure.open_to_everyone).count();
+        let noun = if rows.len() == 1 { "socket" } else { "sockets" };
+        println!();
+        println!("{} listening {noun}, {open} open to everyone.", rows.len());
+    }
+    for check in &checks {
+        let text = format!("SSH: {}", check.summary());
+        if check.access == core::lockout::Access::Accepted {
+            println!("{text}");
+        } else {
+            println!("{}", paint(&text, Color::Red, color));
+        }
+    }
+    if scan
+        .sockets
+        .iter()
+        .any(|s| s.processes.is_empty() && s.uid != nix::unistd::getuid().as_raw())
+    {
+        println!(
+            "Processes of other users' sockets need root to name; DRFW does not use it for this."
+        );
     }
     Ok(())
 }
@@ -1303,6 +1604,114 @@ mod tests {
         assert_eq!(stripped, plain);
     }
 
+    fn exposure_fixture() -> Vec<core::exposure::ExposureRow> {
+        use drfw::core::evaluate::Transport;
+        use drfw::core::exposure::{ListeningSocket, ProcessInfo, build_socket_list};
+
+        let socket = |port, local: &str, inode| ListeningSocket {
+            transport: Transport::Tcp,
+            ipv6_socket: false,
+            local: local.parse().unwrap(),
+            port,
+            uid: 1000,
+            inode,
+        };
+        let mut owners = std::collections::HashMap::new();
+        owners.insert(
+            1,
+            vec![ProcessInfo {
+                pid: 7,
+                name: "sshd".into(),
+            }],
+        );
+        let sockets = build_socket_list(
+            vec![
+                socket(22, "0.0.0.0", 1),
+                socket(631, "127.0.0.1", 2),
+                socket(8080, "0.0.0.0", 3),
+            ],
+            &owners,
+            1000,
+            false,
+            |_| None,
+        );
+        let mut ruleset = core::firewall::FirewallRuleset::new();
+        let mut ssh = core::firewall::Rule::with_caches(
+            uuid::Uuid::new_v4(),
+            "SSH".into(),
+            core::firewall::Protocol::Tcp,
+            vec![core::firewall::PortEntry::Single(22)],
+            vec![],
+            None,
+            core::firewall::Chain::Input,
+            true,
+            jiff::Timestamp::now(),
+            vec![],
+        );
+        ssh.rebuild_caches();
+        ruleset.rules.push(ssh);
+        core::exposure::exposure_rows(&ruleset, &sockets)
+    }
+
+    #[test]
+    fn test_exposure_table_marks_open_sockets_with_text() {
+        let lines = exposure_table(&exposure_fixture(), false);
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].starts_with("PORT"), "{lines:?}");
+        assert!(lines[0].contains("REACHABLE FROM"), "{lines:?}");
+        // Open first, marked in text; columns line up
+        assert!(lines[1].starts_with("TCP 22"), "{lines:?}");
+        assert!(lines[1].contains("OPEN TO EVERYONE: everyone"), "{lines:?}");
+        assert!(lines[1].ends_with("rule \"SSH\""), "{lines:?}");
+        let column = lines[0].find("PROCESS").unwrap();
+        assert_eq!(lines[1].find("sshd"), Some(column), "{lines:?}");
+        let local = lines.iter().find(|l| l.starts_with("TCP 631")).unwrap();
+        assert!(
+            local.contains("local only") && !local.contains("OPEN"),
+            "{local}"
+        );
+        assert!(
+            lines.iter().all(|l| !l.contains('\x1b')),
+            "no color off a terminal"
+        );
+        let colored = exposure_table(&exposure_fixture(), true);
+        assert!(colored[1].contains('\x1b') || std::env::var_os("NO_COLOR").is_some());
+    }
+
+    #[test]
+    fn test_exposure_json_shape() {
+        let session = core::lockout::parse_ssh_connection("10.0.0.5 50000 10.0.0.1 2222").unwrap();
+        let rows = exposure_fixture();
+        let ruleset = core::firewall::FirewallRuleset::new();
+        let checks = core::lockout::check_sessions(&ruleset, &[session]);
+        let json = exposure_json("web", &rows, &checks);
+        assert_eq!(json["profile"], "web");
+        let ssh = &json["sockets"][0];
+        assert_eq!(ssh["transport"], "tcp");
+        assert_eq!(ssh["port"], 22);
+        assert_eq!(ssh["families"], serde_json::json!(["ipv4"]));
+        assert_eq!(ssh["bind"], "0.0.0.0");
+        assert_eq!(ssh["process"], "sshd");
+        assert_eq!(ssh["processes"][0]["pid"], 7);
+        assert_eq!(ssh["open_to_everyone"], true);
+        assert_eq!(ssh["reachable_from"], "everyone");
+        assert_eq!(ssh["decided_by"], "rule \"SSH\"");
+        assert!(ssh["decided_by_rule_id"].is_string());
+        let local = json["sockets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["port"] == 631)
+            .unwrap();
+        assert_eq!(local["local_only"], true);
+        assert!(local["decided_by"].is_null());
+        let session = &json["ssh_sessions"][0];
+        assert_eq!(session["client"], "10.0.0.5");
+        assert_eq!(session["server_port"], 2222);
+        assert_eq!(session["source"], "environment");
+        assert_eq!(session["new_connections"], "blocked");
+    }
+
     #[test]
     fn test_cli_apply_examples_parse() {
         // Keep the module-level usage examples in sync with the real CLI
@@ -1322,6 +1731,10 @@ mod tests {
             &["drfw", "save", "my-profile", "-y"],
             &["drfw", "list"],
             &["drfw", "status"],
+            &["drfw", "exposure"],
+            &["drfw", "exposure", "my-profile"],
+            &["drfw", "exposure", "--json"],
+            &["drfw", "exposure", "my-profile", "--json"],
         ] {
             assert!(
                 Cli::try_parse_from(args).is_ok(),

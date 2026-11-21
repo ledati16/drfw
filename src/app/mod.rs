@@ -117,6 +117,16 @@ pub struct State {
     /// earlier boot. Save to System offers it as the tested choice; the
     /// retention guard compares new rulesets with it.
     pub confirmed_record: Option<crate::core::confirmed::ConfirmedRecord>,
+    /// Bumped whenever this GUI replaces `confirmed_record` itself; a reload
+    /// from disk started before that (`Message::ApplyContextLoaded`) is older
+    /// and does not overwrite it.
+    pub confirmed_record_generation: u64,
+    /// The SSH session DRFW runs in (`SSH_CONNECTION`), read at startup
+    pub ssh_env_session: Option<crate::core::lockout::SshSession>,
+    /// The SSH sessions last found (the one above and those in `/proc`),
+    /// refreshed when Apply or Save to System starts and by the Exposure
+    /// scan; the lockout check evaluates them
+    pub ssh_sessions: Vec<crate::core::lockout::SshSession>,
     /// Ruleset snapshot carried through verify -> apply -> confirm/revert
     pub apply_session: Option<handlers::ApplySession>,
     pub cached_disk_profile: Option<FirewallRuleset>,
@@ -634,8 +644,12 @@ pub enum Message {
     ToggleExposure(bool),
     /// Re-read the listening sockets
     RefreshExposure,
-    /// A socket scan finished: (scan generation, sockets or why not)
-    ExposureScanned(u64, Result<Vec<crate::core::exposure::SocketInfo>, String>),
+    /// A socket scan finished: (scan generation, sockets and SSH sessions or
+    /// why not)
+    ExposureScanned(u64, Result<exposure::ExposureScan, String>),
+    /// The kept-ruleset record and the SSH sessions, re-read off the UI
+    /// thread when Apply or Save to System starts (`None`: the reload failed)
+    ApplyContextLoaded(Option<Box<handlers::ApplyContext>>),
     Undo,
     Redo,
     OpenThemePicker,
@@ -789,10 +803,17 @@ impl State {
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
 
+        // Cheap (the environment only); the sessions in /proc are scanned
+        // off the UI thread when Apply or Save to System starts
+        let ssh_env_session = crate::core::lockout::session_from_env();
+
         let mut state = Self {
             // Unknown until DRFW applies something: the kernel may hold anything
             last_applied_ruleset: None,
             confirmed_record: crate::core::confirmed::ConfirmedRecord::load_blocking(),
+            confirmed_record_generation: 0,
+            ssh_env_session: ssh_env_session.clone(),
+            ssh_sessions: ssh_env_session.into_iter().collect(),
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -928,6 +949,10 @@ impl State {
         let mut state = Self {
             last_applied_ruleset: Some(ruleset.clone()),
             confirmed_record: None,
+            confirmed_record_generation: 0,
+            // Never the test runner's own SSH session
+            ssh_env_session: None,
+            ssh_sessions: Vec::new(),
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -1687,6 +1712,11 @@ impl State {
             Message::RefreshExposure => return handlers::handle_refresh_exposure(self),
             Message::ExposureScanned(generation, result) => {
                 handlers::handle_exposure_scanned(self, generation, result);
+            }
+            Message::ApplyContextLoaded(context) => {
+                if let Some(context) = context {
+                    handlers::handle_apply_context_loaded(self, *context);
+                }
             }
             Message::Undo => return handlers::handle_undo(self),
             Message::Redo => return handlers::handle_redo(self),

@@ -185,6 +185,25 @@ pub fn view_exposure_modal<'a>(
     .spacing(16)
     .padding(24);
 
+    // Whether the clients of the SSH sessions could reconnect (text first;
+    // the color only repeats it)
+    if !panel.ssh_lines.is_empty() {
+        body = body.push(
+            column(panel.ssh_lines.iter().map(|line| {
+                text(&line.text)
+                    .size(13)
+                    .font(regular_font)
+                    .color(if line.warning {
+                        theme.danger
+                    } else {
+                        theme.fg_primary
+                    })
+                    .into()
+            }))
+            .spacing(4),
+        );
+    }
+
     if let Some(error) = &panel.error {
         body = body.push(text(error).size(13).font(regular_font).color(theme.danger));
     }

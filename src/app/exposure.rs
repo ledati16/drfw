@@ -4,13 +4,34 @@
 //! panel opens and on Refresh. Every row and string the view shows is built
 //! here, in `update()`: after a scan, and again whenever the editor ruleset or
 //! the applied ruleset changes while the panel is open (re-evaluating is
-//! cheap; the sockets are not re-read).
+//! cheap; the sockets are not re-read). The scan also finds the SSH
+//! sessions into this computer ([`crate::core::lockout`]); the panel says
+//! whether the editor rules would let their clients reconnect.
 
 use uuid::Uuid;
 
 use crate::core::evaluate::InputChain;
 use crate::core::exposure::{SocketExposure, SocketInfo, evaluate_socket};
 use crate::core::firewall::FirewallRuleset;
+use crate::core::lockout::{Access, SshSession};
+
+/// What one Exposure scan found.
+#[derive(Debug, Clone, Default)]
+pub struct ExposureScan {
+    pub sockets: Vec<SocketInfo>,
+    /// SSH sessions (`SSH_CONNECTION` and `/proc`), see
+    /// [`crate::core::lockout::detect_sessions`]
+    pub sessions: Vec<SshSession>,
+}
+
+/// One "SSH: …" line of the panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshLine {
+    /// "SSH: you are connected from … would be accepted by rule \"SSH\""
+    pub text: String,
+    /// New connections from this client would be (or may be) blocked
+    pub warning: bool,
+}
 
 /// Badge text for sockets every address can reach (shown with color, never
 /// color alone).
@@ -43,6 +64,10 @@ pub struct ExposurePanel {
     pub scanning: bool,
     /// The last scan's sockets (re-evaluated on ruleset changes)
     sockets: Vec<SocketInfo>,
+    /// The last scan's SSH sessions (re-evaluated on ruleset changes)
+    sessions: Vec<SshSession>,
+    /// One line per SSH session, under the editor rules
+    pub ssh_lines: Vec<SshLine>,
     /// Why the last scan failed (user-facing)
     pub error: Option<String>,
     pub applied: AppliedState,
@@ -137,6 +162,8 @@ impl ExposurePanel {
         Self {
             scanning: true,
             sockets: Vec::new(),
+            sessions: Vec::new(),
+            ssh_lines: Vec::new(),
             error: None,
             applied: AppliedState::Unknown,
             rows: Vec::new(),
@@ -148,18 +175,20 @@ impl ExposurePanel {
     /// Stores a scan result and rebuilds the rows.
     pub fn set_scan(
         &mut self,
-        result: Result<Vec<SocketInfo>, String>,
+        result: Result<ExposureScan, String>,
         editor: &FirewallRuleset,
         applied: Option<&FirewallRuleset>,
     ) {
         self.scanning = false;
         match result {
-            Ok(sockets) => {
-                self.sockets = sockets;
+            Ok(scan) => {
+                self.sockets = scan.sockets;
+                self.sessions = scan.sessions;
                 self.error = None;
             }
             Err(message) => {
                 self.sockets.clear();
+                self.sessions.clear();
                 self.error = Some(message);
             }
         }
@@ -222,6 +251,14 @@ impl ExposurePanel {
         rows.sort_by_key(|row| !row.highlight);
         self.rows = rows;
 
+        self.ssh_lines = crate::core::lockout::check_sessions(editor, &self.sessions)
+            .iter()
+            .map(|check| SshLine {
+                text: format!("SSH: {}", check.summary()),
+                warning: check.access != Access::Accepted,
+            })
+            .collect();
+
         let total = self.rows.len();
         let open = self.rows.iter().filter(|r| r.highlight).count();
         self.summary = match (&self.error, total) {
@@ -270,6 +307,13 @@ mod tests {
         )
     }
 
+    fn scan(sockets: Vec<SocketInfo>) -> ExposureScan {
+        ExposureScan {
+            sockets,
+            sessions: Vec::new(),
+        }
+    }
+
     fn rule(label: &str, protocol: Protocol, port: u16, sources: &[&str]) -> Rule {
         let mut r = crate::core::test_helpers::create_test_rule(label, None);
         r.protocol = protocol;
@@ -288,7 +332,7 @@ mod tests {
             .push(rule("ssh", Protocol::Tcp, 22, &["10.0.0.0/8"]));
         let web_id = editor.rules[0].id;
         let mut panel = ExposurePanel::scanning();
-        panel.set_scan(Ok(sockets()), &editor, None);
+        panel.set_scan(Ok(scan(sockets())), &editor, None);
 
         assert_eq!(panel.applied, AppliedState::Unknown);
         assert_eq!(panel.summary, "4 listening sockets · 1 open to everyone");
@@ -325,7 +369,7 @@ mod tests {
             .push(rule("old web", Protocol::Tcp, 8080, &[]));
 
         let mut panel = ExposurePanel::scanning();
-        panel.set_scan(Ok(sockets()), &editor, Some(&applied));
+        panel.set_scan(Ok(scan(sockets())), &editor, Some(&applied));
         assert_eq!(panel.applied, AppliedState::Differs);
         let web = &panel.rows[0];
         assert_eq!(web.port_proto, "TCP 8080");
@@ -349,6 +393,46 @@ mod tests {
     }
 
     #[test]
+    fn test_ssh_lines_follow_the_editor_rules() {
+        let session = SshSession {
+            client: "10.0.0.5".parse().unwrap(),
+            client_port: 50000,
+            server: "10.0.0.1".parse().unwrap(),
+            server_port: 22,
+            source: crate::core::lockout::SessionSource::Environment,
+        };
+        let mut editor = FirewallRuleset::new();
+        let mut panel = ExposurePanel::scanning();
+        panel.set_scan(
+            Ok(ExposureScan {
+                sockets: sockets(),
+                sessions: vec![session],
+            }),
+            &editor,
+            None,
+        );
+        assert_eq!(panel.ssh_lines.len(), 1);
+        assert!(panel.ssh_lines[0].warning);
+        assert!(
+            panel.ssh_lines[0]
+                .text
+                .starts_with("SSH: you are connected from 10.0.0.5 to port 22;"),
+            "{:?}",
+            panel.ssh_lines
+        );
+        assert!(panel.ssh_lines[0].text.contains("BLOCKED"));
+
+        editor.rules.push(rule("ssh", Protocol::Tcp, 22, &[]));
+        panel.rebuild(&editor, None);
+        assert!(!panel.ssh_lines[0].warning);
+        assert!(
+            panel.ssh_lines[0]
+                .text
+                .ends_with("accepted by rule \"ssh\"")
+        );
+    }
+
+    #[test]
     fn test_scan_error_and_empty_scan() {
         let editor = FirewallRuleset::new();
         let mut panel = ExposurePanel::scanning();
@@ -357,7 +441,7 @@ mod tests {
         assert!(!panel.scanning);
         assert_eq!(panel.error.as_deref(), Some("Could not read"));
         assert_eq!(panel.rows, Vec::new());
-        panel.set_scan(Ok(Vec::new()), &editor, None);
+        panel.set_scan(Ok(ExposureScan::default()), &editor, None);
         assert_eq!(panel.error, None);
         assert_eq!(panel.summary, "No listening sockets found.");
     }
