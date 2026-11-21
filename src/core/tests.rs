@@ -1908,7 +1908,8 @@ mod generation_semantics_tests {
     #[test]
     fn test_text_header() {
         let text = FirewallRuleset::new().to_nft_text();
-        assert!(text.starts_with("#!/usr/sbin/nft -f\n"));
+        // The shebang follows the compile-time nft path (DRFW_NFT_PATH)
+        assert!(text.starts_with(&format!("#!{} -f\n", crate::distro::UNIT_NFT_PATH)));
         assert!(text.contains("\ntable inet drfw\ndelete table inet drfw\n"));
     }
 
