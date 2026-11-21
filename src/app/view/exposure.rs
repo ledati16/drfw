@@ -7,10 +7,13 @@ use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length};
 
 use crate::app::Message;
-use crate::app::exposure::{AppliedState, ExposurePanel, ExposureRowView, ReachTone, ReachView};
+use crate::app::exposure::{
+    AppliedState, ExposurePanel, ExposureRowView, Highlight, ReachTone, ReachView,
+};
 use crate::app::ui_components::{
     attention_card_container, card_container, danger_badge_container, primary_button,
     secondary_button, section_header_container, themed_scrollable,
+    warning_attention_card_container, warning_badge_container,
 };
 use crate::theme::AppTheme;
 
@@ -25,6 +28,7 @@ const LABEL_COLUMN_WIDTH: f32 = 64.0;
 fn tone_color(theme: &AppTheme, tone: ReachTone) -> Color {
     match tone {
         ReachTone::Open => theme.danger,
+        ReachTone::OpenOnInterfaces => theme.warning,
         ReachTone::Restricted => theme.fg_primary,
         ReachTone::Closed => theme.success,
         ReachTone::LocalOnly => theme.fg_muted,
@@ -45,11 +49,18 @@ fn reach_line<'a>(
     ]
     .spacing(8)
     .align_y(Alignment::Center);
-    if let Some(badge) = view.badge {
+    if let Some(badge) = &view.badge {
+        let warning = view.tone == ReachTone::OpenOnInterfaces;
         line = line.push(
             container(text(badge).size(10).font(mono_font))
                 .padding([2, 8])
-                .style(move |_| danger_badge_container(theme)),
+                .style(move |_| {
+                    if warning {
+                        warning_badge_container(theme)
+                    } else {
+                        danger_badge_container(theme)
+                    }
+                }),
         );
     }
     line = line.push(
@@ -81,6 +92,7 @@ fn reach_line<'a>(
 fn socket_row<'a>(
     row_data: &'a ExposureRowView,
     applied: AppliedState,
+    applied_label: &'static str,
     theme: &'a AppTheme,
     regular_font: iced::Font,
     mono_font: iced::Font,
@@ -99,7 +111,7 @@ fn socket_row<'a>(
     .spacing(4);
     if let Some(applied_view) = &row_data.applied {
         answers = answers.push(reach_line(
-            "APPLIED",
+            applied_label,
             applied_view,
             theme,
             regular_font,
@@ -138,12 +150,10 @@ fn socket_row<'a>(
     container(column![header, answers].spacing(8))
         .padding(12)
         .width(Length::Fill)
-        .style(move |_| {
-            if highlight {
-                attention_card_container(theme)
-            } else {
-                card_container(theme)
-            }
+        .style(move |_| match highlight {
+            Highlight::Everyone => attention_card_container(theme),
+            Highlight::Interfaces => warning_attention_card_container(theme),
+            Highlight::None => card_container(theme),
         })
         .into()
 }
@@ -208,12 +218,16 @@ pub fn view_exposure_modal<'a>(
         body = body.push(text(error).size(13).font(regular_font).color(theme.danger));
     }
 
-    let rows = column(
-        panel
-            .rows
-            .iter()
-            .map(|r| socket_row(r, panel.applied, theme, regular_font, mono_font)),
-    )
+    let rows = column(panel.rows.iter().map(|r| {
+        socket_row(
+            r,
+            panel.applied,
+            panel.applied_label,
+            theme,
+            regular_font,
+            mono_font,
+        )
+    }))
     .spacing(8);
     // Borderless scrollable (STYLE.md section 17, pattern 1)
     body = body.push(

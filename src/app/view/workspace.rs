@@ -6,8 +6,8 @@ use iced::widget::{Id, button, checkbox, column, container, row, scrollable, tex
 use iced::{Alignment, Border, Element, Length, Shadow};
 
 use crate::app::ui_components::{
-    active_tab_button, danger_button, dirty_button, inactive_tab_button, popup_container,
-    primary_button, secondary_button, themed_checkbox, themed_scrollable,
+    active_tab_button, danger_button, dirty_button, inactive_tab_button, info_notice_container,
+    popup_container, primary_button, secondary_button, themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
 
@@ -83,17 +83,25 @@ pub fn view_workspace<'a>(
     if state.active_tab == WorkspaceTab::Nftables {
         let mut checkboxes = column![].spacing(8);
 
-        // Add diff toggle when we have a previous version
-        if state.last_applied_ruleset.is_some() {
+        // The diff toggle, labelled by what it compares with (applied this
+        // session or kept earlier); without either, a muted hint
+        if let Some(kind) = state.diff_baseline {
             checkboxes = checkboxes.push(
                 checkbox(state.show_diff)
-                    .label("Show diff")
+                    .label(kind.diff_label())
                     .on_toggle(Message::ToggleDiff)
                     .size(16)
                     .text_size(12)
                     .font(state.font_regular)
                     .spacing(6)
                     .style(move |_, status| themed_checkbox(theme, status)),
+            );
+        } else {
+            checkboxes = checkboxes.push(
+                text(NO_DIFF_HINT)
+                    .size(12)
+                    .font(state.font_regular)
+                    .color(theme.fg_muted),
             );
         }
 
@@ -112,7 +120,10 @@ pub fn view_workspace<'a>(
         title_row = title_row.push(checkboxes);
     }
 
-    let preview_header = column![nav_row, title_row].spacing(20);
+    let mut preview_header = column![nav_row, title_row].spacing(20);
+    if state.auto_revert_notice_visible() {
+        preview_header = preview_header.push(auto_revert_notice(state));
+    }
 
     // Settings tab only needs vertical scrolling, other tabs need both
     let scroll_direction = if matches!(state.active_tab, WorkspaceTab::Settings) {
@@ -264,6 +275,45 @@ pub fn view_workspace<'a>(
             .padding(32),
     )
     .width(Length::Fill)
+    .into()
+}
+
+/// Shown instead of the diff toggle when there is nothing to compare with.
+const NO_DIFF_HINT: &str = "No diff yet: nothing applied or kept";
+
+/// The one-time notice for configs that have auto-revert off (the old
+/// default): says what that means and asks once.
+fn auto_revert_notice(state: &State) -> Element<'_, Message> {
+    let theme = &state.theme;
+    container(
+        row![
+            text("INFO")
+                .size(10)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Bold,
+                    ..state.font_mono
+                })
+                .color(theme.info),
+            text("Auto-revert is off: if an apply locks you out, DRFW won't roll it back.")
+                .size(13)
+                .font(state.font_regular)
+                .color(theme.fg_primary)
+                .width(Length::Fill),
+            button(text("Turn on").size(13).font(state.font_regular))
+                .on_press(Message::AutoRevertNoticeAnswered(true))
+                .padding([6, 14])
+                .style(move |_, status| primary_button(theme, status)),
+            button(text("Keep off").size(13).font(state.font_regular))
+                .on_press(Message::AutoRevertNoticeAnswered(false))
+                .padding([6, 14])
+                .style(move |_, status| secondary_button(theme, status)),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center),
+    )
+    .padding([10, 16])
+    .width(Length::Fill)
+    .style(move |_| info_notice_container(theme))
     .into()
 }
 

@@ -121,6 +121,13 @@ pub struct State {
     /// from disk started before that (`Message::ApplyContextLoaded`) is older
     /// and does not overwrite it.
     pub confirmed_record_generation: u64,
+    /// This GUI has applied (or tried to apply) rules in this session; after
+    /// that, a missing `last_applied_ruleset` means "lost track", and the
+    /// record is only the last *kept* rules ([`BaselineKind::LastKept`])
+    applied_this_session: bool,
+    /// Where `cached_applied_text` (the old side of the diff) comes from;
+    /// `None` when there is nothing to compare with. Refreshed with it.
+    pub diff_baseline: Option<BaselineKind>,
     /// The SSH session DRFW runs in (`SSH_CONNECTION`), read at startup
     pub ssh_env_session: Option<crate::core::lockout::SshSession>,
     /// The SSH sessions last found (the one above and those in `/proc`),
@@ -148,8 +155,9 @@ pub struct State {
     pub progress_animation: Animation<f32>,
     pub form_errors: Option<FormErrors>,
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
-    /// Text and tokens of `last_applied_ruleset` (the old side of the diff);
-    /// refreshed only when the applied ruleset changes, not on every edit.
+    /// Text and tokens of the comparison baseline (the old side of the diff:
+    /// `last_applied_ruleset`, else the kept record, see [`baseline_of`]);
+    /// refreshed only when the baseline changes, not on every edit.
     pub cached_applied_text: Option<syntax_cache::TokenizedText>,
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>,
     pub cached_nft_width_px: f32,
@@ -178,6 +186,9 @@ pub struct State {
     pub show_diff: bool,
     pub show_zebra_striping: bool,
     pub auto_revert_enabled: bool,
+    /// The user answered the "Auto-revert is off" notice (or changed the
+    /// setting themselves); persisted, so the notice shows at most once
+    pub auto_revert_notice_shown: bool,
     pub auto_revert_timeout_secs: u64,
     pub enable_event_log: bool,
     pub reduced_colors: bool,
@@ -291,6 +302,72 @@ pub struct SettingsDisplay {
     pub icmp_rate: String,
     /// "10/m"
     pub log_rate: String,
+}
+
+/// Where the rules the editor is compared with (the old side of the diff,
+/// the "Applied"/"Kept" answers of the Exposure panel) come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineKind {
+    /// Applied by this GUI in this session (`State::last_applied_ruleset`)
+    Applied,
+    /// The kept-ruleset record, written during this boot (by the CLI or an
+    /// earlier GUI); this GUI has not applied anything yet
+    KeptThisBoot,
+    /// The kept-ruleset record, after an apply of this session that was not
+    /// kept or whose outcome is unknown: the last kept rules, not
+    /// necessarily the last applied
+    LastKept,
+    /// The kept-ruleset record from an earlier boot (or an unknown one): a
+    /// reboot or another tool may have replaced those rules since
+    KeptEarlierSession,
+}
+
+impl BaselineKind {
+    /// Label of the "Show diff" checkbox.
+    pub const fn diff_label(self) -> &'static str {
+        match self {
+            Self::Applied | Self::KeptThisBoot => "Show diff (vs last applied)",
+            Self::LastKept => "Show diff (vs last kept)",
+            Self::KeptEarlierSession => "Show diff (vs last kept, earlier session)",
+        }
+    }
+}
+
+/// The rules the editor is compared with, and where they come from.
+#[derive(Debug, Clone, Copy)]
+pub struct Baseline<'a> {
+    pub ruleset: &'a FirewallRuleset,
+    pub kind: BaselineKind,
+}
+
+/// The comparison baseline: what this GUI applied, else the kept-ruleset
+/// record (if it holds a ruleset), else none. A free function over the
+/// fields so it can be called while another field is borrowed mutably.
+/// The record is never treated as "applied this session": `is_dirty()`
+/// ignores it.
+fn baseline_of<'a>(
+    applied: Option<&'a FirewallRuleset>,
+    record: Option<&'a crate::core::confirmed::ConfirmedRecord>,
+    applied_this_session: bool,
+) -> Option<Baseline<'a>> {
+    if let Some(ruleset) = applied {
+        return Some(Baseline {
+            ruleset,
+            kind: BaselineKind::Applied,
+        });
+    }
+    let record = record?;
+    let kind = if !record.from_this_boot() {
+        BaselineKind::KeptEarlierSession
+    } else if applied_this_session {
+        BaselineKind::LastKept
+    } else {
+        BaselineKind::KeptThisBoot
+    };
+    Some(Baseline {
+        ruleset: record.ruleset()?,
+        kind,
+    })
 }
 
 /// Whether two rulesets produce the same firewall (rules and the advanced
@@ -600,6 +677,8 @@ pub enum Message {
     ToggleDiff(bool),
     ToggleZebraStriping(bool),
     ToggleAutoRevert(bool),
+    /// The "Auto-revert is off" notice: `true` = "Turn on", `false` = "Keep off"
+    AutoRevertNoticeAnswered(bool),
     AutoRevertTimeoutChanged(u64),
     ToggleEventLog(bool),
     ToggleReducedColors(bool),
@@ -765,6 +844,7 @@ impl State {
         let show_diff = config.show_diff;
         let show_zebra_striping = config.show_zebra_striping;
         let auto_revert_enabled = config.auto_revert_enabled;
+        let auto_revert_notice_shown = config.auto_revert_notice_shown;
         // Clamp timeout to prevent integer overflow (max 1 hour = 3600 seconds)
         let auto_revert_timeout_secs = config.auto_revert_timeout_secs.min(3600);
         let enable_event_log = config.enable_event_log;
@@ -812,6 +892,8 @@ impl State {
             last_applied_ruleset: None,
             confirmed_record: crate::core::confirmed::ConfirmedRecord::load_blocking(),
             confirmed_record_generation: 0,
+            applied_this_session: false,
+            diff_baseline: None,
             ssh_env_session: ssh_env_session.clone(),
             ssh_sessions: ssh_env_session.into_iter().collect(),
             apply_session: None,
@@ -850,6 +932,7 @@ impl State {
             show_diff,
             show_zebra_striping,
             auto_revert_enabled,
+            auto_revert_notice_shown,
             auto_revert_timeout_secs,
             enable_event_log,
             reduced_colors,
@@ -911,6 +994,8 @@ impl State {
         // Initialize all caches properly via centralized logic
         state.set_available_profiles(available_profiles);
         state.refresh_settings_display();
+        // The diff starts against the kept record, if there is one
+        state.refresh_diff_baseline();
         state.update_cached_text();
 
         if let Some(issue) = &state.unreadable_profile {
@@ -950,6 +1035,8 @@ impl State {
             last_applied_ruleset: Some(ruleset.clone()),
             confirmed_record: None,
             confirmed_record_generation: 0,
+            applied_this_session: false,
+            diff_baseline: None,
             // Never the test runner's own SSH session
             ssh_env_session: None,
             ssh_sessions: Vec::new(),
@@ -988,6 +1075,7 @@ impl State {
             show_diff: false,
             show_zebra_striping: true,
             auto_revert_enabled: true,
+            auto_revert_notice_shown: false,
             auto_revert_timeout_secs: 15,
             enable_event_log: false,
             reduced_colors: false,
@@ -1048,7 +1136,7 @@ impl State {
 
         state.set_available_profiles(vec!["test".to_string()]);
         state.refresh_settings_display();
-        state.refresh_applied_text_cache();
+        state.refresh_diff_baseline();
         state.update_cached_text();
         state
     }
@@ -1123,7 +1211,14 @@ impl State {
         }
         // Who can reach the listening sockets now (no re-scan)
         if let Some(panel) = &mut self.exposure.panel {
-            panel.rebuild(&self.ruleset, self.last_applied_ruleset.as_ref());
+            panel.rebuild(
+                &self.ruleset,
+                baseline_of(
+                    self.last_applied_ruleset.as_ref(),
+                    self.confirmed_record.as_ref(),
+                    self.applied_this_session,
+                ),
+            );
         }
 
         self.cached_nft_tokens = syntax_cache::tokenize_nft(&nft_text);
@@ -1188,21 +1283,58 @@ impl State {
         self.refresh_dirty_flags();
     }
 
-    /// Re-tokenizes the old side of the diff. Must run whenever
-    /// `last_applied_ruleset` changes (see [`Self::set_last_applied`]).
-    fn refresh_applied_text_cache(&mut self) {
-        self.cached_applied_text = self
-            .last_applied_ruleset
-            .as_ref()
-            .map(|last| syntax_cache::TokenizedText::new(last.to_nft_text()));
+    /// The comparison baseline (see [`baseline_of`]).
+    pub(crate) fn baseline(&self) -> Option<Baseline<'_>> {
+        baseline_of(
+            self.last_applied_ruleset.as_ref(),
+            self.confirmed_record.as_ref(),
+            self.applied_this_session,
+        )
+    }
+
+    /// Re-tokenizes the old side of the diff and records where it comes
+    /// from. Must run whenever the baseline changes: `last_applied_ruleset`
+    /// ([`Self::set_last_applied`]) or the record
+    /// ([`Self::replace_confirmed_record`]).
+    fn refresh_diff_baseline(&mut self) {
+        let baseline = self.baseline();
+        let kind = baseline.map(|b| b.kind);
+        let text = baseline.map(|b| syntax_cache::TokenizedText::new(b.ruleset.to_nft_text()));
+        self.diff_baseline = kind;
+        self.cached_applied_text = text;
     }
 
     /// Records what is now applied in the kernel (`None` = unknown) and
-    /// refreshes the diff and the dirty state.
+    /// refreshes the diff and the dirty state. Only the apply flow calls it.
     pub(crate) fn set_last_applied(&mut self, applied: Option<FirewallRuleset>) {
         self.last_applied_ruleset = applied;
-        self.refresh_applied_text_cache();
+        self.applied_this_session = true;
+        self.refresh_diff_baseline();
         self.update_cached_text();
+    }
+
+    /// Replaces the kept-ruleset record (loaded from disk, or written by an
+    /// apply this GUI kept). When the record is the comparison baseline
+    /// (nothing applied this session), the diff and the Exposure panel
+    /// follow; the dirty state never depends on it.
+    pub(crate) fn replace_confirmed_record(
+        &mut self,
+        record: Option<crate::core::confirmed::ConfirmedRecord>,
+    ) {
+        let same = match (&self.confirmed_record, &record) {
+            (None, None) => true,
+            (Some(old), Some(new)) => {
+                old.nftables_text() == new.nftables_text()
+                    && old.from_this_boot() == new.from_this_boot()
+                    && old.ruleset().is_some() == new.ruleset().is_some()
+            }
+            _ => false,
+        };
+        self.confirmed_record = record;
+        if !same && self.last_applied_ruleset.is_none() {
+            self.refresh_diff_baseline();
+            self.update_cached_text();
+        }
     }
 
     /// Records what the active profile file now contains and refreshes
@@ -1363,8 +1495,17 @@ impl State {
         self.pending_slider_log = Some((description, std::time::Instant::now()));
     }
 
+    /// The one-time "Auto-revert is off" notice is shown: auto-revert is
+    /// off (e.g. an old config that saved the old default) and the user has
+    /// not answered the notice or changed the setting.
+    pub fn auto_revert_notice_visible(&self) -> bool {
+        !self.auto_revert_enabled && !self.auto_revert_notice_shown
+    }
+
     /// The ruleset differs from what DRFW last applied (or that is unknown).
-    /// Cached; safe to call from `view()`.
+    /// Never compared with the kept record: rules applied before this
+    /// session may have been replaced since. Cached; safe to call from
+    /// `view()`.
     pub fn is_dirty(&self) -> bool {
         self.cached_is_dirty
     }
@@ -1495,6 +1636,7 @@ impl State {
             show_diff: self.show_diff,
             show_zebra_striping: self.show_zebra_striping,
             auto_revert_enabled: self.auto_revert_enabled,
+            auto_revert_notice_shown: self.auto_revert_notice_shown,
             auto_revert_timeout_secs: self.auto_revert_timeout_secs,
             enable_event_log: self.enable_event_log,
             reduced_colors: self.reduced_colors,
@@ -1645,6 +1787,9 @@ impl State {
             }
             Message::ToggleAutoRevert(enabled) => {
                 return handlers::handle_toggle_auto_revert(self, enabled);
+            }
+            Message::AutoRevertNoticeAnswered(turn_on) => {
+                return handlers::handle_auto_revert_notice_answered(self, turn_on);
             }
             Message::AutoRevertTimeoutChanged(timeout) => {
                 handlers::handle_auto_revert_timeout_changed(self, timeout);

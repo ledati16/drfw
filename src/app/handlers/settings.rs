@@ -41,9 +41,11 @@ pub(crate) fn handle_toggle_zebra_striping(state: &mut State, enabled: bool) -> 
     )
 }
 
-/// Handles toggling auto-revert feature
+/// Handles toggling auto-revert feature. A choice in Settings also answers
+/// the one-time "Auto-revert is off" notice.
 pub(crate) fn handle_toggle_auto_revert(state: &mut State, enabled: bool) -> Task<Message> {
     state.auto_revert_enabled = enabled;
+    state.auto_revert_notice_shown = true;
     state.mark_config_dirty();
     super::log_setting_change(
         state,
@@ -53,6 +55,24 @@ pub(crate) fn handle_toggle_auto_revert(state: &mut State, enabled: bool) -> Tas
             "Auto-revert disabled"
         },
     )
+}
+
+/// Handles the "Auto-revert is off" notice: "Turn on" enables auto-revert,
+/// "Keep off" leaves it; either way the notice is not shown again (saved
+/// with the debounced config save).
+pub(crate) fn handle_auto_revert_notice_answered(
+    state: &mut State,
+    turn_on: bool,
+) -> Task<Message> {
+    if !state.auto_revert_notice_visible() {
+        return Task::none();
+    }
+    if turn_on {
+        return handle_toggle_auto_revert(state, true);
+    }
+    state.auto_revert_notice_shown = true;
+    state.mark_config_dirty();
+    super::log_setting_change(state, "Auto-revert kept off (notice answered)")
 }
 
 /// Handles auto-revert timeout change
@@ -498,6 +518,57 @@ mod tests {
         let mut state = create_test_state();
         let _ = handle_toggle_auto_revert(&mut state, true);
         assert!(state.auto_revert_enabled);
+    }
+
+    /// An upgraded config with auto-revert off (the old default): the notice
+    /// shows; it is never flipped silently.
+    fn state_with_old_config() -> State {
+        let mut state = create_test_state();
+        state.auto_revert_enabled = false;
+        state.auto_revert_notice_shown = false;
+        state.config_dirty = false;
+        state
+    }
+
+    #[test]
+    fn test_auto_revert_notice_turn_on() {
+        let mut state = state_with_old_config();
+        assert!(state.auto_revert_notice_visible());
+        let _ = state.update(Message::AutoRevertNoticeAnswered(true));
+        assert!(state.auto_revert_enabled);
+        assert!(state.auto_revert_notice_shown);
+        assert!(!state.auto_revert_notice_visible());
+        assert!(state.config_dirty, "saved with the debounced config save");
+        let config = state.config_snapshot();
+        assert!(config.auto_revert_enabled && config.auto_revert_notice_shown);
+    }
+
+    #[test]
+    fn test_auto_revert_notice_keep_off() {
+        let mut state = state_with_old_config();
+        let _ = state.update(Message::AutoRevertNoticeAnswered(false));
+        assert!(!state.auto_revert_enabled, "the saved choice stays");
+        assert!(!state.auto_revert_notice_visible());
+        assert!(state.config_dirty);
+        let config = state.config_snapshot();
+        assert!(!config.auto_revert_enabled && config.auto_revert_notice_shown);
+
+        // Answered: a second answer changes nothing
+        state.config_dirty = false;
+        let _ = state.update(Message::AutoRevertNoticeAnswered(true));
+        assert!(!state.auto_revert_enabled);
+        assert!(!state.config_dirty);
+    }
+
+    /// Turning auto-revert off in Settings is a choice too: no notice at the
+    /// next start. With auto-revert on there is never a notice.
+    #[test]
+    fn test_auto_revert_notice_after_settings_change() {
+        let mut state = create_test_state();
+        assert!(!state.auto_revert_notice_visible(), "on: no notice");
+        let _ = state.update(Message::ToggleAutoRevert(false));
+        assert!(!state.auto_revert_notice_visible());
+        assert!(state.config_snapshot().auto_revert_notice_shown);
     }
 
     #[test]

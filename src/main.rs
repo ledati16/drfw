@@ -1195,9 +1195,22 @@ fn print_ssh_status(
     }
 }
 
-/// Marker of sockets every address can reach (`drfw exposure`): text, not
-/// color alone.
+/// Marker of sockets every address can reach on any interface (`drfw
+/// exposure`): text, not color alone.
 const OPEN_MARKER: &str = "OPEN TO EVERYONE";
+
+/// `"any"` when every address can connect on any interface, `"interfaces"`
+/// when only on [`core::exposure::SocketExposure::open_on_interfaces`],
+/// `None` otherwise (`scope` of `drfw exposure --json`).
+fn open_scope_json(exposure: &core::exposure::SocketExposure) -> Option<&'static str> {
+    if exposure.open_to_everyone {
+        Some("any")
+    } else if exposure.open_on_interfaces.is_empty() {
+        None
+    } else {
+        Some("interfaces")
+    }
+}
 
 /// Lowercase name of a transport for `--json`.
 const fn transport_json(transport: core::evaluate::Transport) -> &'static str {
@@ -1242,6 +1255,8 @@ fn exposure_json(
                 })).collect::<Vec<_>>(),
                 "reachable_from": exposure.summary,
                 "open_to_everyone": exposure.open_to_everyone,
+                "scope": open_scope_json(exposure),
+                "interfaces": exposure.open_on_interfaces,
                 "nobody": exposure.nobody,
                 "decided_by": (!exposure.decided_by_display.is_empty())
                     .then_some(&exposure.decided_by_display),
@@ -1278,7 +1293,8 @@ fn exposure_json(
 
 /// The `drfw exposure` table: one line per socket (columns padded to the
 /// widest cell), the open-to-everyone ones first and marked with
-/// [`OPEN_MARKER`] (in red on a terminal).
+/// [`OPEN_MARKER`] (in red on a terminal), then those open to everyone on
+/// some interfaces only, marked "OPEN ON <interfaces>" (in yellow).
 fn exposure_table(rows: &[core::exposure::ExposureRow], color: bool) -> Vec<String> {
     const HEADERS: [&str; 6] = [
         "PORT",
@@ -1295,6 +1311,8 @@ fn exposure_table(rows: &[core::exposure::ExposureRow], color: bool) -> Vec<Stri
                 "local only".to_string()
             } else if row.exposure.open_to_everyone {
                 format!("{OPEN_MARKER}: {}", row.exposure.summary)
+            } else if let Some(badge) = row.exposure.open_on_badge() {
+                format!("{badge}: {}", row.exposure.summary)
             } else {
                 row.exposure.summary.clone()
             };
@@ -1325,9 +1343,14 @@ fn exposure_table(rows: &[core::exposure::ExposureRow], color: bool) -> Vec<Stri
                 out.push_str(cell);
             } else {
                 let pad = width - cell.chars().count() + 2;
-                let cell = match cell.strip_prefix(OPEN_MARKER) {
-                    Some(rest) => format!("{}{rest}", paint(OPEN_MARKER, Color::Red, color)),
-                    None => cell.clone(),
+                let cell = if let Some(rest) = cell.strip_prefix(OPEN_MARKER) {
+                    format!("{}{rest}", paint(OPEN_MARKER, Color::Red, color))
+                } else if cell.starts_with(core::exposure::OPEN_ON_BADGE_PREFIX)
+                    && let Some((marker, rest)) = cell.split_once(':')
+                {
+                    format!("{}:{rest}", paint(marker, Color::Yellow, color))
+                } else {
+                    cell.clone()
                 };
                 out.push_str(&cell);
                 out.extend(std::iter::repeat_n(' ', pad));
@@ -1392,9 +1415,21 @@ async fn print_exposure(
             println!("{line}");
         }
         let open = rows.iter().filter(|r| r.exposure.open_to_everyone).count();
+        let open_on = rows
+            .iter()
+            .filter(|r| !r.exposure.open_on_interfaces.is_empty())
+            .count();
         let noun = if rows.len() == 1 { "socket" } else { "sockets" };
         println!();
-        println!("{} listening {noun}, {open} open to everyone.", rows.len());
+        if open_on == 0 {
+            println!("{} listening {noun}, {open} open to everyone.", rows.len());
+        } else {
+            println!(
+                "{} listening {noun}, {open} open to everyone, {open_on} open to everyone on \
+                 some interfaces only.",
+                rows.len()
+            );
+        }
     }
     for check in &checks {
         let text = format!("SSH: {}", check.summary());
@@ -1625,6 +1660,12 @@ mod tests {
     }
 
     fn exposure_fixture() -> Vec<core::exposure::ExposureRow> {
+        exposure_fixture_with(None)
+    }
+
+    /// The fixture's rows; with `tailnet`, a rule accepting all TCP on that
+    /// interface follows the SSH rule.
+    fn exposure_fixture_with(tailnet: Option<&str>) -> Vec<core::exposure::ExposureRow> {
         use drfw::core::evaluate::Transport;
         use drfw::core::exposure::{ListeningSocket, ProcessInfo, build_socket_list};
 
@@ -1670,7 +1711,60 @@ mod tests {
         );
         ssh.rebuild_caches();
         ruleset.rules.push(ssh);
+        if let Some(interface) = tailnet {
+            let mut rule = core::firewall::Rule::with_caches(
+                uuid::Uuid::new_v4(),
+                "Tailnet".into(),
+                core::firewall::Protocol::Tcp,
+                vec![],
+                vec![],
+                Some(interface.to_string()),
+                core::firewall::Chain::Input,
+                true,
+                jiff::Timestamp::now(),
+                vec![],
+            );
+            rule.rebuild_caches();
+            ruleset.rules.push(rule);
+        }
         core::exposure::exposure_rows(&ruleset, &sockets)
+    }
+
+    /// Everyone on one interface is marked as such, in text and JSON, and
+    /// listed after the sockets open on any interface.
+    #[test]
+    fn test_exposure_marks_interface_scoped_sockets() {
+        let rows = exposure_fixture_with(Some("tailscale0"));
+        let lines = exposure_table(&rows, false);
+        assert!(lines[1].starts_with("TCP 22"), "{lines:?}");
+        assert!(lines[1].contains("OPEN TO EVERYONE: everyone"), "{lines:?}");
+        assert!(lines[2].starts_with("TCP 8080"), "{lines:?}");
+        assert!(
+            lines[2].contains("OPEN ON tailscale0: everyone on tailscale0"),
+            "{lines:?}"
+        );
+        assert!(!lines[2].contains("OPEN TO EVERYONE"), "{lines:?}");
+        let colored = exposure_table(&rows, true);
+        assert!(colored[2].contains('\x1b') || std::env::var_os("NO_COLOR").is_some());
+
+        let ruleset = core::firewall::FirewallRuleset::new();
+        let json = exposure_json("p", &rows, &core::lockout::check_sessions(&ruleset, &[]));
+        let ssh = &json["sockets"][0];
+        assert_eq!(ssh["scope"], "any");
+        assert_eq!(ssh["interfaces"], serde_json::json!([]));
+        let web = &json["sockets"][1];
+        assert_eq!(web["port"], 8080);
+        assert_eq!(web["open_to_everyone"], false);
+        assert_eq!(web["scope"], "interfaces");
+        assert_eq!(web["interfaces"], serde_json::json!(["tailscale0"]));
+        assert_eq!(web["reachable_from"], "everyone on tailscale0");
+        let local = json["sockets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["port"] == 631)
+            .unwrap();
+        assert!(local["scope"].is_null());
     }
 
     #[test]

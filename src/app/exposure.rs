@@ -8,8 +8,11 @@
 //! sessions into this computer ([`crate::core::lockout`]); the panel says
 //! whether the editor rules would let their clients reconnect.
 
+use std::fmt::Write as _;
+
 use uuid::Uuid;
 
+use crate::app::{Baseline, BaselineKind};
 use crate::core::evaluate::InputChain;
 use crate::core::exposure::{SocketExposure, SocketInfo, evaluate_socket};
 use crate::core::firewall::FirewallRuleset;
@@ -33,8 +36,10 @@ pub struct SshLine {
     pub warning: bool,
 }
 
-/// Badge text for sockets every address can reach (shown with color, never
-/// color alone).
+/// Badge text for sockets every address can reach on any interface (shown
+/// with color, never color alone). Sockets every address can reach on some
+/// interfaces only get "OPEN ON <interfaces>"
+/// ([`crate::core::exposure::SocketExposure::open_on_badge`]).
 pub const OPEN_BADGE: &str = "OPEN TO EVERYONE";
 
 /// Open/closed state of the Exposure panel, with the scan bookkeeping.
@@ -46,15 +51,66 @@ pub struct ExposureState {
     pub generation: u64,
 }
 
-/// How the applied ruleset relates to the editor's.
+/// How the baseline ruleset (applied this session, or the kept record; see
+/// [`crate::app::BaselineKind`]) relates to the editor's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppliedState {
-    /// DRFW has not applied anything this session: only the editor rules
+    /// No baseline: only the editor rules
     Unknown,
-    /// The applied rules are the editor's
+    /// The baseline rules are the editor's
     SameAsEditor,
-    /// Both are evaluated; rows show the applied answer where it differs
+    /// Both are evaluated; rows show the baseline answer where it differs
     Differs,
+}
+
+/// The explanation under the summary: what the rows compare, and how much
+/// is known about the kernel's rules.
+fn applied_note(state: AppliedState, kind: Option<BaselineKind>) -> &'static str {
+    match (state, kind) {
+        (AppliedState::Unknown, _) | (_, None) => {
+            "Evaluated against the rules in the editor. DRFW has no copy of rules it \
+             applied and kept, so what the kernel enforces now is not known."
+        }
+        (AppliedState::SameAsEditor, Some(BaselineKind::Applied)) => {
+            "Evaluated against the rules in the editor, which are the applied rules."
+        }
+        (AppliedState::Differs, Some(BaselineKind::Applied)) => {
+            "Evaluated against the rules in the editor; \"Applied\" shows the rules in \
+             the kernel where they give a different answer."
+        }
+        (AppliedState::SameAsEditor, Some(BaselineKind::KeptThisBoot)) => {
+            "Evaluated against the rules in the editor, which are the rules last applied \
+             and kept (this boot). DRFW has not applied rules this session, so whether \
+             the kernel still enforces them is not known."
+        }
+        (AppliedState::Differs, Some(BaselineKind::KeptThisBoot)) => {
+            "Evaluated against the rules in the editor; \"Applied\" shows the rules last \
+             applied and kept (this boot) where they give a different answer. DRFW has not \
+             applied rules this session, so whether the kernel still enforces them is not \
+             known."
+        }
+        (AppliedState::SameAsEditor, Some(BaselineKind::LastKept)) => {
+            "Evaluated against the rules in the editor, which are the rules last applied \
+             and kept. This session's last apply was not kept, so what the kernel \
+             enforces now is not known."
+        }
+        (AppliedState::Differs, Some(BaselineKind::LastKept)) => {
+            "Evaluated against the rules in the editor; \"Kept\" shows the rules last \
+             applied and kept where they give a different answer. This session's last \
+             apply was not kept, so what the kernel enforces now is not known."
+        }
+        (AppliedState::SameAsEditor, Some(BaselineKind::KeptEarlierSession)) => {
+            "Evaluated against the rules in the editor, which are the rules last applied \
+             and kept, in an earlier session. A reboot or another tool may have replaced \
+             them, so what the kernel enforces now is not known."
+        }
+        (AppliedState::Differs, Some(BaselineKind::KeptEarlierSession)) => {
+            "Evaluated against the rules in the editor; \"Kept\" shows the rules last \
+             applied and kept, in an earlier session, where they give a different answer. \
+             A reboot or another tool may have replaced them, so what the kernel enforces \
+             now is not known."
+        }
+    }
 }
 
 /// The open Exposure panel.
@@ -71,11 +127,17 @@ pub struct ExposurePanel {
     /// Why the last scan failed (user-facing)
     pub error: Option<String>,
     pub applied: AppliedState,
-    /// Rows: sockets open to everyone first
+    /// Label of the baseline's answers: "APPLIED" (this session or this
+    /// boot) or "KEPT" (the last kept rules, not known to be the last
+    /// applied)
+    pub applied_label: &'static str,
+    /// Rows: sockets open to everyone first, then those open to everyone on
+    /// some interfaces, then the rest
     pub rows: Vec<ExposureRowView>,
-    /// "12 listening sockets · 2 open to everyone"
+    /// "12 listening sockets · 2 open to everyone · 1 open on some
+    /// interfaces only"
     pub summary: String,
-    /// What the rows compare (editor vs applied)
+    /// What the rows compare (editor vs baseline)
     pub applied_note: &'static str,
 }
 
@@ -90,19 +152,32 @@ pub struct ExposureRowView {
     pub process: String,
     /// "all addresses", "127.0.0.1 (local only)", "192.168.1.5 only"
     pub bind: String,
-    /// Open to everyone under the editor or the applied rules
-    pub highlight: bool,
+    /// The most exposed answer of the editor and the baseline rules (the
+    /// card border, the sort order)
+    pub highlight: Highlight,
     /// The answer under the editor rules
     pub editor: ReachView,
     /// The answer under the applied rules, when it differs from `editor`
     pub applied: Option<ReachView>,
 }
 
+/// How strongly a row is marked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Highlight {
+    /// Open to everyone on any interface (danger)
+    Everyone,
+    /// Open to everyone on some interfaces only (warning)
+    Interfaces,
+    None,
+}
+
 /// Tone of a reachability answer (the view picks the theme color).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReachTone {
-    /// Every address can connect
+    /// Every address can connect, on any interface
     Open,
+    /// Every address can connect, on some interfaces only
+    OpenOnInterfaces,
     /// Some sources can connect
     Restricted,
     /// Nobody can connect
@@ -117,8 +192,11 @@ pub struct ReachView {
     /// "Reachable from: everyone", "Local only"
     pub text: String,
     pub tone: ReachTone,
-    /// [`OPEN_BADGE`] for sockets open to everyone
-    pub badge: Option<&'static str>,
+    /// [`OPEN_BADGE`] for sockets open to everyone, "OPEN ON tailscale0" for
+    /// those open to everyone on some interfaces (`tone` gives the color)
+    pub badge: Option<String>,
+    /// [`crate::core::exposure::SocketExposure::rank`] (sort order)
+    pub rank: u8,
     /// "rule \"SSH\"", "built-in rule \"…\""; empty when local only
     pub rule_text: String,
     /// The deciding user rule, if it exists in the editor (clickable)
@@ -127,10 +205,13 @@ pub struct ReachView {
 
 impl ReachView {
     fn new(exposure: &SocketExposure, editor: &FirewallRuleset) -> Self {
+        let open_on = exposure.open_on_badge();
         let tone = if exposure.local_only {
             ReachTone::LocalOnly
         } else if exposure.open_to_everyone {
             ReachTone::Open
+        } else if open_on.is_some() {
+            ReachTone::OpenOnInterfaces
         } else if exposure.nobody {
             ReachTone::Closed
         } else {
@@ -149,9 +230,23 @@ impl ReachView {
         Self {
             text,
             tone,
-            badge: exposure.open_to_everyone.then_some(OPEN_BADGE),
+            badge: if exposure.open_to_everyone {
+                Some(OPEN_BADGE.to_string())
+            } else {
+                open_on
+            },
+            rank: exposure.rank(),
             rule_text: exposure.decided_by_display.clone(),
             edit_rule_id,
+        }
+    }
+
+    /// The row marking this answer calls for.
+    fn highlight(&self) -> Highlight {
+        match self.tone {
+            ReachTone::Open => Highlight::Everyone,
+            ReachTone::OpenOnInterfaces => Highlight::Interfaces,
+            ReachTone::Restricted | ReachTone::Closed | ReachTone::LocalOnly => Highlight::None,
         }
     }
 }
@@ -166,6 +261,7 @@ impl ExposurePanel {
             ssh_lines: Vec::new(),
             error: None,
             applied: AppliedState::Unknown,
+            applied_label: "APPLIED",
             rows: Vec::new(),
             summary: "Scanning listening sockets…".to_string(),
             applied_note: "",
@@ -177,7 +273,7 @@ impl ExposurePanel {
         &mut self,
         result: Result<ExposureScan, String>,
         editor: &FirewallRuleset,
-        applied: Option<&FirewallRuleset>,
+        baseline: Option<Baseline<'_>>,
     ) {
         self.scanning = false;
         match result {
@@ -192,35 +288,27 @@ impl ExposurePanel {
                 self.error = Some(message);
             }
         }
-        self.rebuild(editor, applied);
+        self.rebuild(editor, baseline);
     }
 
-    /// Re-evaluates the scanned sockets against the rulesets.
-    pub fn rebuild(&mut self, editor: &FirewallRuleset, applied: Option<&FirewallRuleset>) {
-        self.applied = match applied {
+    /// Re-evaluates the scanned sockets against the editor rules and the
+    /// baseline (what DRFW applied this session, else the kept record).
+    pub fn rebuild(&mut self, editor: &FirewallRuleset, baseline: Option<Baseline<'_>>) {
+        self.applied = match baseline {
             None => AppliedState::Unknown,
-            Some(applied) if crate::app::rulesets_match(applied, editor) => {
-                AppliedState::SameAsEditor
-            }
+            Some(b) if crate::app::rulesets_match(b.ruleset, editor) => AppliedState::SameAsEditor,
             Some(_) => AppliedState::Differs,
         };
-        self.applied_note = match self.applied {
-            AppliedState::Unknown => {
-                "Evaluated against the rules in the editor. DRFW has not applied rules \
-                 this session, so what the kernel enforces now is not known."
-            }
-            AppliedState::SameAsEditor => {
-                "Evaluated against the rules in the editor, which are the applied rules."
-            }
-            AppliedState::Differs => {
-                "Evaluated against the rules in the editor; \"Applied\" shows the rules in \
-                 the kernel where they give a different answer."
-            }
+        let kind = baseline.map(|b| b.kind);
+        self.applied_note = applied_note(self.applied, kind);
+        self.applied_label = match kind {
+            Some(BaselineKind::LastKept | BaselineKind::KeptEarlierSession) => "KEPT",
+            Some(BaselineKind::Applied | BaselineKind::KeptThisBoot) | None => "APPLIED",
         };
 
         let editor_chain = InputChain::new(editor);
-        let applied_chain = match (self.applied, applied) {
-            (AppliedState::Differs, Some(applied)) => Some(InputChain::new(applied)),
+        let applied_chain = match (self.applied, baseline) {
+            (AppliedState::Differs, Some(b)) => Some(InputChain::new(b.ruleset)),
             _ => None,
         };
         let mut rows: Vec<ExposureRowView> = self
@@ -234,8 +322,9 @@ impl ExposurePanel {
                     .filter(|view| {
                         view.text != editor_view.text || view.rule_text != editor_view.rule_text
                     });
-                let highlight = editor_view.badge.is_some()
-                    || applied_view.as_ref().is_some_and(|v| v.badge.is_some());
+                let highlight = applied_view.as_ref().map_or(editor_view.highlight(), |v| {
+                    v.highlight().min(editor_view.highlight())
+                });
                 ExposureRowView {
                     port_proto: format!("{} {}", socket.transport.display_name(), socket.port),
                     family: socket.family_display,
@@ -247,8 +336,13 @@ impl ExposurePanel {
                 }
             })
             .collect();
-        // Stable: the scan's protocol/port order within each group
-        rows.sort_by_key(|row| !row.highlight);
+        // Most exposed (under either ruleset) first; stable: the scan's
+        // protocol/port order within each group
+        rows.sort_by_key(|row| {
+            row.applied
+                .as_ref()
+                .map_or(row.editor.rank, |v| v.rank.min(row.editor.rank))
+        });
         self.rows = rows;
 
         self.ssh_lines = crate::core::lockout::check_sessions(editor, &self.sessions)
@@ -260,13 +354,19 @@ impl ExposurePanel {
             .collect();
 
         let total = self.rows.len();
-        let open = self.rows.iter().filter(|r| r.highlight).count();
+        let count = |level: Highlight| self.rows.iter().filter(|r| r.highlight == level).count();
+        let open = count(Highlight::Everyone);
+        let open_on = count(Highlight::Interfaces);
         self.summary = match (&self.error, total) {
             (Some(_), _) => "No sockets to show.".to_string(),
             (None, 0) => "No listening sockets found.".to_string(),
             (None, _) => {
                 let sockets = if total == 1 { "socket" } else { "sockets" };
-                format!("{total} listening {sockets} · {open} open to everyone")
+                let mut summary = format!("{total} listening {sockets} · {open} open to everyone");
+                if open_on > 0 {
+                    let _ = write!(summary, " · {open_on} open on some interfaces only");
+                }
+                summary
             }
         };
     }
@@ -314,6 +414,13 @@ mod tests {
         }
     }
 
+    fn applied_baseline(ruleset: &FirewallRuleset) -> Baseline<'_> {
+        Baseline {
+            ruleset,
+            kind: BaselineKind::Applied,
+        }
+    }
+
     fn rule(label: &str, protocol: Protocol, port: u16, sources: &[&str]) -> Rule {
         let mut r = crate::core::test_helpers::create_test_rule(label, None);
         r.protocol = protocol;
@@ -338,8 +445,8 @@ mod tests {
         assert_eq!(panel.summary, "4 listening sockets · 1 open to everyone");
         let first = &panel.rows[0];
         assert_eq!(first.port_proto, "TCP 8080");
-        assert!(first.highlight);
-        assert_eq!(first.editor.badge, Some(OPEN_BADGE));
+        assert_eq!(first.highlight, Highlight::Everyone);
+        assert_eq!(first.editor.badge.as_deref(), Some(OPEN_BADGE));
         assert_eq!(first.editor.tone, ReachTone::Open);
         assert_eq!(first.editor.text, "Reachable from: everyone");
         assert_eq!(first.editor.rule_text, "rule \"web\"");
@@ -369,14 +476,22 @@ mod tests {
             .push(rule("old web", Protocol::Tcp, 8080, &[]));
 
         let mut panel = ExposurePanel::scanning();
-        panel.set_scan(Ok(scan(sockets())), &editor, Some(&applied));
+        panel.set_scan(
+            Ok(scan(sockets())),
+            &editor,
+            Some(applied_baseline(&applied)),
+        );
         assert_eq!(panel.applied, AppliedState::Differs);
         let web = &panel.rows[0];
         assert_eq!(web.port_proto, "TCP 8080");
-        assert!(web.highlight, "open under the applied rules");
+        assert_eq!(
+            web.highlight,
+            Highlight::Everyone,
+            "open under the applied rules"
+        );
         assert_eq!(web.editor.tone, ReachTone::Closed);
         let applied_view = web.applied.as_ref().expect("differs");
-        assert_eq!(applied_view.badge, Some(OPEN_BADGE));
+        assert_eq!(applied_view.badge.as_deref(), Some(OPEN_BADGE));
         assert_eq!(applied_view.edit_rule_id, None, "not in the editor");
         let ssh = panel
             .rows
@@ -386,10 +501,114 @@ mod tests {
         assert!(ssh.applied.is_none(), "same answer");
 
         // The same rules: one answer per row
-        panel.rebuild(&applied, Some(&applied));
+        panel.rebuild(&applied, Some(applied_baseline(&applied)));
         assert_eq!(panel.applied, AppliedState::SameAsEditor);
         assert!(panel.rows.iter().all(|r| r.applied.is_none()));
-        assert_eq!(panel.rows[0].editor.badge, Some(OPEN_BADGE));
+        assert_eq!(panel.rows[0].editor.badge.as_deref(), Some(OPEN_BADGE));
+    }
+
+    /// "Accept all TCP on tailscale0": everyone on the tailnet, an amber
+    /// "OPEN ON" badge (not the red one), after the sockets open on any
+    /// interface.
+    #[test]
+    fn test_interface_scoped_rows_are_amber_and_after_open_ones() {
+        let mut editor = FirewallRuleset::new();
+        editor.rules.push(rule("web", Protocol::Tcp, 8080, &[]));
+        let mut tailnet = rule("Tailscale Interface", Protocol::Tcp, 0, &[]);
+        tailnet.ports.clear();
+        tailnet.interface = Some("tailscale0".into());
+        tailnet.rebuild_caches();
+        editor.rules.push(tailnet);
+        let mut panel = ExposurePanel::scanning();
+        panel.set_scan(Ok(scan(sockets())), &editor, None);
+
+        assert_eq!(
+            panel.summary,
+            "4 listening sockets · 1 open to everyone · 1 open on some interfaces only"
+        );
+        let ports: Vec<&str> = panel.rows.iter().map(|r| r.port_proto.as_str()).collect();
+        assert_eq!(ports[..2], ["TCP 8080", "TCP 22"]);
+        let ssh = &panel.rows[1];
+        assert_eq!(ssh.highlight, Highlight::Interfaces);
+        assert_eq!(ssh.editor.tone, ReachTone::OpenOnInterfaces);
+        assert_eq!(ssh.editor.badge.as_deref(), Some("OPEN ON tailscale0"));
+        assert_eq!(ssh.editor.text, "Reachable from: everyone on tailscale0");
+        assert_eq!(ssh.editor.rule_text, "rule \"Tailscale Interface\"");
+        assert_eq!(panel.rows[2].highlight, Highlight::None);
+
+        // The user's case: the only rule is the interface one
+        editor.rules.remove(0);
+        panel.rebuild(&editor, None);
+        assert_eq!(
+            panel.summary,
+            "4 listening sockets · 0 open to everyone · 2 open on some interfaces only"
+        );
+        assert!(
+            panel
+                .rows
+                .iter()
+                .all(|r| r.editor.badge.as_deref() != Some(OPEN_BADGE))
+        );
+    }
+
+    /// Before the first apply, the kept record is the baseline, labelled by
+    /// where it comes from; without one the panel says nothing is known.
+    #[test]
+    fn test_kept_record_baseline_notes() {
+        let mut editor = FirewallRuleset::new();
+        editor.rules.push(rule("ssh", Protocol::Tcp, 22, &[]));
+        let mut kept = FirewallRuleset::new();
+        kept.rules.push(rule("old web", Protocol::Tcp, 8080, &[]));
+        let mut panel = ExposurePanel::scanning();
+
+        panel.set_scan(Ok(scan(sockets())), &editor, None);
+        assert_eq!(panel.applied, AppliedState::Unknown);
+        assert!(
+            panel.applied_note.contains("not known"),
+            "{}",
+            panel.applied_note
+        );
+
+        let this_boot = Baseline {
+            ruleset: &kept,
+            kind: BaselineKind::KeptThisBoot,
+        };
+        panel.rebuild(&editor, Some(this_boot));
+        assert_eq!(panel.applied, AppliedState::Differs);
+        assert_eq!(panel.applied_label, "APPLIED");
+        assert!(
+            panel
+                .applied_note
+                .contains("last applied and kept (this boot)")
+        );
+        assert!(
+            panel
+                .applied_note
+                .contains("not applied rules this session")
+        );
+        let web = panel
+            .rows
+            .iter()
+            .find(|r| r.port_proto == "TCP 8080")
+            .unwrap();
+        assert!(web.applied.is_some(), "the kept answer differs");
+
+        let earlier = Baseline {
+            ruleset: &kept,
+            kind: BaselineKind::KeptEarlierSession,
+        };
+        panel.rebuild(&editor, Some(earlier));
+        assert_eq!(panel.applied_label, "KEPT");
+        assert!(panel.applied_note.contains("\"Kept\""));
+        assert!(panel.applied_note.contains("earlier session"));
+
+        let same = Baseline {
+            ruleset: &editor,
+            kind: BaselineKind::KeptEarlierSession,
+        };
+        panel.rebuild(&editor, Some(same));
+        assert_eq!(panel.applied, AppliedState::SameAsEditor);
+        assert!(panel.applied_note.contains("may have replaced"));
     }
 
     #[test]

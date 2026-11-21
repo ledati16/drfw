@@ -109,7 +109,13 @@ inset_container(theme)              // Recessed areas (tag clouds, lists)
 inset_container_bordered(theme)     // Recessed areas with visible border
 section_header_container(theme)     // Subtle label backgrounds
 modal_backdrop(theme)               // Semi-transparent overlay
+attention_card_container(theme)     // Card with 2px danger border (open to everyone)
+warning_attention_card_container(theme) // Same in warning (open on some interfaces)
+info_notice_container(theme)        // Same in info (inline workspace notices)
+danger_badge_container(theme)       // Solid pill badge, danger ("OPEN TO EVERYONE")
+warning_badge_container(theme)      // Solid pill badge, warning ("OPEN ON wg0")
 ```
+Badges always carry text: the color only repeats what the words say.
 
 ### Implementation Notes
 **Buttons:** All button functions use a unified `ButtonStyleConfig` system internally to avoid code duplication. Each button type is defined as a const configuration with specific colors, shadows, and interaction states. **Do not create new button functions**—modify existing configurations or add new const configs to the system.

@@ -24,6 +24,13 @@ pub struct AppConfig {
     /// Configs written before this default changed keep their explicit value.
     #[serde(default = "default_true")]
     pub auto_revert_enabled: bool,
+    /// The GUI's one-time "Auto-revert is off" notice was answered (or the
+    /// user changed auto-revert themselves). Configs from before the default
+    /// changed hold `auto_revert_enabled: false` without the user ever
+    /// having chosen it; the notice asks once instead of flipping the saved
+    /// value. Missing in older configs: `false`.
+    #[serde(default)]
+    pub auto_revert_notice_shown: bool,
     /// Timeout in seconds for auto-revert countdown (default: 15s, max: 3600s)
     ///
     /// Clamped to 3600 seconds (1 hour) to prevent integer overflow in countdown calculations.
@@ -50,6 +57,7 @@ impl Default for AppConfig {
             show_diff: true,
             show_zebra_striping: true,
             auto_revert_enabled: true, // Lockout protection on by default
+            auto_revert_notice_shown: false,
             auto_revert_timeout_secs: 15,
             enable_event_log: true, // Useful for troubleshooting, local-only so no privacy concern
             reduced_colors: false,  // Full syntax highlighting by default
@@ -223,6 +231,23 @@ pub fn load_config_checked_blocking() -> LoadedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config saved before auto-revert defaulted to on keeps its value,
+    /// and has not seen the notice.
+    #[test]
+    fn test_old_config_keeps_auto_revert_off_and_has_no_notice() {
+        let old: AppConfig =
+            serde_json::from_str(r#"{ "active_profile": "home", "auto_revert_enabled": false }"#)
+                .unwrap();
+        assert!(!old.auto_revert_enabled);
+        assert!(!old.auto_revert_notice_shown);
+        let mut answered = old;
+        answered.auto_revert_notice_shown = true;
+        let round_trip: AppConfig =
+            serde_json::from_slice(&serde_json::to_vec(&answered).unwrap()).unwrap();
+        assert!(round_trip.auto_revert_notice_shown);
+        assert!(!round_trip.auto_revert_enabled);
+    }
 
     #[test]
     fn test_salvage_active_profile() {

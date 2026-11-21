@@ -1687,4 +1687,157 @@ mod tests {
         assert_eq!(state.rule_search, "Allow SSH");
         assert!(handle_copy_preview_line(&mut state, line).units() > 0);
     }
+
+    /// The diff at startup (nothing applied this session) compares with the
+    /// kept record when there is one, labelled by where it comes from; the
+    /// record never makes the ruleset "applied" (the Apply button stays
+    /// marked).
+    mod diff_baseline {
+        use crate::app::handlers::test_utils::create_test_state;
+        use crate::app::syntax_cache::DiffType;
+        use crate::app::{BaselineKind, State};
+        use crate::core::confirmed::{ConfirmedRecord, RecordKind, current_boot_id};
+        use crate::core::firewall::FirewallRuleset;
+        use crate::core::test_helpers::create_test_rule;
+
+        fn kept_ruleset() -> FirewallRuleset {
+            let mut kept = FirewallRuleset::new();
+            kept.rules.push(create_test_rule("Old web", Some(8080)));
+            kept
+        }
+
+        fn record(boot_id: Option<&str>) -> ConfirmedRecord {
+            let kept = kept_ruleset();
+            ConfirmedRecord::new(&kept.to_nftables_json(), &kept, RecordKind::Confirmed)
+                .unwrap()
+                .with_boot_id(boot_id)
+        }
+
+        /// As `State::new` leaves it: nothing applied, `record` loaded, and
+        /// an editor rule the record does not have.
+        fn startup_state(record: Option<ConfirmedRecord>) -> State {
+            let mut state = create_test_state();
+            state.last_applied_ruleset = None;
+            state.confirmed_record = record;
+            state.refresh_diff_baseline();
+            state.show_diff = true;
+            state
+                .ruleset
+                .rules
+                .push(create_test_rule("Allow SSH", Some(22)));
+            state.mark_profile_dirty();
+            state
+        }
+
+        fn changed_lines(state: &State, kind: DiffType) -> Vec<String> {
+            state
+                .cached_diff_tokens
+                .as_ref()
+                .expect("a diff")
+                .iter()
+                .filter(|(t, _)| *t == kind)
+                .map(|(_, line)| line.tokens.iter().map(|t| &*t.text).collect())
+                .collect()
+        }
+
+        #[test]
+        fn test_no_record_no_diff() {
+            let state = startup_state(None);
+            assert_eq!(state.diff_baseline, None);
+            assert!(state.cached_diff_tokens.is_none());
+            assert!(state.is_dirty(), "unknown: Apply Changes*");
+        }
+
+        #[test]
+        fn test_record_from_this_boot_is_the_last_applied() {
+            let Some(boot) = current_boot_id() else {
+                return; // no procfs boot id: every record is "earlier"
+            };
+            let mut state = startup_state(Some(record(Some(boot))));
+            assert_eq!(state.diff_baseline, Some(BaselineKind::KeptThisBoot));
+            assert_eq!(
+                BaselineKind::KeptThisBoot.diff_label(),
+                "Show diff (vs last applied)"
+            );
+            assert!(
+                changed_lines(&state, DiffType::Added)
+                    .iter()
+                    .any(|l| l.contains("Allow SSH"))
+            );
+            assert!(
+                changed_lines(&state, DiffType::Removed)
+                    .iter()
+                    .any(|l| l.contains("Old web"))
+            );
+            assert!(state.last_applied_ruleset.is_none(), "not faked as applied");
+            assert!(state.is_dirty());
+
+            // The editor holds the kept rules: no changed lines, but still
+            // not known to be applied
+            state.ruleset = state
+                .confirmed_record
+                .as_ref()
+                .and_then(ConfirmedRecord::ruleset)
+                .unwrap()
+                .clone();
+            state.mark_profile_dirty();
+            assert!(
+                state
+                    .cached_diff_tokens
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .all(|(t, _)| *t == DiffType::Unchanged)
+            );
+            assert!(state.is_dirty(), "the record is not \"applied\"");
+
+            // The Exposure panel compares with the same baseline
+            state.exposure.panel = Some(crate::app::exposure::ExposurePanel::scanning());
+            state.mark_profile_dirty();
+            let panel = state.exposure.panel.as_ref().unwrap();
+            assert_eq!(
+                panel.applied,
+                crate::app::exposure::AppliedState::SameAsEditor
+            );
+            assert!(panel.applied_note.contains("this boot"));
+
+            // An apply of this session that is not kept: the record is only
+            // the last kept rules
+            state.set_last_applied(None);
+            assert_eq!(state.diff_baseline, Some(BaselineKind::LastKept));
+            assert_eq!(
+                BaselineKind::LastKept.diff_label(),
+                "Show diff (vs last kept)"
+            );
+        }
+
+        #[test]
+        fn test_record_from_an_earlier_boot() {
+            let state = startup_state(Some(record(Some("an-earlier-boot"))));
+            assert_eq!(state.diff_baseline, Some(BaselineKind::KeptEarlierSession));
+            assert_eq!(
+                BaselineKind::KeptEarlierSession.diff_label(),
+                "Show diff (vs last kept, earlier session)"
+            );
+            assert!(state.cached_diff_tokens.is_some());
+            assert!(state.is_dirty());
+        }
+
+        /// A record read later (Apply re-reads it) becomes the baseline; once
+        /// this GUI applied, what it applied is the baseline instead.
+        #[test]
+        fn test_reloaded_record_and_applied_rules() {
+            let mut state = startup_state(None);
+            state.replace_confirmed_record(Some(record(None)));
+            assert_eq!(state.diff_baseline, Some(BaselineKind::KeptEarlierSession));
+            assert!(state.cached_diff_tokens.is_some());
+
+            let applied = state.ruleset.clone();
+            state.set_last_applied(Some(applied));
+            assert_eq!(state.diff_baseline, Some(BaselineKind::Applied));
+            assert!(!state.is_dirty());
+            state.replace_confirmed_record(None);
+            assert_eq!(state.diff_baseline, Some(BaselineKind::Applied));
+        }
+    }
 }

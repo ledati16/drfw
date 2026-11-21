@@ -895,6 +895,23 @@ mod tests {
         );
         assert!(ruleset.validate().is_ok());
     }
+
+    /// Profiles saved before labels were trimmed are fixed on load: the
+    /// stray spaces go, and tags that only differed by them merge.
+    #[test]
+    fn test_normalize_loaded_trims_labels_and_tags() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = base_rule();
+        rule.label = "Tailscale Interface ".into();
+        rule.tags = vec!["vpn".into(), " vpn ".into(), "home  lan".into()];
+        ruleset.rules.push(rule);
+        assert_eq!(ruleset.normalize_loaded(), 0);
+        let rule = &ruleset.rules[0];
+        assert_eq!(rule.label, "Tailscale Interface");
+        assert_eq!(rule.label_lowercase, "tailscale interface");
+        assert_eq!(rule.tags, vec!["vpn".to_string(), "home lan".to_string()]);
+        assert!(ruleset.validate().is_ok());
+    }
 }
 
 #[cfg(test)]

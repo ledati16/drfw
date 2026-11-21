@@ -123,7 +123,7 @@ mode.
 - **Diff view**: See exactly what changes before applying
 - **In-app notifications**: Success, warning, and error banners
 - **Diagnostics viewer**: Built-in event log browser with filter and search, times in local time (with the date for older events)
-- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback). Sockets open to everyone are flagged, rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this. It also says, for each current SSH session, whether its client could open a new connection under the editor's rules (see [SSH lockout check](#ssh-lockout-check)). `drfw exposure` prints the same from the command line
+- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback). Sockets open to everyone are flagged (in red; those open to everyone on some interfaces only, such as a VPN, in amber), rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this. It also says, for each current SSH session, whether its client could open a new connection under the editor's rules (see [SSH lockout check](#ssh-lockout-check)). `drfw exposure` prints the same from the command line
 - **Keyboard shortcuts**: Ctrl+N (new rule), Ctrl+S (apply), Ctrl+E (export), F1 (help)
 
 ### Profile Management
@@ -178,11 +178,16 @@ drfw exposure [profile] --json       # ... as JSON, for scripts
   under the rules of the active profile.
 - `drfw exposure` prints the Exposure view as a table: socket (protocol, port, family),
   process, bind address, who can reach it, and the deciding rule. Sockets every address
-  can reach are marked `OPEN TO EVERYONE` (in red on a terminal; plain text when piped).
+  can reach are marked `OPEN TO EVERYONE` (in red on a terminal; plain text when piped);
+  those every address can reach only through some interfaces (for example a rule for
+  `tailscale0`: everyone on the tailnet, not the internet) are marked
+  `OPEN ON tailscale0` (in yellow) and listed after them.
   The SSH lines of `drfw status` follow. `--json` prints an object with `profile`,
   `sockets` (one object per socket: `transport`, `port`, `families`, `bind`,
   `bind_display`, `local_only`, `uid`, `process`, `processes`, `reachable_from`,
-  `open_to_everyone`, `nobody`, `decided_by`, `decided_by_rule_id`) and `ssh_sessions`
+  `open_to_everyone` (every address, on any interface), `scope` = `any`/`interfaces`/null
+  (where every address can connect from), `interfaces` (for `scope` = `interfaces`),
+  `nobody`, `decided_by`, `decided_by_rule_id`) and `ssh_sessions`
   (`client`, `client_port`, `server`, `server_port`, `source`, `interface` (the one that
   owns `server`, or null), `new_connections` = `accepted`/`limited`/`may_be_blocked`/
   `blocked`, `outcome`). It evaluates the profile's rules,
@@ -325,6 +330,13 @@ System, `nft flush ruleset` or another tool can change the kernel's rules. When 
 record is from an earlier boot (or from an older DRFW that did not store the boot id),
 the Save to System dialog and `drfw save` say that it was kept in an earlier session and
 may not be what is running.
+
+Until the GUI applies something itself, its diff and the Exposure view compare the
+editor with the record, and say so: "Show diff (vs last applied)" for a record from this
+boot, "Show diff (vs last kept, earlier session)" for an older one (and "vs last kept"
+after an apply of this session that was not kept). The Apply button still shows
+unapplied changes (`Apply Changes*`) until the GUI has applied the rules, since the
+record cannot tell what the kernel runs now.
 
 `--no-confirm` counts as kept on purpose: it is the same explicit choice as turning
 auto-revert off in the GUI, and a record left at an older ruleset would describe rules
@@ -500,7 +512,10 @@ DRFW creates its own nftables table (`drfw`) at **priority -10**, evaluated befo
 
 ### Auto-Revert
 If you don't confirm within the countdown (default 15s), rules automatically
-revert. The revert runs as a separate root process (a `drfw-revert-*` systemd
+revert. Auto-revert is on by default; settings saved by an older DRFW, whose
+default was off, keep their value, and the GUI asks once ("Auto-revert is off:
+if an apply locks you out, DRFW won't roll it back. [Turn on] [Keep off]")
+instead of changing it silently. The revert runs as a separate root process (a `drfw-revert-*` systemd
 unit, or a detached process without systemd), so closing DRFW or losing the
 SSH connection does not stop it. Its outcome is recorded in
 `/run/drfw/status-<id>`; `drfw status` shows whether one is still pending.

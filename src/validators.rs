@@ -42,31 +42,6 @@ pub const MAX_LOG_RATE_PER_MINUTE: u32 = 1_000;
 /// terminating NUL, and rejects `iifname` strings of 16 characters, `*` or not.
 pub const MAX_INTERFACE_LENGTH: usize = 15;
 
-/// Sanitizes a label for safe use in nftables comments.
-///
-/// Removes control characters, quotes, and shell metacharacters.
-/// Limits length to 64 bytes (ASCII characters only) as per specification.
-///
-/// This correctly filters out zero-width characters (U+200B, U+200D, etc.)
-/// and combining characters since they are not ASCII.
-///
-/// SECURITY: Uses `is_ascii_alphanumeric()` to prevent Unicode-based bypasses
-/// and ensure labels stay within system limits (64 bytes max).
-///
-/// # Examples
-///
-/// ```
-/// use drfw::validators::sanitize_label;
-///
-/// let safe = sanitize_label("Normal Label");
-/// assert_eq!(safe, "Normal Label");
-///
-/// let unsafe_label = "Test\nNewline\"Quote";
-/// let safe = sanitize_label(unsafe_label);
-/// assert!(!safe.contains('\n'));
-/// assert!(!safe.contains('"'));
-/// ```
-///
 /// Generic validator for labeled strings (labels, log prefixes, etc.)
 /// Extracted to avoid duplication between label and log prefix validation
 fn validate_labeled_string(
@@ -101,16 +76,64 @@ fn validate_labeled_string(
     Ok(sanitized)
 }
 
+/// Sanitizes a rule label or tag (also used in nftables comments).
+///
+/// Keeps ASCII letters, digits, space and `- _ . :`; everything else
+/// (control characters, quotes, shell metacharacters, non-ASCII) is removed.
+/// Leading and trailing spaces are trimmed and runs of spaces collapse to
+/// one, so `" Tailscale  Interface "` becomes `"Tailscale Interface"`. The
+/// result is at most 64 bytes ([`MAX_LABEL_LENGTH`]). It never fails: a label
+/// with no usable character becomes empty.
+///
+/// The function is idempotent (sanitizing a sanitized label changes nothing),
+/// which [`crate::core::firewall::Rule::validate`] relies on to flag labels
+/// that were not sanitized.
+///
+/// This correctly filters out zero-width characters (U+200B, U+200D, etc.)
+/// and combining characters since they are not ASCII.
+///
+/// SECURITY: Uses `is_ascii_alphanumeric()` to prevent Unicode-based bypasses
+/// and ensure labels stay within system limits (64 bytes max).
+///
+/// # Examples
+///
+/// ```
+/// use drfw::validators::sanitize_label;
+///
+/// let safe = sanitize_label("Normal Label");
+/// assert_eq!(safe, "Normal Label");
+///
+/// let unsafe_label = "Test\nNewline\"Quote";
+/// let safe = sanitize_label(unsafe_label);
+/// assert!(!safe.contains('\n'));
+/// assert!(!safe.contains('"'));
+///
+/// assert_eq!(
+///     sanitize_label("  Tailscale   Interface "),
+///     "Tailscale Interface"
+/// );
+/// ```
 pub fn sanitize_label(input: &str) -> String {
-    // Note: sanitize_label has different semantics than validators - it never errors, just truncates
-    input
-        .chars()
-        .filter(|c| {
-            // SECURITY: Use ASCII-only to prevent Unicode bypasses and multi-byte issues
-            c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ':')
-        })
-        .take(MAX_LABEL_LENGTH)
-        .collect()
+    // SECURITY: ASCII-only to prevent Unicode bypasses and multi-byte issues
+    let allowed = |c: &char| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | ':');
+    // Only ASCII is pushed, so `len()` counts characters
+    let mut out = String::with_capacity(input.len().min(MAX_LABEL_LENGTH));
+    for c in input.chars().filter(allowed) {
+        // No leading space, no runs of spaces (whitespace is never meaningful
+        // in a description or tag, and invisible in the GUI)
+        if c == ' ' && (out.is_empty() || out.ends_with(' ')) {
+            continue;
+        }
+        if out.len() == MAX_LABEL_LENGTH {
+            break;
+        }
+        out.push(c);
+    }
+    // At most one trailing space can be left
+    if out.ends_with(' ') {
+        out.pop();
+    }
+    out
 }
 
 /// Makes a string safe to embed in an nftables quoted string (`"..."`).
@@ -485,6 +508,22 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_label_trims_and_collapses_spaces() {
+        assert_eq!(
+            sanitize_label("Tailscale Interface "),
+            "Tailscale Interface"
+        );
+        assert_eq!(sanitize_label("  Web   Server  "), "Web Server");
+        // Removed characters do not leave double spaces behind
+        assert_eq!(sanitize_label("a \t b"), "a b");
+        assert_eq!(sanitize_label("\" SSH \""), "SSH");
+        assert_eq!(sanitize_label("   "), "");
+        // The limit applies to what is kept, and the cut never ends in a space
+        let label = format!("{} b", "a".repeat(63));
+        assert_eq!(sanitize_label(&label), "a".repeat(63));
+    }
+
+    #[test]
     fn test_sanitize_label_unicode() {
         // Unicode should be removed (not alphanumeric ASCII)
         assert_eq!(sanitize_label("Test😀Emoji"), "TestEmoji");
@@ -724,6 +763,14 @@ mod property_tests {
         fn test_sanitize_label_never_exceeds_64_chars(input in "\\PC*") {
             let sanitized = sanitize_label(&input);
             prop_assert!(sanitized.len() <= 64);
+        }
+
+        #[test]
+        fn test_sanitize_label_is_idempotent_and_trimmed(input in "[ a-z\t\"]{0,80}") {
+            let sanitized = sanitize_label(&input);
+            prop_assert_eq!(&sanitize_label(&sanitized), &sanitized);
+            prop_assert_eq!(sanitized.trim(), sanitized.as_str());
+            prop_assert!(!sanitized.contains("  "));
         }
 
         #[test]

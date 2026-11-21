@@ -42,7 +42,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use super::evaluate::{
-    Decider, InputChain, IpFamily, Probe, ProbeSource, Reachability, Transport, Verdict,
+    Decider, EveryoneScope, InputChain, IpFamily, Probe, ProbeSource, Reachability, Transport,
+    Verdict,
 };
 use super::firewall::FirewallRuleset;
 
@@ -520,8 +521,13 @@ pub struct SocketExposure {
     pub local_only: bool,
     /// One answer per family in [`SocketInfo::families`] (empty when local only)
     pub per_family: Vec<Reachability>,
-    /// Every address of some family can connect (at least within a limit)
+    /// Every address of some family can connect on any interface (at least
+    /// within a limit): open to the whole network, the internet included
     pub open_to_everyone: bool,
+    /// When not `open_to_everyone`: the interfaces on which every address
+    /// can connect (everyone on that link, e.g. the peers of a VPN), in rule
+    /// order; empty when no interface lets everyone in
+    pub open_on_interfaces: Vec<String>,
     /// Nobody can connect over any family
     pub nobody: bool,
     /// "everyone", "IPv4: 10.0.0.0/8; IPv6: nobody", "local only", …
@@ -539,6 +545,7 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
             local_only: true,
             per_family: Vec::new(),
             open_to_everyone: false,
+            open_on_interfaces: Vec::new(),
             nobody: false,
             summary: "local only".to_string(),
             decided_by: None,
@@ -565,7 +572,23 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
         })
         .collect();
 
-    let open_to_everyone = per_family.iter().any(Reachability::open_to_everyone);
+    let scopes: Vec<EveryoneScope> = per_family
+        .iter()
+        .filter_map(Reachability::everyone_scope)
+        .collect();
+    let open_to_everyone = scopes.contains(&EveryoneScope::AnyInterface);
+    let mut open_on_interfaces: Vec<String> = Vec::new();
+    if !open_to_everyone {
+        for scope in scopes {
+            if let EveryoneScope::Interfaces(names) = scope {
+                for name in names {
+                    if !open_on_interfaces.contains(&name) {
+                        open_on_interfaces.push(name);
+                    }
+                }
+            }
+        }
+    }
     let nobody = per_family.iter().all(Reachability::nobody);
     let texts: Vec<String> = per_family.iter().map(ToString::to_string).collect();
     let summary = if texts.windows(2).all(|w| w[0] == w[1]) {
@@ -586,7 +609,8 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
     // The most exposed family's deciding rule
     let decided_by = per_family
         .iter()
-        .find(|r| r.open_to_everyone())
+        .find(|r| r.everyone_scope() == Some(EveryoneScope::AnyInterface))
+        .or_else(|| per_family.iter().find(|r| r.open_to_everyone()))
         .or_else(|| per_family.iter().find(|r| !r.nobody()))
         .or_else(|| per_family.first())
         .and_then(Reachability::deciding)
@@ -596,6 +620,7 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
         local_only: false,
         per_family,
         open_to_everyone,
+        open_on_interfaces,
         nobody,
         summary,
         decided_by,
@@ -611,7 +636,10 @@ pub struct ExposureRow {
 }
 
 /// Evaluates every socket against `ruleset`: one row per socket, those open
-/// to everyone first, then by protocol and port.
+/// to everyone on any interface first, then those open to everyone on some
+/// interfaces only, then those open to some sources, then the rest (nobody,
+/// local only); each group in the scan's protocol and port order
+/// ([`SocketExposure::rank`]).
 ///
 /// The rows carry display strings ([`SocketInfo::process_display`],
 /// [`SocketExposure::summary`], …) so a front end only prints them.
@@ -644,8 +672,48 @@ pub fn exposure_rows(ruleset: &FirewallRuleset, sockets: &[SocketInfo]) -> Vec<E
         })
         .collect();
     // Stable: keeps the socket order within each group
-    rows.sort_by_key(|row| !row.exposure.open_to_everyone);
+    rows.sort_by_key(|row| row.exposure.rank());
     rows
+}
+
+/// Interfaces named in [`SocketExposure::open_on_badge`]; more are counted.
+const BADGE_INTERFACES: usize = 2;
+
+/// Start of [`SocketExposure::open_on_badge`].
+pub const OPEN_ON_BADGE_PREFIX: &str = "OPEN ON ";
+
+impl SocketExposure {
+    /// "OPEN ON tailscale0", "OPEN ON eth0, wg0 +1": the badge of a socket
+    /// every address can reach on some interfaces only (at most two named,
+    /// the rest counted; the summary names them all). `None` when it is
+    /// open on any interface or not to everyone.
+    pub fn open_on_badge(&self) -> Option<String> {
+        if self.open_to_everyone || self.open_on_interfaces.is_empty() {
+            return None;
+        }
+        let shown = &self.open_on_interfaces[..self.open_on_interfaces.len().min(BADGE_INTERFACES)];
+        let mut badge = format!("{OPEN_ON_BADGE_PREFIX}{}", shown.join(", "));
+        let hidden = self.open_on_interfaces.len() - shown.len();
+        if hidden > 0 {
+            let _ = write!(badge, " +{hidden}");
+        }
+        Some(badge)
+    }
+
+    /// Sort rank, most exposed first: everyone on any interface (0),
+    /// everyone on some interfaces only (1), some sources (2), nobody or
+    /// local only (3).
+    pub fn rank(&self) -> u8 {
+        if self.local_only || self.nobody {
+            3
+        } else if self.open_to_everyone {
+            0
+        } else if !self.open_on_interfaces.is_empty() {
+            1
+        } else {
+            2
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1046,6 +1114,73 @@ not a line
             by_port(546).exposure.summary,
             "fe80::/10 (from source port 547)"
         );
+    }
+
+    /// "Accept all TCP on tailscale0" opens the TCP sockets to everyone on
+    /// the tailnet, not to everyone: a group of its own, after the sockets
+    /// open on any interface.
+    #[cfg(target_endian = "little")]
+    #[test]
+    fn test_interface_scoped_sockets_are_not_open_to_everyone() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.push(rule("SSH", 22, &[]));
+        let mut tailnet = rule("Tailscale", 0, &[]);
+        tailnet.ports.clear();
+        tailnet.interface = Some("tailscale0".into());
+        tailnet.rebuild_caches();
+        ruleset.rules.push(tailnet);
+        let rows = exposure_rows(&ruleset, &fixture_sockets(false));
+
+        let ranks: Vec<u8> = rows.iter().map(|r| r.exposure.rank()).collect();
+        assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "{ranks:?}");
+        assert!(rows[0].exposure.open_to_everyone);
+        assert_eq!(rows[0].socket.port, 22);
+        assert_eq!(rows[0].exposure.open_on_interfaces, Vec::<String>::new());
+
+        let web = rows
+            .iter()
+            .find(|r| r.socket.port == 8080)
+            .expect("TCP 8080");
+        assert!(!web.exposure.open_to_everyone);
+        assert_eq!(web.exposure.open_on_interfaces, ["tailscale0"]);
+        assert_eq!(web.exposure.rank(), 1);
+        assert_eq!(
+            web.exposure.open_on_badge().as_deref(),
+            Some("OPEN ON tailscale0")
+        );
+        assert_eq!(rows[0].exposure.open_on_badge(), None);
+        assert_eq!(web.exposure.summary, "everyone on tailscale0");
+        assert_eq!(web.exposure.decided_by_display, "rule \"Tailscale\"");
+        // UDP is not covered by the rule
+        let mdns = rows.iter().find(|r| r.socket.port == 5353).unwrap();
+        assert_eq!(mdns.exposure.open_on_interfaces, Vec::<String>::new());
+        assert_eq!(mdns.exposure.rank(), 3);
+    }
+
+    #[test]
+    fn test_open_on_badge_names_two_interfaces() {
+        let mut exposure = SocketExposure {
+            local_only: false,
+            per_family: Vec::new(),
+            open_to_everyone: false,
+            open_on_interfaces: vec!["eth0".into(), "wg*".into()],
+            nobody: false,
+            summary: String::new(),
+            decided_by: None,
+            decided_by_display: String::new(),
+        };
+        assert_eq!(
+            exposure.open_on_badge().as_deref(),
+            Some("OPEN ON eth0, wg*")
+        );
+        exposure.open_on_interfaces.push("tailscale0".into());
+        exposure.open_on_interfaces.push("br0".into());
+        assert_eq!(
+            exposure.open_on_badge().as_deref(),
+            Some("OPEN ON eth0, wg* +2")
+        );
+        exposure.open_on_interfaces.clear();
+        assert_eq!(exposure.open_on_badge(), None);
     }
 
     #[cfg(target_endian = "little")]

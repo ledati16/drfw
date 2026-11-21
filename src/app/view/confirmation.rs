@@ -98,6 +98,10 @@ fn confirmation_blocks<'a>(
 // Helper Functions - Build modal body content
 // ============================================================================
 
+/// The "Commit Changes?" line when auto-revert is off.
+pub(crate) const NO_AUTO_REVERT_NOTE: &str =
+    "No auto-revert: these rules stay until you change them.";
+
 /// Build the body content for `AwaitingApply` state
 fn build_awaiting_body<'a>(
     auto_revert_enabled: bool,
@@ -127,7 +131,7 @@ fn build_awaiting_body<'a>(
         .align_x(Alignment::Center)
     } else {
         container(
-            text("Changes will take effect immediately (no auto-revert).")
+            text(NO_AUTO_REVERT_NOTE)
                 .size(14)
                 .font(font)
                 .color(theme.fg_muted),

@@ -589,20 +589,48 @@ pub fn card_container(theme: &AppTheme) -> container::Style {
 /// A card that needs attention (e.g. a socket open to everyone): the
 /// standard card with a 2px danger border (radius kept, see STYLE.md §6).
 pub fn attention_card_container(theme: &AppTheme) -> container::Style {
+    attention_card_in(theme, theme.danger)
+}
+
+/// [`attention_card_container`] in the warning color: needs a look, but less
+/// than a danger (e.g. a socket open to everyone on one interface only).
+pub fn warning_attention_card_container(theme: &AppTheme) -> container::Style {
+    attention_card_in(theme, theme.warning)
+}
+
+/// A card with a 2px border in `color`.
+fn attention_card_in(theme: &AppTheme, color: Color) -> container::Style {
     let mut style = card_container(theme);
     style.border = Border {
-        color: theme.danger,
+        color,
         width: 2.0,
         radius: 8.0.into(),
     };
     style
 }
 
+/// An inline notice in the workspace (e.g. "Auto-revert is off"):
+/// [`attention_card_container`] in the info color, so it reads as
+/// information, not as an error.
+pub fn info_notice_container(theme: &AppTheme) -> container::Style {
+    attention_card_in(theme, theme.info)
+}
+
 /// A small solid badge in the danger color with text on it (e.g. "OPEN TO
 /// EVERYONE"); pill radius as for tags (STYLE.md §14).
 pub fn danger_badge_container(theme: &AppTheme) -> container::Style {
+    badge_in(theme.danger, theme)
+}
+
+/// [`danger_badge_container`] in the warning color (e.g. "OPEN ON wg0").
+pub fn warning_badge_container(theme: &AppTheme) -> container::Style {
+    badge_in(theme.warning, theme)
+}
+
+/// A pill badge on `color` with `fg_on_accent` text (as the banners).
+fn badge_in(color: Color, theme: &AppTheme) -> container::Style {
     container::Style {
-        background: Some(theme.danger.into()),
+        background: Some(color.into()),
         text_color: Some(theme.fg_on_accent),
         border: Border {
             radius: 12.0.into(),

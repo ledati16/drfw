@@ -528,6 +528,45 @@ pub struct ConditionalAccess {
     pub when: Vec<Condition>,
 }
 
+impl ConditionalAccess {
+    /// The interface the access is bound to, if any (a rule matches at most
+    /// one input interface).
+    pub fn interface(&self) -> Option<&str> {
+        self.when.iter().find_map(|condition| match condition {
+            Condition::Interface(name) => Some(name.as_str()),
+            _ => None,
+        })
+    }
+}
+
+impl fmt::Display for ConditionalAccess {
+    /// "everyone on wg0", "10.0.0.0/8 on eth0 (up to 5/second)",
+    /// "everyone (up to 5/second)": the interface reads as where the
+    /// sources are, the other conditions follow in parentheses.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.sources)?;
+        if let Some(name) = self.interface() {
+            write!(f, " on {name}")?;
+        }
+        let others = self
+            .when
+            .iter()
+            .filter(|condition| !matches!(condition, Condition::Interface(_)));
+        for (i, condition) in others.enumerate() {
+            f.write_str(if i == 0 { " (" } else { " and " })?;
+            write!(f, "{condition}")?;
+        }
+        if self
+            .when
+            .iter()
+            .any(|condition| !matches!(condition, Condition::Interface(_)))
+        {
+            f.write_str(")")?;
+        }
+        Ok(())
+    }
+}
+
 /// Who can open a new connection to a port (the answer for
 /// [`ProbeSource::Unknown`]; see the module docs for the approximations).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -550,9 +589,47 @@ pub struct Reachability {
     pub caveats: Vec<ConditionalAccess>,
 }
 
+/// Where every address of a family can connect from
+/// ([`Reachability::everyone_scope`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EveryoneScope {
+    /// On any interface (possibly only within a limit or to some address):
+    /// open to the whole network the host is on, the internet included
+    AnyInterface,
+    /// Only on these interfaces (as written in the rules, a `*` suffix is a
+    /// prefix match), in rule order: everyone *on that link* (for example
+    /// the peers of a VPN), not everyone anywhere
+    Interfaces(Vec<String>),
+}
+
 impl Reachability {
+    /// Where every address of the family can connect from: on any interface
+    /// when some unconditional or interface-free accept covers everyone,
+    /// else on the interfaces of the accepts that cover everyone there;
+    /// `None` when no accept covers every address.
+    pub fn everyone_scope(&self) -> Option<EveryoneScope> {
+        if self.open == Reach::Everyone {
+            return Some(EveryoneScope::AnyInterface);
+        }
+        let mut interfaces: Vec<String> = Vec::new();
+        for access in self
+            .conditional
+            .iter()
+            .filter(|access| access.sources == Reach::Everyone)
+        {
+            let Some(name) = access.interface() else {
+                return Some(EveryoneScope::AnyInterface);
+            };
+            if !interfaces.iter().any(|known| known == name) {
+                interfaces.push(name.to_string());
+            }
+        }
+        (!interfaces.is_empty()).then_some(EveryoneScope::Interfaces(interfaces))
+    }
+
     /// `true` when every address of the family can connect, at least under
-    /// some condition (a limit, an interface).
+    /// some condition (a limit, an interface). See [`Self::everyone_scope`]
+    /// for whether that is on any interface.
     pub fn open_to_everyone(&self) -> bool {
         self.open == Reach::Everyone
             || self
@@ -592,9 +669,7 @@ impl fmt::Display for Reachability {
                 f.write_str("; ")?;
             }
             first = false;
-            write!(f, "{} (", access.sources)?;
-            write_conditions(f, &access.when)?;
-            f.write_str(")")?;
+            write!(f, "{access}")?;
         }
         if !self.exact {
             f.write_str(" (at most)")?;
@@ -1393,6 +1468,72 @@ mod tests {
         assert!(r.to_string().ends_with("(at most)"));
     }
 
+    /// "Everyone" bound to an interface is everyone on that link, not
+    /// everyone anywhere; any interface-free accept of everyone wins.
+    #[test]
+    fn test_everyone_scope() {
+        let scope = |rules: Vec<Rule>| {
+            reach(&ruleset(rules), &unknown(Transport::Tcp, 22, IpFamily::V4)).everyone_scope()
+        };
+        let on = |label: &str, iface: &str, sources: &[&str]| {
+            let mut r = rule(label, Protocol::Tcp, &[], sources);
+            r.interface = Some(iface.into());
+            r.rebuild_caches();
+            r
+        };
+
+        assert_eq!(scope(vec![]), None);
+        let all = rule("all", Protocol::Tcp, &[22], &[]);
+        assert_eq!(scope(vec![all.clone()]), Some(EveryoneScope::AnyInterface));
+        let mut limited = all.clone();
+        limited.rate_limit = Some(RateLimit {
+            count: 5,
+            unit: TimeUnit::Second,
+            burst: None,
+            per_source: false,
+        });
+        assert_eq!(
+            scope(vec![limited]),
+            Some(EveryoneScope::AnyInterface),
+            "a limit does not narrow who"
+        );
+
+        let tailscale = on("tailnet", "tailscale0", &[]);
+        let r = reach(
+            &ruleset(vec![tailscale.clone()]),
+            &unknown(Transport::Tcp, 22, IpFamily::V4),
+        );
+        assert_eq!(
+            r.everyone_scope(),
+            Some(EveryoneScope::Interfaces(vec!["tailscale0".into()]))
+        );
+        assert_eq!(r.to_string(), "everyone on tailscale0");
+        assert_eq!(
+            scope(vec![
+                tailscale.clone(),
+                on("wg", "wg*", &[]),
+                on("again", "tailscale0", &[])
+            ]),
+            Some(EveryoneScope::Interfaces(vec![
+                "tailscale0".into(),
+                "wg*".into()
+            ])),
+            "each interface once, in rule order"
+        );
+        assert_eq!(
+            scope(vec![tailscale.clone(), all]),
+            Some(EveryoneScope::AnyInterface)
+        );
+        // Some sources on an interface: not everyone at all
+        let lan = on("lan", "eth0", &["192.168.1.0/24"]);
+        assert_eq!(scope(vec![lan.clone()]), None);
+        let r = reach(
+            &ruleset(vec![lan]),
+            &unknown(Transport::Tcp, 22, IpFamily::V4),
+        );
+        assert_eq!(r.to_string(), "192.168.1.0/24 on eth0");
+    }
+
     #[test]
     fn test_interface_exact_wildcard_and_unknown() {
         let mut r = rule("wg", Protocol::Udp, &[51820], &[]);
@@ -1406,7 +1547,12 @@ mod tests {
         p.interface = None;
         assert_eq!(evaluate_inbound(&rs, &p).first_packet(), None, "unsettled");
         let r = reach(&rs, &unknown(Transport::Udp, 51820, IpFamily::V6));
-        assert_eq!(r.to_string(), "everyone (on interface wg*)");
+        assert_eq!(r.to_string(), "everyone on wg*");
+        assert_eq!(
+            r.everyone_scope(),
+            Some(EveryoneScope::Interfaces(vec!["wg*".into()]))
+        );
+        assert!(r.open_to_everyone(), "still everyone, on that link");
 
         // Loopback is accepted by the base rule
         let mut lo = probe(Transport::Tcp, 1, "127.0.0.1");

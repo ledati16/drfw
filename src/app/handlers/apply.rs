@@ -164,7 +164,7 @@ fn kept_ruleset(state: &State) -> Option<&FirewallRuleset> {
 /// Replaces the kept-ruleset record with one this GUI just kept; a reload
 /// from disk started before is then older (see the module docs).
 fn set_confirmed_record(state: &mut State, record: Option<ConfirmedRecord>) {
-    state.confirmed_record = record;
+    state.replace_confirmed_record(record);
     state.confirmed_record_generation = state.confirmed_record_generation.wrapping_add(1);
 }
 
@@ -202,7 +202,7 @@ fn reload_context_task(state: &State) -> Task<Message> {
 /// open "Commit Changes?" or Save to System dialog.
 pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyContext) {
     if context.record_generation == state.confirmed_record_generation {
-        state.confirmed_record = context.record;
+        state.replace_confirmed_record(context.record);
     }
     state.ssh_sessions = context.sessions;
     match state.status {

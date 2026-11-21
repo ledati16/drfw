@@ -449,6 +449,15 @@ mod tests {
     }
 
     #[test]
+    fn test_saved_label_is_trimmed() {
+        let mut form = tcp_form();
+        form.label = " Tailscale  Interface ".into();
+        assert!(form.validate().is_none());
+        let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
+        assert_eq!(rule.label, "Tailscale Interface");
+    }
+
+    #[test]
     fn test_rate_limit_enabled_needs_count() {
         let mut form = tcp_form();
         form.rate_limit_enabled = true;

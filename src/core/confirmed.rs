@@ -152,6 +152,14 @@ impl ConfirmedRecord {
         })
     }
 
+    /// The record as if written during the boot `boot_id` (tests of
+    /// earlier-session records).
+    #[cfg(test)]
+    pub(crate) fn with_boot_id(mut self, boot_id: Option<&str>) -> Self {
+        self.boot_id = boot_id.map(str::to_string);
+        self
+    }
+
     /// How the ruleset was kept.
     pub fn kind(&self) -> RecordKind {
         self.kind

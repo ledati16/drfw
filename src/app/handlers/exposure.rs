@@ -50,7 +50,15 @@ pub(crate) fn handle_exposure_scanned(
     let Some(panel) = &mut state.exposure.panel else {
         return;
     };
-    panel.set_scan(result, &state.ruleset, state.last_applied_ruleset.as_ref());
+    panel.set_scan(
+        result,
+        &state.ruleset,
+        crate::app::baseline_of(
+            state.last_applied_ruleset.as_ref(),
+            state.confirmed_record.as_ref(),
+            state.applied_this_session,
+        ),
+    );
 }
 
 /// Reads the sockets and SSH sessions (blocking): `env` is the
@@ -157,6 +165,7 @@ mod tests {
 
     #[test]
     fn test_rows_follow_ruleset_changes_while_open() {
+        use crate::app::exposure::Highlight;
         use crate::core::evaluate::Transport;
         use crate::core::exposure::{ListeningSocket, build_socket_list};
 
@@ -186,13 +195,17 @@ mod tests {
             }),
         );
         let row = |state: &State| state.exposure.panel.as_ref().unwrap().rows[0].clone();
-        assert!(!row(&state).highlight);
+        assert_eq!(row(&state).highlight, Highlight::None);
 
         let mut rule = crate::core::test_helpers::create_test_rule("ssh", Some(2222));
         rule.rebuild_caches();
         state.ruleset.rules.push(rule);
         state.update_cached_text();
-        assert!(row(&state).highlight, "re-evaluated on the ruleset change");
+        assert_eq!(
+            row(&state).highlight,
+            Highlight::Everyone,
+            "re-evaluated on the ruleset change"
+        );
         assert_eq!(row(&state).editor.text, "Reachable from: everyone");
     }
 }
