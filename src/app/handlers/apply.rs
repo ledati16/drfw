@@ -12,6 +12,10 @@
 //! snapshot is verified and applied, and ruleset edits are refused until the
 //! apply flow is over, so nothing unverified can slip in.
 
+use std::time::Instant;
+
+use iced::Task;
+
 use super::audit_task;
 use crate::app::{AppStatus, BannerSeverity, Message, State};
 use crate::audit;
@@ -19,8 +23,6 @@ use crate::core::apply_guard::{ApplyError, GuardError, GuardHandle, GuardOutcome
 use crate::core::firewall::FirewallRuleset;
 use crate::core::verify::{VerifyError, VerifyResult};
 use crate::elevation::AuthError;
-use iced::Task;
-use std::time::Instant;
 
 // ============================================================================
 // Helper Functions
@@ -817,8 +819,9 @@ mod tests {
     // Apply flow: snapshot, edit lock, guard outcomes, error classification
     // =========================================================================
 
-    use crate::core::test_helpers::create_test_rule;
     use std::time::Duration;
+
+    use crate::core::test_helpers::create_test_rule;
 
     fn last_banner(state: &State) -> (&str, BannerSeverity) {
         let banner = state.banners.back().expect("a banner");

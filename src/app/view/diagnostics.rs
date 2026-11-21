@@ -3,16 +3,17 @@
 //! Rows, filter results and the count label are prepared in `update()`
 //! (`app::diagnostics::DiagnosticsLog`); this view only borrows them.
 
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, space, text, text_input,
+};
+use iced::{Alignment, Border, Element, Length, Padding};
+
 use crate::app::diagnostics::{DiagnosticRow, RowTone};
 use crate::app::ui_components::{
     card_container, danger_button, secondary_button, section_header_container, themed_pick_list,
     themed_pick_list_menu, themed_scrollable, themed_text_input,
 };
 use crate::app::{DiagnosticsFilter, Message, State};
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, space, text, text_input,
-};
-use iced::{Alignment, Border, Element, Length, Padding};
 
 /// Time column width for `HH:MM:SS` in the 12px mono font
 const TIME_COLUMN_WIDTH: f32 = 64.0;

@@ -16,13 +16,13 @@ pub mod test_utils;
 // Re-export all handlers for clean imports in app/mod.rs
 pub(crate) use apply::*;
 pub(crate) use export::*;
+use iced::Task;
 pub(crate) use profiles::*;
 pub(crate) use rules::*;
 pub(crate) use settings::*;
 pub(crate) use ui_state::*;
 
 use crate::app::{Message, State};
-use iced::Task;
 
 /// Wraps an audit-log future as a task that marks the audit cache dirty when
 /// the entry was written.

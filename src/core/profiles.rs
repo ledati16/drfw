@@ -20,9 +20,10 @@
 //! Profile functions are **not** safe for concurrent access from multiple processes.
 //! Running multiple DRFW instances simultaneously may cause data loss.
 
+use std::path::PathBuf;
+
 use crate::core::firewall::{FirewallRuleset, MAX_RULES};
 use crate::utils::get_data_dir;
-use std::path::PathBuf;
 
 /// The canonical name for the initial/fallback profile.
 /// This profile is protected from deletion and renaming to ensure the system

@@ -1,6 +1,7 @@
+use std::sync::OnceLock;
+
 use iced::Font;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 
 /// Represents a font choice, either a system preset or a specific system font family
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

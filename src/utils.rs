@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use drfw::utils::{get_data_dir, get_state_dir, ensure_dirs};
+//! use drfw::utils::{ensure_dirs, get_data_dir, get_state_dir};
 //!
 //! // Ensure directories exist before use
 //! ensure_dirs().expect("Failed to create directories");
@@ -21,8 +21,9 @@
 //! }
 //! ```
 
-use directories::ProjectDirs;
 use std::path::PathBuf;
+
+use directories::ProjectDirs;
 
 /// Returns the application data directory.
 ///
@@ -97,9 +98,9 @@ pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
 
     cfg_select! {
         unix => {
-            let mode = std::os::unix::fs::PermissionsExt::mode(
-                &std::fs::metadata(dir)?.permissions(),
-            ) & 0o777;
+            let mode =
+                std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(dir)?.permissions())
+                    & 0o777;
             if mode != 0o700
                 && let Err(e) = std::fs::set_permissions(
                     dir,

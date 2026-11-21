@@ -14,9 +14,11 @@
 //! arming starts one new timer for the remaining time, so a burst of edits
 //! costs about one wake-up per debounce period instead of ten per second.
 
-use crate::app::Message;
-use iced::Task;
 use std::time::{Duration, Instant};
+
+use iced::Task;
+
+use crate::app::Message;
 
 /// The kinds of debounced work, one [`Timer`] each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

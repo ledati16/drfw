@@ -9,9 +9,10 @@
 //!
 //! [`FirewallRuleset::to_nft_text`]: crate::core::firewall::FirewallRuleset::to_nft_text
 
-use crate::core::error::{Error, Result};
 use std::path::PathBuf;
 use std::time::Duration;
+
+use crate::core::error::{Error, Result};
 
 /// Maximum time for the whole save, including the authentication dialog.
 const SAVE_TIMEOUT: Duration = Duration::from_secs(120);

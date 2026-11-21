@@ -20,7 +20,7 @@
 //! # Examples
 //!
 //! ```
-//! use drfw::core::firewall::{Protocol, RejectType, Chain};
+//! use drfw::core::firewall::{Chain, Protocol, RejectType};
 //! use drfw::core::rule_constraints::*;
 //!
 //! // Check if a protocol supports port filtering
@@ -28,12 +28,19 @@
 //! assert!(!protocol_supports_ports(Protocol::Icmp));
 //!
 //! // Check if a reject type is valid for a protocol
-//! assert!(reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::Tcp));
-//! assert!(!reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::Udp));
+//! assert!(reject_type_valid_for_protocol(
+//!     RejectType::TcpReset,
+//!     Protocol::Tcp
+//! ));
+//! assert!(!reject_type_valid_for_protocol(
+//!     RejectType::TcpReset,
+//!     Protocol::Udp
+//! ));
 //! ```
 
-use super::firewall::{Chain, Protocol, RejectType};
 use ipnetwork::IpNetwork;
+
+use super::firewall::{Chain, Protocol, RejectType};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Protocol Constraints
@@ -189,13 +196,28 @@ pub fn protocol_requires_ipv6(protocol: Protocol) -> bool {
 /// use drfw::core::rule_constraints::reject_type_valid_for_protocol;
 ///
 /// // TcpReset only valid for pure TCP
-/// assert!(reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::Tcp));
-/// assert!(!reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::Udp));
-/// assert!(!reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::TcpAndUdp));
+/// assert!(reject_type_valid_for_protocol(
+///     RejectType::TcpReset,
+///     Protocol::Tcp
+/// ));
+/// assert!(!reject_type_valid_for_protocol(
+///     RejectType::TcpReset,
+///     Protocol::Udp
+/// ));
+/// assert!(!reject_type_valid_for_protocol(
+///     RejectType::TcpReset,
+///     Protocol::TcpAndUdp
+/// ));
 ///
 /// // Other reject types valid for any protocol
-/// assert!(reject_type_valid_for_protocol(RejectType::Default, Protocol::Udp));
-/// assert!(reject_type_valid_for_protocol(RejectType::AdminProhibited, Protocol::Icmp));
+/// assert!(reject_type_valid_for_protocol(
+///     RejectType::Default,
+///     Protocol::Udp
+/// ));
+/// assert!(reject_type_valid_for_protocol(
+///     RejectType::AdminProhibited,
+///     Protocol::Icmp
+/// ));
 /// ```
 #[inline]
 pub fn reject_type_valid_for_protocol(reject_type: RejectType, protocol: Protocol) -> bool {
@@ -303,7 +325,7 @@ pub fn chain_uses_output_interface(chain: Chain) -> bool {
 ///
 /// ```
 /// use drfw::core::firewall::Chain;
-/// use drfw::core::rule_constraints::{chain_interface_type, InterfaceType};
+/// use drfw::core::rule_constraints::{InterfaceType, chain_interface_type};
 ///
 /// assert_eq!(chain_interface_type(Chain::Input), InterfaceType::Input);
 /// assert_eq!(chain_interface_type(Chain::Output), InterfaceType::Output);

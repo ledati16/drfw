@@ -3,6 +3,11 @@
 //! Uses summary buttons for multi-value fields that open helper modals.
 //! Main form stays compact with advanced options in collapsible section.
 
+use iced::widget::{
+    Space, button, checkbox, column, combo_box, container, pick_list, row, text, text_input,
+};
+use iced::{Alignment, Element, Length};
+
 use super::helper_modals;
 use crate::app::ui_components::{
     card_container, primary_button, secondary_button, section_header_container, themed_checkbox,
@@ -11,10 +16,6 @@ use crate::app::ui_components::{
 use crate::app::{HelperType, Message, RuleForm};
 use crate::core::firewall::{Protocol, RejectType};
 use crate::core::rule_constraints::{available_reject_types_for_protocol, protocol_supports_ports};
-use iced::widget::{
-    Space, button, checkbox, column, combo_box, container, pick_list, row, text, text_input,
-};
-use iced::{Alignment, Element, Length};
 
 pub fn view_rule_form<'a>(
     form: &'a RuleForm,

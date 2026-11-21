@@ -3,12 +3,14 @@
 //! Provides common test helpers to avoid duplication across test suites.
 //! This module is only compiled in test mode.
 
+use std::sync::{Mutex, Once};
+
+use jiff::Timestamp;
+use uuid::Uuid;
+
 use crate::core::firewall::{
     Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
 };
-use jiff::Timestamp;
-use std::sync::{Mutex, Once};
-use uuid::Uuid;
 
 /// Timestamps exactly as earlier, chrono-based DRFW builds wrote them (and as
 /// hand-edited files may contain them), with their Unix time in nanoseconds.

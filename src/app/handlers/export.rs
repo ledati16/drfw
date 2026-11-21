@@ -5,9 +5,10 @@
 //! - Exporting rules as nft text
 //! - Diagnostics event log: change-checked reloads, search, clearing
 
+use iced::Task;
+
 use crate::app::{BannerSeverity, Message, State, diagnostics};
 use crate::audit;
-use iced::Task;
 
 /// Handles exporting as JSON
 pub(crate) fn handle_export_as_json(state: &State) -> Task<Message> {

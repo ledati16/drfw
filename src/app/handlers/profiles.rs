@@ -16,12 +16,14 @@
 //! - Async results carry `profile_generation` / `switch_request`; results that
 //!   belong to a profile that is no longer active are dropped.
 
+use std::time::{Duration, Instant};
+
+use iced::Task;
+use tracing::error;
+
 use crate::app::{BannerSeverity, FirewallRuleset, Message, ProfileSaveOutcome, State};
 use crate::audit;
 use crate::core::profiles::{UnreadableProfile, find_name_conflict, validate_profile_name};
-use iced::Task;
-use std::time::{Duration, Instant};
-use tracing::error;
 
 /// Normal autosave debounce after the last edit.
 const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(1000);

@@ -960,10 +960,11 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 ### Toolchain
 - **Pinned:** `rust-toolchain.toml` pins the exact Rust release; `rust-version` in `Cargo.toml` matches it (MSRV == pinned toolchain, no separate MSRV job).
 - **Bumping:** When a new stable is installed, bump both deliberately in one commit and fix any new clippy lints in that same commit. CI's non-blocking "latest-stable" job gives early warning of upcoming lints.
+- **Formatting:** `rustfmt.toml` uses nightly-only options (grouped `std` / external / crate imports, formatted doc examples), so format with the dated nightly: `cargo +nightly-2026-11-14 fmt`. Stable `cargo fmt --check` accepts the result (it only warns about the options it skips), but nightly is authoritative. Bump the date in CLAUDE.md, README and CI together.
 
 ### Pre-Commit Checklist
 ```bash
-cargo fmt --check
+cargo +nightly-2026-11-14 fmt --check  # nightly rustfmt (rustfmt.toml uses unstable options)
 cargo clippy --all-targets -- -D warnings  # pedantic lints configured in Cargo.toml
 cargo test
 cargo build --release

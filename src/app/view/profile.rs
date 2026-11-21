@@ -1,12 +1,13 @@
 //! Profile management UI components
 
+use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
+use iced::{Alignment, Border, Element, Length};
+
 use crate::app::ui_components::{
     card_button, card_container, danger_button, inset_container_bordered, primary_button,
     secondary_button, section_header_container, themed_scrollable, themed_text_input,
 };
 use crate::app::{Message, ProfileManagerState, State};
-use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
-use iced::{Alignment, Border, Element, Length};
 
 pub fn view_profile_switch_confirm(
     theme: &crate::theme::AppTheme,

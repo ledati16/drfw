@@ -1,18 +1,20 @@
 //! Sidebar with profile selector and rule list
 
-use crate::app::ui_components::{
-    active_card_container, active_tag_button, card_container, danger_button, inset_container,
-    popup_container, primary_button, secondary_button, section_header_container, sidebar_container,
-    tag_button, themed_checkbox, themed_horizontal_rule, themed_scrollable, themed_text_input,
-};
-use crate::app::{Message, State};
+use std::sync::Arc;
+
 use iced::widget::text::Wrapping;
 use iced::widget::{
     Id, button, checkbox, column, container, mouse_area, row, rule, scrollable, text, text_input,
     tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length};
-use std::sync::Arc;
+
+use crate::app::ui_components::{
+    active_card_container, active_tag_button, card_container, danger_button, inset_container,
+    popup_container, primary_button, secondary_button, section_header_container, sidebar_container,
+    tag_button, themed_checkbox, themed_horizontal_rule, themed_scrollable, themed_text_input,
+};
+use crate::app::{Message, State};
 
 /// Persistent notice for a profile that could not be loaded (read-only), with
 /// the explanation and the "Start fresh" action. Empty when not read-only.

@@ -473,7 +473,7 @@ cargo test                    # All tests (mock nft; real-nft tests skip if unav
 DRFW_REQUIRE_REAL_NFT=1 cargo test  # Fail instead of skipping the real-nft tests (CI)
 cargo test --test integration_tests # Integration tests only
 cargo clippy --all-targets -- -D warnings  # Lint (pedantic enabled in Cargo.toml)
-cargo fmt --check             # Format check
+cargo +nightly-2026-11-14 fmt --check  # Format check (nightly rustfmt)
 cargo deny check              # Advisories and licenses (deny.toml)
 ```
 

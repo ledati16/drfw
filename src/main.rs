@@ -55,13 +55,14 @@
 //! `core::apply_guard`): if the terminal closes or the SSH connection drops
 //! during the countdown, the rules still revert on time.
 
+use std::io::stdout;
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use crossterm::ExecutableCommand;
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use drfw::build_info::{LONG_VERSION, SHORT_VERSION};
 use drfw::{audit, config, core, elevation};
-use std::io::stdout;
-use std::process::ExitCode;
 
 /// What ended the countdown
 #[derive(Debug, PartialEq, Eq)]
@@ -128,8 +129,9 @@ fn is_running_via_sudo() -> bool {
 ///
 /// Blocking (crossterm polling); run it with `spawn_blocking`.
 fn run_countdown(deadline: std::time::Instant) -> CountdownEnd {
-    use crossterm::event::{self, Event, KeyEventKind};
     use std::io::Write;
+
+    use crossterm::event::{self, Event, KeyEventKind};
 
     if let Err(e) = crossterm::terminal::enable_raw_mode() {
         return CountdownEnd::NoTerminal(e.to_string());
@@ -597,8 +599,9 @@ async fn check_profile(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)

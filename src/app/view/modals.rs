@@ -1,11 +1,12 @@
 //! Modal dialogs (warnings and export)
 
+use iced::widget::{button, column, container, row, space, text};
+use iced::{Alignment, Border, Element, Length};
+
 use crate::app::ui_components::{
     card_container, danger_button, primary_button, secondary_button, section_header_container,
 };
 use crate::app::{Message, PendingWarning};
-use iced::widget::{button, column, container, row, space, text};
-use iced::{Alignment, Border, Element, Length};
 
 pub fn view_warning_modal<'a>(
     warning: &'a PendingWarning,

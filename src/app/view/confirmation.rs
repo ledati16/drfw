@@ -1,11 +1,12 @@
 //! Apply confirmation dialogs and countdown modals
 
+use iced::widget::{button, column, container, progress_bar, row, text};
+use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Shadow};
+
 use crate::app::ui_components::{
     card_container, danger_button, primary_button, secondary_button, section_header_container,
 };
 use crate::app::{AppStatus, Message};
-use iced::widget::{button, column, container, progress_bar, row, text};
-use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Shadow};
 
 // ============================================================================
 // Helper Functions - Build modal body content

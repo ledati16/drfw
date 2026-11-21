@@ -1,9 +1,10 @@
+use std::path::PathBuf;
+
 /// Audit logging for security-critical operations
 ///
 /// This module provides structured logging of all privileged operations
 /// including rule applications, reverts, and configuration changes.
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
 
 /// Types of auditable events

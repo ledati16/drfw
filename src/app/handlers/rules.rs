@@ -7,18 +7,19 @@
 //! - Form field updates (with UI state validation)
 //! - Search and tag filtering
 
+use std::sync::Arc;
+
+use iced::Task;
+use jiff::Timestamp;
+use uuid::Uuid;
+
 use crate::app::{Message, RuleForm, State};
-use crate::audit;
 use crate::command::{
     AddRuleCommand, DeleteRuleCommand, EditRuleCommand, ReorderRuleCommand, ToggleRuleCommand,
 };
 use crate::core::firewall::{Chain, MAX_RULES, Protocol};
 use crate::core::rule_constraints::{protocol_supports_ports, reject_type_valid_for_protocol};
-use crate::validators;
-use iced::Task;
-use jiff::Timestamp;
-use std::sync::Arc;
-use uuid::Uuid;
+use crate::{audit, validators};
 
 /// Refreshes the interface suggestions of the rule form's combo boxes.
 ///

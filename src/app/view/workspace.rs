@@ -1,13 +1,15 @@
 //! Workspace tab bar and content area
 
+use std::time::Duration;
+
+use iced::widget::{Id, button, checkbox, column, container, row, scrollable, text, tooltip};
+use iced::{Alignment, Border, Element, Length, Shadow};
+
 use crate::app::ui_components::{
     active_tab_button, dirty_button, inactive_tab_button, popup_container, primary_button,
     secondary_button, themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
-use iced::widget::{Id, button, checkbox, column, container, row, scrollable, text, tooltip};
-use iced::{Alignment, Border, Element, Length, Shadow};
-use std::time::Duration;
 
 pub fn view_workspace<'a>(
     state: &'a State,

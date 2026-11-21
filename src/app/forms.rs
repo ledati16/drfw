@@ -9,9 +9,10 @@
 //! calls [`Rule::validate`], so the form and the profile loader can never
 //! disagree about what is valid.
 
+use ipnetwork::IpNetwork;
+
 use crate::core::firewall::{PortEntry, Protocol, RateLimit, RejectType, Rule};
 use crate::core::validate::RuleField;
-use ipnetwork::IpNetwork;
 
 /// Form validation errors for individual fields
 #[derive(Debug, Clone, Default)]
@@ -419,9 +420,10 @@ mod tests {
 
 #[cfg(test)]
 mod property_tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::core::firewall::{Action, Chain, TimeUnit};
-    use proptest::prelude::*;
 
     const PROTOCOLS: [Protocol; 7] = [
         Protocol::Any,

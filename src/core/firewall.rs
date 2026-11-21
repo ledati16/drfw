@@ -22,15 +22,15 @@
 //! # Example
 //!
 //! ```
-//! use drfw::core::firewall::{Rule, Protocol, PortEntry, Chain};
+//! use drfw::core::firewall::{Chain, PortEntry, Protocol, Rule};
 //! use uuid::Uuid;
 //!
 //! let mut rule = Rule {
 //!     id: Uuid::new_v4(),
 //!     label: "Allow SSH".to_string(),
 //!     protocol: Protocol::Tcp,
-//!     ports: vec![PortEntry::single(22)],  // Single port, or vec![22.into()]
-//!     sources: vec![],  // Empty = any source. Can mix IPv4/IPv6
+//!     ports: vec![PortEntry::single(22)], // Single port, or vec![22.into()]
+//!     sources: vec![],                    // Empty = any source. Can mix IPv4/IPv6
 //!     interface: None,
 //!     output_interface: None,
 //!     chain: Chain::Input,
@@ -38,7 +38,7 @@
 //!     created_at: jiff::Timestamp::now(),
 //!     tags: vec![],
 //!     // Advanced options
-//!     destinations: vec![],  // Empty = any destination. Can mix IPv4/IPv6
+//!     destinations: vec![], // Empty = any destination. Can mix IPv4/IPv6
 //!     action: drfw::core::firewall::Action::Accept,
 //!     reject_type: drfw::core::firewall::RejectType::Default,
 //!     rate_limit: None,
@@ -63,9 +63,10 @@
 //! rule.rebuild_caches();
 //! ```
 
+use std::fmt;
+
 use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use uuid::Uuid;
 
 /// Maximum number of rules allowed in a single ruleset

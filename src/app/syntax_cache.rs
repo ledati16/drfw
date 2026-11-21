@@ -3,9 +3,10 @@
 //! Pre-tokenizes syntax highlighting to avoid expensive per-frame parsing.
 //! Uses logos for declarative, DFA-based lexing (2-5× faster than manual parsing).
 
+use std::borrow::Cow;
+
 use iced::Color;
 use logos::Logos;
-use std::borrow::Cow;
 
 /// Average number of syntax tokens per line in nftables text output (pre-allocation optimization)
 const AVG_NFT_TOKENS_PER_LINE: usize = 15;

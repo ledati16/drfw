@@ -11,10 +11,11 @@
 //! diff toggle), `keyed_column`'s state reconciliation causes panics with `MouseArea`.
 //! Performance impact is minimal since tokens are pre-cached.
 
-use crate::app::Message;
 use iced::widget::text::Wrapping;
 use iced::widget::{Column, column, container, mouse_area, row, space, text};
 use iced::{Color, Length};
+
+use crate::app::Message;
 
 pub fn view_from_cached_diff_tokens<'a>(
     diff_tokens: &'a [(

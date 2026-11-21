@@ -37,11 +37,11 @@ pub mod theme;
 pub mod utils;
 pub mod validators;
 
-pub use app::run_gui;
-
 // Re-export commonly used types
 pub use core::error::{Error, Result};
 pub use core::firewall::{FirewallRuleset, Protocol, Rule};
+
+pub use app::run_gui;
 
 // ============================================================================
 // Compile-time configurable paths for distro packagers

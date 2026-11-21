@@ -1,8 +1,9 @@
-use crate::theme::AppTheme;
 use iced::widget::{
     button, checkbox, container, pick_list, rule, scrollable, slider, text_input, toggler,
 };
 use iced::{Border, Color, Gradient, Shadow, Vector};
+
+use crate::theme::AppTheme;
 
 // =============================================================================
 // OPACITY CONSTANTS

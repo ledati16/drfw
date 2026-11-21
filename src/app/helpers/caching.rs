@@ -54,9 +54,10 @@ pub fn calculate_max_content_width_from_refs(tokens: &[&HighlightedLine]) -> f32
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use crate::app::syntax_cache::{HighlightedLine, Token, TokenColor};
-    use std::borrow::Cow;
 
     fn create_test_line(indent: usize, text_len: usize) -> HighlightedLine {
         HighlightedLine {

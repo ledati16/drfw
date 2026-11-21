@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests_impl {
-    use crate::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
     use jiff::Timestamp;
     use uuid::Uuid;
+
+    use crate::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
 
     /// Helper to create a minimal test rule with sensible defaults
     fn test_rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
@@ -451,12 +452,13 @@ mod tests_impl {
 
 #[cfg(test)]
 mod property_tests {
-    use crate::core::firewall::{
-        Action, FirewallRuleset, PortEntry, PortRange, Protocol, RejectType, Rule,
-    };
     use jiff::Timestamp;
     use proptest::prelude::*;
     use uuid::Uuid;
+
+    use crate::core::firewall::{
+        Action, FirewallRuleset, PortEntry, PortRange, Protocol, RejectType, Rule,
+    };
 
     prop_compose! {
         fn arb_port()(port in 1u16..=65535) -> u16 {

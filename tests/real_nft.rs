@@ -24,15 +24,16 @@
 //! This file has its own rule helpers: integration tests cannot see the
 //! library's `#[cfg(test)]` helpers.
 
+use std::path::Path;
+use std::process::{Command, Output};
+use std::sync::OnceLock;
+
 use drfw::core::firewall::{
     Action, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol, RateLimit, RejectType,
     Rule, TimeUnit,
 };
 use ipnetwork::IpNetwork;
 use proptest::prelude::*;
-use std::path::Path;
-use std::process::{Command, Output};
-use std::sync::OnceLock;
 
 // ============================================================================
 // Namespace helpers

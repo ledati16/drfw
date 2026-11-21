@@ -542,7 +542,7 @@ fn random_ipv6(rng: &mut impl Rng) -> IpNetwork {
     let addr_str = format!("{prefix_str}{suffix:x}");
     let addr: std::net::Ipv6Addr = addr_str.parse().unwrap_or_else(|_| {
         // Fallback to simple address
-        std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, rng.random_range(0..=65535))
+        std::net::Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, rng.random_range(0..=65535))
     });
     let prefix_len = *[48, 64, 128].choose(rng).unwrap();
     IpNetwork::new(std::net::IpAddr::V6(addr), prefix_len).unwrap()

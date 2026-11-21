@@ -1,5 +1,8 @@
 //! Theme and font picker modals
 
+use iced::widget::{Id, button, column, container, row, rule, scrollable, space, text, text_input};
+use iced::{Alignment, Border, Color, Element, Length, Padding};
+
 use crate::app::ui_components::{
     active_card_button, active_tab_button, card_button, card_container, danger_button,
     dirty_button, inset_container_bordered, primary_button, secondary_button,
@@ -9,8 +12,6 @@ use crate::app::{
     FONT_PICKER_DISPLAY_LIMIT, FontPickerState, FontPickerTarget, Message, State, ThemeFilter,
     ThemePickerState,
 };
-use iced::widget::{Id, button, column, container, row, rule, scrollable, space, text, text_input};
-use iced::{Alignment, Border, Color, Element, Length, Padding};
 
 pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> Element<'a, Message> {
     let theme = &state.theme;

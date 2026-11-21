@@ -28,10 +28,12 @@
 //! [`APPLY_SCRIPT`]: crate::elevation::APPLY_SCRIPT
 //! [`WATCHER_SCRIPT`]: crate::elevation::WATCHER_SCRIPT
 
-use crate::elevation::AuthError;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
 use tracing::{info, warn};
+
+use crate::elevation::AuthError;
 
 /// Upper bound for the whole elevated apply, including the time the user
 /// spends in the authentication dialog. The script itself takes well under a

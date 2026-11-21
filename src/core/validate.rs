@@ -20,6 +20,10 @@
 //! Field checks reuse [`crate::validators`] and [`crate::core::rule_constraints`];
 //! this module only decides which combinations are errors.
 
+use std::fmt;
+
+use uuid::Uuid;
+
 use super::firewall::{
     Action, AdvancedSecuritySettings, Chain, EgressProfile, FirewallRuleset, MAX_RULES, PortEntry,
     Rule,
@@ -27,8 +31,6 @@ use super::firewall::{
 use super::rule_constraints::{
     ip_compatible_with_protocol, protocol_is_icmp, reject_type_valid_for_protocol,
 };
-use std::fmt;
-use uuid::Uuid;
 
 /// The rule field an issue is about (lets the form show it next to the input).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,12 +139,20 @@ impl ValidationReport {
     /// # Example
     ///
     /// ```
-    /// use drfw::core::firewall::{FirewallRuleset, PortEntry, Protocol, Rule, Chain};
+    /// use drfw::core::firewall::{Chain, FirewallRuleset, PortEntry, Protocol, Rule};
     ///
     /// let mut ruleset = FirewallRuleset::new();
     /// ruleset.rules.push(Rule::with_caches(
-    ///     uuid::Uuid::new_v4(), "Bad".into(), Protocol::Tcp, vec![PortEntry::single(0)],
-    ///     vec![], None, Chain::Input, true, jiff::Timestamp::now(), vec![],
+    ///     uuid::Uuid::new_v4(),
+    ///     "Bad".into(),
+    ///     Protocol::Tcp,
+    ///     vec![PortEntry::single(0)],
+    ///     vec![],
+    ///     None,
+    ///     Chain::Input,
+    ///     true,
+    ///     jiff::Timestamp::now(),
+    ///     vec![],
     /// ));
     /// let report = ruleset.validate().unwrap_err();
     /// assert!(report.blocking_summary().unwrap().contains("Bad"));
@@ -812,12 +822,13 @@ mod tests {
 
 #[cfg(test)]
 mod property_tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::core::firewall::{Protocol, RateLimit, RejectType, TimeUnit};
     use crate::core::rule_constraints::{
         available_reject_types_for_protocol, protocol_supports_ports,
     };
-    use proptest::prelude::*;
 
     const PROTOCOLS: [Protocol; 7] = [
         Protocol::Any,

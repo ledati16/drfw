@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
+
 use crate::core::profiles::DEFAULT_PROFILE_NAME;
 use crate::utils::get_data_dir;
-use serde::{Deserialize, Serialize};
 
 /// Complete application configuration including UI settings and current profile
 #[derive(Debug, Clone, Serialize, Deserialize)]

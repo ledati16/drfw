@@ -1,14 +1,15 @@
 //! Settings tab UI
 
+use iced::widget::text::Wrapping;
+use iced::widget::{Column, button, column, container, row, slider, text, text_input, toggler};
+use iced::{Alignment, Element, Length};
+
 use crate::app::ui_components::{
     card_container, secondary_button, section_header_container, themed_slider, themed_text_input,
     themed_toggler,
 };
 use crate::app::{FontPickerTarget, Message, State};
 use crate::core::firewall::EgressProfile;
-use iced::widget::text::Wrapping;
-use iced::widget::{Column, button, column, container, row, slider, text, text_input, toggler};
-use iced::{Alignment, Element, Length};
 
 pub fn view_settings(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;

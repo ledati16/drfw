@@ -64,6 +64,7 @@
 //! ```
 
 use std::io;
+
 use tokio::process::Command;
 
 /// Error type for privilege elevation operations

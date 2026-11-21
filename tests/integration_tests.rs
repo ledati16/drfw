@@ -27,11 +27,12 @@
 //! `#[cfg(test)]` modules from the library. The library's `test_helpers` module
 //! is for unit tests within the library crate only.
 
-use drfw::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
-use drfw::core::verify;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Once;
+
+use drfw::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
+use drfw::core::verify;
 use uuid::Uuid;
 
 /// One-time initialization flag for mock nft setup

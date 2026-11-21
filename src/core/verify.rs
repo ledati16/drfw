@@ -8,9 +8,11 @@
 //! unprivileged user namespaces are disabled), so it falls back to the elevated
 //! check, whose verdict is authoritative.
 
-use crate::elevation::AuthError;
 use std::time::Duration;
+
 use tracing::{info, warn};
+
+use crate::elevation::AuthError;
 
 /// Timeout for the unprivileged check (no prompt involved; nft is near-instant).
 const UNPRIVILEGED_CHECK_TIMEOUT: Duration = Duration::from_secs(10);

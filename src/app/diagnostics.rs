@@ -11,13 +11,15 @@
 //! generation number: a result from a load that was superseded (the log was
 //! cleared meanwhile) is dropped instead of overwriting newer rows.
 
+use std::path::PathBuf;
+use std::time::SystemTime;
+
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
+
 use crate::app::DiagnosticsFilter;
 use crate::audit::{AuditEvent, EventType};
 use crate::core::error::NftablesErrorPattern;
-use jiff::civil::Date;
-use jiff::tz::TimeZone;
-use std::path::PathBuf;
-use std::time::SystemTime;
 
 /// Maximum number of audit entries loaded for display (most recent kept)
 pub(crate) const MAX_DISPLAY_ENTRIES: usize = 1000;
@@ -501,8 +503,9 @@ fn describe_event(event: &AuditEvent) -> (RowTone, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use jiff::civil::date;
+
+    use super::*;
 
     fn event_at(stamp: &str, event_type: EventType, success: bool) -> AuditEvent {
         let mut event = AuditEvent::new(event_type, success, serde_json::json!({}), None);

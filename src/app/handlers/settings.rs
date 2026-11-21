@@ -7,9 +7,11 @@
 //! - Theme and font selection
 //! - Debounced auto-save
 
-use crate::app::{Message, PendingWarning, State};
-use iced::Task;
 use std::time::{Duration, Instant};
+
+use iced::Task;
+
+use crate::app::{Message, PendingWarning, State};
 
 /// Handles toggling diff view
 pub(crate) fn handle_toggle_diff(state: &mut State, enabled: bool) -> Task<Message> {

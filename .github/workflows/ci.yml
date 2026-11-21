@@ -32,12 +32,20 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.100.0
         with:
-          components: rustfmt, clippy
+          components: clippy
+
+      # rustfmt.toml uses nightly-only options; keep this date in sync with
+      # the `cargo +nightly-…` command in CLAUDE.md
+      - name: Setup nightly rustfmt
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-11-14
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo +nightly-2026-11-14 fmt --check
 
       # Pedantic lints are configured in Cargo.toml [lints.clippy]
       - name: Clippy

@@ -103,10 +103,11 @@ pub fn fuzzy_filter_themes(
 
 #[cfg(test)]
 mod tests {
+    use strum::IntoEnumIterator;
+
     use super::*;
     use crate::fonts::FontChoice;
     use crate::theme::ThemeChoice;
-    use strum::IntoEnumIterator;
 
     #[test]
     fn test_fuzzy_filter_fonts_empty_query() {

@@ -9,11 +9,12 @@
 //! - Banner management
 //! - Keyboard shortcuts and the Escape layer order
 
+use iced::Task;
+use strum::IntoEnumIterator;
+
 use crate::app::{
     BannerSeverity, DiagnosticsFilter, FontPickerTarget, Message, State, ThemeFilter, WorkspaceTab,
 };
-use iced::Task;
-use strum::IntoEnumIterator;
 
 /// Handles tab change
 pub(crate) fn handle_tab_changed(state: &mut State, tab: WorkspaceTab) {
@@ -555,8 +556,10 @@ fn shortcut_message(
     event: &iced::Event,
     status: iced::event::Status,
 ) -> Option<Message> {
+    use iced::keyboard::Key;
+    use iced::keyboard::key::Named;
+
     use crate::app::AppStatus;
-    use iced::keyboard::{Key, key::Named};
 
     let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event
     else {
@@ -681,9 +684,11 @@ mod tests {
     // Keyboard: status filtering, layer order, Escape
     // ------------------------------------------------------------------
 
-    use crate::app::{AppStatus, HelperType, PendingWarning, RuleForm, RuleFormHelper};
     use iced::event::Status;
-    use iced::keyboard::{Key, Modifiers, key::Named};
+    use iced::keyboard::key::Named;
+    use iced::keyboard::{Key, Modifiers};
+
+    use crate::app::{AppStatus, HelperType, PendingWarning, RuleForm, RuleFormHelper};
 
     fn key_event(key: Key, modifiers: Modifiers) -> iced::Event {
         iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {

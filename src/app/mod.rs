@@ -8,21 +8,21 @@ pub mod ui_components;
 mod view;
 
 // Re-export form types
-pub use forms::{FormErrors, HelperType, RuleForm, RuleFormHelper};
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 
+pub use debounce::TimerKind;
+pub use forms::{FormErrors, HelperType, RuleForm, RuleFormHelper};
 use helpers::{
     calculate_max_content_width, calculate_max_content_width_from_refs, fuzzy_filter_fonts,
     fuzzy_filter_themes,
 };
-
-use crate::core::firewall::{FirewallRuleset, Protocol};
-pub use debounce::TimerKind;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
-use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
+
+use crate::core::firewall::{FirewallRuleset, Protocol};
 
 /// Largest GUI log file before it is rotated to `drfw.log.1`.
 const GUI_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;

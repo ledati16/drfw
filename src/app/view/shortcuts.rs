@@ -1,11 +1,12 @@
 //! Keyboard shortcuts help modal
 
+use iced::Element;
+use iced::widget::{button, column, container, row, text};
+
 use crate::app::Message;
 use crate::app::ui_components::{
     card_container, kbd_badge_container, secondary_button, section_header_container,
 };
-use iced::Element;
-use iced::widget::{button, column, container, row, text};
 
 /// One "keys — description" row.
 fn shortcut_row<'a>(

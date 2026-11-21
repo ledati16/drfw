@@ -5,14 +5,15 @@
 //! - Addresses: IP/CIDR addresses (e.g., "192.168.1.0/24", "`fd00::1`")
 //! - Tags: Organizational labels
 
+use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
+use iced::{Alignment, Element, Length};
+
 use crate::app::ui_components::{
     card_container, inset_container_bordered, primary_button, section_header_container, tag_button,
     themed_scrollable, themed_text_input,
 };
 use crate::app::{HelperType, Message, RuleForm, RuleFormHelper};
 use crate::core::firewall::PortEntry;
-use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Element, Length};
 
 /// Renders the helper modal based on current helper type
 pub fn view_helper_modal<'a>(

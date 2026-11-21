@@ -10,9 +10,10 @@
 //! no-replace create/rename, profile listing hygiene, file modes, and the
 //! config recovery path.
 
-use drfw::core::profiles::{self, ProfileError};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+use drfw::core::profiles::{self, ProfileError};
 
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 

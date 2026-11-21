@@ -23,10 +23,11 @@ mod syntax;
 mod workspace;
 
 // Shared imports used by main view function
-use crate::app::ui_components::{main_container, modal_backdrop, notification_banner};
-use crate::app::{AppStatus, Message, State, WorkspaceTab};
 use iced::widget::{center, column, container, opaque, stack};
 use iced::{Element, Length, alignment};
+
+use crate::app::ui_components::{main_container, modal_backdrop, notification_banner};
+use crate::app::{AppStatus, Message, State, WorkspaceTab};
 
 /// Main view entry point
 pub fn view(state: &State) -> Element<'_, Message> {

@@ -17,9 +17,9 @@
 //! # Example
 //!
 //! ```no_run
-//! use drfw::command::{CommandHistory, AddRuleCommand};
+//! use drfw::command::{AddRuleCommand, CommandHistory};
 //! use drfw::core::firewall::{
-//!     FirewallRuleset, Rule, Protocol, PortEntry, Chain, Action, RejectType,
+//!     Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
 //! };
 //! use uuid::Uuid;
 //!
@@ -69,9 +69,10 @@
 //! history.undo(&mut ruleset);
 //! ```
 
-use crate::core::firewall::{FirewallRuleset, Rule};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::core::firewall::{FirewallRuleset, Rule};
 
 /// Command pattern trait for undo/redo functionality
 ///
