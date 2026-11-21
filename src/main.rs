@@ -662,7 +662,7 @@ fn launch_gui() -> ExitCode {
             ..Default::default()
         })
         .title("Dumb Rust Firewall")
-        .theme(|_state: &app::State| iced::Theme::Dark)
+        .theme(app::State::iced_theme)
         .run();
 
     match result {

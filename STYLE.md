@@ -544,15 +544,10 @@ const MODAL_WIDTH: f32 = 556.0;  // Fine-tuned (not calculated)
 **Rule:** Choose width, add ~24px slack for scrollbar, fine-tune ±10px visually.
 
 ### Performance
-**Cache theme conversions:**
-```rust
-let filtered_themes: Vec<(ThemeChoice, AppTheme)> = ThemeChoice::all()
-    .filter_map(|choice| {
-        let theme = choice.to_theme();  // Cache this!
-        Some((*choice, theme))
-    })
-    .collect();
-```
+**Filter in `update()`, never in `view()`:** `ThemePickerState` / `FontPickerState`
+keep the filtered index list and count label, recomputed by `refilter()` only when
+the search text changes. `view()` just iterates the cached indices; converted
+`AppTheme`s are cached the same way.
 
 **Use ASCII-only search:** `to_ascii_lowercase()` vs `to_lowercase()` (theme names are ASCII).
 

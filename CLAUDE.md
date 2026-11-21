@@ -795,13 +795,10 @@ Message::SettingChanged => {
     self.mark_config_dirty();  // Just set flag
 }
 
-// Subscription auto-saves after 500ms of no changes
-if self.config_dirty {
-    iced::time::every(Duration::from_millis(100))
-        .map(|_| Message::CheckConfigSave)
-} else {
-    iced::Subscription::none()
-}
+// One-shot, generation-tagged timers (src/app/debounce.rs) are re-armed from
+// state at the end of every update(): no polling subscription, so an idle app
+// does not rebuild its view 10 times a second. A timer that fires after newer
+// edits carries a stale generation and is ignored (or re-armed for the rest).
 ```
 
 **Honest autosave (profiles, `handlers/profiles.rs`):**

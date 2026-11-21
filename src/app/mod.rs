@@ -1179,9 +1179,6 @@ impl State {
 
     /// The iced base theme matching the current `AppTheme`, for
     /// `iced::application(..).theme(State::iced_theme)`. Cheap (an `Arc` clone).
-    // TODO(merge): main.rs must pass this to `.theme(app::State::iced_theme)`
-    // (main.rs is owned by another change); remove this allow when it does.
-    #[allow(dead_code)]
     pub fn iced_theme(&self) -> iced::Theme {
         self.iced_theme.clone()
     }

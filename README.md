@@ -375,8 +375,11 @@ opens read-only.
 | **Ctrl+S** | Apply changes |
 | **Ctrl+E** | Export rules |
 | **Ctrl+Z** | Undo |
-| **Ctrl+Shift+Z** | Redo |
-| **Esc** | Close modal/form |
+| **Ctrl+Shift+Z** / **Ctrl+Y** | Redo |
+| **Enter** | Save the rule form (when it is the top-most dialog) |
+| **Esc** | Close the top-most dialog only (never cancels a running apply or countdown) |
+
+Shortcuts are ignored while you are typing in a text field inside a dialog.
 | **F1** | Show shortcuts |
 
 ## Known Limitations
