@@ -43,6 +43,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Action types**: Accept, Drop, or Reject (with type: port-unreachable, host-unreachable, admin-prohibited, tcp-reset)
 - **Rate limiting**: Per-rule rate limits with optional burst (e.g., `5/minute burst 10`)
 - **Connection limiting**: Max simultaneous connections per rule
+- **Per-source limits**: Optionally give every client IP (IPv6: every /64) its own rate or connection budget, so one flooding host cannot lock everyone else out
 - **Per-rule logging**: Toggle to log matched packets with auto-generated prefix
 - **Chain selection**: Input or Output (Output only in Server Mode)
 - **Output interface**: Filter outbound traffic by interface (Server Mode only)
@@ -273,7 +274,7 @@ sudo cp -p /etc/nftables.conf.drfw-orig /etc/nftables.conf
 - Protocol: Any, Interface: `docker*` (wildcard)
 
 **Rate-limited SSH with burst (prevent brute force):**
-- Protocol: TCP, Port: `22`, Rate Limit: `3/minute burst 5`
+- Protocol: TCP, Port: `22`, Rate Limit: `3/minute burst 5`, Per source address: on
 
 **Block port scanners with admin-prohibited:**
 - Protocol: TCP, Port: `23`, Action: Reject (admin-prohibited)

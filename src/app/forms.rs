@@ -112,9 +112,13 @@ pub struct RuleForm {
     pub rate_limit_count: String,
     pub rate_limit_unit: crate::core::firewall::TimeUnit,
     pub rate_limit_burst: String,
+    /// Separate rate budget per source address
+    pub rate_limit_per_source: bool,
 
     // Connection limiting
     pub connection_limit: String,
+    /// Count connections per source address
+    pub connection_limit_per_source: bool,
 
     // Per-rule logging
     pub log_enabled: bool,
@@ -142,7 +146,9 @@ impl Default for RuleForm {
             rate_limit_count: String::new(),
             rate_limit_unit: crate::core::firewall::TimeUnit::Second,
             rate_limit_burst: String::new(),
+            rate_limit_per_source: false,
             connection_limit: String::new(),
+            connection_limit_per_source: false,
             log_enabled: false,
             show_advanced: false,
         }
@@ -185,11 +191,13 @@ impl RuleForm {
                 .rate_limit
                 .and_then(|rl| rl.burst)
                 .map_or_else(String::new, |b| b.to_string()),
+            rate_limit_per_source: rule.rate_limit.is_some_and(|rl| rl.per_source),
             connection_limit: if rule.connection_limit > 0 {
                 rule.connection_limit.to_string()
             } else {
                 String::new()
             },
+            connection_limit_per_source: rule.connection_limit_per_source,
             log_enabled: rule.log_enabled,
             show_advanced: has_advanced,
         }
@@ -221,6 +229,7 @@ impl RuleForm {
                     count,
                     unit: self.rate_limit_unit,
                     burst: parsed_burst.unwrap_or(None),
+                    per_source: self.rate_limit_per_source,
                 })
             } else {
                 errors.rate_limit = Some("Invalid rate limit number".to_string());
@@ -282,6 +291,7 @@ impl RuleForm {
         rule.reject_type = self.reject_type;
         rule.rate_limit = rate_limit;
         rule.connection_limit = connection_limit;
+        rule.connection_limit_per_source = self.connection_limit_per_source;
         rule.log_enabled = self.log_enabled;
         rule.rebuild_caches();
         rule
@@ -361,7 +371,8 @@ mod tests {
             Some(RateLimit {
                 count: 5,
                 unit: TimeUnit::Second,
-                burst: Some(10)
+                burst: Some(10),
+                per_source: false,
             })
         );
     }
@@ -401,6 +412,27 @@ mod tests {
     }
 
     #[test]
+    fn test_per_source_flags() {
+        let mut form = tcp_form();
+        form.rate_limit_enabled = true;
+        form.rate_limit_count = "3".into();
+        form.rate_limit_per_source = true;
+        assert!(form.validate().is_none());
+        let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
+        assert!(rule.rate_limit.is_some_and(|rl| rl.per_source));
+        assert!(!rule.connection_limit_per_source);
+
+        // Per-source connection counting needs a connection limit
+        form.connection_limit_per_source = true;
+        assert!(form.validate().unwrap().connection_limit.is_some());
+        form.connection_limit = "4".into();
+        assert!(form.validate().is_none());
+        let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
+        assert!(rule.connection_limit_per_source);
+        assert_eq!(rule.connection_limit, 4);
+    }
+
+    #[test]
     fn test_from_rule_round_trip() {
         let mut rule = crate::core::test_helpers::create_test_rule("Web", Some(443));
         rule.enabled = false;
@@ -408,8 +440,10 @@ mod tests {
             count: 3,
             unit: TimeUnit::Minute,
             burst: Some(6),
+            per_source: true,
         });
         rule.connection_limit = 10;
+        rule.connection_limit_per_source = true;
         rule.rebuild_caches();
         let form = RuleForm::from_rule(&rule);
         assert!(form.show_advanced);
@@ -456,6 +490,7 @@ mod property_tests {
             reject in 0usize..REJECT_TYPES.len(),
             rate in prop::option::of(("[0-9]{0,6}", "[0-9]{0,3}")),
             conn in "[0-9]{0,6}",
+            per_source in any::<(bool, bool)>(),
         ) -> RuleForm {
             let source: IpNetwork = if v6_source { "fd00::/8".parse().unwrap() } else { "10.0.0.0/8".parse().unwrap() };
             RuleForm {
@@ -474,6 +509,8 @@ mod property_tests {
                 rate_limit_burst: rate.map_or_default(|r| r.1),
                 rate_limit_unit: TimeUnit::Minute,
                 connection_limit: conn,
+                rate_limit_per_source: per_source.0,
+                connection_limit_per_source: per_source.1,
                 ..RuleForm::default()
             }
         }

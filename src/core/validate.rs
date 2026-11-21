@@ -404,6 +404,14 @@ impl Rule {
         if let Err(msg) = crate::validators::validate_connection_limit(self.connection_limit) {
             issues.push(RuleIssue::new(RuleField::ConnectionLimit, msg));
         }
+        // (A per-source rate limit cannot exist without a rate: the flag is
+        // part of the rate limit itself.)
+        if self.connection_limit_per_source && self.connection_limit == 0 {
+            issues.push(RuleIssue::new(
+                RuleField::ConnectionLimit,
+                "Set a connection limit to count connections per source address",
+            ));
+        }
     }
 
     /// `true` when this rule would be part of the applied ruleset.
@@ -622,18 +630,21 @@ mod tests {
             count: 0,
             unit: TimeUnit::Second,
             burst: None,
+            per_source: false,
         });
         assert_eq!(fields(&rule), vec![RuleField::RateLimit]);
         rule.rate_limit = Some(RateLimit {
             count: 5,
             unit: TimeUnit::Second,
             burst: Some(0),
+            per_source: false,
         });
         assert_eq!(fields(&rule), vec![RuleField::RateLimit]);
         rule.rate_limit = Some(RateLimit {
             count: 5,
             unit: TimeUnit::Second,
             burst: Some(10),
+            per_source: false,
         });
         assert!(rule.validate().is_ok());
     }
@@ -645,6 +656,7 @@ mod tests {
             count: crate::validators::MAX_RATE_LIMIT_PER_SECOND + 1,
             unit: TimeUnit::Second,
             burst: None,
+            per_source: false,
         });
         assert_eq!(fields(&rule), vec![RuleField::RateLimit]);
     }
@@ -654,6 +666,22 @@ mod tests {
         let mut rule = base_rule();
         rule.connection_limit = crate::validators::MAX_CONNECTION_LIMIT + 1;
         assert_eq!(fields(&rule), vec![RuleField::ConnectionLimit]);
+    }
+
+    #[test]
+    fn test_per_source_needs_a_limit() {
+        let mut rule = base_rule();
+        rule.connection_limit_per_source = true;
+        assert_eq!(fields(&rule), vec![RuleField::ConnectionLimit]);
+        rule.connection_limit = 3;
+        assert!(rule.validate().is_ok());
+        rule.rate_limit = Some(RateLimit {
+            count: 3,
+            unit: TimeUnit::Minute,
+            burst: None,
+            per_source: true,
+        });
+        assert!(rule.validate().is_ok());
     }
 
     #[test]
@@ -862,6 +890,7 @@ mod property_tests {
             reject_idx in 0usize..8,
             rate in prop::option::of((1u32..=1000, prop::option::of(1u32..=100))),
             conn in 0u32..=crate::validators::MAX_CONNECTION_LIMIT,
+            per_source in any::<(bool, bool)>(),
             enabled in any::<bool>(),
         ) -> Rule {
             let protocol = PROTOCOLS[protocol_idx];
@@ -891,8 +920,9 @@ mod property_tests {
             }
             rule.action = [Action::Accept, Action::Drop, Action::Reject][action_idx];
             rule.reject_type = reject_types[reject_idx % reject_types.len()];
-            rule.rate_limit = rate.map(|(count, burst)| RateLimit { count, unit: TimeUnit::Minute, burst });
+            rule.rate_limit = rate.map(|(count, burst)| RateLimit { count, unit: TimeUnit::Minute, burst, per_source: per_source.0 });
             rule.connection_limit = conn;
+            rule.connection_limit_per_source = per_source.1 && conn > 0;
             rule.rebuild_caches();
             rule
         }

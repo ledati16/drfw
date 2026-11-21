@@ -9,10 +9,12 @@
 //!
 //! Only the expression subset drfw emits is supported: matches on `meta`, `ct`,
 //! `payload` and `fib` (values: strings, numbers, sets, prefixes, ranges),
-//! `limit` (burst, inverted), `ct count` (inverted), `log`, `counter`, and the
-//! `accept`/`drop`/`reject` verdicts. Anything else is a programming error; it
-//! is rendered as an invalid statement so that `nft -c` rejects the file
-//! instead of silently loading a rule with a match missing.
+//! `limit` (burst, inverted), `ct count` (inverted), `log`, `counter`, the
+//! `accept`/`drop`/`reject` verdicts, and per-source limits (named dynamic
+//! sets plus `add`/`update @set { <saddr key> <limit or ct count> }`).
+//! Anything else is a programming error; it is rendered as an invalid
+//! statement so that `nft -c` rejects the file instead of silently loading a
+//! rule with a match missing.
 //!
 //! # Output format
 //!
@@ -33,8 +35,8 @@
 //! `table …` followed by `delete table …` is the idempotent replace idiom: the
 //! first line guarantees the table exists so the delete cannot fail, and the
 //! whole file is one transaction. It works on every nft version, unlike
-//! `destroy table` (nft >= 1.0.8). The JSON side uses `add` + `flush` instead,
-//! which is equivalent for drfw's fixed chain layout.
+//! `destroy table` (nft >= 1.0.8). The JSON side uses the same
+//! `add` + `delete` + `add` sequence.
 //!
 //! [`FirewallRuleset::to_nftables_json`]: crate::core::firewall::FirewallRuleset::to_nftables_json
 
@@ -143,11 +145,20 @@ pub(crate) fn render(commands: &[NftCommand]) -> String {
 pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
     let mut preamble: Vec<String> = Vec::new();
     let mut table: Option<(String, String)> = None;
+    // Set blocks with the index of the command that declared them
+    let mut sets: Vec<(String, usize)> = Vec::new();
     let mut chains: Vec<ChainBlock> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
     for (index, command) in commands.iter().enumerate() {
-        if let Err(e) = apply_command(command, index, &mut preamble, &mut table, &mut chains) {
+        if let Err(e) = apply_command(
+            command,
+            index,
+            &mut preamble,
+            &mut table,
+            &mut sets,
+            &mut chains,
+        ) {
             tracing::error!("nft text renderer: {e}");
             errors.push(e);
         }
@@ -192,9 +203,15 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
 
     doc.line(LineSource::Header, format_args!(""));
     doc.line(LineSource::Header, format_args!("table {family} {name} {{"));
+    // A set belongs to the rule whose command created it (see `apply_command`)
+    for (set, index) in &sets {
+        for line in set.lines() {
+            doc.line(LineSource::Rule(*index), format_args!("{line}"));
+        }
+    }
     for (i, chain) in chains.iter().enumerate() {
         let own = LineSource::Chain(i);
-        if i > 0 {
+        if i > 0 || !sets.is_empty() {
             doc.line(LineSource::Header, format_args!(""));
         }
         doc.line(own, format_args!("{CHAIN_INDENT}chain {} {{", chain.name));
@@ -225,6 +242,7 @@ fn apply_command(
     index: usize,
     preamble: &mut Vec<String>,
     table: &mut Option<(String, String)>,
+    sets: &mut Vec<(String, usize)>,
     chains: &mut Vec<ChainBlock>,
 ) -> Result<(), String> {
     let (verb, body) = single_entry(&command.value).ok_or("malformed command")?;
@@ -234,11 +252,20 @@ fn apply_command(
         ("add", "table") => {
             let family = str_field(spec, "family")?;
             let name = str_field(spec, "name")?;
+            // Only the first `add` needs a line: the re-`add` after the delete
+            // is the table block itself.
+            let first = table.is_none();
             check_table(table, family, name)?;
-            preamble.push(format!("table {family} {name}"));
+            if first {
+                preamble.push(format!("table {family} {name}"));
+            }
             Ok(())
         }
-        ("flush", "table") => {
+        ("add", "set") => {
+            sets.push((render_set_declaration(spec)?, index));
+            Ok(())
+        }
+        ("flush" | "delete", "table") => {
             let family = str_field(spec, "family")?;
             let name = str_field(spec, "name")?;
             check_table(table, family, name)?;
@@ -313,6 +340,40 @@ fn check_table(
             Ok(())
         }
     }
+}
+
+/// Renders an `add set` body as a set block inside the table block.
+fn render_set_declaration(spec: &Value) -> Result<String, String> {
+    check_keys(
+        spec,
+        &[
+            "family", "table", "name", "type", "flags", "timeout", "size",
+        ],
+        "set",
+    )?;
+    let name = symbol(str_field(spec, "name")?)?;
+    let mut lines = vec![
+        format!("{CHAIN_INDENT}set {name} {{"),
+        format!("{RULE_INDENT}type {}", symbol(str_field(spec, "type")?)?),
+    ];
+    if let Some(flags) = spec.get("flags") {
+        let flags = flags
+            .as_array()
+            .ok_or("set flags are not a list")?
+            .iter()
+            .map(|flag| symbol(flag.as_str().ok_or("non-string set flag")?))
+            .collect::<Result<Vec<_>, _>>()?;
+        lines.push(format!("{RULE_INDENT}flags {}", flags.join(",")));
+    }
+    if spec.get("timeout").is_some() {
+        let timeout = u64_field(spec, "timeout")?;
+        lines.push(format!("{RULE_INDENT}timeout {timeout}s"));
+    }
+    if spec.get("size").is_some() {
+        lines.push(format!("{RULE_INDENT}size {}", u64_field(spec, "size")?));
+    }
+    lines.push(format!("{CHAIN_INDENT}}}"));
+    Ok(lines.join("\n"))
 }
 
 /// Returns the chain block named `name`, creating it if needed.
@@ -391,8 +452,62 @@ fn render_statement(expr: &Value) -> Result<String, String> {
         }
         "counter" | "accept" | "drop" if body.is_null() => Ok(key.to_string()),
         "reject" => render_reject(body),
+        "set" => render_set_statement(body),
         _ => Err(format!("unsupported expression `{key}`")),
     }
+}
+
+/// Renders a per-source set statement:
+/// `update @name { ip saddr limit rate … }` or `add @name { ip6 saddr & mask ct count … }`.
+fn render_set_statement(body: &Value) -> Result<String, String> {
+    check_keys(body, &["op", "elem", "set", "stmt"], "set statement")?;
+    let op = match str_field(body, "op")? {
+        op @ ("add" | "update") => op,
+        other => return Err(format!("unsupported set operation `{other}`")),
+    };
+    let set = str_field(body, "set")?
+        .strip_prefix('@')
+        .ok_or("set statement without @set reference")?;
+    let set = symbol(set)?;
+
+    // The key: a source address, optionally masked (`ip6 saddr & ffff:…::`)
+    let elem = body.get("elem").ok_or("set statement without elem")?;
+    let (kind, spec) = single_entry(elem).ok_or("malformed set statement elem")?;
+    let key = match kind {
+        "payload" => render_payload(spec)?,
+        "&" => {
+            let [left, mask] = spec.as_array().map_or_default(Vec::as_slice) else {
+                return Err("`&` needs two operands".to_string());
+            };
+            let (kind, spec) = single_entry(left).ok_or("malformed `&` operand")?;
+            if kind != "payload" {
+                return Err(format!("unsupported `&` operand `{kind}`"));
+            }
+            let mask = symbol(mask.as_str().ok_or("non-string mask")?)?;
+            format!("{} & {mask}", render_payload(spec)?)
+        }
+        other => return Err(format!("unsupported set statement key `{other}`")),
+    };
+
+    let mut parts = vec![key];
+    for stmt in body
+        .get("stmt")
+        .and_then(Value::as_array)
+        .ok_or("set statement without stmt list")?
+    {
+        match single_entry(stmt) {
+            Some(("limit" | "ct count", _)) => parts.push(render_statement(stmt)?),
+            _ => return Err("unsupported statement in set statement".to_string()),
+        }
+    }
+    Ok(format!("{op} @{set} {{ {} }}", parts.join(" ")))
+}
+
+/// Renders a payload expression body (`ip saddr`).
+fn render_payload(spec: &Value) -> Result<String, String> {
+    let protocol = symbol(str_field(spec, "protocol")?)?;
+    let field = symbol(str_field(spec, "field")?)?;
+    Ok(format!("{protocol} {field}"))
 }
 
 /// Renders a `reject` verdict.
@@ -448,11 +563,7 @@ fn render_match(body: &Value) -> Result<String, String> {
             };
             (left, render_value(right, false)?)
         }
-        "payload" => {
-            let protocol = symbol(str_field(spec, "protocol")?)?;
-            let field = symbol(str_field(spec, "field")?)?;
-            (format!("{protocol} {field}"), render_value(right, false)?)
-        }
+        "payload" => (render_payload(spec)?, render_value(right, false)?),
         "fib" => {
             let mut flags = Vec::new();
             for flag in spec

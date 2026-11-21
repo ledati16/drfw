@@ -646,6 +646,21 @@ pub(crate) fn handle_rule_form_rate_limit_burst_changed(state: &mut State, value
     });
 }
 
+pub(crate) fn handle_rule_form_rate_limit_per_source_toggled(state: &mut State, enabled: bool) {
+    with_form(state, "RuleFormRateLimitPerSourceToggled", |form| {
+        form.rate_limit_per_source = enabled;
+    });
+}
+
+pub(crate) fn handle_rule_form_connection_limit_per_source_toggled(
+    state: &mut State,
+    enabled: bool,
+) {
+    with_form(state, "RuleFormConnectionLimitPerSourceToggled", |form| {
+        form.connection_limit_per_source = enabled;
+    });
+}
+
 pub(crate) fn handle_rule_form_log_enabled_toggled(state: &mut State, enabled: bool) {
     with_form(state, "RuleFormLogEnabledToggled", |form| {
         form.log_enabled = enabled;

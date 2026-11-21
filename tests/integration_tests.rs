@@ -98,6 +98,7 @@ fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         reject_type: RejectType::Default,
         rate_limit: None,
         connection_limit: 0,
+        connection_limit_per_source: false,
         log_enabled: false,
         // Cached fields
         label_lowercase: String::new(),
@@ -146,6 +147,7 @@ fn create_full_test_rule(
         reject_type: RejectType::Default,
         rate_limit: None,
         connection_limit: 0,
+        connection_limit_per_source: false,
         log_enabled: false,
         // Cached fields
         label_lowercase: String::new(),

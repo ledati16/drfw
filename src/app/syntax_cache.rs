@@ -212,6 +212,20 @@ enum NftToken {
     #[token("missing")]
     Missing,
 
+    // Named sets (per-source limits)
+    #[token("set")]
+    Set,
+    #[token("update")]
+    Update,
+    #[token("flags")]
+    Flags,
+    #[token("dynamic")]
+    Dynamic,
+    #[token("timeout")]
+    Timeout,
+    #[token("size")]
+    Size,
+
     // Strings and numbers
     #[regex(r#""([^"\\]|\\.)*""#)]
     String,
@@ -355,7 +369,8 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
             | Saddr | Daddr | Type | Hook | Priority | Policy | Fib | Iif | Oif | Eq | Protocol
             | Redirect | Ipv6Icmp | Icmpv6 | Limit | Rate | Second | Minute | Hour | Day | Week
             | Log | Prefix | Level | Info | Warn | Debug | Pkttype | Host | Counter | With
-            | Icmpx | Th | Count | Burst | Packets | Reset | Over | Missing => {
+            | Icmpx | Th | Count | Burst | Packets | Reset | Over | Missing | Set | Update
+            | Flags | Dynamic | Timeout | Size => {
                 tokens.push(Token {
                     text: Cow::Owned(text.to_string()),
                     color: TokenColor::Keyword,

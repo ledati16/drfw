@@ -153,6 +153,8 @@ struct CoverageTracker {
     time_units: HashMap<&'static str, usize>,
     with_rate_limit: usize,
     with_connection_limit: usize,
+    with_per_source_rate: usize,
+    with_per_source_connections: usize,
     with_logging: usize,
     with_sources: usize,
     with_destinations: usize,
@@ -184,6 +186,9 @@ impl CoverageTracker {
 
         if let Some(ref rl) = rule.rate_limit {
             self.with_rate_limit += 1;
+            if rl.per_source {
+                self.with_per_source_rate += 1;
+            }
             *self
                 .time_units
                 .entry(match rl.unit {
@@ -197,6 +202,9 @@ impl CoverageTracker {
 
         if rule.connection_limit > 0 {
             self.with_connection_limit += 1;
+            if rule.connection_limit_per_source {
+                self.with_per_source_connections += 1;
+            }
         }
         if rule.log_enabled {
             self.with_logging += 1;
@@ -243,6 +251,11 @@ impl CoverageTracker {
         println!("\nFeature Usage:");
         println!("  Rate limited: {}", self.with_rate_limit);
         println!("  Connection limited: {}", self.with_connection_limit);
+        println!("  Per-source rate limit: {}", self.with_per_source_rate);
+        println!(
+            "  Per-source connection limit: {}",
+            self.with_per_source_connections
+        );
         println!("  Per-rule logging: {}", self.with_logging);
         println!("  With sources: {}", self.with_sources);
         println!("  With destinations: {}", self.with_destinations);
@@ -286,6 +299,13 @@ impl CoverageTracker {
                     missing.push(format!("RejectType::{reject_type:?}"));
                 }
             }
+        }
+
+        if self.with_per_source_rate == 0 {
+            missing.push("per-source rate limit".to_string());
+        }
+        if self.with_per_source_connections == 0 {
+            missing.push("per-source connection limit".to_string());
         }
 
         missing
@@ -390,7 +410,8 @@ const COMMON_PORTS: [u16; 20] = [
 ];
 
 // Minimum rules needed to guarantee all variants appear
-const MIN_COVERAGE_COUNT: usize = 15; // 7 protocols + 3 actions + 5 reject types (worst case)
+// 2 per-source limits + 7 protocols + 3 actions + 5 reject types (worst case)
+const MIN_COVERAGE_COUNT: usize = 17;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Rule Builder (DRY: extracts common Rule construction)
@@ -410,6 +431,8 @@ struct RuleConfig {
     output_interface: Option<String>,
     rate_limit: Option<RateLimit>,
     connection_limit: u32,
+    /// Ignored when `connection_limit` is 0 (validation requires a limit)
+    connection_limit_per_source: bool,
     log_enabled: bool,
     enabled: bool,
     tags: Vec<String>,
@@ -435,6 +458,8 @@ impl RuleConfig {
             reject_type: self.reject_type,
             rate_limit: self.rate_limit,
             connection_limit: self.connection_limit,
+            connection_limit_per_source: self.connection_limit_per_source
+                && self.connection_limit > 0,
             log_enabled: self.log_enabled,
             // Cached fields (populated by rebuild_caches())
             label_lowercase: String::new(),
@@ -632,7 +657,12 @@ fn random_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
         None
     };
 
-    Some(RateLimit { count, unit, burst })
+    Some(RateLimit {
+        count,
+        unit,
+        burst,
+        per_source: rng.random_bool(0.4),
+    })
 }
 
 fn random_connection_limit(rng: &mut impl Rng) -> u32 {
@@ -865,24 +895,42 @@ fn edge_case_rate_limit(rng: &mut impl Rng) -> Option<RateLimit> {
             count: MAX_RATE_LIMIT_PER_SECOND,
             unit: TimeUnit::Second,
             burst: None,
+            per_source: false,
         }),
         // Very low rate
         Some(RateLimit {
             count: 1,
             unit: TimeUnit::Day,
             burst: None,
+            per_source: false,
         }),
         // Large burst
         Some(RateLimit {
             count: 10,
             unit: TimeUnit::Minute,
             burst: Some(1000),
+            per_source: false,
         }),
         // High minute rate at validator limit
         Some(RateLimit {
             count: MAX_RATE_LIMIT_PER_MINUTE,
             unit: TimeUnit::Minute,
             burst: None,
+            per_source: false,
+        }),
+        // Per source, longest set timeout (refill time exceeds the one-week cap)
+        Some(RateLimit {
+            count: 1,
+            unit: TimeUnit::Day,
+            burst: Some(1000),
+            per_source: true,
+        }),
+        // Per source, shortest set timeout
+        Some(RateLimit {
+            count: MAX_RATE_LIMIT_PER_SECOND,
+            unit: TimeUnit::Second,
+            burst: None,
+            per_source: true,
         }),
         // None
         None,
@@ -980,6 +1028,7 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
         output_interface,
         rate_limit: edge_case_rate_limit(rng),
         connection_limit: edge_case_connection_limit(rng),
+        connection_limit_per_source: rng.random_bool(0.4),
         log_enabled: rng.random_bool(0.3),
         enabled: rng.random_bool(0.85),
         tags: edge_case_tags(rng),
@@ -1021,6 +1070,7 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
         output_interface,
         rate_limit: random_rate_limit(rng),
         connection_limit: random_connection_limit(rng),
+        connection_limit_per_source: rng.random_bool(0.4),
         log_enabled: rng.random_bool(0.1),
         enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
@@ -1070,6 +1120,7 @@ fn generate_coverage_rule(
             } else {
                 None
             },
+            per_source: rng.random_bool(0.5),
         })
     } else {
         random_rate_limit(rng)
@@ -1088,6 +1139,7 @@ fn generate_coverage_rule(
         output_interface,
         rate_limit,
         connection_limit: random_connection_limit(rng),
+        connection_limit_per_source: rng.random_bool(0.4),
         log_enabled: rng.random_bool(0.1),
         enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
@@ -1118,6 +1170,34 @@ fn generate_ruleset(
     let mut rule_index = 0;
 
     // Phase 1: Guarantee all variants appear
+    // Generate rules to cover per-source rate and connection limits
+    for per_source_rate in [true, false] {
+        if rule_index >= count {
+            break;
+        }
+        let action = random_action(rng);
+        let mut rule = generate_coverage_rule(
+            rng,
+            rule_index + 1,
+            Protocol::Tcp,
+            action,
+            Chain::Input,
+            None,
+            Some(TimeUnit::Minute),
+        );
+        if let Some(rate_limit) = rule.rate_limit.as_mut() {
+            rate_limit.per_source = per_source_rate;
+        }
+        if !per_source_rate {
+            rule.connection_limit = rng.random_range(1..=100);
+            rule.connection_limit_per_source = true;
+        }
+        rule.rebuild_caches();
+        tracker.record_rule(&rule, false);
+        rules.push(rule);
+        rule_index += 1;
+    }
+
     // Generate rules to cover all Protocol variants
     for protocol in PROTOCOLS {
         if rule_index >= count {

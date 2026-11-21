@@ -43,6 +43,7 @@
 //!     reject_type: drfw::core::firewall::RejectType::Default,
 //!     rate_limit: None,
 //!     connection_limit: 0,
+//!     connection_limit_per_source: false,
 //!     log_enabled: false,
 //!     // Cached fields (populated by rebuild_caches())
 //!     label_lowercase: String::new(),
@@ -63,11 +64,14 @@
 //! rule.rebuild_caches();
 //! ```
 
+use std::collections::HashSet;
 use std::fmt;
 
 use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::core::rule_constraints::{protocol_requires_ipv4, protocol_requires_ipv6};
 
 /// Maximum number of rules allowed in a single ruleset
 ///
@@ -441,6 +445,16 @@ impl TimeUnit {
         }
     }
 
+    /// Returns the length of one unit in seconds
+    pub const fn seconds(self) -> u64 {
+        match self {
+            TimeUnit::Second => 1,
+            TimeUnit::Minute => 60,
+            TimeUnit::Hour => 3_600,
+            TimeUnit::Day => 86_400,
+        }
+    }
+
     /// Returns display name for UI rendering
     pub const fn display_name(self) -> &'static str {
         match self {
@@ -461,6 +475,12 @@ impl TimeUnit {
 /// The optional `burst` field allows short bursts beyond the rate limit.
 /// For example, rate 5/minute with burst 10 allows up to 10 connections
 /// quickly, then enforces 5/minute average.
+///
+/// # Per source
+/// By default the budget is shared by all clients: one host flooding the port
+/// uses it up for everyone. With `per_source` every source address (IPv6: every
+/// /64 prefix) gets its own budget, kept in an nftables dynamic set (see
+/// [`FirewallRuleset::to_nftables_json`]).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RateLimit {
     pub count: u32,
@@ -468,15 +488,22 @@ pub struct RateLimit {
     /// Optional burst allowance (0 or None = no burst)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub burst: Option<u32>,
+    /// Keep a separate budget per source address instead of one shared budget.
+    /// Absent in older profiles (defaults to `false`); not written when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub per_source: bool,
 }
 
 impl fmt::Display for RateLimit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.count, self.unit)?;
         if let Some(burst) = self.burst {
-            write!(f, "{}/{} burst {}", self.count, self.unit, burst)
-        } else {
-            write!(f, "{}/{}", self.count, self.unit)
+            write!(f, " burst {burst}")?;
         }
+        if self.per_source {
+            f.write_str(" per source")?;
+        }
+        Ok(())
     }
 }
 
@@ -552,6 +579,10 @@ pub struct Rule {
     /// Connection limit (max simultaneous connections, 0 = disabled)
     #[serde(default)]
     pub connection_limit: u32,
+    /// Count connections per source address (IPv6: per /64) instead of across
+    /// all clients. Only meaningful with a `connection_limit`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub connection_limit_per_source: bool,
     /// Enable per-rule logging (logs matched packets before action)
     /// Prefix is auto-generated from sanitized label: "DRFW-{label}: "
     #[serde(default)]
@@ -721,8 +752,24 @@ impl Rule {
             .collect();
 
         // Cache badge display string for sidebar rule cards (avoids format! every frame)
-        // Format: "{protocol}: {port_display}"
-        self.badge_display = format!("{}: {}", self.protocol.display_name(), self.port_display);
+        // Format: "{protocol}: {port_display}", plus a marker for per-source limits
+        let per_source = if self.has_per_source_limit() {
+            PER_SOURCE_BADGE
+        } else {
+            ""
+        };
+        self.badge_display = format!(
+            "{}: {}{per_source}",
+            self.protocol.display_name(),
+            self.port_display
+        );
+    }
+
+    /// Returns `true` when a rate or connection limit of this rule is kept per
+    /// source address (and therefore generates nftables dynamic sets).
+    pub fn has_per_source_limit(&self) -> bool {
+        self.rate_limit.is_some_and(|rl| rl.per_source)
+            || (self.connection_limit > 0 && self.connection_limit_per_source)
     }
 
     /// Sanitizes a label for use as nftables log prefix.
@@ -814,6 +861,7 @@ impl Rule {
             reject_type: RejectType::default(),
             rate_limit: None,
             connection_limit: 0,
+            connection_limit_per_source: false,
             log_enabled: false,
             // Initialize with empty caches - will be rebuilt next
             label_lowercase: String::new(),
@@ -958,12 +1006,33 @@ impl FirewallRuleset {
     /// `nft -f` text, so preview, export and Save to System cannot diverge from
     /// what is applied.
     ///
+    /// The batch starts with `add table`, `delete table`, `add table`: applying
+    /// it replaces the whole `inet drfw` table atomically, including the
+    /// dynamic sets of per-source limits (their state starts fresh on every
+    /// apply, and sets of deleted rules do not linger).
+    ///
     /// Rule ordering (per chain):
     /// 1. Base rules (optional RPF, loopback, invalid drop, established/related,
     ///    `DHCPv6` client replies)
     /// 2. ICMP redirect drops and ICMP allow rules
     /// 3. User rules, in profile order
     /// 4. End of input chain: optional drop logging, rate-limited reject, counter
+    ///
+    /// # Per-source limits
+    ///
+    /// A rate or connection limit marked per source is kept in a named dynamic
+    /// set, one per rule and address family (`rl4_`/`rl6_` for rate limits,
+    /// `cl4_`/`cl6_` for connection limits, followed by the first 12 hex digits
+    /// of the rule id). The set key is the source address; IPv6 sources are
+    /// keyed by their /64 prefix, since a single client usually controls a
+    /// whole /64. A rule without addresses that would otherwise match both
+    /// families is emitted once per family, each copy with its own set.
+    ///
+    /// ```text
+    /// set rl4_0123456789ab { type ipv4_addr; flags dynamic,timeout; timeout 120s; size 65535; }
+    /// tcp dport 22 update @rl4_0123456789ab { ip saddr limit rate 2/minute burst 2 packets } accept
+    /// tcp dport 22 add @cl4_0123456789ab { ip saddr ct count over 3 } drop
+    /// ```
     pub fn to_nftables_json(&self) -> serde_json::Value {
         let commands: Vec<serde_json::Value> = self
             .build_commands()
@@ -990,11 +1059,16 @@ impl FirewallRuleset {
         use serde_json::json;
 
         let advanced = &self.advanced_security;
-        // Base: table, flush, 3 chains, ~20 base rules; user rules: N (or 2N when dual-stack)
+        // Base: table (3), 3 chains, ~20 base rules; user rules: N (or 2N when dual-stack)
         let mut cmds = CommandList::with_capacity(32 + self.rules.len());
 
-        cmds.push(json!({ "add": { "table": { "family": NFT_FAMILY, "name": NFT_TABLE } } }));
-        cmds.push(json!({ "flush": { "table": { "family": NFT_FAMILY, "name": NFT_TABLE } } }));
+        // Replace the table: the first `add` guarantees it exists so the
+        // `delete` cannot fail. Unlike `flush table`, this also removes sets
+        // (per-source limit state, sets of deleted rules).
+        let table = json!({ "table": { "family": NFT_FAMILY, "name": NFT_TABLE } });
+        cmds.push(json!({ "add": table.clone() }));
+        cmds.push(json!({ "delete": table.clone() }));
+        cmds.push(json!({ "add": table }));
 
         Self::add_base_chains(&mut cmds, advanced);
         Self::add_base_rules(&mut cmds, advanced);
@@ -1423,13 +1497,27 @@ impl FirewallRuleset {
         }
         let ifaces = (iif.as_deref(), oif.as_deref());
 
-        if rule.sources.is_empty() && rule.destinations.is_empty() {
+        // Per-source limits key a set on `ip saddr` or `ip6 saddr`, so they
+        // need a family-specific copy even when the rule has no addresses.
+        let per_source = rule.has_per_source_limit();
+        if rule.sources.is_empty() && rule.destinations.is_empty() && !per_source {
             Self::add_single_rule(cmds, rule, ifaces, &AddressMatch::default());
             return;
         }
 
         let mut emitted = false;
         for (family, is_v6) in [("ip", false), ("ip6", true)] {
+            // A copy for a family the protocol cannot carry (ICMPv4 over IPv6)
+            // would never match; only skipped for per-source rules, whose
+            // copies exist solely for the set key.
+            let protocol_family_ok = if is_v6 {
+                !protocol_requires_ipv4(rule.protocol)
+            } else {
+                !protocol_requires_ipv6(rule.protocol)
+            };
+            if per_source && !protocol_family_ok {
+                continue;
+            }
             let sources: Vec<&IpNetwork> = rule
                 .sources
                 .iter()
@@ -1571,7 +1659,13 @@ impl FirewallRuleset {
             if inverted {
                 limit["inv"] = json!(true);
             }
-            expressions.push(json!({ "limit": limit }));
+            let limit = json!({ "limit": limit });
+            expressions.push(if rate_limit.per_source {
+                let kind = PerSourceKind::Rate(rate_limit);
+                Self::per_source_statement(cmds, rule, addresses.family, kind, limit)
+            } else {
+                limit
+            });
         }
 
         if rule.connection_limit > 0 {
@@ -1579,7 +1673,13 @@ impl FirewallRuleset {
             if inverted {
                 count["inv"] = json!(true);
             }
-            expressions.push(json!({ "ct count": count }));
+            let count = json!({ "ct count": count });
+            expressions.push(if rule.connection_limit_per_source {
+                let kind = PerSourceKind::Connections;
+                Self::per_source_statement(cmds, rule, addresses.family, kind, count)
+            } else {
+                count
+            });
         }
 
         // Per-rule logging (before action, so log happens even if action is accept)
@@ -1615,6 +1715,66 @@ impl FirewallRuleset {
             expressions,
             &rule.label,
         ));
+    }
+
+    /// Creates the dynamic set for one per-source limit of `rule` (one address
+    /// family) and returns the set statement that applies `stmt` per source:
+    /// `update @rl4_… { ip saddr limit rate … }` or
+    /// `add @cl4_… { ip saddr ct count … }`.
+    ///
+    /// The `add set` command is pushed immediately, so it precedes the rule
+    /// that references it.
+    fn per_source_statement(
+        cmds: &mut CommandList,
+        rule: &Rule,
+        family: &str,
+        kind: PerSourceKind,
+        stmt: serde_json::Value,
+    ) -> serde_json::Value {
+        use serde_json::json;
+
+        let is_v6 = family == "ip6";
+        let mut id_buf = Uuid::encode_buffer();
+        let id_hex = rule.id.simple().encode_lower(&mut id_buf);
+        let name = cmds.unique_set_name(&format!(
+            "{}{}_{}",
+            kind.name_prefix(),
+            if is_v6 { '6' } else { '4' },
+            &id_hex[..PER_SOURCE_SET_ID_HEX_DIGITS]
+        ));
+
+        let mut set = json!({
+            "family": NFT_FAMILY,
+            "table": NFT_TABLE,
+            "name": name,
+            "type": if is_v6 { "ipv6_addr" } else { "ipv4_addr" },
+            "size": PER_SOURCE_SET_SIZE,
+        });
+        match kind {
+            PerSourceKind::Rate(rate_limit) => {
+                set["flags"] = json!(["dynamic", "timeout"]);
+                set["timeout"] = json!(per_source_rate_timeout_secs(rate_limit));
+            }
+            // Elements with a `ct count` are garbage-collected once their last
+            // connection is gone, so no timeout is needed (or wanted: it would
+            // forget the count of long-lived connections).
+            PerSourceKind::Connections => set["flags"] = json!(["dynamic"]),
+        }
+        cmds.push(json!({ "add": { "set": set } }));
+
+        let saddr = json!({ "payload": { "protocol": family, "field": "saddr" } });
+        let elem = if is_v6 {
+            json!({ "&": [saddr, PER_SOURCE_IPV6_MASK] })
+        } else {
+            saddr
+        };
+        let mut statement = json!({ "set": {
+            "op": kind.set_op(),
+            "elem": elem,
+            "set": format!("@{name}"),
+        } });
+        statement["set"]["stmt"] = serde_json::Value::Array(vec![stmt]);
+        statement
     }
 
     fn add_termination_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
@@ -1656,6 +1816,86 @@ impl FirewallRuleset {
     }
 }
 
+/// Burst nft applies to a packet `limit` that does not specify one.
+const NFT_DEFAULT_LIMIT_BURST: u32 = 5;
+
+/// Maximum number of sources tracked by one per-source set.
+///
+/// Elements are created from the packet path, so without a cap a flood of
+/// spoofed source addresses could exhaust kernel memory (65535 elements are
+/// in the order of 10 MiB). When the set is full, the rule stops matching
+/// *new* sources until elements expire: they fall through to later rules (for
+/// an Accept rule, usually the drop policy). Known sources are unaffected.
+const PER_SOURCE_SET_SIZE: u32 = 65_535;
+/// Rule id hex digits in a per-source set name (`rl4_0123456789ab`): short
+/// enough to keep the preview readable, 48 random bits so that distinct
+/// rules practically never collide (collisions get a suffix anyway).
+const PER_SOURCE_SET_ID_HEX_DIGITS: usize = 12;
+/// IPv6 sources are tracked per /64: one client usually controls a whole
+/// /64, so keying on full addresses would let it rotate through 2^64 budgets.
+const PER_SOURCE_IPV6_MASK: &str = "ffff:ffff:ffff:ffff::";
+/// Lower bound of a per-source rate-limit set's element timeout, in units of
+/// the limit's period.
+const PER_SOURCE_MIN_TIMEOUT_UNITS: u64 = 2;
+/// Upper bound of a per-source rate-limit set's element timeout (one week).
+const PER_SOURCE_MAX_TIMEOUT_SECS: u64 = 7 * 86_400;
+/// Sidebar badge suffix for rules with a per-source limit.
+const PER_SOURCE_BADGE: &str = " · per-src";
+
+/// Element timeout, in seconds, of a per-source rate-limit set.
+///
+/// `update` refreshes an element's timeout on every packet from that source,
+/// so an element only expires after `timeout` of silence; the next packet
+/// then creates a fresh element with a full bucket. That is harmless as long
+/// as the bucket would have refilled completely during the silence anyway,
+/// i.e. the timeout is at least the bucket's refill time. A per-element bucket
+/// holds `burst` packets (5 when unset), which refill in `burst / rate`
+/// periods; one more period is added as margin (a rule's global `limit` was
+/// observed to start with `rate + burst` packets). The timeout is the larger
+/// of that and two periods (so a source sending at exactly the limit keeps
+/// its state between packets), capped at a week.
+fn per_source_rate_timeout_secs(rate_limit: RateLimit) -> u64 {
+    let burst = rate_limit
+        .burst
+        .filter(|&b| b > 0)
+        .unwrap_or(NFT_DEFAULT_LIMIT_BURST);
+    let refill_units = u64::from(burst).div_ceil(u64::from(rate_limit.count.max(1))) + 1;
+    rate_limit
+        .unit
+        .seconds()
+        .saturating_mul(refill_units.max(PER_SOURCE_MIN_TIMEOUT_UNITS))
+        .min(PER_SOURCE_MAX_TIMEOUT_SECS)
+}
+
+/// What a per-source dynamic set keeps per source address.
+#[derive(Debug, Clone, Copy)]
+enum PerSourceKind {
+    /// A token bucket (`limit rate`)
+    Rate(RateLimit),
+    /// A connection count (`ct count`)
+    Connections,
+}
+
+impl PerSourceKind {
+    /// Set name prefix (followed by the address family digit).
+    const fn name_prefix(self) -> &'static str {
+        match self {
+            Self::Rate(_) => "rl",
+            Self::Connections => "cl",
+        }
+    }
+
+    /// Set statement operation. `update` refreshes the element timeout on
+    /// every packet; `ct count` sets have no timeout, and nft requires `add`
+    /// for them.
+    const fn set_op(self) -> &'static str {
+        match self {
+            Self::Rate(_) => "update",
+            Self::Connections => "add",
+        }
+    }
+}
+
 /// nftables address family of the drfw table.
 const NFT_FAMILY: &str = "inet";
 /// Name of the drfw table.
@@ -1685,6 +1925,8 @@ pub(crate) struct NftCommand {
 struct CommandList {
     commands: Vec<NftCommand>,
     section: &'static str,
+    /// Names of the per-source sets created so far
+    set_names: HashSet<String>,
 }
 
 impl CommandList {
@@ -1692,7 +1934,23 @@ impl CommandList {
         Self {
             commands: Vec::with_capacity(capacity),
             section: SECTION_SETUP,
+            set_names: HashSet::new(),
         }
+    }
+
+    /// Reserves `base` as a set name, or `base_2`, `base_3`, … if taken.
+    ///
+    /// Names only collide when two rules share the first id digits (or the
+    /// whole id, which validation refuses); the suffix keeps their state apart.
+    fn unique_set_name(&mut self, base: &str) -> String {
+        let mut name = base.to_string();
+        let mut n = 2u32;
+        while self.set_names.contains(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        self.set_names.insert(name.clone());
+        name
     }
 
     fn push(&mut self, value: serde_json::Value) {

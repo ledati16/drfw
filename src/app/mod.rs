@@ -584,6 +584,8 @@ pub enum Message {
     RuleFormOutputInterfaceChanged(String),
     RuleFormRejectTypeChanged(crate::core::firewall::RejectType),
     RuleFormRateLimitBurstChanged(String),
+    RuleFormRateLimitPerSourceToggled(bool),
+    RuleFormConnectionLimitPerSourceToggled(bool),
     RuleFormLogEnabledToggled(bool),
 
     // Profile messages
@@ -1552,6 +1554,12 @@ impl State {
             }
             Message::RuleFormRateLimitBurstChanged(s) => {
                 handlers::handle_rule_form_rate_limit_burst_changed(self, s);
+            }
+            Message::RuleFormRateLimitPerSourceToggled(enabled) => {
+                handlers::handle_rule_form_rate_limit_per_source_toggled(self, enabled);
+            }
+            Message::RuleFormConnectionLimitPerSourceToggled(enabled) => {
+                handlers::handle_rule_form_connection_limit_per_source_toggled(self, enabled);
             }
             Message::RuleFormLogEnabledToggled(enabled) => {
                 handlers::handle_rule_form_log_enabled_toggled(self, enabled);

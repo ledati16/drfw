@@ -454,6 +454,35 @@ fn view_interface_fields<'a>(
     }
 }
 
+/// Helper text under the "Per source address" checkboxes.
+const PER_SOURCE_HELP: &str = "Each client IP (IPv6: each /64) gets its own limit. \
+     Recommended for SSH and other login services.";
+
+/// "Per source address" checkbox with its helper text (rate and connection limits).
+fn view_per_source_checkbox(
+    checked: bool,
+    on_toggle: fn(bool) -> Message,
+    theme: &crate::theme::AppTheme,
+    regular_font: iced::Font,
+) -> Element<'_, Message> {
+    column![
+        checkbox(checked)
+            .label("Per source address")
+            .on_toggle(on_toggle)
+            .size(16)
+            .spacing(8)
+            .text_size(12)
+            .font(regular_font)
+            .style(move |_, status| themed_checkbox(theme, status)),
+        text(PER_SOURCE_HELP)
+            .size(11)
+            .font(regular_font)
+            .color(theme.fg_muted),
+    ]
+    .spacing(2)
+    .into()
+}
+
 /// Advanced options section with destination, action, reject type, rate limiting, etc.
 fn view_advanced_section<'a>(
     form: &'a RuleForm,
@@ -656,6 +685,12 @@ fn view_advanced_section<'a>(
                 ]
                 .spacing(8),
             );
+            rate_limit_col = rate_limit_col.push(view_per_source_checkbox(
+                form.rate_limit_per_source,
+                Message::RuleFormRateLimitPerSourceToggled,
+                theme,
+                regular_font,
+            ));
         }
         if let Some(err) = rate_limit_error {
             rate_limit_col =
@@ -678,6 +713,12 @@ fn view_advanced_section<'a>(
                 .padding(8)
                 .font(mono_font)
                 .style(move |_, status| themed_text_input(theme, status)),
+            view_per_source_checkbox(
+                form.connection_limit_per_source,
+                Message::RuleFormConnectionLimitPerSourceToggled,
+                theme,
+                regular_font,
+            ),
         ]
         .spacing(4);
         if let Some(err) = connection_limit_error {

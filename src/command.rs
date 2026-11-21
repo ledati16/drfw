@@ -43,6 +43,7 @@
 //!     reject_type: RejectType::Default,
 //!     rate_limit: None,
 //!     connection_limit: 0,
+//!     connection_limit_per_source: false,
 //!     log_enabled: false,
 //!     // Cached fields (populated by rebuild_caches())
 //!     label_lowercase: String::new(),

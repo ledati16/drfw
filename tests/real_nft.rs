@@ -275,6 +275,7 @@ fn kitchen_sink_rules() -> Vec<Rule> {
                 TimeUnit::Day,
             ][i],
             burst,
+            per_source: false,
         });
         rules.push(r);
     }
@@ -288,6 +289,7 @@ fn kitchen_sink_rules() -> Vec<Rule> {
         count: 1,
         unit: TimeUnit::Second,
         burst: None,
+        per_source: false,
     });
     rules.push(r);
 
@@ -320,6 +322,8 @@ fn kitchen_sink_rules() -> Vec<Rule> {
         rules.push(r);
     }
 
+    rules.extend(per_source_rules());
+
     let mut r = rule("Outbound DNS", Protocol::Udp, vec![PortEntry::Single(53)]);
     r.chain = Chain::Output;
     r.output_interface = Some("eth*".to_string());
@@ -332,6 +336,77 @@ fn kitchen_sink_rules() -> Vec<Rule> {
     for r in &mut rules {
         r.rebuild_caches();
     }
+    rules
+}
+
+/// A per-source rate limit (`burst: None` = nft's default).
+fn per_source_rate(count: u32, unit: TimeUnit, burst: Option<u32>) -> RateLimit {
+    RateLimit {
+        count,
+        unit,
+        burst,
+        per_source: true,
+    }
+}
+
+/// Every shape of per-source limit: both families, pinned families, inverted
+/// (`over`) forms, rate + connection sets on one rule, ICMP, OUTPUT chain.
+fn per_source_rules() -> Vec<Rule> {
+    let mut rules = Vec::new();
+
+    let mut r = rule("PS accept", Protocol::Tcp, vec![PortEntry::Single(22)]);
+    r.rate_limit = Some(per_source_rate(2, TimeUnit::Minute, Some(2)));
+    rules.push(r);
+
+    let mut r = rule("PS drop mixed", Protocol::Tcp, vec![PortEntry::Single(80)]);
+    r.action = Action::Drop;
+    r.sources = nets(&["192.0.2.0/24", "2001:db8::/48"]);
+    r.rate_limit = Some(per_source_rate(20, TimeUnit::Second, None));
+    rules.push(r);
+
+    let mut r = rule(
+        "PS reset both",
+        Protocol::Tcp,
+        vec![PortEntry::Single(2222)],
+    );
+    r.action = Action::Reject;
+    r.reject_type = RejectType::TcpReset;
+    r.rate_limit = Some(per_source_rate(1, TimeUnit::Hour, Some(10)));
+    r.connection_limit = 3;
+    r.connection_limit_per_source = true;
+    rules.push(r);
+
+    let mut r = rule("PS conn only", Protocol::Any, vec![]);
+    r.destinations = nets(&["fd00::1"]);
+    r.connection_limit = 50;
+    r.connection_limit_per_source = true;
+    r.log_enabled = true;
+    rules.push(r);
+
+    let mut r = rule(
+        "PS conn reject",
+        Protocol::TcpAndUdp,
+        vec![PortEntry::Single(53)],
+    );
+    r.action = Action::Reject;
+    r.connection_limit = 8;
+    r.connection_limit_per_source = true;
+    rules.push(r);
+
+    let mut r = rule("PS icmp", Protocol::Icmp, vec![]);
+    r.rate_limit = Some(per_source_rate(10, TimeUnit::Second, Some(20)));
+    rules.push(r);
+
+    let mut r = rule("PS icmp both", Protocol::IcmpBoth, vec![]);
+    r.action = Action::Drop;
+    r.rate_limit = Some(per_source_rate(5, TimeUnit::Day, None));
+    rules.push(r);
+
+    let mut r = rule("PS out", Protocol::Tcp, vec![PortEntry::Single(25)]);
+    r.chain = Chain::Output;
+    r.rate_limit = Some(per_source_rate(1, TimeUnit::Day, Some(1000)));
+    rules.push(r);
+
     rules
 }
 
@@ -449,6 +524,169 @@ fn test_mixed_family_rule_never_widens_in_kernel() {
         !expr.contains("\"ip6\""),
         "IPv6 copy must not exist: {expr}"
     );
+}
+
+/// Applying the JSON replaces the table: per-source state starts fresh and the
+/// sets of removed rules disappear (`flush table` would keep both).
+#[test]
+fn test_apply_replaces_per_source_sets() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let mut ruleset = FirewallRuleset::new();
+    let mut r = rule("PS", Protocol::Tcp, vec![PortEntry::Single(22)]);
+    r.id = "0123456789abcdef0123456789abcdef".parse().expect("uuid");
+    r.rate_limit = Some(per_source_rate(2, TimeUnit::Minute, Some(2)));
+    ruleset.rules.push(r);
+    write_json(dir.path(), "with.json", &ruleset);
+    write_json(dir.path(), "without.json", &FirewallRuleset::new());
+
+    let output = run_in_netns_ok(
+        dir.path(),
+        "nft -j -f with.json \
+         && nft add element inet drfw rl4_0123456789ab '{ 192.0.2.7 }' \
+         && nft list set inet drfw rl4_0123456789ab > before.out \
+         && nft -j -f with.json \
+         && nft list set inet drfw rl4_0123456789ab > again.out \
+         && nft -j -f without.json \
+         && nft list table inet drfw",
+    );
+    assert!(read(dir.path(), "before.out").contains("192.0.2.7"));
+    let again = read(dir.path(), "again.out");
+    assert!(
+        !again.contains("192.0.2.7"),
+        "re-applying must reset per-source state:\n{again}"
+    );
+    assert!(again.contains("timeout 2m"), "set definition:\n{again}");
+    let table = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !table.contains("set "),
+        "the set of a removed rule must not linger:\n{table}"
+    );
+}
+
+/// Behaviour in the kernel: two clients behind a veth pair share one port, and
+/// exhausting one client's budget leaves the other's intact.
+///
+/// Uses two network namespaces (the test namespace and a child holding the
+/// client end of the veth pair). TCP connects come from bash `/dev/tcp`; the
+/// source address is chosen with a `/32` route's `src`. Nothing listens on the
+/// port, so a connect the firewall *accepted* fails with "Connection refused"
+/// (the kernel's RST), while a blocked one fails otherwise (drfw's final
+/// `reject with icmpx admin-prohibited`, or a timeout).
+#[test]
+fn test_per_source_rate_limit_keeps_clients_apart() {
+    if !real_nft_available() {
+        return;
+    }
+    let missing: Vec<&str> = ["bash", "ip", "nsenter", "timeout"]
+        .into_iter()
+        .filter(|tool| {
+            Command::new("sh")
+                .args(["-c", &format!("command -v {tool}")])
+                .output()
+                .map_or(true, |o| !o.status.success())
+        })
+        .collect();
+    if !missing.is_empty() {
+        assert!(
+            std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
+            "DRFW_REQUIRE_REAL_NFT=1 but the behaviour test needs {missing:?}"
+        );
+        eprintln!("SKIPPING per-source behaviour test: missing {missing:?}");
+        return;
+    }
+
+    let dir = work_dir();
+    let mut ruleset = FirewallRuleset::new();
+    let mut r = rule("PS ssh", Protocol::Tcp, vec![PortEntry::Single(2222)]);
+    r.id = "0123456789abcdef0123456789abcdef".parse().expect("uuid");
+    r.rate_limit = Some(per_source_rate(2, TimeUnit::Minute, Some(2)));
+    ruleset.rules.push(r);
+    // A per-source connection limit too, so the revert check below also
+    // reloads a populated `ct count` set
+    let mut r = rule("PS conn", Protocol::Tcp, vec![PortEntry::Single(2223)]);
+    r.id = "fedcba9876543210fedcba9876543210".parse().expect("uuid");
+    r.connection_limit = 5;
+    r.connection_limit_per_source = true;
+    ruleset.rules.push(r);
+    write_json(dir.path(), "rules.json", &ruleset);
+
+    let script = r#"
+set -eu
+unshare -n sleep 60 &
+client=$!
+trap 'kill $client 2>/dev/null' EXIT
+i=0
+while [ "$(readlink /proc/$client/ns/net)" = "$(readlink /proc/self/ns/net)" ]; do
+    i=$((i + 1)); [ $i -lt 100 ] || { echo "client namespace not ready" >&2; exit 1; }
+    sleep 0.05
+done
+ip link set lo up
+ip link add v0 type veth peer name v1 netns "$client"
+ip addr add 10.9.0.1/24 dev v0
+ip link set v0 up
+nsenter -t "$client" -n sh -c 'ip link set lo up && ip addr add 10.9.0.2/24 dev v1 \
+    && ip addr add 10.9.0.3/24 dev v1 && ip link set v1 up'
+nft -j -f rules.json
+attempt() { # source port
+    nsenter -t "$client" -n ip route replace 10.9.0.1/32 dev v1 src "$1"
+    if out=$(nsenter -t "$client" -n timeout 3 bash -c "exec 3<>/dev/tcp/10.9.0.1/$2" 2>&1); then
+        echo "$1 connected"
+    else
+        case $out in
+            *refused*) echo "$1 accepted" ;;
+            *) echo "$1 blocked" ;;
+        esac
+    fi
+}
+for src in 10.9.0.2 10.9.0.2 10.9.0.2 10.9.0.3 10.9.0.3 10.9.0.3; do
+    attempt "$src" 2222
+done
+attempt 10.9.0.2 2223 > /dev/null
+nft list set inet drfw rl4_0123456789ab > rate_set.out
+nft list set inet drfw cl4_fedcba987654 > conn_set.out
+# The revert guard restores `nft list table` output: it must reload with the
+# dynamic sets populated
+{ printf 'add table inet drfw\ndelete table inet drfw\n'; nft list table inet drfw; } > revert.nft
+nft -f revert.nft
+"#;
+    let output = Command::new("unshare")
+        .args(["-rn", "bash", "-c", script])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn unshare");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "behaviour script failed:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let outcomes: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        outcomes,
+        [
+            "10.9.0.2 accepted",
+            "10.9.0.2 accepted",
+            "10.9.0.2 blocked",
+            // The first client's exhausted budget does not affect the second
+            "10.9.0.3 accepted",
+            "10.9.0.3 accepted",
+            "10.9.0.3 blocked",
+        ],
+        "burst 2 per source"
+    );
+    let rate_set = read(dir.path(), "rate_set.out");
+    for element in [
+        "10.9.0.2 limit rate 2/minute",
+        "10.9.0.3 limit rate 2/minute",
+    ] {
+        assert!(rate_set.contains(element), "{element} missing:\n{rate_set}");
+    }
+    let conn_set = read(dir.path(), "conn_set.out");
+    assert!(conn_set.contains("flags dynamic"), "{conn_set}");
 }
 
 #[test]
@@ -1005,6 +1243,7 @@ prop_compose! {
         ],
         rate_limit in proptest::option::of((1u32..1000, 0usize..4, proptest::option::of(0u32..50))),
         connection_limit in prop_oneof![Just(0u32), 1u32..1000],
+        per_source in any::<(bool, bool)>(),
         log_enabled in any::<bool>(),
         tags in prop::collection::vec("\\PC{0,24}", 0..3),
     ) -> Rule {
@@ -1033,8 +1272,10 @@ prop_compose! {
             count,
             unit: [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day][unit],
             burst,
+            per_source: per_source.0,
         });
         r.connection_limit = connection_limit;
+        r.connection_limit_per_source = per_source.1;
         r.log_enabled = log_enabled;
         r.rebuild_caches();
         r

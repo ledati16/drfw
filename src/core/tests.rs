@@ -24,6 +24,7 @@ mod tests_impl {
             reject_type: RejectType::Default,
             rate_limit: None,
             connection_limit: 0,
+            connection_limit_per_source: false,
             log_enabled: false,
             // Cached fields
             label_lowercase: String::new(),
@@ -52,11 +53,12 @@ mod tests_impl {
         assert!(json["nftables"].is_array());
         let nft = json["nftables"].as_array().unwrap();
 
-        // table(1) + flush(1) + chains(3) + base(8: lo, invalid, ct, dhcpv6, icmp_redir, icmpv6_redir, icmp, icmpv6) + rejection(1) + counter(1) = 15
-        assert_eq!(nft.len(), 15);
+        // table(3: add, delete, add) + chains(3) + base(8: lo, invalid, ct, dhcpv6, icmp_redir, icmpv6_redir, icmp, icmpv6) + rejection(1) + counter(1) = 16
+        assert_eq!(nft.len(), 16);
 
         assert_eq!(nft[0]["add"]["table"]["name"], "drfw");
-        assert!(nft[1].get("flush").is_some());
+        assert_eq!(nft[1]["delete"]["table"]["name"], "drfw");
+        assert_eq!(nft[2]["add"]["table"]["name"], "drfw");
     }
     #[test]
     fn test_single_rule_json() {
@@ -70,10 +72,10 @@ mod tests_impl {
         let json = ruleset.to_nftables_json();
         let nft = json["nftables"].as_array().unwrap();
 
-        // 15 base + 1 user rule = 16
-        assert_eq!(nft.len(), 16);
+        // 16 base + 1 user rule = 17
+        assert_eq!(nft.len(), 17);
 
-        let user_rule = &nft[13]["add"]["rule"];
+        let user_rule = &nft[14]["add"]["rule"];
         assert_eq!(user_rule["chain"], "input");
         assert_eq!(user_rule["table"], "drfw");
         assert_eq!(user_rule["comment"], "Allow SSH");
@@ -113,10 +115,10 @@ mod tests_impl {
         let json = ruleset.to_nftables_json();
         let nft = json["nftables"].as_array().unwrap();
 
-        // 15 base + 1 user rule = 16
-        assert_eq!(nft.len(), 16);
+        // 16 base + 1 user rule = 17
+        assert_eq!(nft.len(), 17);
 
-        let user_rule = &nft[13]["add"]["rule"];
+        let user_rule = &nft[14]["add"]["rule"];
         let expr = user_rule["expr"].as_array().unwrap();
 
         // l4proto {tcp, udp} + source + th dport + accept. The port must never be
@@ -144,7 +146,7 @@ mod tests_impl {
         ruleset.rules.push(rule);
 
         let json = ruleset.to_nftables_json();
-        let user_rule = &json["nftables"][13]["add"]["rule"];
+        let user_rule = &json["nftables"][14]["add"]["rule"];
         let json_str = serde_json::to_string(user_rule).unwrap();
         assert!(!json_str.contains("l4proto"));
         assert!(!json_str.contains("dport"));
@@ -159,7 +161,7 @@ mod tests_impl {
             vec![PortEntry::Single(22)],
         ));
         let json = ruleset.to_nftables_json();
-        let expr = json["nftables"][13]["add"]["rule"]["expr"]
+        let expr = json["nftables"][14]["add"]["rule"]["expr"]
             .as_array()
             .unwrap()
             .clone();
@@ -325,7 +327,7 @@ mod tests_impl {
         let nft = json["nftables"].as_array().unwrap();
         let mut json_user_rules = Vec::new();
         for item in nft.iter().skip(12) {
-            // Skip table, flush, chains, base rules
+            // Skip table setup, chains, base rules
             if let Some(rule) = item.get("add").and_then(|a| a.get("rule"))
                 && let Some(comment) = rule.get("comment").and_then(|c| c.as_str())
                 && !comment.starts_with("allow")  // Skip base rule comments
@@ -580,6 +582,7 @@ mod property_tests {
                 count,
                 unit: units[unit],
                 burst,
+                per_source: false,
             });
             rule.connection_limit = connection_limit;
             rule.log_enabled = log_enabled;
@@ -713,7 +716,7 @@ mod property_tests {
             use crate::core::firewall::{RateLimit, TimeUnit};
 
             let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
-            let rate_limit = RateLimit { count, unit: units[unit_idx], burst: None };
+            let rate_limit = RateLimit { count, unit: units[unit_idx], burst: None, per_source: false };
 
             // Test serialization
             let json = serde_json::to_string(&rate_limit).unwrap();
@@ -731,7 +734,7 @@ mod property_tests {
             use crate::core::firewall::{RateLimit, TimeUnit};
 
             let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
-            let rate_limit = RateLimit { count, unit: units[unit_idx], burst: None };
+            let rate_limit = RateLimit { count, unit: units[unit_idx], burst: None, per_source: false };
 
             let display = rate_limit.to_string();
 
@@ -823,8 +826,8 @@ mod integration_tests {
         let json = ruleset.to_nftables_json();
         let nft_array = json["nftables"].as_array().unwrap();
 
-        // Should have base rules (15) + 3 user rules
-        assert_eq!(nft_array.len(), 18);
+        // Should have base rules (16) + 3 user rules
+        assert_eq!(nft_array.len(), 19);
 
         // Verify JSON can be serialized
         let json_str = serde_json::to_string(&json);
@@ -1337,6 +1340,7 @@ mod integration_tests {
             count: 5,
             unit: crate::core::firewall::TimeUnit::Minute,
             burst: Some(10),
+            per_source: false,
         });
         rule.rebuild_caches();
         ruleset.rules.push(rule);
@@ -1555,6 +1559,7 @@ mod generation_semantics_tests {
                 count: 5,
                 unit: TimeUnit::Minute,
                 burst: Some(0),
+                per_source: false,
             });
             rule.connection_limit = 3;
             rule.rebuild_caches();
@@ -1822,5 +1827,291 @@ mod timestamp_compat_tests {
             let json = legacy_rule_json(bad);
             assert!(serde_json::from_str::<Rule>(&json).is_err(), "{bad:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod per_source_tests {
+    //! JSON shape and text rendering of per-source rate and connection limits
+    //! (named dynamic sets). Kernel behaviour is tested in `tests/real_nft.rs`.
+
+    use serde_json::{Value, json};
+
+    use crate::core::firewall::{Action, FirewallRuleset, Protocol, RateLimit, Rule, TimeUnit};
+    use crate::core::test_helpers::create_test_rule;
+
+    const ID: &str = "0123456789abcdef0123456789abcdef";
+
+    fn per_source_rule(action: Action, rate: Option<RateLimit>, conn: u32) -> Rule {
+        let mut rule = create_test_rule("SSH", Some(22));
+        rule.id = ID.parse().unwrap();
+        rule.action = action;
+        rule.rate_limit = rate;
+        rule.connection_limit = conn;
+        rule.connection_limit_per_source = conn > 0;
+        rule.rebuild_caches();
+        rule
+    }
+
+    fn rate(count: u32, unit: TimeUnit, burst: Option<u32>) -> RateLimit {
+        RateLimit {
+            count,
+            unit,
+            burst,
+            per_source: true,
+        }
+    }
+
+    fn commands(rule: Rule) -> Vec<Value> {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.push(rule);
+        ruleset.to_nftables_json()["nftables"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    fn sets(cmds: &[Value]) -> Vec<&Value> {
+        cmds.iter().filter_map(|c| c["add"].get("set")).collect()
+    }
+
+    fn user_rules(cmds: &[Value]) -> Vec<&Value> {
+        cmds.iter()
+            .filter_map(|c| c["add"].get("rule"))
+            .filter(|r| r["comment"] == "SSH")
+            .collect()
+    }
+
+    /// The set statements of a rule
+    fn set_statements(rule: &Value) -> Vec<&Value> {
+        rule["expr"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e.get("set").filter(|s| s.get("op").is_some()))
+            .collect()
+    }
+
+    #[test]
+    fn test_accept_rate_limit_emits_one_set_and_rule_per_family() {
+        let cmds = commands(per_source_rule(
+            Action::Accept,
+            Some(rate(2, TimeUnit::Minute, Some(2))),
+            0,
+        ));
+
+        let sets = sets(&cmds);
+        assert_eq!(sets.len(), 2);
+        assert_eq!(
+            *sets[0],
+            json!({
+                "family": "inet", "table": "drfw", "name": "rl4_0123456789ab",
+                "type": "ipv4_addr", "size": 65535,
+                "flags": ["dynamic", "timeout"], "timeout": 120
+            })
+        );
+        assert_eq!(sets[1]["name"], "rl6_0123456789ab");
+        assert_eq!(sets[1]["type"], "ipv6_addr");
+
+        let rules = user_rules(&cmds);
+        assert_eq!(rules.len(), 2, "one rule per family");
+        let v4 = set_statements(rules[0]);
+        assert_eq!(
+            *v4[0],
+            json!({
+                "op": "update",
+                "elem": { "payload": { "protocol": "ip", "field": "saddr" } },
+                "set": "@rl4_0123456789ab",
+                "stmt": [{ "limit": { "rate": 2, "per": "minute", "burst": 2 } }]
+            })
+        );
+        let v6 = set_statements(rules[1]);
+        assert_eq!(
+            v6[0]["elem"],
+            json!({ "&": [
+                { "payload": { "protocol": "ip6", "field": "saddr" } },
+                "ffff:ffff:ffff:ffff::"
+            ] })
+        );
+        assert_eq!(v6[0]["set"], "@rl6_0123456789ab");
+        // No global limit statement next to the per-source one
+        let expr = rules[0]["expr"].to_string();
+        assert_eq!(expr.matches("\"limit\"").count(), 1);
+
+        // Every set is created before the first rule that references it
+        let position = |pred: &dyn Fn(&Value) -> bool| cmds.iter().position(pred).unwrap();
+        let set_at = position(&|c| c["add"]["set"]["name"] == "rl6_0123456789ab");
+        let rule_at = position(&|c| c["add"]["rule"]["expr"].to_string().contains("@rl6_"));
+        assert!(set_at < rule_at);
+    }
+
+    #[test]
+    fn test_drop_inverts_inside_the_set_statement_and_ct_count_uses_add() {
+        let cmds = commands(per_source_rule(
+            Action::Drop,
+            Some(rate(5, TimeUnit::Second, None)),
+            3,
+        ));
+        let rules = user_rules(&cmds);
+        assert_eq!(rules.len(), 2);
+        let stmts = set_statements(rules[0]);
+        assert_eq!(stmts.len(), 2, "rate and connection sets");
+        assert_eq!(
+            stmts[0]["stmt"],
+            json!([{ "limit": { "rate": 5, "per": "second", "inv": true } }])
+        );
+        assert_eq!(stmts[1]["op"], "add");
+        assert_eq!(stmts[1]["set"], "@cl4_0123456789ab");
+        assert_eq!(
+            stmts[1]["stmt"],
+            json!([{ "ct count": { "val": 3, "inv": true } }])
+        );
+
+        let conn_set = sets(&cmds)
+            .into_iter()
+            .find(|s| s["name"] == "cl4_0123456789ab")
+            .expect("connection set");
+        assert_eq!(conn_set["flags"], json!(["dynamic"]));
+        assert!(
+            conn_set.get("timeout").is_none(),
+            "ct count elements expire with their connections"
+        );
+    }
+
+    #[test]
+    fn test_families_follow_addresses_and_protocol() {
+        // IPv4 sources: IPv4 copy only
+        let mut rule = per_source_rule(Action::Accept, Some(rate(3, TimeUnit::Minute, None)), 0);
+        rule.sources = vec!["192.0.2.0/24".parse().unwrap()];
+        let cmds = commands(rule);
+        let names: Vec<_> = sets(&cmds).iter().map(|s| s["name"].clone()).collect();
+        assert_eq!(names, vec![json!("rl4_0123456789ab")]);
+        assert_eq!(user_rules(&cmds).len(), 1);
+
+        // ICMPv6 without addresses: IPv6 copy only
+        let mut rule = per_source_rule(Action::Accept, Some(rate(3, TimeUnit::Minute, None)), 0);
+        rule.protocol = Protocol::Icmpv6;
+        rule.ports = Vec::new();
+        let cmds = commands(rule);
+        let names: Vec<_> = sets(&cmds).iter().map(|s| s["name"].clone()).collect();
+        assert_eq!(names, vec![json!("rl6_0123456789ab")]);
+
+        // A global limit keeps the single family-less rule and creates no set
+        let mut rule = per_source_rule(Action::Accept, Some(rate(3, TimeUnit::Minute, None)), 0);
+        rule.rate_limit.as_mut().unwrap().per_source = false;
+        let cmds = commands(rule);
+        assert_eq!(sets(&cmds), [] as [&Value; 0]);
+        assert_eq!(user_rules(&cmds).len(), 1);
+
+        // A per-source flag without a connection limit does nothing
+        let mut rule = per_source_rule(Action::Accept, None, 0);
+        rule.connection_limit_per_source = true;
+        let cmds = commands(rule);
+        assert_eq!(sets(&cmds), [] as [&Value; 0]);
+        assert_eq!(user_rules(&cmds).len(), 1);
+    }
+
+    #[test]
+    fn test_rate_set_timeout_covers_the_bucket_refill_time() {
+        let timeout = |rate_limit: Option<RateLimit>| {
+            sets(&commands(per_source_rule(Action::Accept, rate_limit, 0)))[0]["timeout"].clone()
+        };
+        // At least two periods
+        assert_eq!(timeout(Some(rate(2, TimeUnit::Minute, Some(2)))), 120);
+        assert_eq!(timeout(Some(rate(10, TimeUnit::Second, None))), 2);
+        assert_eq!(timeout(Some(rate(100, TimeUnit::Hour, Some(50)))), 7_200);
+        // Bucket refill time plus one period: burst 10 at 1/minute refills in
+        // 10 minutes; no burst means the kernel default of 5 packets
+        assert_eq!(timeout(Some(rate(1, TimeUnit::Minute, Some(10)))), 660);
+        assert_eq!(timeout(Some(rate(1, TimeUnit::Minute, None))), 360);
+        assert_eq!(timeout(Some(rate(3, TimeUnit::Minute, Some(7)))), 240);
+        // Capped at a week
+        assert_eq!(timeout(Some(rate(1, TimeUnit::Day, Some(1000)))), 604_800);
+    }
+
+    #[test]
+    fn test_set_names_never_collide() {
+        let mut ruleset = FirewallRuleset::new();
+        // Same first 12 hex digits, different ids
+        for id in [ID, "0123456789abffffffffffffffffffff"] {
+            let mut rule =
+                per_source_rule(Action::Accept, Some(rate(3, TimeUnit::Minute, None)), 0);
+            rule.id = id.parse().unwrap();
+            rule.sources = vec!["192.0.2.1/32".parse().unwrap()];
+            ruleset.rules.push(rule);
+        }
+        let json = ruleset.to_nftables_json();
+        let cmds = json["nftables"].as_array().unwrap();
+        let names: Vec<_> = sets(cmds).iter().map(|s| s["name"].clone()).collect();
+        assert_eq!(
+            names,
+            vec![json!("rl4_0123456789ab"), json!("rl4_0123456789ab_2")]
+        );
+        assert!(json.to_string().contains("\"@rl4_0123456789ab_2\""));
+    }
+
+    #[test]
+    fn test_text_renders_sets_and_set_statements() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.push(per_source_rule(
+            Action::Reject,
+            Some(rate(2, TimeUnit::Minute, Some(2))),
+            4,
+        ));
+        let text = ruleset.to_nft_text();
+
+        let set_block = "    set rl4_0123456789ab {\n        type ipv4_addr\n        \
+                         flags dynamic,timeout\n        timeout 120s\n        size 65535\n    }\n";
+        assert!(text.contains(set_block), "set block missing:\n{text}");
+        assert!(
+            text.contains("    set cl6_0123456789ab {\n        type ipv6_addr\n        flags dynamic\n        size 65535\n    }\n"),
+            "connection set block missing:\n{text}"
+        );
+        // Sets are declared before the chains that use them
+        assert!(text.find("set rl4_").unwrap() < text.find("chain input").unwrap());
+        assert!(
+            text.contains(
+                "meta l4proto tcp tcp dport 22 \
+             update @rl4_0123456789ab { ip saddr limit rate over 2/minute burst 2 packets } \
+             add @cl4_0123456789ab { ip saddr ct count over 4 } reject comment \"SSH\""
+            ),
+            "{text}"
+        );
+        assert!(text.contains(
+            "update @rl6_0123456789ab { ip6 saddr & ffff:ffff:ffff:ffff:: limit rate over 2/minute burst 2 packets }"
+        ), "{text}");
+        assert!(!text.contains("drfw-render-error"));
+        // The table is replaced, never just flushed
+        assert_eq!(text.matches("\ntable inet drfw\n").count(), 1);
+        assert!(text.contains("\ndelete table inet drfw\n"));
+    }
+
+    #[test]
+    fn test_per_source_flags_serde() {
+        // Old profiles (no flags) load with the flags off
+        let old: RateLimit = serde_json::from_str(r#"{"count":5,"unit":"Minute"}"#).unwrap();
+        assert!(!old.per_source);
+        // Off is not written, so profiles without per-source limits are unchanged
+        let rule = create_test_rule("x", Some(22));
+        let value = serde_json::to_value(&rule).unwrap();
+        assert!(value.get("connection_limit_per_source").is_none());
+        let mut limited = per_source_rule(Action::Accept, Some(rate(5, TimeUnit::Minute, None)), 2);
+        let value = serde_json::to_value(&limited).unwrap();
+        assert_eq!(value["rate_limit"]["per_source"], true);
+        assert_eq!(value["connection_limit_per_source"], true);
+        let mut back: Rule = serde_json::from_value(value).unwrap();
+        back.rebuild_caches();
+        limited.rebuild_caches();
+        assert_eq!(back, limited);
+    }
+
+    #[test]
+    fn test_badge_marks_per_source_rules() {
+        let rule = per_source_rule(Action::Accept, Some(rate(5, TimeUnit::Minute, None)), 0);
+        assert_eq!(rule.badge_display, "TCP: 22 · per-src");
+        let mut rule = create_test_rule("x", Some(22));
+        rule.connection_limit_per_source = true; // no limit: not per source
+        rule.rebuild_caches();
+        assert_eq!(rule.badge_display, "TCP: 22");
     }
 }
