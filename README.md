@@ -122,6 +122,7 @@ mode.
 - **Diff view**: See exactly what changes before applying
 - **In-app notifications**: Success, warning, and error banners
 - **Diagnostics viewer**: Built-in event log browser with filter and search, times in local time (with the date for older events)
+- **Exposure view**: Lists the programs listening for connections on this computer (TCP and UDP, IPv4 and IPv6) and, for each, who can reach it through your rules: everyone, specific source networks, nobody, or local only (bound to loopback). Sockets open to everyone are flagged, rate- or interface-limited access is spelled out, and the deciding rule opens in the editor with one click. It compares the rules in the editor with the ones DRFW applied, so you can see what a change would expose before applying it. The socket list is read without privileges; process names are shown only for your own processes, because naming the processes behind other users' (e.g. system services') sockets needs root, which DRFW deliberately does not use for this
 - **Keyboard shortcuts**: Ctrl+N (new rule), Ctrl+S (apply), Ctrl+E (export), F1 (help)
 
 ### Profile Management

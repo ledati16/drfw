@@ -5,6 +5,7 @@
 
 pub mod apply;
 pub mod export;
+pub mod exposure;
 pub mod profiles;
 pub mod rules;
 pub mod settings;
@@ -16,6 +17,7 @@ pub mod test_utils;
 // Re-export all handlers for clean imports in app/mod.rs
 pub(crate) use apply::*;
 pub(crate) use export::*;
+pub(crate) use exposure::*;
 use iced::Task;
 pub(crate) use profiles::*;
 pub(crate) use rules::*;

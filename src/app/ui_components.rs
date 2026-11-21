@@ -586,6 +586,32 @@ pub fn card_container(theme: &AppTheme) -> container::Style {
     }
 }
 
+/// A card that needs attention (e.g. a socket open to everyone): the
+/// standard card with a 2px danger border (radius kept, see STYLE.md §6).
+pub fn attention_card_container(theme: &AppTheme) -> container::Style {
+    let mut style = card_container(theme);
+    style.border = Border {
+        color: theme.danger,
+        width: 2.0,
+        radius: 8.0.into(),
+    };
+    style
+}
+
+/// A small solid badge in the danger color with text on it (e.g. "OPEN TO
+/// EVERYONE"); pill radius as for tags (STYLE.md §14).
+pub fn danger_badge_container(theme: &AppTheme) -> container::Style {
+    container::Style {
+        background: Some(theme.danger.into()),
+        text_color: Some(theme.fg_on_accent),
+        border: Border {
+            radius: 12.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 pub fn active_card_container(theme: &AppTheme) -> container::Style {
     container::Style {
         background: Some(theme.bg_active.into()),

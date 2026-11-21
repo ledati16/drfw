@@ -10,6 +10,7 @@ pub const WORKSPACE_SCROLLABLE_ID: &str = "workspace-preview";
 // Submodule declarations
 mod confirmation;
 mod diagnostics;
+mod exposure;
 mod helper_modals;
 mod modals;
 mod pickers;
@@ -35,6 +36,9 @@ pub const DIFF_GUTTER_WIDTH_PX: f32 = 18.0;
 /// The layers drawn over the sidebar and workspace (see [`LAYERS`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Layer {
+    /// The Exposure panel, below every dialog: a rule opened from it is
+    /// edited on top of it
+    Exposure,
     /// The main-flow dialog: one of "Start fresh?", a risky-setting warning,
     /// the rule form, the apply flow, Save to System, or the verification
     /// errors (the first open one, in that order)
@@ -58,7 +62,8 @@ pub(crate) enum Layer {
 /// Draw order of the layers, bottom to top. Must agree with
 /// `handlers::top_layer` (which decides what Escape/Enter act on); a test
 /// checks that it does.
-pub(crate) const LAYERS: [Layer; 11] = [
+pub(crate) const LAYERS: [Layer; 12] = [
+    Layer::Exposure,
     Layer::Dialog,
     Layer::Helper,
     Layer::Diagnostics,
@@ -138,6 +143,12 @@ fn modal<'a>(state: &'a State, content: Element<'a, Message>) -> Element<'a, Mes
 pub(crate) fn layer_element(state: &State, layer: Layer) -> Option<Element<'_, Message>> {
     let theme = &state.theme;
     let content: Element<'_, Message> = match layer {
+        Layer::Exposure => exposure::view_exposure_modal(
+            state.exposure.panel.as_ref()?,
+            theme,
+            state.font_regular,
+            state.font_mono,
+        ),
         Layer::Dialog => dialog(state)?,
         Layer::Helper => {
             let (Some(form), Some(helper)) = (&state.rule_form, &state.rule_form_helper) else {
@@ -306,6 +317,7 @@ mod tests {
             TopLayer::ExportModal => Layer::Export,
             TopLayer::Diagnostics => Layer::Diagnostics,
             TopLayer::HelperModal => Layer::Helper,
+            TopLayer::Exposure => Layer::Exposure,
             TopLayer::StartFreshConfirm
             | TopLayer::Warning
             | TopLayer::RuleForm
@@ -338,6 +350,16 @@ mod tests {
         };
         check(&state);
 
+        let _ = crate::app::handlers::handle_toggle_exposure(&mut state, true);
+        check(&state);
+        state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(
+            &crate::core::verify::VerifyResult::failure(vec![
+                crate::core::verify::VerifyIssue::unlocated("bad"),
+            ]),
+            &state.ruleset,
+        ));
+        state.show_verify_errors = true;
+        check(&state);
         state.rule_form = Some(crate::app::RuleForm::default());
         check(&state);
         state.rule_form_helper = Some(crate::app::RuleFormHelper {

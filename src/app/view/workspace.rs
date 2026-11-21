@@ -38,6 +38,11 @@ pub fn view_workspace<'a>(
     }
     let nav_row = nav_row.extend([
         // Global Utility Tools
+        button(text("Exposure").size(13).font(state.font_regular))
+            .on_press(Message::ToggleExposure(true))
+            .padding([8, 16])
+            .style(move |_, status| secondary_button(theme, status))
+            .into(),
         button(text("Export").size(13).font(state.font_regular))
             .on_press(Message::ToggleExportModal(true))
             .padding([8, 16])

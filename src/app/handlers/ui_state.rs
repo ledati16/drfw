@@ -454,6 +454,9 @@ pub(crate) enum TopLayer {
     /// "Verification Errors" panel. Below the rule form, so a rule opened
     /// from the panel is edited on top of it and Escape returns to the list.
     VerifyErrors,
+    /// Exposure panel (listening sockets). Below every dialog, so a rule
+    /// opened from it is edited on top and Escape returns to the panel.
+    Exposure,
     /// No modal: the sidebar and workspace
     Base,
 }
@@ -498,6 +501,7 @@ pub(crate) fn top_layer(state: &State) -> TopLayer {
             | AppStatus::PendingConfirmation { .. } => TopLayer::ApplyFlow,
             AppStatus::AwaitingSaveToSystem => TopLayer::SaveToSystem,
             _ if state.show_verify_errors => TopLayer::VerifyErrors,
+            _ if state.exposure.panel.is_some() => TopLayer::Exposure,
             _ => TopLayer::Base,
         }
     }
@@ -529,7 +533,8 @@ pub(crate) fn layer_inputs(layer: TopLayer) -> &'static [&'static str] {
         | TopLayer::Warning
         | TopLayer::ApplyFlow
         | TopLayer::SaveToSystem
-        | TopLayer::VerifyErrors => &[],
+        | TopLayer::VerifyErrors
+        | TopLayer::Exposure => &[],
     }
 }
 
@@ -579,6 +584,7 @@ fn escape_message(state: &State) -> Option<Message> {
         }
         TopLayer::SaveToSystem => Some(Message::SaveToSystemCancelled),
         TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
+        TopLayer::Exposure => Some(Message::ToggleExposure(false)),
         TopLayer::Base => state.deleting_id.is_some().then_some(Message::CancelDelete),
     }
 }
@@ -587,7 +593,8 @@ fn escape_message(state: &State) -> Option<Message> {
 ///
 /// Chosen deliberately per layer:
 /// - Dialogs run their highlighted (primary) button; the dialog after a
-///   failed close keeps DRFW open.
+///   failed close keeps DRFW open. Read-only panels (shortcuts, verification
+///   errors, exposure) close.
 /// - Yes/no prompts (delete a rule or profile, clear the log, discard form
 ///   changes) confirm, as their confirm button is the one being asked about.
 /// - The auto-revert countdown does **not** confirm on Enter: a stray or
@@ -650,6 +657,8 @@ fn enter_message(state: &State) -> Option<Message> {
             .primary_source()
             .map(Message::SaveToSystemConfirmed),
         TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
+        // A read-only panel: Enter closes it (its highlighted button)
+        TopLayer::Exposure => Some(Message::ToggleExposure(false)),
         TopLayer::Base => state.deleting_id.map(Message::DeleteRule),
     }
 }
@@ -1106,6 +1115,7 @@ mod tests {
         let mut state = create_test_state();
         state.rule_search = "ssh".into();
         state.rule_search_lowercase = "ssh".into();
+        let _ = crate::app::handlers::handle_toggle_exposure(&mut state, true);
         state.verify_errors = Some(verify_errors_panel());
         handle_toggle_verify_errors(&mut state, true);
         open_helper(&mut state);
@@ -1128,6 +1138,7 @@ mod tests {
             "CloseHelper",
             "CancelRuleForm",
             "ToggleVerifyErrors(false)",
+            "ToggleExposure(false)",
         ];
         for want in expected {
             let got = press(&mut state, &named(Named::Escape), Status::Ignored)
@@ -1144,7 +1155,8 @@ mod tests {
                 "ToggleDiagnostics(false)" => Message::ToggleDiagnostics(false),
                 "CloseHelper" => Message::CloseHelper,
                 "CancelRuleForm" => Message::CancelRuleForm,
-                _ => Message::ToggleVerifyErrors(false),
+                "ToggleVerifyErrors(false)" => Message::ToggleVerifyErrors(false),
+                _ => Message::ToggleExposure(false),
             };
             let _ = state.update(message);
         }
@@ -1406,6 +1418,10 @@ mod tests {
         crate::app::handlers::handle_delete_profile_requested(&mut state, "x".into());
         assert_eq!(enter(&mut state).as_deref(), Some("ConfirmDeleteProfile"));
         state.profile_manager = None;
+
+        let _ = crate::app::handlers::handle_toggle_exposure(&mut state, true);
+        assert_eq!(enter(&mut state).as_deref(), Some("ToggleExposure(false)"));
+        state.exposure.panel = None;
 
         state.show_diagnostics = true;
         assert_eq!(enter(&mut state), None);

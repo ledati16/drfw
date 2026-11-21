@@ -1,5 +1,6 @@
 mod debounce;
 mod diagnostics;
+mod exposure;
 mod focus;
 mod forms;
 mod handlers;
@@ -264,6 +265,8 @@ pub struct State {
     pub close_after_rename: bool,
     /// Saving on close failed: the "Close anyway?" dialog shows this text
     pub close_error: Option<String>,
+    /// The Exposure panel (listening sockets and who can reach them)
+    pub exposure: exposure::ExposureState,
 }
 
 /// Value labels of the settings tab sliders (and the apply dialog's timer),
@@ -627,6 +630,12 @@ pub enum Message {
     ExportAsNft,
     ExportResult(Result<String, String>),
     ToggleShortcutsHelp(bool),
+    /// Open (and scan) or close the Exposure panel
+    ToggleExposure(bool),
+    /// Re-read the listening sockets
+    RefreshExposure,
+    /// A socket scan finished: (scan generation, sockets or why not)
+    ExposureScanned(u64, Result<Vec<crate::core::exposure::SocketInfo>, String>),
     Undo,
     Redo,
     OpenThemePicker,
@@ -875,6 +884,7 @@ impl State {
             closing: false,
             close_after_rename: false,
             close_error: None,
+            exposure: exposure::ExposureState::default(),
         };
 
         // Initialize all caches properly via centralized logic
@@ -1008,6 +1018,7 @@ impl State {
             closing: false,
             close_after_rename: false,
             close_error: None,
+            exposure: exposure::ExposureState::default(),
         };
 
         state.set_available_profiles(vec!["test".to_string()]);
@@ -1084,6 +1095,10 @@ impl State {
         // "Edit Rule" only for rules that still exist
         if let Some(panel) = &mut self.verify_errors {
             panel.sync_with(&self.ruleset);
+        }
+        // Who can reach the listening sockets now (no re-scan)
+        if let Some(panel) = &mut self.exposure.panel {
+            panel.rebuild(&self.ruleset, self.last_applied_ruleset.as_ref());
         }
 
         self.cached_nft_tokens = syntax_cache::tokenize_nft(&nft_text);
@@ -1667,6 +1682,11 @@ impl State {
             }
             Message::ToggleShortcutsHelp(show) => {
                 handlers::handle_toggle_shortcuts_help(self, show);
+            }
+            Message::ToggleExposure(show) => return handlers::handle_toggle_exposure(self, show),
+            Message::RefreshExposure => return handlers::handle_refresh_exposure(self),
+            Message::ExposureScanned(generation, result) => {
+                handlers::handle_exposure_scanned(self, generation, result);
             }
             Message::Undo => return handlers::handle_undo(self),
             Message::Redo => return handlers::handle_redo(self),

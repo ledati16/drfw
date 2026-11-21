@@ -7,6 +7,8 @@
 //! - [`apply_guard`]: Applying rules with a root-side auto-revert guard
 //! - [`boot`]: Whether a systemd unit loads the saved rules at boot
 //! - [`confirmed`]: The record of the last ruleset applied and kept
+//! - [`evaluate`]: What the generated input chain does with a new connection
+//! - [`exposure`]: Listening sockets and who can reach them through the rules
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
@@ -17,10 +19,13 @@
 //! - [`validate`]: Rule and ruleset validation (shared by the form, loader and apply)
 //! - [`retention`]: Confirmation before dropping most of the kept rules
 
+pub(crate) mod addr_set;
 pub mod apply_guard;
 pub mod boot;
 pub mod confirmed;
 pub mod error;
+pub mod evaluate;
+pub mod exposure;
 pub mod firewall;
 pub mod nft_errors;
 pub mod nft_text;

@@ -602,6 +602,11 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/core/boot.rs` | `systemctl` output mapping | `enablement_from_output()`, `BootStatus` summaries and checkbox rules |
 | `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts; which applies write the kept-ruleset record), CLI `status`/`check`/`save`/`print-service-unit`, the retention guard of `apply`/`save` and the `--help` exit codes (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
 | `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
+| `src/core/evaluate.rs` | Unit tests for the rule evaluator | Chain model (order, family copies, skipped rules), limits/conditions as `Limited`, reachability sets (subtracted drops, `AllExcept`, conditional access, caveats), base rule names match the generator |
+| `src/core/addr_set.rs` | Unit tests for the address-set arithmetic | Union/intersection/difference/complement, CIDR decomposition |
+| `src/core/exposure.rs` | Unit tests for socket discovery | `/proc/net` parsing (IPv4, IPv6, v4-mapped, UDP), inode → process mapping on a fixture tree, dual-stack heuristic, exposure rows |
+| `src/app/exposure.rs` | Unit tests for the Exposure panel model | Row order and badges, editor vs applied answers, scan errors |
+| `tests/evaluate.rs` | Evaluator property tests; kernel agreement in two `unshare -rn` namespaces over veth (own binary re-executed as server/client helpers) | Per-source verdicts agree with the reachability sets (proptest); **the evaluator agrees with real nft** on random rulesets and probes (proptest) and directed cases |
 | `tests/verify_errors.rs` | Error attribution against real `nft` in `unshare -rn`, and `drfw check` output (own binary) | A rejected ruleset names the rule that caused each error (also with per-source sets), CLI prints mapped errors without color codes |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
@@ -1085,6 +1090,13 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - Root-side revert guard (`core::apply_guard`): one elevation applies the rules
   and starts a detached root watcher that restores the previous table unless
   the user confirms in time, even if DRFW or the session dies
+- Rule evaluator (`core::evaluate`): what the generated input chain does with a
+  new TCP/UDP connection, and which rule decides; for an unknown source, the
+  set of sources that can connect (documented approximations in the module)
+- Exposure view (`core::exposure`, GUI "Exposure"): listening sockets read
+  unprivileged from `/proc/net`, each evaluated against the editor and the
+  applied rules ("reachable from: everyone / sources / nobody / local only");
+  process names only for the user's own processes (no root for this)
 
 ### Not Implemented (Intentional)
 - **Per-rule ICMP type filtering:** 99% of users don't understand 20+ ICMP types; ICMPv6 filtering is dangerous (the global strict ICMP mode allows a fixed set of essential types)
