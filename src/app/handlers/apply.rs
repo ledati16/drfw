@@ -128,9 +128,13 @@ impl ApplySession {
     }
 
     /// Applying takes "Apply anyway" (Enter is refused): the retention guard
-    /// or the lockout check warns.
+    /// warns, or the lockout check does (its notes alone do not).
     pub fn needs_confirmation(&self) -> bool {
-        self.retention.is_some() || self.lockout.is_some()
+        self.retention.is_some()
+            || self
+                .lockout
+                .as_ref()
+                .is_some_and(LockoutWarning::needs_confirmation)
     }
 
     /// Computes both warnings for `verified` from the current record and
@@ -927,9 +931,13 @@ impl SaveToSystemDialog {
     }
 
     /// Saving the editor's rules takes "Save anyway": the retention guard or
-    /// the lockout check warns about them.
+    /// the lockout check warns about them (lockout notes alone do not).
     pub fn editor_needs_confirmation(&self) -> bool {
-        self.retention.is_some() || self.lockout.is_some()
+        self.retention.is_some()
+            || self
+                .lockout
+                .as_ref()
+                .is_some_and(LockoutWarning::needs_confirmation)
     }
 
     /// The dialog's primary (highlighted, Enter) choice: the tested rules.
@@ -2139,6 +2147,69 @@ mod tests {
         assert!(!state.apply_session.as_ref().unwrap().needs_confirmation());
         let _ = state.update(Message::ProceedToApply);
         assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    /// Adds `rule` to the editor, clicks Apply, passes the verification and
+    /// returns the session of the "Commit Changes?" dialog.
+    fn apply_dialog_with(state: &mut State, rule: crate::core::firewall::Rule) -> &ApplySession {
+        state.ruleset.rules.push(rule);
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(state);
+        let _ = handle_verify_completed(state, Ok(VerifyResult::success()));
+        state.apply_session.as_ref().expect("session")
+    }
+
+    /// A rate-limited SSH accept (the recommended setup) is a note in the
+    /// dialog: "Apply" and Enter work, no "Apply anyway".
+    #[test]
+    fn test_lockout_limited_ssh_is_a_note_without_confirmation() {
+        let mut state = create_test_state();
+        state.ssh_sessions = vec![ssh_session()];
+        let mut ssh = create_test_rule("SSH", Some(22));
+        ssh.rate_limit = Some(crate::core::firewall::RateLimit {
+            count: 3,
+            unit: crate::core::firewall::TimeUnit::Minute,
+            burst: None,
+            per_source: true,
+        });
+        ssh.rebuild_caches();
+        let session = apply_dialog_with(&mut state, ssh);
+        assert!(!session.needs_confirmation());
+        let lockout = session.lockout().expect("a note");
+        assert!(lockout.lines.is_empty(), "{lockout:?}");
+        assert_eq!(lockout.notes.len(), 1);
+        assert!(
+            lockout.notes[0].contains("accepted up to 3/minute per source by rule \"SSH\""),
+            "{lockout:?}"
+        );
+        let _ = state.update(Message::ProceedToApply);
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    /// "SSH on eth0 only": allowed when the session's server address is on
+    /// eth0, blocked (confirmation) when it is on another interface, and
+    /// "blocked in some cases" (confirmation) when the interface is unknown.
+    #[test]
+    fn test_lockout_interface_bound_ssh_with_resolved_interface() {
+        let mut on_eth0 = create_test_rule("SSH on eth0", Some(22));
+        on_eth0.interface = Some("eth0".into());
+        on_eth0.rebuild_caches();
+        for (interface, confirm) in [(Some("eth0"), false), (Some("wlan0"), true), (None, true)] {
+            let mut state = create_test_state();
+            let mut session = ssh_session();
+            session.interface = interface.map(str::to_owned);
+            state.ssh_sessions = vec![session];
+            let apply = apply_dialog_with(&mut state, on_eth0.clone());
+            assert_eq!(apply.needs_confirmation(), confirm, "{interface:?}");
+            if confirm {
+                let _ = state.update(Message::ProceedToApply);
+                assert_eq!(state.status, AppStatus::AwaitingApply, "{interface:?}");
+            } else {
+                assert!(apply.lockout().is_none(), "{:?}", apply.lockout());
+                let _ = state.update(Message::ProceedToApply);
+                assert_eq!(state.status, AppStatus::Applying);
+            }
+        }
     }
 
     /// The sessions found off the UI thread replace the known ones and the

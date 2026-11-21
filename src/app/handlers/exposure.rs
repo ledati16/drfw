@@ -57,8 +57,10 @@ pub(crate) fn handle_exposure_scanned(
 /// `SSH_CONNECTION` session of this process.
 fn scan_blocking(env: Option<crate::core::lockout::SshSession>) -> std::io::Result<ExposureScan> {
     let host = crate::core::exposure::scan_host()?;
-    let sessions =
-        crate::core::lockout::merge_sessions(env, crate::core::lockout::sessions_from_scan(&host));
+    let sessions = crate::core::lockout::with_interfaces(crate::core::lockout::merge_sessions(
+        env,
+        crate::core::lockout::sessions_from_scan(&host),
+    ));
     Ok(ExposureScan {
         sockets: host.sockets,
         sessions,

@@ -189,7 +189,10 @@ pub struct Probe {
     /// Address family; ignored for [`ProbeSource::Addr`], whose address decides
     pub family: IpFamily,
     /// Input interface name; `None` = some non-loopback interface (rules bound
-    /// to an interface then decide only conditionally)
+    /// to an interface then decide only conditionally). The lockout check
+    /// ([`crate::core::lockout`]) sets the interface that owns the
+    /// destination address: normally the one the packet arrives on, but not
+    /// always (asymmetric routing), so it says when that choice decided.
     pub interface: Option<String>,
     /// Destination (local) address; `None` = any address of this computer
     /// (rules with destinations then decide only conditionally)
@@ -275,7 +278,7 @@ impl Condition {
     /// ruleset, from an ephemeral source port, unicast, with a source that
     /// passes the reverse-path check; `None` if that does not settle it
     /// (interface, destination).
-    const fn holds_for_first_packet(&self) -> Option<bool> {
+    pub const fn holds_for_first_packet(&self) -> Option<bool> {
         match self {
             // A fresh budget: within every limit
             Self::Rate { over, .. } | Self::Connections { over, .. } => Some(!*over),

@@ -1532,6 +1532,111 @@ fn test_cli_apply_lockout_check() {
     assert!(!all_output(&output).contains("lock you out"));
 }
 
+/// A rate-limited SSH accept (the recommended setup) is a note: printed,
+/// no question, no exit 9, applied; `drfw save` is the same.
+#[test]
+fn test_cli_limited_ssh_is_a_note() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = FirewallRuleset::new();
+    let mut ssh = create_test_rule("SSH", Some(22));
+    ssh.rate_limit = Some(drfw::core::firewall::RateLimit {
+        count: 3,
+        unit: drfw::core::firewall::TimeUnit::Minute,
+        burst: None,
+        per_source: true,
+    });
+    ruleset.rules.push(ssh);
+    write_profile(root.path(), "web", &ruleset);
+
+    let output = run_drfw_apply_with(root.path(), &["web", "--no-confirm"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(
+        out.contains("New SSH connections are limited by these rules:"),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "new connections from 10.0.0.5 would be accepted up to 3/minute per source by \
+             rule \"SSH\"; more are turned away"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("lock you out"), "{out}");
+    assert!(!out.contains("--yes"), "{out}");
+    assert!(
+        drfw::core::confirmed::ConfirmedRecord::load_from_blocking(root.path()).is_some(),
+        "applied"
+    );
+
+    let bin = fake_systemctl_dir();
+    let output = run_drfw_save_with(root.path(), bin.path(), &["web"], &[SSH_SESSION]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(all_output(&output).contains("New SSH connections are limited"));
+    assert!(root.path().join("nftables.conf").exists());
+}
+
+/// "SSH on eth0 only": the session's server address (10.0.0.1) on eth0
+/// allows it without a question; on another interface it is blocked (exit
+/// 9, the guess named); with no interface having it, "blocked in some
+/// cases" (exit 9). The interface addresses come from the fixture file in
+/// `DRFW_TEST_PROC_DIR`, never from the machine.
+#[test]
+fn test_cli_interface_bound_ssh_uses_the_session_interface() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = FirewallRuleset::new();
+    let mut ssh = create_test_rule("SSH on eth0", Some(22));
+    ssh.interface = Some("eth0".into());
+    ruleset.rules.push(ssh);
+    write_profile(root.path(), "web", &ruleset);
+    let proc = root.path().join("addrs");
+    std::fs::create_dir_all(&proc).unwrap();
+    let addresses = proc.join(drfw::core::lockout::TEST_ADDRESSES_FILE);
+    let proc_env = ("DRFW_TEST_PROC_DIR", proc.to_str().unwrap());
+
+    std::fs::write(
+        &addresses,
+        "lo 127.0.0.1\neth0 10.0.0.1\nwlan0 192.168.1.20\n",
+    )
+    .unwrap();
+    let output = run_drfw_apply_with(
+        root.path(),
+        &["web", "--no-confirm"],
+        &[SSH_SESSION, proc_env],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(!out.contains("lock you out"), "{out}");
+    assert!(!out.contains("New SSH connections are limited"), "{out}");
+
+    std::fs::write(&addresses, "eth0 192.168.1.20\nwlan0 10.0.0.1\n").unwrap();
+    let output = run_drfw_apply_with(
+        root.path(),
+        &["web", "--no-confirm"],
+        &[SSH_SESSION, proc_env],
+    );
+    assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("could lock you out of SSH"), "{out}");
+    assert!(out.contains("BLOCKED: rejected by"), "{out}");
+    assert!(
+        out.contains("(assuming they arrive on wlan0, the interface that has 10.0.0.1)"),
+        "{out}"
+    );
+
+    // Ambiguous (two interfaces have it): unknown, blocked in some cases
+    std::fs::write(&addresses, "eth0 10.0.0.1\nbr0 10.0.0.1\n").unwrap();
+    let output = run_drfw_apply_with(
+        root.path(),
+        &["web", "--no-confirm"],
+        &[SSH_SESSION, proc_env],
+    );
+    assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("blocked in some cases"), "{out}");
+    assert!(!out.contains("assuming they arrive"), "{out}");
+}
+
 /// `drfw save` runs the same check (the saved rules load at the next boot).
 #[test]
 fn test_cli_save_lockout_check() {

@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::core::evaluate::InputChain;
 use crate::core::exposure::{SocketExposure, SocketInfo, evaluate_socket};
 use crate::core::firewall::FirewallRuleset;
-use crate::core::lockout::{Access, SshSession};
+use crate::core::lockout::SshSession;
 
 /// What one Exposure scan found.
 #[derive(Debug, Clone, Default)]
@@ -255,7 +255,7 @@ impl ExposurePanel {
             .iter()
             .map(|check| SshLine {
                 text: format!("SSH: {}", check.summary()),
-                warning: check.access != Access::Accepted,
+                warning: check.access.needs_confirmation(),
             })
             .collect();
 
@@ -400,6 +400,7 @@ mod tests {
             server: "10.0.0.1".parse().unwrap(),
             server_port: 22,
             source: crate::core::lockout::SessionSource::Environment,
+            interface: None,
         };
         let mut editor = FirewallRuleset::new();
         let mut panel = ExposurePanel::scanning();

@@ -32,7 +32,9 @@
 //! `DRFW_TEST_PROC_DIR`, when set, replaces `/proc` for every file read here
 //! (`net/tcp*`, `net/udp*`, `<pid>/fd`, `<pid>/comm`,
 //! `sys/net/ipv6/bindv6only`), so tests run on fixtures instead of the
-//! machine's own sockets.
+//! machine's own sockets. It also replaces the interface addresses the SSH
+//! lockout check reads ([`crate::core::lockout::local_addresses`]) with the
+//! fixture file [`crate::core::lockout::TEST_ADDRESSES_FILE`] in it.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -54,12 +56,18 @@ const UDP_UNCONNECTED: &str = "07";
 /// Environment variable that replaces `/proc` (see the module docs).
 pub const TEST_PROC_DIR_VAR: &str = "DRFW_TEST_PROC_DIR";
 
+/// `DRFW_TEST_PROC_DIR` when set and not empty: the fixture directory that
+/// replaces `/proc`.
+pub fn test_proc_root() -> Option<PathBuf> {
+    std::env::var_os(TEST_PROC_DIR_VAR)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
 /// The directory read as `/proc`: `DRFW_TEST_PROC_DIR` when set and not
 /// empty, otherwise `/proc`.
 pub fn proc_root() -> PathBuf {
-    std::env::var_os(TEST_PROC_DIR_VAR)
-        .filter(|dir| !dir.is_empty())
-        .map_or_else(|| PathBuf::from("/proc"), PathBuf::from)
+    test_proc_root().unwrap_or_else(|| PathBuf::from("/proc"))
 }
 
 /// One socket line of `/proc/net/{tcp,tcp6,udp,udp6}`.

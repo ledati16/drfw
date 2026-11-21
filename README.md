@@ -57,7 +57,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **One generator**: Apply (JSON), the preview, `drfw export` and Save to System (text) all render the same command list, so what you see is what is applied and what boots
 - **No silent data loss**: A damaged or newer-version profile/config is copied aside and opened read-only, never overwritten
 - **Undo/Redo**: Full history for all rule modifications (Ctrl+Z / Ctrl+Shift+Z)
-- **SSH lockout check**: Before Apply and Save to System, DRFW checks whether the new rules would keep the client of a current SSH session from reconnecting, and asks for an explicit confirmation if so (see [SSH lockout check](#ssh-lockout-check))
+- **SSH lockout check**: Before Apply and Save to System, DRFW checks whether the new rules would keep the client of a current SSH session from reconnecting, and asks for an explicit confirmation if so; a rate- or connection-limited SSH rule is only noted (see [SSH lockout check](#ssh-lockout-check))
 
 See [Safety Model](#safety-model) for how Apply, Confirm and the revert guard work.
 
@@ -172,7 +172,7 @@ drfw exposure [profile] --json       # ... as JSON, for scripts
 - `drfw apply` and `drfw save` ask before a big change (see [Retention
   guard](#retention-guard)) and before rules that would lock out a current SSH session's
   client (see [SSH lockout check](#ssh-lockout-check)); without a terminal they need
-  `--yes`.
+  `--yes`. A rate- or connection-limited SSH rule is only noted, without a question.
 - `drfw status` also has an "SSH" line per SSH session: "you are connected from X to port
   22; new connections from X would be accepted by rule "SSH"" (or BLOCKED, and by what),
   under the rules of the active profile.
@@ -183,8 +183,9 @@ drfw exposure [profile] --json       # ... as JSON, for scripts
   `sockets` (one object per socket: `transport`, `port`, `families`, `bind`,
   `bind_display`, `local_only`, `uid`, `process`, `processes`, `reachable_from`,
   `open_to_everyone`, `nobody`, `decided_by`, `decided_by_rule_id`) and `ssh_sessions`
-  (`client`, `client_port`, `server`, `server_port`, `source`, `new_connections` =
-  `accepted`/`may_be_blocked`/`blocked`, `outcome`). It evaluates the profile's rules,
+  (`client`, `client_port`, `server`, `server_port`, `source`, `interface` (the one that
+  owns `server`, or null), `new_connections` = `accepted`/`limited`/`may_be_blocked`/
+  `blocked`, `outcome`). It evaluates the profile's rules,
   not the kernel's (listing those needs root).
 - During the `drfw apply` countdown, if another apply replaces the pending one, the
   countdown stops at once and reports it.
@@ -362,14 +363,30 @@ with a new connection from each session's client address to the session's port:
   another user. Other users' sessions on a non-standard port whose server is not
   readable are not found.
 
-If a new connection would be dropped or rejected, or is accepted only under a
-condition with a drop or reject behind it (a rate or connection limit, an interface the
-check cannot know), the "Commit Changes?" (or Save to System) dialog shows why and takes
-a click on **Apply anyway** (or the red save button); the CLI prints the same lines and
-asks y/N on a terminal, or needs `--yes` (exit code 9, nothing changed). The interface
-of a session is not known, so a rule that allows SSH only on one interface counts as
-"blocked in some cases". The Exposure view and `drfw status` show the same per-session
-answer.
+If a new connection would be dropped or rejected, or may be in a case the check cannot
+settle (an interface it does not know, see below), the "Commit Changes?" (or Save to
+System) dialog shows why and takes a click on **Apply anyway** (or the red save button);
+the CLI prints the same lines and asks y/N on a terminal, or needs `--yes` (exit code 9,
+nothing changed).
+
+A connection accepted only up to a **rate or connection limit** (e.g. "SSH up to
+3/minute per source", the recommended setup) is a **note**, not a warning: the dialog
+shows "New SSH connections are limited by these rules" in the info style and applies
+with the normal button (Enter works); the CLI prints it and goes ahead (no question, no
+exit 9). Asking every time for a limit that is there on purpose would only teach you to
+click through the real warnings.
+
+The session's interface is the one that owns the address the client connected to (the
+local address of the session). Packets for an address normally arrive on the interface
+that has it, so a rule that allows SSH only on `eth0` is checked against that interface:
+allowed if the session's address is on `eth0`, blocked if it is on another one. With
+asymmetric routing they can arrive elsewhere, so whenever the interface decided the
+answer it says so ("assuming they arrive on eth0, the interface that has 10.0.0.1"). When
+no interface, several interfaces or the loopback interface have that address, the
+interface stays unknown and an interface-bound SSH rule counts as "blocked in some
+cases". The check assumes the client passes the reverse-path check when anti-spoofing
+(RPF) is on, as the open session from it suggests. The Exposure view and `drfw status`
+show the same per-session answer.
 
 ## Save to System
 

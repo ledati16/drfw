@@ -36,14 +36,41 @@
 //! the **next** connection. For each session the evaluator
 //! ([`crate::core::evaluate`]) is asked what the input chain does with a new
 //! TCP connection from the session's client address to the session's server
-//! address and port, on an unknown interface:
+//! address and port, on the session's interface (see below):
 //!
 //! - [`Access::Blocked`]: the first packet is dropped or rejected;
-//! - [`Access::MayBeBlocked`]: it is accepted only under a condition (a rate
-//!   or connection limit, an interface) with a drop or reject behind it;
+//! - [`Access::MayBeBlocked`]: whether it is turned away depends on something
+//!   the check cannot settle, typically an interface-bound rule when the
+//!   interface is unknown;
+//! - [`Access::Limited`]: it is accepted, but a rate or connection limit can
+//!   turn later connections away (e.g. "SSH up to 3/minute per source", the
+//!   recommended setup);
 //! - [`Access::Accepted`] otherwise.
 //!
-//! Both of the first two need an explicit confirmation ([`LockoutWarning`]).
+//! The first two need an explicit confirmation ([`LockoutWarning::lines`]);
+//! `Limited` is only a note ([`LockoutWarning::notes`]): asking every time
+//! for a limit that is there on purpose would teach people to click through
+//! the warning. Like the evaluator's first-packet answer, the check assumes
+//! the client passes the reverse-path check (with RPF on), sends unicast and
+//! uses an ephemeral source port: a rule that only decides otherwise (the
+//! RPF drop) is neither a warning nor a note.
+//!
+//! # Which interface
+//!
+//! The session's interface is the one that owns its server address
+//! ([`interface_owning`], from [`local_addresses`]). The incoming interface
+//! is normally the one that owns the destination address, but with
+//! asymmetric routing (two interfaces on reachable networks, an address on a
+//! dummy device) a packet can arrive elsewhere: Linux accepts it on any
+//! interface. The resolved interface is still used as known, because the
+//! common cases (one uplink, one LAN per interface) are exact and treating it
+//! as unknown would make every interface-bound SSH rule ask for a
+//! confirmation; whenever the interface decided the answer, the outcome says
+//! "assuming they arrive on eth0, the interface that has 10.0.0.1", so the
+//! guess is visible. The interface stays unknown (and interface-bound rules
+//! stay "blocked in some cases") when no interface has the address, when
+//! several do, or when a loopback interface has it (an address on `lo` is
+//! reached through another interface).
 //!
 //! # Server mode
 //!
@@ -60,7 +87,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::net::IpAddr;
 
-use super::evaluate::{InputChain, IpFamily, Probe, ProbeSource, Transport, Verdict};
+use super::evaluate::{Condition, InputChain, IpFamily, Probe, ProbeSource, Transport, Verdict};
 use super::exposure::{HostScan, ProcessInfo};
 use super::firewall::{Action, FirewallRuleset};
 
@@ -102,6 +129,9 @@ pub struct SshSession {
     pub server: IpAddr,
     pub server_port: u16,
     pub source: SessionSource,
+    /// The local interface that owns `server`, when exactly one does (see
+    /// the module docs and [`resolve_interfaces`]); `None` = unknown
+    pub interface: Option<String>,
 }
 
 /// Parses one address of `SSH_CONNECTION`: an IPv4 or IPv6 address, an IPv6
@@ -143,6 +173,7 @@ pub fn parse_ssh_connection(value: &str) -> Option<SshSession> {
         server: parse_address(server)?,
         server_port: parse_port(server_port)?,
         source: SessionSource::Environment,
+        interface: None,
     })
 }
 
@@ -195,6 +226,7 @@ pub fn sessions_from_scan(scan: &HostScan) -> Vec<SshSession> {
                 server: connection.local.to_canonical(),
                 server_port: connection.local_port,
                 source,
+                interface: None,
             })
         })
         .collect()
@@ -220,8 +252,146 @@ pub fn merge_sessions(env: Option<SshSession>, found: Vec<SshSession>) -> Vec<Ss
     sessions
 }
 
+/// Fixture file under `DRFW_TEST_PROC_DIR` that replaces the interface
+/// addresses of this computer in [`local_addresses`]: one `name address`
+/// pair per line (`lo` counts as loopback; empty lines and `#` comments are
+/// skipped).
+pub const TEST_ADDRESSES_FILE: &str = "drfw-test-addresses";
+
+/// Name of the loopback interface (in [`TEST_ADDRESSES_FILE`]).
+const LOOPBACK_INTERFACE: &str = "lo";
+
+/// One address of a local network interface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalAddress {
+    /// The interface as `iifname` matches it (an IPv4 alias label such as
+    /// `eth0:1` is its interface, `eth0`)
+    pub interface: String,
+    pub addr: IpAddr,
+    /// The interface is a loopback interface
+    pub loopback: bool,
+}
+
+/// The interface part of a name `getifaddrs` reports: `eth0:1` (an IPv4
+/// alias label) is `eth0`; Linux interface names cannot contain `:`.
+fn interface_name(name: &str) -> &str {
+    name.split_once(':')
+        .map_or(name, |(interface, _)| interface)
+}
+
+/// Parses [`TEST_ADDRESSES_FILE`]; malformed lines are skipped.
+fn parse_test_addresses(text: &str) -> Vec<LocalAddress> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let (name, addr) = line.split_once(char::is_whitespace)?;
+            let interface = interface_name(name).to_string();
+            Some(LocalAddress {
+                loopback: interface == LOOPBACK_INTERFACE,
+                addr: addr.trim().parse().ok()?,
+                interface,
+            })
+        })
+        .collect()
+}
+
+/// The addresses of this computer's interfaces (`getifaddrs`, through the
+/// `network-interface` crate), or with `DRFW_TEST_PROC_DIR` set the ones in
+/// its [`TEST_ADDRESSES_FILE`] (none when it is missing: tests never see the
+/// machine's own interfaces).
+///
+/// Blocking (a system call); run it off the UI thread. A failure returns no
+/// addresses (logged), which leaves every interface unknown.
+pub fn local_addresses() -> Vec<LocalAddress> {
+    use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+
+    if let Some(dir) = crate::core::exposure::test_proc_root() {
+        return std::fs::read_to_string(dir.join(TEST_ADDRESSES_FILE))
+            .map_or_else(|_| Vec::new(), |text| parse_test_addresses(&text));
+    }
+    let interfaces = match NetworkInterface::show() {
+        Ok(interfaces) => interfaces,
+        Err(e) => {
+            tracing::debug!("Interface addresses not read: {e}");
+            return Vec::new();
+        }
+    };
+    interfaces
+        .iter()
+        .flat_map(|iface| {
+            iface.addr.iter().map(|addr| LocalAddress {
+                interface: interface_name(&iface.name).to_string(),
+                addr: match addr {
+                    Addr::V4(v4) => IpAddr::V4(v4.ip),
+                    Addr::V6(v6) => IpAddr::V6(v6.ip),
+                },
+                loopback: iface.internal,
+            })
+        })
+        .collect()
+}
+
+/// The interface that owns `addr`, if exactly one non-loopback interface
+/// has it: `None` when none does, when several do (the address is
+/// ambiguous), or when a loopback interface has it.
+///
+/// # Example
+///
+/// ```
+/// use drfw::core::lockout::{LocalAddress, interface_owning};
+///
+/// let addresses = [LocalAddress {
+///     interface: "eth0".into(),
+///     addr: "10.0.0.1".parse().unwrap(),
+///     loopback: false,
+/// }];
+/// assert_eq!(
+///     interface_owning(&addresses, "10.0.0.1".parse().unwrap()),
+///     Some("eth0")
+/// );
+/// assert_eq!(
+///     interface_owning(&addresses, "10.0.0.2".parse().unwrap()),
+///     None
+/// );
+/// ```
+pub fn interface_owning(addresses: &[LocalAddress], addr: IpAddr) -> Option<&str> {
+    let addr = addr.to_canonical();
+    let mut owner: Option<&str> = None;
+    for local in addresses.iter().filter(|a| a.addr.to_canonical() == addr) {
+        if local.loopback {
+            return None;
+        }
+        match owner {
+            Some(name) if name != local.interface => return None,
+            _ => owner = Some(&local.interface),
+        }
+    }
+    owner
+}
+
+/// Sets each session's [`SshSession::interface`] to the interface that owns
+/// its server address in `addresses` ([`interface_owning`]).
+pub fn resolve_interfaces(sessions: &mut [SshSession], addresses: &[LocalAddress]) {
+    for session in sessions {
+        session.interface = interface_owning(addresses, session.server).map(str::to_owned);
+    }
+}
+
+/// `sessions` with their interfaces resolved from [`local_addresses`] (read
+/// only when there is a session).
+///
+/// Blocking; run it off the UI thread.
+pub fn with_interfaces(mut sessions: Vec<SshSession>) -> Vec<SshSession> {
+    if !sessions.is_empty() {
+        resolve_interfaces(&mut sessions, &local_addresses());
+    }
+    sessions
+}
+
 /// Every SSH session into this computer: `env` (the `SSH_CONNECTION`
-/// session, see [`session_from_env`]) and the ones in `/proc`.
+/// session, see [`session_from_env`]) and the ones in `/proc`, with their
+/// interfaces ([`with_interfaces`]).
 ///
 /// Blocking (reads `/proc`); run it off the UI thread. A failed scan only
 /// loses the `/proc` sessions (logged).
@@ -233,14 +403,18 @@ pub fn detect_sessions(env: Option<SshSession>) -> Vec<SshSession> {
             Vec::new()
         }
     };
-    merge_sessions(env, found)
+    with_interfaces(merge_sessions(env, found))
 }
 
 /// Whether a new connection from a session's client gets in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
     Accepted,
-    /// Accepted only under a condition, with a drop or reject behind it
+    /// Accepted, but a rate or connection limit can turn later connections
+    /// away (a note, no confirmation)
+    Limited,
+    /// Turned away in some cases the check cannot settle (an interface it
+    /// does not know, …)
     MayBeBlocked,
     /// The first packet is dropped or rejected
     Blocked,
@@ -251,9 +425,16 @@ impl Access {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
+            Self::Limited => "limited",
             Self::MayBeBlocked => "may_be_blocked",
             Self::Blocked => "blocked",
         }
+    }
+
+    /// `true` for [`Access::Blocked`] and [`Access::MayBeBlocked`]: applying
+    /// takes an explicit confirmation.
+    pub const fn needs_confirmation(self) -> bool {
+        matches!(self, Self::Blocked | Self::MayBeBlocked)
     }
 }
 
@@ -288,14 +469,6 @@ impl SessionCheck {
     }
 }
 
-/// The verdict at the end of the `Limited` layers.
-fn innermost(verdict: &Verdict) -> &Verdict {
-    match verdict {
-        Verdict::Limited { otherwise, .. } => innermost(otherwise),
-        other => other,
-    }
-}
-
 const fn verb(action: Action) -> &'static str {
     match action {
         Action::Accept => "accepted",
@@ -304,35 +477,180 @@ const fn verb(action: Action) -> &'static str {
     }
 }
 
+/// Which outcomes a verdict can still have.
+#[derive(Debug, Clone, Copy, Default)]
+struct Outcomes {
+    accept: bool,
+    block: bool,
+}
+
+impl Outcomes {
+    const fn of(action: Action) -> Self {
+        let accept = matches!(action, Action::Accept);
+        Self {
+            accept,
+            block: !accept,
+        }
+    }
+
+    const fn or(self, other: Self) -> Self {
+        Self {
+            accept: self.accept || other.accept,
+            block: self.block || other.block,
+        }
+    }
+}
+
+/// The outcomes `verdict` can have for a new connection: conditions the
+/// probe leaves open (an interface, a destination) can go either way, and
+/// so can rate and connection limits when `limits_vary` (else they are
+/// fresh); the other conditions are fixed as for the first packet (the
+/// source passes the reverse-path check, unicast, an ephemeral source port).
+/// Conditions are taken as independent, which can only add outcomes.
+fn possible_outcomes(verdict: &Verdict, limits_vary: bool) -> Outcomes {
+    match verdict {
+        Verdict::Accepted(_) => Outcomes::of(Action::Accept),
+        Verdict::Dropped(_) | Verdict::Rejected(_) => Outcomes::of(Action::Drop),
+        Verdict::Limited {
+            action,
+            when,
+            otherwise,
+            ..
+        } => {
+            let (mut can_hold, mut can_fail) = (true, false);
+            for condition in when {
+                let (holds, fails) = match condition.holds_for_first_packet() {
+                    Some(holds) if !(limits_vary && condition.is_limit()) => (holds, !holds),
+                    _ => (true, true),
+                };
+                can_hold &= holds;
+                can_fail |= fails;
+            }
+            let mut outcomes = Outcomes::default();
+            if can_hold {
+                outcomes = outcomes.or(Outcomes::of(*action));
+            }
+            if can_fail {
+                outcomes = outcomes.or(possible_outcomes(otherwise, limits_vary));
+            }
+            outcomes
+        }
+        // Not an answer for one source: anything
+        Verdict::Reachable(_) => Outcomes {
+            accept: true,
+            block: true,
+        },
+    }
+}
+
+/// The limits of `conditions`, joined with " and " (empty without one).
+fn limits_text(conditions: &[Condition]) -> String {
+    let mut text = String::new();
+    for condition in conditions.iter().filter(|c| c.is_limit()) {
+        if !text.is_empty() {
+            text.push_str(" and ");
+        }
+        let _ = write!(text, "{condition}");
+    }
+    text
+}
+
+/// The outcome of an [`Access::Limited`] verdict: the accept that takes the
+/// first packet with its limits, and the limited drops before it ("accepted
+/// up to 3/minute per source by rule \"SSH\"; more are turned away").
+fn limited_outcome(verdict: &Verdict) -> String {
+    let mut drops: Vec<String> = Vec::new();
+    let mut current = verdict;
+    let accept = loop {
+        match current {
+            Verdict::Limited {
+                by,
+                action,
+                when,
+                otherwise,
+            } => {
+                let limits = limits_text(when);
+                let takes_first = when
+                    .iter()
+                    .all(|c| c.holds_for_first_packet() == Some(true));
+                if *action == Action::Accept {
+                    if takes_first {
+                        break Some((by, limits));
+                    }
+                } else if !limits.is_empty() {
+                    drops.push(format!("{} {limits} by {by}", verb(*action)));
+                }
+                current = otherwise;
+            }
+            Verdict::Accepted(by) => break Some((by, String::new())),
+            _ => break None,
+        }
+    };
+    let Some((by, limits)) = accept else {
+        return verdict.to_string();
+    };
+    let mut text = if limits.is_empty() {
+        format!("accepted by {by}")
+    } else {
+        format!("accepted {limits} by {by}")
+    };
+    for drop in &drops {
+        let _ = write!(text, ", but {drop}");
+    }
+    if !limits.is_empty() {
+        text.push_str("; more are turned away");
+    }
+    text
+}
+
+/// The access and outcome text of `verdict` (see [`Access`]).
+fn classify(verdict: &Verdict) -> (Access, String) {
+    let first = verdict.first_packet();
+    if let Some((action @ (Action::Drop | Action::Reject), by)) = first {
+        return (
+            Access::Blocked,
+            format!("BLOCKED: {} by {by}", verb(action)),
+        );
+    }
+    if possible_outcomes(verdict, false).block {
+        return (
+            Access::MayBeBlocked,
+            format!("blocked in some cases: {verdict}"),
+        );
+    }
+    if possible_outcomes(verdict, true).block {
+        return (Access::Limited, limited_outcome(verdict));
+    }
+    match first {
+        Some((_, by)) => (Access::Accepted, format!("accepted by {by}")),
+        None => (Access::Accepted, verdict.to_string()),
+    }
+}
+
 /// Evaluates a new connection from `session`'s client to its server address
-/// and port (interface unknown) against `chain`.
+/// and port, on its interface when known, against `chain`. When the
+/// interface decided the answer, the outcome says it was assumed.
 pub fn check_session(chain: &InputChain, session: &SshSession) -> SessionCheck {
-    let probe = Probe {
+    let mut probe = Probe {
         transport: Transport::Tcp,
         port: session.server_port,
         family: IpFamily::of(session.client),
-        interface: None,
+        interface: session.interface.clone(),
         destination: Some(session.server),
         source: ProbeSource::Addr(session.client),
     };
     let verdict = chain.evaluate(&probe);
-    let first = verdict.first_packet();
-    let fallback_blocks = matches!(
-        innermost(&verdict),
-        Verdict::Dropped(_) | Verdict::Rejected(_)
-    );
-    let (access, outcome) = match first {
-        Some((action @ (Action::Drop | Action::Reject), by)) => (
-            Access::Blocked,
-            format!("BLOCKED: {} by {by}", verb(action)),
-        ),
-        _ if fallback_blocks => (
-            Access::MayBeBlocked,
-            format!("blocked in some cases: {verdict}"),
-        ),
-        Some((_, by)) => (Access::Accepted, format!("accepted by {by}")),
-        None => (Access::Accepted, verdict.to_string()),
-    };
+    let (access, mut outcome) = classify(&verdict);
+    if let Some(interface) = &session.interface {
+        probe.interface = None;
+        if chain.evaluate(&probe) != verdict {
+            let _ = write!(
+                outcome,
+                " (assuming they arrive on {interface}, the interface that has {})",
+                session.server
+            );
+        }
+    }
     SessionCheck {
         session: session.clone(),
         verdict,
@@ -362,38 +680,66 @@ fn capitalized(text: &str) -> String {
     })
 }
 
-/// Why a ruleset needs an explicit confirmation: new SSH connections from a
-/// current session's client would be (or may be) turned away. Shown with the
-/// retention guard's warning, before Apply and Save to System.
+/// What the lockout check says about a ruleset, shown with the retention
+/// guard's warning before Apply and Save to System: sessions whose client
+/// would be (or may be) turned away, which need an explicit confirmation,
+/// and sessions whose new connections are only limited, a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockoutWarning {
     /// Checks that are [`Access::Blocked`] or [`Access::MayBeBlocked`]
     pub checks: Vec<SessionCheck>,
-    /// One line per check, then what happens to the open sessions
+    /// One line per check in [`Self::checks`], then what happens to the open
+    /// sessions; empty when there is no such check
     pub lines: Vec<String>,
+    /// Checks that are [`Access::Limited`]
+    pub limited: Vec<SessionCheck>,
+    /// One line per check in [`Self::limited`] (shown under
+    /// [`Self::NOTE_HEADING`], no confirmation)
+    pub notes: Vec<String>,
 }
 
 impl LockoutWarning {
     /// Heading shown above [`Self::lines`].
     pub const HEADING: &'static str = "These rules could lock you out of SSH:";
+    /// Heading shown above [`Self::notes`].
+    pub const NOTE_HEADING: &'static str = "New SSH connections are limited by these rules:";
 
-    /// The warning for applying (or saving) `ruleset` while `sessions` are
-    /// open; `None` when every session's client could reconnect.
+    /// What to say about applying (or saving) `ruleset` while `sessions` are
+    /// open; `None` when every session's client could reconnect without a
+    /// limit.
     pub fn check(ruleset: &FirewallRuleset, sessions: &[SshSession]) -> Option<Self> {
-        let checks: Vec<SessionCheck> = check_sessions(ruleset, sessions)
+        let (checks, rest): (Vec<SessionCheck>, Vec<SessionCheck>) =
+            check_sessions(ruleset, sessions)
+                .into_iter()
+                .partition(|c| c.access.needs_confirmation());
+        let limited: Vec<SessionCheck> = rest
             .into_iter()
-            .filter(|c| c.access != Access::Accepted)
+            .filter(|c| c.access == Access::Limited)
             .collect();
-        if checks.is_empty() {
+        if checks.is_empty() && limited.is_empty() {
             return None;
         }
         let mut lines: Vec<String> = checks.iter().map(|c| capitalized(&c.summary())).collect();
-        lines.push(
-            "Open sessions stay connected (established connections are always accepted); \
-             the risk is the next connection."
-                .to_string(),
-        );
-        Some(Self { checks, lines })
+        if !lines.is_empty() {
+            lines.push(
+                "Open sessions stay connected (established connections are always accepted); \
+                 the risk is the next connection."
+                    .to_string(),
+            );
+        }
+        let notes = limited.iter().map(|c| capitalized(&c.summary())).collect();
+        Some(Self {
+            checks,
+            lines,
+            limited,
+            notes,
+        })
+    }
+
+    /// `true` when a session's client would be (or may be) turned away:
+    /// applying takes an explicit confirmation. Notes alone do not.
+    pub fn needs_confirmation(&self) -> bool {
+        !self.checks.is_empty()
     }
 }
 
@@ -415,6 +761,7 @@ mod tests {
             },
             server_port: port,
             source: SessionSource::Environment,
+            interface: None,
         }
     }
 
@@ -605,24 +952,234 @@ mod tests {
             ..FirewallRuleset::new()
         };
         let check = &check_sessions(&ruleset, &[session("10.0.0.5", 22)])[0];
+        assert_eq!(check.access, Access::Limited);
+        assert_eq!(
+            check.outcome,
+            "accepted up to 3/minute per source by rule \"SSH\"; more are turned away"
+        );
+        // A note, not a warning: no confirmation
+        let warning = LockoutWarning::check(&ruleset, &[session("10.0.0.5", 22)]).expect("note");
+        assert!(!warning.needs_confirmation());
+        assert!(warning.checks.is_empty() && warning.lines.is_empty());
+        assert_eq!(
+            warning.notes,
+            [
+                "You are connected from 10.0.0.5 to port 22; new connections from 10.0.0.5 \
+              would be accepted up to 3/minute per source by rule \"SSH\"; more are turned away"
+            ]
+        );
+        // With a blocked session too: both, and the blocked one needs a confirmation
+        let warning = LockoutWarning::check(
+            &ruleset,
+            &[session("10.0.0.5", 22), session("10.0.0.5", 2222)],
+        )
+        .expect("warns");
+        assert!(warning.needs_confirmation());
+        assert_eq!((warning.checks.len(), warning.limited.len()), (1, 1));
+        assert_eq!(
+            warning.lines.len(),
+            2,
+            "the check and the open-sessions line"
+        );
+    }
+
+    fn ruleset_of(rules: Vec<crate::core::firewall::Rule>) -> FirewallRuleset {
+        FirewallRuleset {
+            rules,
+            ..FirewallRuleset::new()
+        }
+    }
+
+    fn on_interface(
+        mut rule: crate::core::firewall::Rule,
+        name: &str,
+    ) -> crate::core::firewall::Rule {
+        rule.interface = Some(name.into());
+        rule.rebuild_caches();
+        rule
+    }
+
+    fn with_interface(name: Option<&str>) -> SshSession {
+        let mut s = session("10.0.0.5", 22);
+        s.interface = name.map(str::to_owned);
+        s
+    }
+
+    #[test]
+    fn test_interface_bound_ssh_rule_and_the_resolved_interface() {
+        let ruleset = ruleset_of(vec![on_interface(ssh_rule(&[]), "eth0")]);
+        // Unknown interface: the fallback rejects, confirmation needed
+        let check = &check_sessions(&ruleset, &[with_interface(None)])[0];
         assert_eq!(check.access, Access::MayBeBlocked);
         assert!(
-            check.outcome.starts_with(
-                "blocked in some cases: accepted up to 3/minute per source by rule \"SSH\""
-            ),
+            check
+                .outcome
+                .starts_with("blocked in some cases: accepted on interface eth0")
+        );
+        assert!(check.access.needs_confirmation());
+
+        // Resolved to eth0: accepted, and the outcome says it was assumed
+        let check = &check_sessions(&ruleset, &[with_interface(Some("eth0"))])[0];
+        assert_eq!(check.access, Access::Accepted);
+        assert_eq!(
+            check.outcome,
+            "accepted by rule \"SSH\" (assuming they arrive on eth0, the interface that has \
+             192.168.1.1)"
+        );
+        assert!(LockoutWarning::check(&ruleset, &[with_interface(Some("eth0"))]).is_none());
+
+        // Resolved to another interface: blocked
+        let check = &check_sessions(&ruleset, &[with_interface(Some("wlan0"))])[0];
+        assert_eq!(check.access, Access::Blocked);
+        assert!(
+            check
+                .outcome
+                .ends_with("(assuming they arrive on wlan0, the interface that has 192.168.1.1)"),
             "{}",
             check.outcome
         );
 
-        // An interface-bound accept: the interface is unknown, the fallback rejects
-        let mut on_eth = ssh_rule(&[]);
-        on_eth.interface = Some("eth0".into());
-        let ruleset = FirewallRuleset {
-            rules: vec![on_eth],
-            ..FirewallRuleset::new()
-        };
+        // An interface that decides nothing is not mentioned
+        let ruleset = ruleset_of(vec![ssh_rule(&[])]);
+        let check = &check_sessions(&ruleset, &[with_interface(Some("eth0"))])[0];
+        assert_eq!(check.outcome, "accepted by rule \"SSH\"");
+
+        // Interface-bound and rate-limited, on its interface: a note
+        let mut limited = on_interface(ssh_rule(&[]), "eth*");
+        limited.connection_limit = 4;
+        limited.connection_limit_per_source = true;
+        let ruleset = ruleset_of(vec![limited]);
+        let check = &check_sessions(&ruleset, &[with_interface(Some("eth0"))])[0];
+        assert_eq!(check.access, Access::Limited);
+        assert!(
+            check
+                .outcome
+                .starts_with("accepted up to 4 connections per source by rule \"SSH\"; more are"),
+            "{}",
+            check.outcome
+        );
+        assert_eq!(
+            check_sessions(&ruleset, &[with_interface(None)])[0].access,
+            Access::MayBeBlocked
+        );
+    }
+
+    #[test]
+    fn test_cause_split_for_drops_and_rpf() {
+        let mut flood = ssh_rule(&[]);
+        flood.label = "Flood".into();
+        flood.action = Action::Drop;
+        flood.rate_limit = Some(RateLimit {
+            count: 10,
+            unit: TimeUnit::Minute,
+            burst: None,
+            per_source: false,
+        });
+        flood.rebuild_caches();
+        // A drop over a limit before the accept: a note
+        let ruleset = ruleset_of(vec![flood, ssh_rule(&[])]);
         let check = &check_sessions(&ruleset, &[session("10.0.0.5", 22)])[0];
+        assert_eq!(check.access, Access::Limited);
+        assert_eq!(
+            check.outcome,
+            "accepted by rule \"SSH\", but dropped over 10/minute by rule \"Flood\""
+        );
+
+        // A drop on an unknown interface before the accept: may be blocked
+        let mut drop_eth = on_interface(ssh_rule(&[]), "eth0");
+        drop_eth.action = Action::Drop;
+        let ruleset = ruleset_of(vec![drop_eth, ssh_rule(&[])]);
+        let check = &check_sessions(&ruleset, &[with_interface(None)])[0];
         assert_eq!(check.access, Access::MayBeBlocked);
+        // ... and on a known one: blocked or accepted
+        let check = &check_sessions(&ruleset, &[with_interface(Some("eth0"))])[0];
+        assert_eq!(check.access, Access::Blocked);
+        let check = &check_sessions(&ruleset, &[with_interface(Some("wlan0"))])[0];
+        assert_eq!(check.access, Access::Accepted);
+
+        // RPF: the client is assumed to pass it, so it changes neither answer
+        let mut rpf = ruleset_of(vec![ssh_rule(&[])]);
+        rpf.advanced_security.enable_rpf = true;
+        assert_eq!(
+            check_sessions(&rpf, &[session("10.0.0.5", 22)])[0].access,
+            Access::Accepted
+        );
+        let mut limited = ssh_rule(&[]);
+        limited.rate_limit = Some(RateLimit {
+            count: 3,
+            unit: TimeUnit::Minute,
+            burst: None,
+            per_source: true,
+        });
+        rpf.rules = vec![limited];
+        assert_eq!(
+            check_sessions(&rpf, &[session("10.0.0.5", 22)])[0].access,
+            Access::Limited
+        );
+    }
+
+    fn local(interface: &str, addr: &str) -> LocalAddress {
+        LocalAddress {
+            interface: interface.into(),
+            addr: addr.parse().unwrap(),
+            loopback: interface == "lo",
+        }
+    }
+
+    #[test]
+    fn test_interface_owning_an_address() {
+        let addresses = [
+            local("eth0", "192.168.1.1"),
+            local("eth0", "fd00::1"),
+            local("wlan0", "10.0.0.1"),
+            // The same address on two interfaces: ambiguous
+            local("eth1", "172.16.0.1"),
+            local("br0", "172.16.0.1"),
+            // Twice on one interface (an alias): still that interface
+            local("eth2", "172.17.0.1"),
+            local("eth2", "172.17.0.1"),
+            // On loopback (and a dummy-style service address on lo)
+            local("lo", "127.0.0.1"),
+            local("lo", "203.0.113.7"),
+        ];
+        let owner = |addr: &str| interface_owning(&addresses, addr.parse().unwrap());
+        assert_eq!(owner("192.168.1.1"), Some("eth0"));
+        assert_eq!(owner("::ffff:192.168.1.1"), Some("eth0"), "IPv4-mapped");
+        assert_eq!(owner("fd00::1"), Some("eth0"));
+        assert_eq!(owner("10.0.0.1"), Some("wlan0"));
+        assert_eq!(owner("172.16.0.1"), None, "ambiguous");
+        assert_eq!(owner("172.17.0.1"), Some("eth2"));
+        assert_eq!(owner("203.0.113.7"), None, "on loopback");
+        assert_eq!(owner("127.0.0.1"), None);
+        assert_eq!(owner("10.9.9.9"), None, "no interface has it");
+        assert_eq!(interface_owning(&[], "10.0.0.1".parse().unwrap()), None);
+
+        let mut sessions = vec![session("10.0.0.5", 22), session("fd00::5", 22)];
+        sessions[0].interface = Some("stale".into());
+        resolve_interfaces(&mut sessions, &[local("eth0", "fd00::1")]);
+        assert_eq!(
+            sessions[0].interface, None,
+            "192.168.1.1 is on no interface"
+        );
+        assert_eq!(sessions[1].interface.as_deref(), Some("eth0"));
+    }
+
+    #[test]
+    fn test_parse_test_addresses() {
+        let parsed = parse_test_addresses(
+            "# fixture\n\neth0 10.0.0.1\n  eth0:1   10.0.0.2 \nlo 127.0.0.1\nbad\nwg0 not-an-ip\n",
+        );
+        assert_eq!(
+            parsed,
+            [
+                local("eth0", "10.0.0.1"),
+                local("eth0", "10.0.0.2"),
+                local("lo", "127.0.0.1"),
+            ]
+        );
+        assert!(parsed[2].loopback);
+        assert_eq!(interface_name("eth0:1"), "eth0");
+        assert_eq!(interface_name("enp3s0"), "enp3s0");
     }
 
     #[test]

@@ -16,9 +16,11 @@ use crate::core::retention::RetentionWarning;
 const RETENTION_HEADING: &str = "This is a big change. Check it before you continue:";
 
 /// A warning that needs an explicit confirmation (retention guard, SSH
-/// lockout check): a heading and its lines, all prepared in `update()`.
+/// lockout check), or a note that does not (`heading_color` tells them
+/// apart): a heading and its lines, all prepared in `update()`.
 fn warning_block<'a>(
     heading: &'a str,
+    heading_color: Color,
     lines: &'a [String],
     width: f32,
     theme: &'a crate::theme::AppTheme,
@@ -39,7 +41,7 @@ fn warning_block<'a>(
                     weight: iced::font::Weight::Bold,
                     ..font
                 })
-                .color(theme.danger),
+                .color(heading_color),
         ]
         .extend(lines)
         .spacing(6),
@@ -50,27 +52,40 @@ fn warning_block<'a>(
     .into()
 }
 
-/// The blocks for the warnings that are present (retention guard first).
+/// The blocks for the warnings that are present (retention guard first),
+/// then the lockout check's note (info style: it needs no confirmation).
 fn confirmation_blocks<'a>(
     retention: Option<&'a RetentionWarning>,
     lockout: Option<&'a LockoutWarning>,
     theme: &'a crate::theme::AppTheme,
     font: iced::Font,
 ) -> Vec<Element<'a, Message>> {
-    let mut blocks = Vec::with_capacity(2);
+    let mut blocks = Vec::with_capacity(3);
     if let Some(warning) = retention {
         blocks.push(warning_block(
             RETENTION_HEADING,
+            theme.danger,
             &warning.lines,
             400.0,
             theme,
             font,
         ));
     }
-    if let Some(warning) = lockout {
+    if let Some(warning) = lockout.filter(|l| l.needs_confirmation()) {
         blocks.push(warning_block(
             LockoutWarning::HEADING,
+            theme.danger,
             &warning.lines,
+            400.0,
+            theme,
+            font,
+        ));
+    }
+    if let Some(note) = lockout.filter(|l| !l.notes.is_empty()) {
+        blocks.push(warning_block(
+            LockoutWarning::NOTE_HEADING,
+            theme.info,
+            &note.notes,
             400.0,
             theme,
             font,

@@ -896,7 +896,9 @@ async fn current_ssh_sessions() -> Vec<core::lockout::SshSession> {
 /// (`core::retention`: `ruleset` is a big change compared with the rules
 /// last applied and kept) and the SSH lockout check (`core::lockout`: new
 /// connections from a current session's client would be blocked). Prints
-/// every warning, then asks once on a terminal unless `yes`.
+/// every warning, then asks once on a terminal unless `yes`. The lockout
+/// check's notes (new SSH connections only limited by a rate or connection
+/// limit) are printed without a question.
 /// `(question, refused)` are e.g. `("Apply anyway?", "not applied")`.
 ///
 /// # Errors
@@ -913,9 +915,6 @@ async fn confirmation_guard(
     let kept = record.and_then(core::confirmed::ConfirmedRecord::ruleset);
     let retention = core::retention::RetentionWarning::check(kept, ruleset);
     let lockout = core::lockout::LockoutWarning::check(ruleset, sessions);
-    if retention.is_none() && lockout.is_none() {
-        return Ok(());
-    }
     let warn = Stream::Stderr.colored();
     if let Some(warning) = &retention {
         eprintln!(
@@ -926,17 +925,31 @@ async fn confirmation_guard(
             eprintln!("  {line}");
         }
     }
+    let mut needs_confirmation = retention.is_some();
     if let Some(warning) = &lockout {
-        eprintln!(
-            "{} {}",
-            paint("WARNING:", Color::Red, warn),
-            core::lockout::LockoutWarning::HEADING
-        );
-        for line in &warning.lines {
-            eprintln!("  {line}");
+        if warning.needs_confirmation() {
+            needs_confirmation = true;
+            eprintln!(
+                "{} {}",
+                paint("WARNING:", Color::Red, warn),
+                core::lockout::LockoutWarning::HEADING
+            );
+            for line in &warning.lines {
+                eprintln!("  {line}");
+            }
+        }
+        if !warning.notes.is_empty() {
+            eprintln!(
+                "{} {}",
+                paint("Note:", Color::Yellow, warn),
+                core::lockout::LockoutWarning::NOTE_HEADING
+            );
+            for line in &warning.notes {
+                eprintln!("  {line}");
+            }
         }
     }
-    if yes {
+    if !needs_confirmation || yes {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
@@ -1169,10 +1182,10 @@ fn print_ssh_status(
     let color = Stream::Stdout.colored();
     for (i, check) in checks.iter().enumerate() {
         let text = check.summary();
-        let text = if check.access == core::lockout::Access::Accepted {
-            text
-        } else {
+        let text = if check.access.needs_confirmation() {
             paint(&text, Color::Red, color)
+        } else {
+            text
         };
         if i == 0 {
             status_line("SSH", &text);
@@ -1250,6 +1263,7 @@ fn exposure_json(
                 "server": session.server.to_string(),
                 "server_port": session.server_port,
                 "source": session.source.as_str(),
+                "interface": session.interface,
                 "new_connections": check.access.as_str(),
                 "outcome": check.outcome,
             })
@@ -1344,10 +1358,16 @@ async fn print_exposure(
     };
     let ruleset = core::profiles::load_profile(&name).await?;
     let env = core::lockout::session_from_env();
-    let scan = tokio::task::spawn_blocking(core::exposure::scan_host)
-        .await?
-        .map_err(|e| format!("cannot read the listening sockets: {e}"))?;
-    let sessions = core::lockout::merge_sessions(env, core::lockout::sessions_from_scan(&scan));
+    let (scan, sessions) = tokio::task::spawn_blocking(move || {
+        core::exposure::scan_host().map(|scan| {
+            let found = core::lockout::sessions_from_scan(&scan);
+            let sessions =
+                core::lockout::with_interfaces(core::lockout::merge_sessions(env, found));
+            (scan, sessions)
+        })
+    })
+    .await?
+    .map_err(|e| format!("cannot read the listening sockets: {e}"))?;
     let rows = core::exposure::exposure_rows(&ruleset, &scan.sockets);
     let checks = core::lockout::check_sessions(&ruleset, &sessions);
 
@@ -1378,10 +1398,10 @@ async fn print_exposure(
     }
     for check in &checks {
         let text = format!("SSH: {}", check.summary());
-        if check.access == core::lockout::Access::Accepted {
-            println!("{text}");
-        } else {
+        if check.access.needs_confirmation() {
             println!("{}", paint(&text, Color::Red, color));
+        } else {
+            println!("{text}");
         }
     }
     if scan
