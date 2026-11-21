@@ -865,7 +865,7 @@ User rules come **before** the local network and ICMP allows so a user Drop/Reje
 ("drop everything from X") also stops them. Established/related traffic is accepted
 before any user rule: standard stateful behaviour, a Drop rule stops new connections
 only (and not ICMP errors related to existing ones). Keep this in README ("Default
-Protection").
+protection").
 
 Output chain: Server Mode adds loopback, invalid drop, established, ND/MLD (incl.
 `mld-listener-done`), IGMP and DHCP/DHCPv6 client requests, then Output user rules;
@@ -1028,7 +1028,7 @@ All logging functions are one-line delegations to `log_event_internal()` (enable
   (grouped `std` / external / crate imports, formatted doc examples), so format with
   `cargo +nightly-2026-11-14 fmt`. Stable `cargo fmt --check` accepts the result (it only
   warns about the options it skips), but nightly is authoritative. Bump the date in
-  CLAUDE.md, README and CI together.
+  CLAUDE.md and CI together.
 
 ### Pre-Commit Checklist
 One list: the checks `.github/workflows/ci.yml` runs, plus the release build. Run all of

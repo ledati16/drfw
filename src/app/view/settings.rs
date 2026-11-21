@@ -20,7 +20,7 @@ const LOCAL_DISCOVERY_SERVER_NOTE: &str = "Not available in Server Mode: outgoin
      connections there only follow your Output rules. Switch to Desktop mode to use it.";
 
 /// Description of the "Anti-spoofing (RPF)" row (new packets only, with the
-/// routing mark: see README "Anti-spoofing").
+/// routing mark: see CLAUDE.md §9, "Rule Ordering").
 const RPF_DESC: &str = "Drop new connections whose source address could not have arrived on \
      that interface. Useful with rules that trust a source address. May block peers that \
      contact a full-tunnel VPN first.";

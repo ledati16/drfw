@@ -11,7 +11,7 @@ use crate::app::{Message, PendingWarning};
 
 /// The RPF warning (true of the strict reverse path check DRFW generates:
 /// after established/related, so new packets only, keyed by the routing
-/// mark; see README "Anti-spoofing").
+/// mark; see CLAUDE.md §9, "Rule Ordering").
 const RPF_WARNING: &str = "Drop new connections whose source address could not have arrived \
 on that interface (strict reverse path filtering). Useful with rules that trust a source \
 address, such as \"SSH from 192.168.1.0/24 only\".\n\n\

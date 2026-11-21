@@ -106,6 +106,41 @@ from a checkout (as `PKGBUILD` does). A build from a release tarball or other so
 without `.git` reports plain `0.9.0`, with commit and branch `unknown` in
 `drfw --version`.
 
+## Compile-Time Configuration
+
+Distro packagers adapt DRFW to the distribution's layout with environment variables
+read at **build** time (see `src/distro.rs`):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DRFW_SYSTEM_NFT_PATH` | `/etc/nftables.conf` | File Save to System writes |
+| `DRFW_SYSTEM_NFT_SERVICE` | `nftables.service` | systemd unit that loads that file at boot (reported, and optionally enabled) |
+| `DRFW_NFT_PATH` | unset | Absolute `nft` path. Unset: the no-prompt check searches `/usr/sbin`, `/sbin`, `/usr/bin`, and elevated commands run plain `nft` |
+| `DRFW_HELPER_PATH` | `/usr/lib/drfw/drfw-helper` | Where the package installs the root helper; also the polkit action's exec path |
+
+Values are checked at compile time and a bad one fails the build: paths must be
+absolute and use only `A-Z a-z 0-9 / . _ @ + -` (the characters DRFW's root scripts
+accept), the service must be a unit name ending in `.service`. An empty value counts
+as unset.
+
+```bash
+# Arch, Debian, Ubuntu (defaults; DRFW_NFT_PATH recommended, see the table below)
+cargo build --release
+
+# Fedora/RHEL
+DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf DRFW_NFT_PATH=/usr/sbin/nft \
+cargo build --release
+
+# Custom setup: DRFW's own file, loaded by DRFW's own unit
+DRFW_SYSTEM_NFT_PATH=/etc/drfw/rules.nft \
+DRFW_SYSTEM_NFT_SERVICE=drfw.service \
+cargo build --release
+./target/release/drfw print-service-unit | sudo tee /etc/systemd/system/drfw.service
+```
+
+In the custom setup, Save to System creates `/etc/drfw/` if needed, and its **Also
+enable drfw.service at boot** checkbox enables the unit you just installed.
+
 ## Per-Distribution Settings
 
 | Distribution | `DRFW_SYSTEM_NFT_PATH` | `DRFW_SYSTEM_NFT_SERVICE` | `DRFW_NFT_PATH` | Notes |
@@ -114,9 +149,36 @@ without `.git` reports plain `0.9.0`, with commit and branch `unknown` in
 | Debian / Ubuntu | `/etc/nftables.conf` | `nftables.service` | `/usr/sbin/nft` | `/usr/sbin` may not be on users' `PATH`; Ubuntu also ships `ufw` |
 | Fedora / RHEL | `/etc/sysconfig/nftables.conf` | `nftables.service` | `/usr/sbin/nft` | The stock file is `include` lines; it is kept as `.drfw-orig`. `firewalld` is on by default |
 | openSUSE | check your distro | check your distro | `/usr/sbin/nft` | `firewalld` is the usual default |
-| NixOS | (declarative) | (declarative) | `/run/current-system/sw/bin/nft` | Prefer `drfw export` into `networking.nftables.ruleset`; see the main README |
+| NixOS | (declarative) | (declarative) | `/run/current-system/sw/bin/nft` | Prefer `drfw export` into `networking.nftables.ruleset`; see [NixOS](#nixos) |
 
-Details and caveats: "Packaging" in the main [README](../README.md).
+### NixOS
+
+With `networking.nftables.enable`, NixOS generates the ruleset and its
+own `nftables.service` from your configuration: an imperatively written
+`/etc/nftables.conf` is not what it loads, and the units NixOS manages are not meant to
+be changed with `systemctl enable`. The recommended way is to keep DRFW for designing and testing rules
+(Apply works on the live kernel) and put the exported rules into your configuration:
+
+```bash
+drfw export my-profile --format nft > /etc/nixos/drfw.nft
+```
+
+```nix
+networking.nftables.enable = true;
+networking.nftables.ruleset = builtins.readFile ./drfw.nft;
+```
+
+Note that the NixOS firewall (`networking.firewall`) adds its own tables when
+nftables is enabled. If you prefer Save to System on NixOS, build with
+`DRFW_SYSTEM_NFT_PATH=/var/lib/drfw/rules.nft DRFW_SYSTEM_NFT_SERVICE=drfw.service
+DRFW_NFT_PATH=/run/current-system/sw/bin/nft`, leave `networking.nftables` off, and
+declare `drfw.service` in your configuration (from `drfw print-service-unit`, with
+`wantedBy = [ "multi-user.target" ]`) instead of using the "enable at boot" checkbox.
+This setup is untested: DRFW's elevated scripts call coreutils and `systemctl` by name,
+and some elevation tools reset `PATH` to directories that are empty on NixOS; check
+your setup. Do not install the root helper there: it runs the scripts with the fixed
+`PATH=/usr/sbin:/usr/bin:/sbin:/bin`, which holds nothing on NixOS (without it, DRFW
+elevates `/bin/sh` and asks for the password on every apply).
 
 ## Boot-Time Firewall
 

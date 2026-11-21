@@ -143,7 +143,7 @@ mod exit_code {
     pub const RETENTION: u8 = 9;
 }
 
-/// Exit code table for `--help` and the README.
+/// Exit code table for `--help` (the README points there).
 const EXIT_CODES_HELP: &str = "\
 Exit codes:
   0  Success: applied, confirmed, reverted (by timeout or on request), saved

@@ -45,7 +45,7 @@ prepare() {
     cargo fetch --locked --target "$(rustc --print host-tuple)"
 }
 
-# Compile-time configuration (see "Packaging" in README.md). Arch keeps nft in
+# Compile-time configuration (see "Compile-Time Configuration" in contrib/README.md). Arch keeps nft in
 # /usr/bin, the config in /etc/nftables.conf and loads it with
 # nftables.service. Naming nft explicitly lets the no-prompt check and the
 # elevated scripts use it without searching PATH.
