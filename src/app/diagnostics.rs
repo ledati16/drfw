@@ -486,7 +486,7 @@ fn describe_event(event: &AuditEvent) -> (RowTone, String) {
                 event.details["source"].as_str(),
                 event.details["untested"].as_bool(),
             ) {
-                (Some("last_confirmed"), _) => "Saved the last applied rules",
+                (Some("last_confirmed"), _) => "Saved the last kept rules",
                 (_, Some(true)) => "Saved untested rules",
                 _ => "Saved",
             };

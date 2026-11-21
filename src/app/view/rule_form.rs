@@ -47,11 +47,15 @@ pub fn view_rule_form<'a>(
     mono_font: iced::Font,
     server_mode: bool,
     block_forwarding: bool,
+    opened_chain: crate::core::firewall::Chain,
     confirm_discard: bool,
 ) -> Element<'a, Message> {
     // Forwarded rules match both the interface a packet arrives on and the
-    // one it leaves on
-    let both_interfaces = server_mode || form.chain == crate::core::firewall::Chain::Forward;
+    // one it leaves on; a leftover output interface stays visible (with its
+    // error) so it can be cleared
+    let both_interfaces = server_mode
+        || form.chain == crate::core::firewall::Chain::Forward
+        || !form.output_interface.is_empty();
     let title_text = if form.id.is_some() {
         "Edit Rule"
     } else {
@@ -202,7 +206,7 @@ pub fn view_rule_form<'a>(
                     source_col
                 },
                 // Interface combo_box(es) with autocomplete (supports wildcards like eth*, docker*)
-                // In server mode: Input + Output interface side by side
+                // In Server Mode: Input + Output interface side by side
                 // Otherwise: just "INTERFACE" (input only)
                 view_interface_fields(
                     form,
@@ -217,9 +221,9 @@ pub fn view_rule_form<'a>(
             .spacing(6);
 
             // Chain selection: visible in Server Mode (Output) and with
-            // forwarding blocked (Forwarded), and for a rule whose chain is
-            // inactive in this mode so it can be changed
-            let choices = chain_choices(server_mode, block_forwarding, form.chain);
+            // forwarded traffic blocked (Forwarded), and for a rule whose chain
+            // is inactive in this mode so it can be changed (and changed back)
+            let choices = chain_choices(server_mode, block_forwarding, [opened_chain, form.chain]);
             if choices.len() > 1 {
                 context_col = context_col.push(
                     column![
@@ -405,7 +409,7 @@ fn view_summary_button<'a>(
     .into()
 }
 
-/// Interface fields - single or side-by-side based on server mode
+/// Interface fields - single or side-by-side based on Server Mode
 fn view_interface_fields<'a>(
     form: &'a RuleForm,
     interface_combo: &'a combo_box::State<String>,
@@ -538,16 +542,17 @@ const CHOICES_ALL: [ChainChoice; 3] = [
 ];
 
 /// The chains the picker offers: Input always; Output in Server Mode,
-/// Forwarded with forwarding blocked; and the rule's own chain even where it
-/// is inactive, so it can be seen and changed.
+/// Forwarded with forwarded traffic blocked; and `keep` (the chain the form
+/// opened with and the one selected) even where inactive, so the rule's own
+/// chain can be seen, changed, and picked again after a change.
 fn chain_choices(
     server_mode: bool,
     block_forwarding: bool,
-    current: crate::core::firewall::Chain,
+    keep: [crate::core::firewall::Chain; 2],
 ) -> &'static [ChainChoice] {
     use crate::core::firewall::Chain;
-    let output = server_mode || current == Chain::Output;
-    let forward = block_forwarding || current == Chain::Forward;
+    let output = server_mode || keep.contains(&Chain::Output);
+    let forward = block_forwarding || keep.contains(&Chain::Forward);
     match (output, forward) {
         (false, false) => &CHOICES_INPUT,
         (true, false) => &CHOICES_INPUT_OUTPUT,
@@ -850,7 +855,7 @@ mod tests {
     use crate::core::firewall::Chain;
 
     fn offered(server: bool, block: bool, current: Chain) -> Vec<Chain> {
-        chain_choices(server, block, current)
+        chain_choices(server, block, [current, current])
             .iter()
             .map(|c| c.0)
             .collect()
@@ -883,6 +888,13 @@ mod tests {
         assert_eq!(
             ChainChoice(Chain::Forward).to_string(),
             "Forwarded (routed through)"
+        );
+        // B.M1: an inactive Forwarded rule switched to Input keeps the
+        // picker, so it can be switched back
+        let keep = chain_choices(false, false, [Chain::Forward, Chain::Input]);
+        assert_eq!(
+            keep.iter().map(|c| c.0).collect::<Vec<_>>(),
+            [Chain::Input, Chain::Forward]
         );
     }
 }

@@ -68,7 +68,10 @@ pub(crate) fn handle_add_rule_clicked(state: &mut State) -> Task<Message> {
 /// that call for a template.
 pub(crate) fn handle_toggle_template_menu(state: &mut State, open: bool) {
     state.template_menu = open.then(|| {
-        crate::app::templates::TemplateMenu::for_interfaces(&crate::utils::list_interfaces())
+        crate::app::templates::TemplateMenu::for_interfaces(
+            &crate::utils::list_interfaces(),
+            &state.ruleset,
+        )
     });
 }
 
@@ -85,6 +88,9 @@ pub(crate) fn handle_add_template(state: &mut State, index: usize) -> Task<Messa
     else {
         return Task::none();
     };
+    if entry.already_added {
+        return Task::none();
+    }
     let rules = entry.rules();
     if state.ruleset.rules.len() + rules.len() > MAX_RULES {
         state.push_banner(
@@ -442,9 +448,15 @@ pub(crate) fn handle_rule_form_interface_changed(state: &mut State, value: Strin
     });
 }
 
+/// Changes the form's chain. A chain that matches no output interface
+/// (Input) drops the output interface: outside Server Mode its field is
+/// hidden then, and the value would only fail validation (B.M1).
 pub(crate) fn handle_rule_form_chain_changed(state: &mut State, chain: Chain) {
     with_form(state, "RuleFormChainChanged", |form| {
         form.chain = chain;
+        if !crate::core::rule_constraints::chain_uses_output_interface(chain) {
+            form.output_interface.clear();
+        }
     });
 }
 
@@ -915,6 +927,36 @@ mod tests {
         assert!(state.rule_form.is_some());
     }
 
+    /// B.M1: in Desktop mode with forwarded traffic not blocked, an
+    /// inactive Forwarded rule moved to Input drops its (now hidden) output
+    /// interface and saves; the opened chain stays offered.
+    #[test]
+    fn test_inactive_forwarded_rule_can_move_to_input() {
+        let mut state = create_test_state();
+        let mut rule = crate::core::test_helpers::create_test_rule("Routed", Some(80));
+        rule.chain = Chain::Forward;
+        rule.interface = Some("eth0".into());
+        rule.output_interface = Some("wg0".into());
+        rule.rebuild_caches();
+        let id = rule.id;
+        state.ruleset.rules.push(rule);
+        state.mark_profile_dirty();
+        let _ = handle_edit_rule_clicked(&mut state, id);
+        let _ = state.update(Message::RuleFormChainChanged(Chain::Input));
+        let form = state.rule_form.as_ref().unwrap();
+        assert_eq!(form.output_interface, "");
+        assert!(form.validate().is_none());
+        assert_eq!(
+            state.rule_form_initial.as_ref().map(|f| f.chain),
+            Some(Chain::Forward),
+            "the view keeps offering the opened chain"
+        );
+        let _ = handle_save_rule_form(&mut state);
+        assert!(state.rule_form.is_none(), "saved");
+        assert_eq!(state.ruleset.rules[0].chain, Chain::Input);
+        assert_eq!(state.ruleset.rules[0].output_interface, None);
+    }
+
     #[test]
     fn test_saving_or_closing_the_form_clears_its_helper() {
         let helper = || crate::app::RuleFormHelper {
@@ -1200,7 +1242,10 @@ mod tests {
 
     fn menu_for(state: &mut State, interfaces: &[&str]) {
         let names: Vec<String> = interfaces.iter().map(ToString::to_string).collect();
-        state.template_menu = Some(crate::app::templates::TemplateMenu::for_interfaces(&names));
+        state.template_menu = Some(crate::app::templates::TemplateMenu::for_interfaces(
+            &names,
+            &state.ruleset,
+        ));
     }
 
     /// Choosing a template adds its rules as ordinary, editable rules in one
@@ -1246,6 +1291,12 @@ mod tests {
         assert_eq!(state.ruleset.rules.len(), 0, "one step");
         let _ = state.update(Message::Redo);
         assert_eq!(state.ruleset.rules.len(), 2);
+
+        // B.L5: offered again, it is marked and not added twice
+        menu_for(&mut state, &["eth0", "virbr0", "tailscale0"]);
+        assert!(state.template_menu.as_ref().unwrap().entries[vm].already_added);
+        let _ = state.update(Message::AddTemplate(vm));
+        assert_eq!(state.ruleset.rules.len(), 2);
     }
 
     #[test]
@@ -1288,5 +1339,14 @@ mod tests {
                 .is_some_and(|m| m.entries.len() == 2),
             "not reopened (rebuilt) while locked"
         );
+        // B.L4: closing it always works
+        let _ = state.update(Message::ToggleTemplateMenu(false));
+        assert!(state.template_menu.is_none());
+
+        // Apply (Ctrl+S) closes an open menu
+        state.status = crate::app::AppStatus::Idle;
+        menu_for(&mut state, &["tailscale0"]);
+        let _ = state.update(Message::ApplyClicked);
+        assert!(state.template_menu.is_none());
     }
 }

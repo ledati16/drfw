@@ -2,7 +2,8 @@
 **/*.rs.bk
 cargo-test-fuzz-target
 
-# Documentation and markdown files
+# Local notes and planning docs (any *.md) and /docs/ stay untracked;
+# only the project docs below are tracked
 *.md
 /docs/
 
@@ -12,3 +13,5 @@ cargo-test-fuzz-target
 !README.md
 !STYLE.md
 !contrib/README.md
+!contrib/icons/README.md
+!tools/e2e/README.md

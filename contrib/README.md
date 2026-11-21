@@ -64,7 +64,14 @@ install -Dm644 drfw.service "$pkgdir/usr/lib/systemd/system/drfw.service"
 ```
 
 `@NFT_PATH@` is `DRFW_NFT_PATH`, or `/usr/sbin/nft` when unset. The command is hidden
-from `--help`, needs no privileges and creates no files.
+from `--help`, needs no privileges and creates no files. The unit is ordered
+`Before=network-pre.target` with `Wants=network-pre.target` (see
+[Option 2](#option-2-drfwservice-drfw-alternative)).
+
+The version shown by `drfw -V` and the GUI includes the git commit only when building
+from a checkout (as `PKGBUILD` does). A build from a release tarball or other source
+without `.git` reports plain `0.9.0`, with commit and branch `unknown` in
+`drfw --version`.
 
 ## Per-Distribution Settings
 
@@ -118,6 +125,10 @@ sudo systemctl start drfw.service
 
 **Key difference:** On stop, `drfw.service` only deletes the `inet drfw` table, preserving other tables like docker or libvirt.
 
+Like a firewall unit should, `drfw.service` is ordered `Before=network-pre.target`
+(with `Wants=network-pre.target`), so the rules are loaded before NetworkManager or
+systemd-networkd bring up any interface: there is no unfiltered window at boot.
+
 The file DRFW writes begins with `table inet drfw` / `delete table inet drfw`, so
 start and reload replace the drfw table atomically and never duplicate rules.
 `drfw status` shows whether `/etc/nftables.conf` was written by DRFW and which unit
@@ -149,6 +160,7 @@ sudo systemctl disable drfw.service
 |---------|------------------|--------------|
 | Config source | the distribution's file (`/etc/nftables.conf` on Arch/Debian) | `DRFW_SYSTEM_NFT_PATH` (filled in by `print-service-unit`) |
 | On start/reload | Loads the file (DRFW's replaces only `inet drfw`) | Same |
+| Boot ordering | set by the distribution's unit | `Before=network-pre.target` |
 | On stop | Flushes entire ruleset | Deletes only `inet drfw` table |
 | Other tables | Removed on stop | Preserved on stop |
 | Conflicts with | drfw.service | nftables.service |

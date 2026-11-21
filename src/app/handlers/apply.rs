@@ -196,38 +196,38 @@ pub struct ApplyContext {
     pub sessions: Vec<SshSession>,
     /// Whether the kernel forwards traffic (for the forwarding notice)
     pub forwarding: crate::core::host_facts::ForwardingState,
+    /// `State::host_facts_epoch` when the reload started
+    pub facts_epoch: u64,
 }
 
-/// Re-reads the kept record and the SSH sessions on the blocking pool.
-fn reload_context_task(state: &State) -> Task<Message> {
-    let record_generation = state.confirmed_record_generation;
-    let env = state.ssh_env_session.clone();
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || ApplyContext {
-                record_generation,
-                record: ConfirmedRecord::load_blocking(),
-                sessions: crate::core::lockout::detect_sessions(env),
-                forwarding: crate::core::host_facts::forwarding_enabled(),
-            })
-            .await
-            .map_err(|e| tracing::error!("Reloading the kept record failed: {e}"))
-            .ok()
-            .map(Box::new)
-        },
-        Message::ApplyContextLoaded,
-    )
+/// Starts a read of the SSH sessions and forwarding state: returns its
+/// epoch (see [`store_host_facts`]).
+pub(crate) fn next_host_facts_epoch(state: &mut State) -> u64 {
+    state.host_facts_epoch = state.host_facts_epoch.wrapping_add(1);
+    state.host_facts_epoch
 }
 
-/// Handles the re-read record and sessions: stores them (the record only if
-/// this GUI did not replace it meanwhile) and recomputes the warnings of an
-/// open "Commit Changes?" or Save to System dialog.
-pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyContext) {
-    if context.record_generation == state.confirmed_record_generation {
-        state.replace_confirmed_record(context.record);
+/// Stores SSH sessions and forwarding state read under `epoch`, unless a
+/// read that started later was stored already (the apply context reload and
+/// an Exposure scan may finish in either order). Returns whether it stored.
+pub(crate) fn store_host_facts(
+    state: &mut State,
+    epoch: u64,
+    sessions: Vec<SshSession>,
+    forwarding: crate::core::host_facts::ForwardingState,
+) -> bool {
+    if epoch < state.host_facts_stored_epoch {
+        return false;
     }
-    state.ssh_sessions = context.sessions;
-    state.host_forwarding = context.forwarding;
+    state.host_facts_stored_epoch = epoch;
+    state.ssh_sessions = sessions;
+    state.host_forwarding = forwarding;
+    true
+}
+
+/// Recomputes the warnings of an open "Commit Changes?" or Save to System
+/// dialog from the kept record, SSH sessions and forwarding state now known.
+pub(crate) fn recheck_open_dialogs(state: &mut State) {
     match state.status {
         AppStatus::Verifying | AppStatus::AwaitingApply => {
             let kept = state
@@ -242,6 +242,50 @@ pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyConte
         // Closed (or past the question): nothing to update
         _ => {}
     }
+}
+
+/// Re-reads the kept record and the SSH sessions on the blocking pool.
+/// Until the answer arrives the dialog's continue buttons wait
+/// (`State::context_reloads_pending`): a warning it brings must not be
+/// skipped by an Enter pressed first (B.L1).
+fn reload_context_task(state: &mut State) -> Task<Message> {
+    state.context_reloads_pending = state.context_reloads_pending.saturating_add(1);
+    let facts_epoch = next_host_facts_epoch(state);
+    let record_generation = state.confirmed_record_generation;
+    let env = state.ssh_env_session.clone();
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || ApplyContext {
+                record_generation,
+                record: ConfirmedRecord::load_blocking(),
+                sessions: crate::core::lockout::detect_sessions(env),
+                forwarding: crate::core::host_facts::forwarding_enabled(),
+                facts_epoch,
+            })
+            .await
+            .map_err(|e| tracing::error!("Reloading the kept record failed: {e}"))
+            .ok()
+            .map(Box::new)
+        },
+        Message::ApplyContextLoaded,
+    )
+}
+
+/// Handles the re-read record and sessions: stores them (the record only if
+/// this GUI did not replace it meanwhile) and recomputes the warnings of an
+/// open "Commit Changes?" or Save to System dialog.
+pub(crate) fn handle_apply_context_loaded(state: &mut State, context: ApplyContext) {
+    state.context_reloads_pending = state.context_reloads_pending.saturating_sub(1);
+    if context.record_generation == state.confirmed_record_generation {
+        state.replace_confirmed_record(context.record);
+    }
+    store_host_facts(
+        state,
+        context.facts_epoch,
+        context.sessions,
+        context.forwarding,
+    );
+    recheck_open_dialogs(state);
 }
 
 /// Longest banner text for apply errors.
@@ -362,11 +406,26 @@ fn verify_rejected_feedback(
     ))
 }
 
-/// Closes and drops the "Verification Errors" panel: a verification passed,
-/// or the profile changed (its rows would name rules of another profile).
+/// Closes and drops the "Verification Errors" panel (or the "Apply
+/// Details" of an apply whose outcome is unknown): an apply's verification
+/// passed, so a new apply is about to bring the kernel to a known state.
 pub(crate) fn clear_verify_errors(state: &mut State) {
     state.verify_errors = None;
     state.show_verify_errors = false;
+}
+
+/// Closes and drops the "Verification Errors" panel when the profile
+/// changed (its rows would name rules of another profile) or a Save to
+/// System check passed. "Apply Details" stays: it describes the kernel,
+/// which neither changes.
+pub(crate) fn clear_profile_verify_errors(state: &mut State) {
+    if state
+        .verify_errors
+        .as_ref()
+        .is_some_and(|panel| !panel.describes_kernel)
+    {
+        clear_verify_errors(state);
+    }
 }
 
 /// True while the apply flow (or Save to System) owns the ruleset.
@@ -463,6 +522,8 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
         return Task::none();
     }
 
+    // Its entries would only be disabled until the apply flow ends (B.L4)
+    state.template_menu = None;
     let verified = state.ruleset.clone();
     let json = verified.to_nftables_json();
     let verify = Task::perform(
@@ -541,7 +602,7 @@ pub(crate) fn handle_proceed_to_apply_anyway(state: &mut State) -> Task<Message>
 /// Starts the elevated apply of the verified snapshot. `confirmed`: the user
 /// explicitly accepted the warnings shown ("Apply anyway").
 fn proceed_to_apply(state: &mut State, confirmed: bool) -> Task<Message> {
-    if state.status != AppStatus::AwaitingApply {
+    if state.status != AppStatus::AwaitingApply || state.context_pending() {
         return Task::none();
     }
     let Some(session) = state.apply_session.as_mut() else {
@@ -844,6 +905,7 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
     }
 
     state.status = AppStatus::Verifying;
+    state.template_menu = None;
     let nft_json = state.ruleset.to_nftables_json();
 
     Task::perform(
@@ -1017,7 +1079,7 @@ pub(crate) fn handle_save_to_system_verify_result(
             // Verification passed - show confirmation modal, then ask systemd
             // (unprivileged) whether the file is loaded at boot
             state.status = AppStatus::AwaitingSaveToSystem;
-            clear_verify_errors(state);
+            clear_profile_verify_errors(state);
             state.save_dialog = SaveToSystemDialog::checking();
             check_save_dialog(state);
             Task::batch([
@@ -1084,17 +1146,22 @@ pub(crate) fn handle_save_to_system_confirmed(
     state: &mut State,
     source: SaveSource,
 ) -> Task<Message> {
-    if state.status != AppStatus::AwaitingSaveToSystem {
+    if state.status != AppStatus::AwaitingSaveToSystem || state.context_pending() {
         return Task::none();
     }
     let text = match source {
         SaveSource::Editor => state.ruleset.to_nft_text(),
+        // The text of exactly the recorded JSON bytes, not the ruleset
+        // rendered again (a newer DRFW may generate it differently)
         SaveSource::LastConfirmed => {
-            let Some(confirmed) = kept_ruleset(state) else {
+            let Some(record) = state.confirmed_record.as_ref() else {
                 tracing::error!("Save of the last confirmed rules without any");
                 return Task::none();
             };
-            confirmed.to_nft_text()
+            match record.nft_text() {
+                Ok(text) => text,
+                Err(e) => return fail_last_kept_save(state, e),
+            }
         }
     };
     let untested = source == SaveSource::Editor && state.save_dialog.tested != SaveTested::Tested;
@@ -1121,6 +1188,34 @@ pub(crate) fn handle_save_to_system_confirmed(
         },
         Message::SaveToSystemResult,
     )
+}
+
+/// The recorded last kept rules cannot be turned into `nft -f` text: closes
+/// the Save to System dialog with an error banner (nothing was written) and
+/// records the failed save.
+fn fail_last_kept_save(state: &mut State, error: String) -> Task<Message> {
+    tracing::error!("Could not render the recorded last kept rules: {error}");
+    state.status = AppStatus::Idle;
+    state.save_dialog = SaveToSystemDialog::default();
+    state.push_banner(
+        "Could not save the last kept rules: their record is unreadable. Nothing was saved.",
+        BannerSeverity::Error,
+    );
+    let enable_event_log = state.enable_event_log;
+    let details = audit::SaveDetails {
+        last_confirmed: true,
+        untested: false,
+    };
+    audit_task(async move {
+        audit::log_save_to_system(
+            enable_event_log,
+            false,
+            crate::SYSTEM_NFT_PATH,
+            details,
+            Some(error),
+        )
+        .await;
+    })
 }
 
 /// Handles user cancelling Save to System modal
@@ -1176,7 +1271,7 @@ pub(crate) fn handle_save_to_system_result(
     };
 
     let what = if details.last_confirmed {
-        "Last applied rules saved"
+        "Last kept rules saved"
     } else {
         "Configuration saved"
     };
@@ -1369,6 +1464,13 @@ mod tests {
 
     use crate::core::test_helpers::create_test_rule;
 
+    /// The reload of the kept record and SSH sessions that Apply and Save
+    /// to System start has arrived (here: failed, so nothing changes); until
+    /// then their dialogs cannot continue.
+    fn context_reloaded(state: &mut State) {
+        let _ = state.update(Message::ApplyContextLoaded(None));
+    }
+
     fn last_banner(state: &State) -> (&str, BannerSeverity) {
         let banner = state.banners.back().expect("a banner");
         (banner.message.as_str(), banner.severity)
@@ -1383,6 +1485,7 @@ mod tests {
         state.ruleset.rules.push(create_test_rule("New", Some(80)));
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         assert_eq!(state.status, AppStatus::AwaitingApply);
         let _ = handle_proceed_to_apply(&mut state);
@@ -1406,6 +1509,7 @@ mod tests {
         state.mark_profile_dirty();
         let id = state.ruleset.rules[0].id;
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
 
         let _ = state.update(Message::ToggleRuleEnabled(id));
         let _ = state.update(Message::DeleteRule(id));
@@ -1446,6 +1550,7 @@ mod tests {
         };
 
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(rejected()));
         assert_eq!(state.status, AppStatus::Idle);
         assert!(state.apply_session.is_none());
@@ -1470,6 +1575,7 @@ mod tests {
         let _ = state.update(Message::ToggleVerifyErrors(false));
         let _ = handle_save_to_system_clicked(&mut state);
         let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
+        context_reloaded(&mut state);
         assert!(state.verify_errors.is_none());
     }
 
@@ -1488,6 +1594,7 @@ mod tests {
         state.mark_profile_dirty();
         let _ = handle_save_to_system_clicked(&mut state);
         let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
+        context_reloaded(&mut state);
         assert_eq!(state.status, AppStatus::AwaitingSaveToSystem);
         state
     }
@@ -1783,6 +1890,7 @@ mod tests {
         state.ruleset.rules.push(create_test_rule("Edit", Some(22)));
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         assert_eq!(state.status, AppStatus::AwaitingApply);
         let _ = state.update(Message::CancelApply);
@@ -1819,6 +1927,7 @@ mod tests {
     fn test_verify_auth_cancel_says_so() {
         let mut state = create_test_state();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Err(VerifyError::Auth(AuthError::Cancelled)));
         assert_eq!(state.status, AppStatus::Idle);
         let (message, severity) = last_banner(&state);
@@ -1834,6 +1943,7 @@ mod tests {
     fn apply_and_confirm(state: &mut State) {
         let dir = tempfile::tempdir().unwrap();
         let _ = handle_apply_clicked(state);
+        context_reloaded(state);
         let _ = handle_verify_completed(state, Ok(VerifyResult::success()));
         let _ = handle_proceed_to_apply(state);
         let guard = GuardHandle::new_for_testing(dir.path(), Duration::from_secs(15));
@@ -1846,6 +1956,7 @@ mod tests {
     fn open_save_dialog(state: &mut State) {
         let _ = handle_save_to_system_clicked(state);
         let _ = handle_save_to_system_verify_result(state, Ok(VerifyResult::success()));
+        context_reloaded(state);
         assert_eq!(state.status, AppStatus::AwaitingSaveToSystem);
     }
 
@@ -1925,12 +2036,48 @@ mod tests {
         );
         assert!(state.save_in_progress.is_none());
         assert!(
-            last_banner(&state)
-                .0
-                .starts_with("Last applied rules saved"),
+            last_banner(&state).0.starts_with("Last kept rules saved"),
             "{:?}",
             state.banners
         );
+    }
+
+    /// "Save the last kept rules" writes the text of the recorded JSON; a
+    /// record that cannot be rendered closes the dialog with an error banner
+    /// and saves nothing.
+    #[test]
+    fn test_save_last_kept_rules_with_unrenderable_record() {
+        use crate::core::confirmed::{ConfirmedRecord, RecordKind};
+
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Kept", Some(22)));
+        state.mark_profile_dirty();
+        apply_and_confirm(&mut state);
+        let kept = state.ruleset.clone();
+        state.ruleset.rules.push(create_test_rule("New", Some(23)));
+        state.mark_profile_dirty();
+        open_save_dialog(&mut state);
+        assert_eq!(
+            state.save_dialog.primary_source(),
+            Some(SaveSource::LastConfirmed)
+        );
+        state.confirmed_record = Some(
+            ConfirmedRecord::new(
+                &serde_json::json!({ "not": "a command list" }),
+                &kept,
+                RecordKind::Confirmed,
+            )
+            .unwrap(),
+        );
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::LastConfirmed);
+        assert_eq!(state.status, AppStatus::Idle);
+        assert!(state.save_in_progress.is_none());
+        let (text, severity) = last_banner(&state);
+        assert!(
+            text.starts_with("Could not save the last kept rules"),
+            "{text}"
+        );
+        assert_eq!(severity, BannerSeverity::Error);
     }
 
     /// Only a confirmed (or deliberately unguarded) apply counts as tested:
@@ -2043,6 +2190,7 @@ mod tests {
         state.ruleset.rules.truncate(2);
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         assert_eq!(state.status, AppStatus::AwaitingApply);
         let warning = state
@@ -2075,6 +2223,7 @@ mod tests {
         state.ruleset.rules.truncate(7); // 3 of 10
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         assert!(state.apply_session.as_ref().unwrap().retention().is_none());
         let _ = state.update(Message::ProceedToApply);
@@ -2136,6 +2285,7 @@ mod tests {
             record,
             sessions,
             forwarding: crate::core::host_facts::ForwardingState::default(),
+            facts_epoch: state.host_facts_epoch,
         }
     }
 
@@ -2151,6 +2301,7 @@ mod tests {
         state.ruleset.rules.push(create_test_rule("Web", Some(80)));
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         let session = state.apply_session.as_ref().expect("session");
         assert!(session.retention().is_none());
@@ -2182,6 +2333,7 @@ mod tests {
         let mut state = create_test_state();
         state.host_forwarding = on;
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         let session = state.apply_session.as_ref().expect("session");
         assert_eq!(session.forwarding_note(), [FORWARDING_WARNING]);
@@ -2205,6 +2357,7 @@ mod tests {
         state.ruleset.advanced_security.block_forwarding = true;
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let session = state.apply_session.as_ref().expect("session");
         assert_eq!(session.forwarding_note().len(), 0);
     }
@@ -2216,6 +2369,7 @@ mod tests {
         state.ruleset.rules.push(create_test_rule("SSH", Some(22)));
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         assert!(!state.apply_session.as_ref().unwrap().needs_confirmation());
         let _ = state.update(Message::ProceedToApply);
@@ -2228,6 +2382,7 @@ mod tests {
         state.ruleset.rules.push(rule);
         state.mark_profile_dirty();
         let _ = handle_apply_clicked(state);
+        context_reloaded(state);
         let _ = handle_verify_completed(state, Ok(VerifyResult::success()));
         state.apply_session.as_ref().expect("session")
     }
@@ -2291,6 +2446,7 @@ mod tests {
     fn test_lockout_recomputed_when_sessions_arrive() {
         let mut state = create_test_state();
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         assert!(state.apply_session.as_ref().unwrap().lockout().is_none());
         let found = context(&state, None, vec![ssh_session()]);
         let _ = state.update(Message::ApplyContextLoaded(Some(Box::new(found))));
@@ -2336,6 +2492,7 @@ mod tests {
                 .push(create_test_rule(&format!("cli{i}"), Some(2000 + i)));
         }
         let _ = handle_apply_clicked(&mut state);
+        context_reloaded(&mut state);
         assert!(state.apply_session.as_ref().unwrap().retention().is_none());
         let reloaded = context(&state, Some(record_of(&on_disk)), Vec::new());
         let _ = state.update(Message::ApplyContextLoaded(Some(Box::new(reloaded))));
@@ -2436,6 +2593,61 @@ mod tests {
         assert_eq!(panel.rows[0].message, detail);
         assert_eq!(panel.rows[0].edit_rule_id(), None);
         assert!(panel.next_step.contains("nft list table inet drfw"));
+        assert!(panel.describes_kernel);
+
+        // B.L10: it describes the kernel, so a passing Save to System check
+        // keeps it; two more persistent banners and a transient one do not
+        // evict it either
+        state.status = AppStatus::Idle;
+        let _ = handle_save_to_system_clicked(&mut state);
+        let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
+        context_reloaded(&mut state);
+        assert!(
+            state
+                .verify_errors
+                .as_ref()
+                .is_some_and(|p| p.describes_kernel)
+        );
+        push_persistent_banner(&mut state, "Revert FAILED: old rules STILL ACTIVE".into());
+        state.push_banner("Profile saved", BannerSeverity::Success);
+        state.push_banner("Another note", BannerSeverity::Info);
+        let messages: Vec<&str> = state.banners.iter().map(|b| b.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            [
+                STATE_UNKNOWN_BANNER,
+                "Revert FAILED: old rules STILL ACTIVE",
+                "Another note"
+            ]
+        );
+    }
+
+    /// B.L1: until the reload of the kept record and SSH sessions arrives,
+    /// "Commit Changes?" and Save to System do not continue (a warning it
+    /// brings must not be skipped by an early Enter or click).
+    #[test]
+    fn test_dialogs_wait_for_the_context_reload() {
+        let mut state = create_test_state();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert!(state.context_pending());
+        let _ = handle_proceed_to_apply(&mut state);
+        assert_eq!(state.status, AppStatus::AwaitingApply, "waits");
+        let context = context(&state, None, Vec::new());
+        handle_apply_context_loaded(&mut state, context);
+        assert!(!state.context_pending());
+        let _ = handle_proceed_to_apply(&mut state);
+        assert_eq!(state.status, AppStatus::Applying);
+
+        let mut state = create_test_state();
+        let _ = handle_save_to_system_clicked(&mut state);
+        let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
+        assert!(state.context_pending());
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::Editor);
+        assert_eq!(state.status, AppStatus::AwaitingSaveToSystem, "waits");
+        context_reloaded(&mut state);
+        let _ = handle_save_to_system_confirmed(&mut state, SaveSource::Editor);
+        assert_ne!(state.status, AppStatus::AwaitingSaveToSystem);
     }
 
     #[test]

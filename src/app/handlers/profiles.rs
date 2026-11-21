@@ -85,7 +85,7 @@ pub(crate) fn profile_name_error(
 /// delete, drag state, pending warning, verification errors). Rule ids and
 /// undo entries of the previous profile must never act on the new one.
 fn reset_editing_state(state: &mut State) {
-    super::clear_verify_errors(state);
+    super::clear_profile_verify_errors(state);
     state.command_history = crate::command::CommandHistory::default();
     state.rule_form = None;
     state.rule_form_initial = None;
@@ -630,7 +630,7 @@ fn handle_rename_outcome(
                 state.active_profile_name.clone_from(&new);
                 state.profile_generation += 1;
                 // The errors were found under the old name; start clean
-                super::clear_verify_errors(state);
+                super::clear_profile_verify_errors(state);
                 if let Some(issue) = &mut state.unreadable_profile {
                     issue.name.clone_from(&new);
                 }
@@ -966,6 +966,14 @@ mod tests {
             Ok(vec!["other2".into(), "renamed".into()]),
         );
         assert!(verify_errors_cleared(&state));
+
+        // B.L10: "Apply Details" describes the kernel, not the profile
+        let mut state = dirty_state();
+        state.verify_errors =
+            Some(crate::app::verify_errors::VerifyErrorsPanel::apply_state_unknown("unknown"));
+        state.show_verify_errors = true;
+        switch_done(&mut state, "other", Ok(FirewallRuleset::default()));
+        assert!(state.verify_errors.is_some() && state.show_verify_errors);
     }
 
     #[test]

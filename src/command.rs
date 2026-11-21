@@ -7,7 +7,8 @@
 //!
 //! Each modification to the firewall ruleset is encapsulated as a [`Command`]:
 //! - [`AddRuleCommand`]: Adds a new rule
-//! - [`AddRulesCommand`]: Adds several rules at once (templates, Server Mode essentials)
+//! - [`AddRulesCommand`]: Adds several rules at once (templates)
+//! - [`EnableServerModeCommand`]: Turns on Server Mode with its essential Output rules
 //! - [`DeleteRuleCommand`]: Removes an existing rule
 //! - [`EditRuleCommand`]: Modifies an existing rule
 //! - [`ToggleRuleCommand`]: Enables/disables a rule
@@ -74,7 +75,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::core::firewall::{FirewallRuleset, Rule};
+use crate::core::firewall::{EgressProfile, FirewallRuleset, Rule};
 
 /// Command pattern trait for undo/redo functionality
 ///
@@ -125,11 +126,11 @@ impl Command for AddRuleCommand {
 }
 
 /// Adds several rules at the end of the ruleset as one undoable step (a
-/// template, the Server Mode essentials); undo removes them all.
+/// template); undo removes them all.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddRulesCommand {
     pub rules: Vec<Rule>,
-    /// What the undo/redo banner says ("Add rules: Server Mode essentials")
+    /// What the undo/redo banner says ("Add rules: Template: Web server")
     pub description: String,
 }
 
@@ -146,6 +147,44 @@ impl Command for AddRulesCommand {
 
     fn description(&self) -> String {
         self.description.clone()
+    }
+
+    fn box_clone(&self) -> Box<dyn Command> {
+        Box::new(self.clone())
+    }
+}
+
+/// Turns on Server Mode and adds the essential Output rules ticked in its
+/// dialog, as one undoable step: undo removes the rules and restores the
+/// egress profile the ruleset had, so Ctrl+Z never leaves Server Mode on
+/// without the rules that let the server reach out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnableServerModeCommand {
+    /// The egress profile before (restored by undo)
+    pub previous: EgressProfile,
+    /// The essential rules added at the end of the ruleset
+    pub rules: Vec<Rule>,
+}
+
+impl Command for EnableServerModeCommand {
+    fn execute(&self, ruleset: &mut FirewallRuleset) {
+        ruleset.advanced_security.egress_profile = EgressProfile::Server;
+        ruleset.rules.extend(self.rules.iter().cloned());
+    }
+
+    fn undo(&self, ruleset: &mut FirewallRuleset) {
+        ruleset
+            .rules
+            .retain(|r| !self.rules.iter().any(|added| added.id == r.id));
+        ruleset.advanced_security.egress_profile = self.previous;
+    }
+
+    fn description(&self) -> String {
+        match self.rules.len() {
+            0 => "Turn on Server Mode".to_string(),
+            1 => "Turn on Server Mode with 1 essential rule".to_string(),
+            n => format!("Turn on Server Mode with {n} essential rules"),
+        }
     }
 
     fn box_clone(&self) -> Box<dyn Command> {
@@ -418,6 +457,40 @@ mod tests {
         );
         assert_eq!(ruleset.rules, vec![kept]);
         history.redo(&mut ruleset);
+        assert_eq!(ruleset.rules.len(), 3);
+    }
+
+    /// B.M3: one undo turns Server Mode off again and removes its rules.
+    #[test]
+    fn test_enable_server_mode_command_undoes_mode_and_rules() {
+        let mut ruleset = FirewallRuleset::new();
+        let kept = create_test_rule("Kept");
+        ruleset.rules.push(kept.clone());
+        let cmd = EnableServerModeCommand {
+            previous: EgressProfile::Desktop,
+            rules: vec![create_test_rule("DNS"), create_test_rule("NTP")],
+        };
+        let mut history = CommandHistory::default();
+        history.execute(Box::new(cmd), &mut ruleset);
+        assert_eq!(
+            ruleset.advanced_security.egress_profile,
+            EgressProfile::Server
+        );
+        assert_eq!(ruleset.rules.len(), 3);
+        assert_eq!(
+            history.undo(&mut ruleset).as_deref(),
+            Some("Turn on Server Mode with 2 essential rules")
+        );
+        assert_eq!(
+            ruleset.advanced_security.egress_profile,
+            EgressProfile::Desktop
+        );
+        assert_eq!(ruleset.rules, vec![kept]);
+        history.redo(&mut ruleset);
+        assert_eq!(
+            ruleset.advanced_security.egress_profile,
+            EgressProfile::Server
+        );
         assert_eq!(ruleset.rules.len(), 3);
     }
 

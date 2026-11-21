@@ -1,3 +1,6 @@
+//! Font choices for the GUI: system presets and the system font families
+//! found by `fontdb` (listed once, for the font pickers)
+
 use std::sync::OnceLock;
 
 use iced::Font;
@@ -123,7 +126,7 @@ impl std::fmt::Display for FontChoice {
 /// Global cache of system font families
 static SYSTEM_FONTS: OnceLock<Vec<FontChoice>> = OnceLock::new();
 
-/// Centralized storage for font names (Phase 2: Fix memory leak)
+/// Centralized storage for font names
 /// Instead of leaking each font name individually, we leak one Vec
 /// This is still a leak, but bounds memory to `O(n_fonts)` instead of unbounded growth
 static FONT_NAMES_STORAGE: OnceLock<&'static [String]> = OnceLock::new();

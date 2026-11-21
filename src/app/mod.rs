@@ -81,6 +81,12 @@ pub fn run_gui() -> ExitCode {
     }
 }
 
+/// Banners shown at once; persistent banners may raise this up to
+/// [`MAX_PERSISTENT_BANNERS`] (see [`State::push_banner`]).
+const MAX_BANNERS: usize = 2;
+/// Hard cap on banners when the persistent ones fill the queue.
+const MAX_PERSISTENT_BANNERS: usize = 4;
+
 /// In-app notification banner severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BannerSeverity {
@@ -135,6 +141,10 @@ pub struct State {
     /// refreshed when Apply or Save to System starts and by the Exposure
     /// scan; the lockout check evaluates them
     pub ssh_sessions: Vec<crate::core::lockout::SshSession>,
+    /// Reloads of the kept record and SSH sessions still running
+    /// (`Message::ApplyContextLoaded`): while any runs, "Commit Changes?"
+    /// and Save to System cannot continue (their warnings may still change)
+    pub context_reloads_pending: u32,
     /// Ruleset snapshot carried through verify -> apply -> confirm/revert
     pub apply_session: Option<handlers::ApplySession>,
     pub cached_disk_profile: Option<FirewallRuleset>,
@@ -296,6 +306,12 @@ pub struct State {
     /// the UI thread when Apply starts or Exposure scans); for the
     /// forwarding notice of the apply dialog
     pub host_forwarding: crate::core::host_facts::ForwardingState,
+    /// Counter of reads of `ssh_sessions` and `host_forwarding` (apply and
+    /// save context reloads, Exposure scans), bumped when one starts
+    pub host_facts_epoch: u64,
+    /// The `host_facts_epoch` of the read last stored: a read that started
+    /// earlier and finishes later is older and is not stored
+    pub host_facts_stored_epoch: u64,
     /// The "Add from template" menu, when open (entries built on open)
     pub template_menu: Option<templates::TemplateMenu>,
 }
@@ -577,8 +593,11 @@ impl ServerEssentials {
         let choices = crate::core::templates::server_essentials()
             .into_iter()
             .map(|rule| {
+                // A disabled rule of that name lets nothing out: offer it again
                 let present = ruleset.rules.iter().any(|r| {
-                    r.chain == crate::core::firewall::Chain::Output && r.label == rule.label
+                    r.enabled
+                        && r.chain == crate::core::firewall::Chain::Output
+                        && r.label == rule.label
                 });
                 // "DNS (TCP+UDP: 53)"; a rule without ports ("Ping") by name
                 let label = if rule.ports.is_empty() {
@@ -932,8 +951,9 @@ impl State {
         let auto_revert_enabled = config.auto_revert_enabled;
         let auto_revert_notice_shown = config.auto_revert_notice_shown;
         let local_discovery_notice_shown = config.local_discovery_notice_shown;
-        // Clamp timeout to prevent integer overflow (max 1 hour = 3600 seconds)
-        let auto_revert_timeout_secs = config.auto_revert_timeout_secs.min(3600);
+        // A hand-edited config may hold any value: clamp it into the
+        // setting's range (5 to 120 s, as the slider and `drfw apply --confirm`)
+        let auto_revert_timeout_secs = config.auto_revert_timeout_secs.clamp(5, 120);
         let enable_event_log = config.enable_event_log;
         let reduced_colors = config.reduced_colors;
         let active_profile_name = config.active_profile;
@@ -993,6 +1013,7 @@ impl State {
             diff_baseline: None,
             ssh_env_session: ssh_env_session.clone(),
             ssh_sessions: ssh_env_session.into_iter().collect(),
+            context_reloads_pending: 0,
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -1089,6 +1110,8 @@ impl State {
             exposure: exposure::ExposureState::default(),
             // Two tiny /proc files; read once here, refreshed off the UI thread
             host_forwarding: crate::core::host_facts::forwarding_enabled(),
+            host_facts_epoch: 0,
+            host_facts_stored_epoch: 0,
             template_menu: None,
         };
 
@@ -1141,6 +1164,7 @@ impl State {
             // Never the test runner's own SSH session
             ssh_env_session: None,
             ssh_sessions: Vec::new(),
+            context_reloads_pending: 0,
             apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
@@ -1235,6 +1259,8 @@ impl State {
             close_error: None,
             exposure: exposure::ExposureState::default(),
             host_forwarding: crate::core::host_facts::ForwardingState::default(),
+            host_facts_epoch: 0,
+            host_facts_stored_epoch: 0,
             template_menu: None,
         };
 
@@ -1272,19 +1298,21 @@ impl State {
             return;
         }
 
-        // Remove oldest if at capacity, sparing persistent (never-expiring) banners
-        while self.banners.len() >= 2 {
-            match self
+        // Remove the oldest if at capacity, sparing persistent (never-expiring)
+        // banners: they report a revert that failed or a firewall state that
+        // is unknown, so they only go when the user dismisses them (or, past
+        // a hard cap, the oldest of them)
+        while self.banners.len() >= MAX_BANNERS {
+            if let Some(index) = self
                 .banners
                 .iter()
                 .position(|b| b.duration_secs != u64::MAX)
             {
-                Some(index) => {
-                    self.banners.remove(index);
-                }
-                None => {
-                    self.banners.pop_front();
-                }
+                self.banners.remove(index);
+            } else if self.banners.len() >= MAX_PERSISTENT_BANNERS {
+                self.banners.pop_front();
+            } else {
+                break;
             }
         }
 
@@ -1641,6 +1669,12 @@ impl State {
             && self.unreadable_profile.is_none()
             && advanced.egress_profile == crate::core::firewall::EgressProfile::Desktop
             && !advanced.local_discovery
+    }
+
+    /// A reload of the kept record and SSH sessions is still running: the
+    /// apply and save dialogs wait for it before they continue.
+    pub fn context_pending(&self) -> bool {
+        self.context_reloads_pending > 0
     }
 
     /// The ruleset differs from what DRFW last applied (or that is unknown).
@@ -2011,11 +2045,13 @@ impl State {
             Message::ExposureScanned(generation, result) => {
                 handlers::handle_exposure_scanned(self, generation, result);
             }
-            Message::ApplyContextLoaded(context) => {
-                if let Some(context) = context {
-                    handlers::handle_apply_context_loaded(self, *context);
+            Message::ApplyContextLoaded(context) => match context {
+                Some(context) => handlers::handle_apply_context_loaded(self, *context),
+                // The reload failed: stop waiting for it
+                None => {
+                    self.context_reloads_pending = self.context_reloads_pending.saturating_sub(1);
                 }
-            }
+            },
             Message::Undo => return handlers::handle_undo(self),
             Message::Redo => return handlers::handle_redo(self),
             Message::OpenThemePicker => return handlers::handle_open_theme_picker(self),

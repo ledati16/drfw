@@ -3,7 +3,7 @@
 `cargo test` never needs root: it uses a mock `nft`, or the real `nft` inside
 `unshare -rn`. This kit covers the rest: the real elevation tools, the
 root-side revert guard under systemd, Save to System on the real config file,
-boot persistence and Server mode on a real network interface.
+boot persistence and Server Mode on a real network interface.
 
 **Run it only in a disposable container or VM.** It creates a user, installs
 sudoers and polkit rules, applies firewall rules, replaces the system nftables
@@ -158,7 +158,7 @@ is missing. Logs (CLI output of every step, the sudo log) are kept in
   and systemd unit management (for `run0`), for this user only.
 - Profiles `e2e-a`, `e2e-b`, `e2e-c` (Desktop mode, one input rule each,
   labelled `e2e-A`/`e2e-B`/`e2e-C`, so the live table can be identified by the
-  rule comment) and `e2e-srv` (Server mode, one rule for an unused port).
+  rule comment) and `e2e-srv` (Server Mode, one rule for an unused port).
 - The CLI's countdown needs a terminal: the kit runs it under `script` (a
   PTY) and feeds keys through a FIFO.
 - Table comparisons use `nft list table inet drfw` with counter values
@@ -200,7 +200,7 @@ Each prints `PASS`/`FAIL` with the evidence for every sub-check.
    the second guard stays pending); the second guard times out and the table
    is back to `e2e-A`, not `e2e-B`.
 7. **First apply without a table, timeout (the original lockout bug).** No
-   `inet drfw` table, then Server mode `e2e-srv` with a 6 s guard: during the
+   `inet drfw` table, then Server Mode `e2e-srv` with a 6 s guard: during the
    countdown the output policy is drop and loopback TCP still works; after
    the timeout the status is `reverted` (or `removed:`), no `inet drfw` table
    is left, and loopback TCP and ping work.
@@ -228,11 +228,11 @@ Each prints `PASS`/`FAIL` with the evidence for every sub-check.
      equals the recorded one. Then it restores everything boot-prep changed.
    Until boot-check runs, the environment keeps the saved config and the
    enabled service.
-10. **Server mode over the network.** A network namespace `drfw-e2e-peer`
+10. **Server Mode over the network.** A network namespace `drfw-e2e-peer`
     joined by a veth pair (`10.213.47.1` here, `.2` there), with TCP echo
     servers on `10.213.47.1:47501` and `127.0.0.1:47502` (socat or python3).
     A new connection from the peer works (control). A session opened from the
-    peer before the apply echoes once, then `e2e-srv` (Server mode, no rule
+    peer before the apply echoes once, then `e2e-srv` (Server Mode, no rule
     for 47501) is applied: the established session still echoes, a new
     connection from the peer is blocked, and loopback TCP works.
 

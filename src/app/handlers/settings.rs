@@ -228,9 +228,9 @@ pub(crate) fn handle_toggle_block_forwarding(state: &mut State, enabled: bool) -
     super::log_setting_change(
         state,
         if enabled {
-            "Forwarded traffic blocking enabled"
+            "Block forwarded traffic turned on"
         } else {
-            "Forwarded traffic blocking disabled"
+            "Block forwarded traffic turned off"
         },
     )
 }
@@ -324,7 +324,7 @@ pub(crate) fn handle_log_prefix_changed(state: &mut State, prefix: &str) -> Task
     }
 }
 
-/// Handles server mode toggle request (shows the warning, with the
+/// Handles Server Mode toggle request (shows the warning, with the
 /// essential Output rules it offers to add)
 pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Task<Message> {
     if enabled {
@@ -336,7 +336,7 @@ pub(crate) fn handle_server_mode_toggled(state: &mut State, enabled: bool) -> Ta
         state.ruleset.advanced_security.egress_profile =
             crate::core::firewall::EgressProfile::Desktop;
         state.mark_profile_dirty();
-        super::log_setting_change(state, "Server mode disabled (desktop profile)")
+        super::log_setting_change(state, "Server Mode disabled (desktop profile)")
     }
 }
 
@@ -349,37 +349,43 @@ pub(crate) fn handle_server_essential_toggled(state: &mut State, index: usize, t
     }
 }
 
-/// Handles confirming server mode: switches the mode and adds the ticked
-/// essential rules as ordinary Output rules, in one undoable step (undo
-/// removes the rules; the mode stays, like every setting).
+/// Handles confirming Server Mode. With essential rules ticked, the mode
+/// switch and the rules are one undoable step
+/// ([`crate::command::EnableServerModeCommand`]): Ctrl+Z turns Server Mode
+/// off again and removes them. With nothing ticked only the setting changes,
+/// like every other setting. When the ticked rules do not fit under
+/// [`crate::core::firewall::MAX_RULES`], nothing changes: Server Mode
+/// without the rules the user asked for would cut the server's outbound
+/// traffic.
 pub(crate) fn handle_confirm_server_mode(state: &mut State) -> Task<Message> {
     let added = match state.pending_warning.take() {
         Some(PendingWarning::EnableServerMode(essentials)) => essentials.ticked_rules(),
         _ => Vec::new(),
     };
-    state.ruleset.advanced_security.egress_profile = EgressProfile::Server;
-    let room = crate::core::firewall::MAX_RULES.saturating_sub(state.ruleset.rules.len());
     let count = added.len();
-    if count > 0 && count <= room {
-        let command = crate::command::AddRulesCommand {
+    let room = crate::core::firewall::MAX_RULES.saturating_sub(state.ruleset.rules.len());
+    if count > room {
+        state.push_banner(
+            "Server Mode was not turned on: the profile has too many rules to add the \
+             essential rules. Delete some rules, or untick essentials.",
+            crate::app::BannerSeverity::Error,
+        );
+        return Task::none();
+    }
+    let description = if count > 0 {
+        let command = crate::command::EnableServerModeCommand {
+            previous: state.ruleset.advanced_security.egress_profile,
             rules: added,
-            description: "Add rules: Server Mode essentials".to_string(),
         };
         state
             .command_history
             .execute(Box::new(command), &mut state.ruleset);
-    } else if count > 0 {
-        state.push_banner(
-            "The essential rules were not added: the profile has too many rules.",
-            crate::app::BannerSeverity::Error,
-        );
-    }
-    state.mark_profile_dirty();
-    let description = if count > 0 && count <= room {
-        format!("Server mode enabled (server profile), {count} essential rules added")
+        format!("Server Mode enabled (server profile), {count} essential rules added")
     } else {
-        "Server mode enabled (server profile)".to_string()
+        state.ruleset.advanced_security.egress_profile = EgressProfile::Server;
+        "Server Mode enabled (server profile)".to_string()
     };
+    state.mark_profile_dirty();
     super::log_setting_change(state, description)
 }
 
@@ -581,7 +587,7 @@ mod tests {
         assert!(!state.rule_is_inactive(&state.ruleset.rules[1]));
         assert!(!state.cached_rule_badges[0].starts_with('↑'));
 
-        // Server mode: active, with chain arrows in the badges
+        // Server Mode: active, with chain arrows in the badges
         let _ = handle_confirm_server_mode(&mut state);
         assert!(!state.rule_is_inactive(&state.ruleset.rules[0]));
         assert!(state.cached_rule_badges[0].starts_with('↑'));
@@ -802,7 +808,7 @@ mod tests {
 
     /// The dialog offers every essential rule, pre-ticked; confirming adds
     /// the ticked ones as ordinary Output rules, and Ctrl+Z removes them
-    /// all at once.
+    /// all at once and turns Server Mode off again (B.M3).
     #[test]
     fn test_server_mode_adds_ticked_essentials_undoably() {
         use crate::core::firewall::Chain;
@@ -872,10 +878,19 @@ mod tests {
                 .back()
                 .unwrap()
                 .message
-                .contains("Server Mode essentials")
+                .contains("Turn on Server Mode with")
+        );
+        assert_eq!(
+            state.ruleset.advanced_security.egress_profile,
+            EgressProfile::Desktop,
+            "the same undo turns Server Mode off again"
         );
         let _ = state.update(Message::Redo);
         assert_eq!(state.ruleset.rules.len(), total);
+        assert_eq!(
+            state.ruleset.advanced_security.egress_profile,
+            EgressProfile::Server
+        );
     }
 
     /// Nothing ticked: only the mode changes (no empty undo step). Rules the
@@ -917,6 +932,13 @@ mod tests {
         assert_eq!(unticked, ["Time sync: NTP"]);
         let _ = state.update(Message::CancelWarning);
 
+        // A disabled Output rule of that name lets nothing out: ticked again
+        state.ruleset.rules[0].enabled = false;
+        state.mark_profile_dirty();
+        let _ = state.update(Message::ServerModeToggled(true));
+        assert!(essentials(&state).choices.iter().all(|c| c.ticked));
+        let _ = state.update(Message::CancelWarning);
+
         // Back to Desktop and on again: the essentials added before are
         // not offered twice
         let mut state = create_test_state();
@@ -930,6 +952,34 @@ mod tests {
             state.ruleset.advanced_security.egress_profile,
             EgressProfile::Desktop,
             "cancelled"
+        );
+    }
+
+    /// B.M3: when the ticked essentials do not fit under the rule limit,
+    /// Server Mode stays off (no switch without its rules).
+    #[test]
+    fn test_server_mode_not_switched_when_essentials_do_not_fit() {
+        let mut state = create_test_state();
+        let filler = crate::core::test_helpers::create_test_rule("Filler", Some(80));
+        state.ruleset.rules = (0..crate::core::firewall::MAX_RULES)
+            .map(|_| {
+                let mut rule = filler.clone();
+                rule.id = uuid::Uuid::new_v4();
+                rule
+            })
+            .collect();
+        state.mark_profile_dirty();
+        let _ = state.update(Message::ServerModeToggled(true));
+        let _ = state.update(Message::ConfirmServerMode);
+        assert_eq!(
+            state.ruleset.advanced_security.egress_profile,
+            EgressProfile::Desktop
+        );
+        assert_eq!(state.ruleset.rules.len(), crate::core::firewall::MAX_RULES);
+        assert!(!state.command_history.can_undo());
+        assert_eq!(
+            state.banners.back().map(|b| b.severity),
+            Some(crate::app::BannerSeverity::Error)
         );
     }
 

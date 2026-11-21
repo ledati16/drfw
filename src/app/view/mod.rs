@@ -220,6 +220,11 @@ fn dialog(state: &State) -> Option<Element<'_, Message>> {
             state.ruleset.advanced_security.egress_profile
                 == crate::core::firewall::EgressProfile::Server,
             state.ruleset.advanced_security.block_forwarding,
+            // The chain the form opened with stays selectable (B.M1)
+            state
+                .rule_form_initial
+                .as_ref()
+                .map_or(form.chain, |initial| initial.chain),
             state.confirm_discard_form,
         ));
     }
@@ -228,6 +233,7 @@ fn dialog(state: &State) -> Option<Element<'_, Message>> {
             Some(confirmation::view_apply_flow_modal(
                 &state.status,
                 state.apply_session.as_ref(),
+                state.context_pending(),
                 state.auto_revert_enabled,
                 &state.settings_display.apply_timer_secs,
                 &state.countdown_display,
@@ -241,6 +247,7 @@ fn dialog(state: &State) -> Option<Element<'_, Message>> {
         }
         AppStatus::AwaitingSaveToSystem => Some(confirmation::view_save_to_system_modal(
             &state.save_dialog,
+            state.context_pending(),
             theme,
             state.font_regular,
         )),

@@ -1,12 +1,12 @@
 //! Apply confirmation dialogs and countdown modals
 
-use iced::widget::{button, checkbox, column, container, progress_bar, row, text};
-use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Shadow};
+use iced::widget::{button, checkbox, column, container, progress_bar, row, scrollable, text};
+use iced::{Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Shadow};
 
 use crate::app::handlers::SaveTested;
 use crate::app::ui_components::{
     card_container, danger_button, inset_container_bordered, primary_button, secondary_button,
-    section_header_container, themed_checkbox,
+    section_header_container, themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, SaveSource};
 use crate::core::lockout::LockoutWarning;
@@ -14,6 +14,50 @@ use crate::core::retention::RetentionWarning;
 
 /// Heading of the retention guard's warning in both dialogs.
 const RETENTION_HEADING: &str = "This is a big change. Check it before you continue:";
+
+/// The retention heading in the Save to System dialog when it offers both
+/// the editor's rules and the last kept ones: the warning is about the
+/// editor's rules only.
+const SAVE_EDITOR_RETENTION_HEADING: &str =
+    "\"Save untested rules\" (the rules in the editor) is a big change. Check it first:";
+
+/// Shown while the kept record and the SSH sessions are re-read: the
+/// continue buttons wait for it (a warning may still appear).
+const CONTEXT_PENDING_NOTE: &str = "Checking SSH sessions and the kept rules…";
+
+/// Tallest dialog body before it scrolls: keeps the buttons on screen in
+/// the default 700 px window even with every warning block shown.
+const DIALOG_BODY_MAX_HEIGHT: f32 = 420.0;
+
+/// Wraps a dialog body in a scrollable that only takes the space it needs
+/// (up to [`DIALOG_BODY_MAX_HEIGHT`]), so the buttons below stay reachable
+/// on small windows.
+fn scrollable_body<'a>(
+    body: impl Into<Element<'a, Message>>,
+    theme: &'a crate::theme::AppTheme,
+) -> Element<'a, Message> {
+    container(
+        scrollable(container(body).padding(Padding::ZERO.right(12)))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new().spacing(0),
+            ))
+            .height(Length::Shrink)
+            .style(move |_, status| themed_scrollable(theme, status)),
+    )
+    .max_height(DIALOG_BODY_MAX_HEIGHT)
+    .into()
+}
+
+/// The muted "Checking …" line while the dialog waits for the reload.
+fn context_pending_line(theme: &crate::theme::AppTheme, font: iced::Font) -> Element<'_, Message> {
+    text(CONTEXT_PENDING_NOTE)
+        .size(12)
+        .font(font)
+        .color(theme.fg_muted)
+        .width(400)
+        .align_x(Alignment::Center)
+        .into()
+}
 
 /// A warning that needs an explicit confirmation (retention guard, SSH
 /// lockout check), or a note that does not (`heading_color` tells them
@@ -59,6 +103,7 @@ const FORWARDING_HEADING: &str = "Note: forwarded traffic is not filtered";
 /// then the lockout check's note and the forwarding notice (info style:
 /// they need no confirmation).
 fn confirmation_blocks<'a>(
+    retention_heading: &'static str,
     retention: Option<&'a RetentionWarning>,
     lockout: Option<&'a LockoutWarning>,
     forwarding_note: &'a [String],
@@ -68,7 +113,7 @@ fn confirmation_blocks<'a>(
     let mut blocks = Vec::with_capacity(4);
     if let Some(warning) = retention {
         blocks.push(warning_block(
-            RETENTION_HEADING,
+            retention_heading,
             theme.danger,
             &warning.lines,
             400.0,
@@ -170,16 +215,18 @@ fn build_awaiting_body<'a>(
 
 /// Build the buttons for `AwaitingApply` state. With a warning (retention
 /// guard, lockout check) the apply button is "Apply anyway" (danger style,
-/// click only: Enter is refused)
+/// click only: Enter is refused). While the kept record and SSH sessions
+/// are re-read (`context_pending`) it is disabled.
 fn build_awaiting_buttons(
     auto_revert_enabled: bool,
     needs_confirmation: bool,
+    context_pending: bool,
     theme: &crate::theme::AppTheme,
     font: iced::Font,
 ) -> Element<'_, Message> {
     let apply = if needs_confirmation {
         button(text("Apply anyway").size(14).font(font))
-            .on_press(Message::ProceedToApplyAnyway)
+            .on_press_maybe((!context_pending).then_some(Message::ProceedToApplyAnyway))
             .padding([10, 24])
             .style(move |_, status| danger_button(theme, status))
     } else {
@@ -189,7 +236,7 @@ fn build_awaiting_buttons(
             "Apply Now"
         };
         button(text(button_text).size(14).font(font))
-            .on_press(Message::ProceedToApply)
+            .on_press_maybe((!context_pending).then_some(Message::ProceedToApply))
             .padding([10, 24])
             .style(move |_, status| primary_button(theme, status))
     };
@@ -468,9 +515,12 @@ fn build_confirmation_buttons(
 /// `timer_secs` and `countdown_text` are the timer length and the remaining
 /// seconds, formatted in `update()`; `session` holds the warnings for this
 /// apply (retention guard, lockout check), computed in `update()`.
+/// `context_pending`: the kept record and SSH sessions are still being
+/// re-read, so the apply buttons wait.
 pub fn view_apply_flow_modal<'a>(
     status: &'a AppStatus,
     session: Option<&'a crate::app::handlers::ApplySession>,
+    context_pending: bool,
     auto_revert_enabled: bool,
     timer_secs: &'a str,
     countdown_text: &'a str,
@@ -483,28 +533,40 @@ pub fn view_apply_flow_modal<'a>(
     let (title_text, body, buttons) = match status {
         AppStatus::AwaitingApply => {
             let body = build_awaiting_body(auto_revert_enabled, timer_secs, theme, font);
-            let blocks = confirmation_blocks(
+            let mut blocks = confirmation_blocks(
+                RETENTION_HEADING,
                 session.and_then(crate::app::handlers::ApplySession::retention),
                 session.and_then(crate::app::handlers::ApplySession::lockout),
                 session.map_or(&[], crate::app::handlers::ApplySession::forwarding_note),
                 theme,
                 font,
             );
+            if context_pending {
+                blocks.push(context_pending_line(theme, font));
+            }
             let body = if blocks.is_empty() {
                 body
             } else {
-                column![body]
-                    .extend(blocks)
-                    .spacing(16)
-                    .align_x(Alignment::Center)
-                    .into()
+                scrollable_body(
+                    column![body]
+                        .extend(blocks)
+                        .spacing(16)
+                        .align_x(Alignment::Center),
+                    theme,
+                )
             };
             let needs_confirmation =
                 session.is_some_and(crate::app::handlers::ApplySession::needs_confirmation);
             (
                 "Commit Changes?",
                 body,
-                build_awaiting_buttons(auto_revert_enabled, needs_confirmation, theme, font),
+                build_awaiting_buttons(
+                    auto_revert_enabled,
+                    needs_confirmation,
+                    context_pending,
+                    theme,
+                    font,
+                ),
             )
         }
         AppStatus::Applying => (
@@ -574,9 +636,11 @@ static ENABLE_AT_BOOT_LABEL: std::sync::LazyLock<String> =
 ///
 /// `dialog` holds the boot persistence line and the "Also enable at boot"
 /// checkbox, both prepared in `update()` from an unprivileged `systemctl`
-/// query.
+/// query. `context_pending`: the kept record and SSH sessions are still
+/// being re-read, so the save buttons wait.
 pub fn view_save_to_system_modal<'a>(
     dialog: &'a crate::app::handlers::SaveToSystemDialog,
+    context_pending: bool,
     theme: &'a crate::theme::AppTheme,
     font: iced::Font,
 ) -> Element<'a, Message> {
@@ -665,7 +729,13 @@ pub fn view_save_to_system_modal<'a>(
         .style(move |_, status| secondary_button(theme, status));
     // Saving the editor's rules despite the retention guard or the lockout
     // check takes a click
+    let retention_heading = if dialog.tested == SaveTested::Differs {
+        SAVE_EDITOR_RETENTION_HEADING
+    } else {
+        RETENTION_HEADING
+    };
     body = body.extend(confirmation_blocks(
+        retention_heading,
         dialog.retention.as_ref(),
         dialog.lockout.as_ref(),
         &[],
@@ -673,36 +743,43 @@ pub fn view_save_to_system_modal<'a>(
         font,
     ));
 
+    if context_pending {
+        body = body.push(context_pending_line(theme, font));
+    }
+    // While the reload runs, no save button continues
+    let save =
+        |source: SaveSource| (!context_pending).then_some(Message::SaveToSystemConfirmed(source));
+
     let buttons = match dialog.tested {
         SaveTested::Tested if dialog.editor_needs_confirmation() => row![
             cancel,
             button(text("Save anyway").size(14).font(font))
-                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .on_press_maybe(save(SaveSource::Editor))
                 .padding([10, 24])
                 .style(move |_, status| danger_button(theme, status)),
         ],
         SaveTested::Tested => row![
             cancel,
             button(text("Save").size(14).font(font))
-                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .on_press_maybe(save(SaveSource::Editor))
                 .padding([10, 24])
                 .style(move |_, status| primary_button(theme, status)),
         ],
         SaveTested::Differs => row![
             cancel,
             button(text("Save untested rules").size(14).font(font))
-                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .on_press_maybe(save(SaveSource::Editor))
                 .padding([10, 20])
                 .style(move |_, status| danger_button(theme, status)),
-            button(text("Save the last applied rules").size(14).font(font))
-                .on_press(Message::SaveToSystemConfirmed(SaveSource::LastConfirmed))
+            button(text("Save the last kept rules").size(14).font(font))
+                .on_press_maybe(save(SaveSource::LastConfirmed))
                 .padding([10, 24])
                 .style(move |_, status| primary_button(theme, status)),
         ],
         SaveTested::NothingApplied => row![
             cancel,
             button(text("Save untested rules").size(14).font(font))
-                .on_press(Message::SaveToSystemConfirmed(SaveSource::Editor))
+                .on_press_maybe(save(SaveSource::Editor))
                 .padding([10, 20])
                 .style(move |_, status| danger_button(theme, status)),
         ],
@@ -719,7 +796,7 @@ pub fn view_save_to_system_modal<'a>(
             )
             .padding([4, 8])
             .style(move |_| section_header_container(theme)),
-            body,
+            scrollable_body(body, theme),
             buttons,
         ]
         .spacing(20)

@@ -7,7 +7,7 @@ use crate::app::syntax_cache::HighlightedLine;
 /// Works with both owned slices (`&[HighlightedLine]`) and reference slices (`&[&HighlightedLine]`)
 /// via the `IntoIterator` trait. Used for horizontal scrolling calculations in syntax-highlighted views.
 ///
-/// Phase 3.1: Unified implementation to eliminate code duplication
+/// One implementation shared by every caller
 fn calculate_max_content_width_generic<'a, I>(tokens: I) -> f32
 where
     I: IntoIterator<Item = &'a HighlightedLine>,

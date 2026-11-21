@@ -20,7 +20,7 @@ const DISABLED_BORDER_ALPHA: f32 = 0.3;
 const MODAL_BACKDROP_ALPHA: f32 = 0.85;
 
 // =============================================================================
-// BUTTON STYLING SYSTEM (Phase 2.1-2.2 refactor)
+// BUTTON STYLING SYSTEM
 // =============================================================================
 
 /// Configuration for button styling variations

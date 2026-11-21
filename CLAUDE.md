@@ -1,6 +1,8 @@
 # DRFW Development Standards
 
-**Purpose:** Core development guidelines for LLM agents and contributors working on DRFW.
+**Purpose:** Development guidelines for agents and contributors working on DRFW, a safe,
+transparent nftables firewall for Linux, with a GUI and CLI. This file states the rules
+and the design the code relies on; history belongs in git and `CHANGELOG.md`.
 
 **Principles:** Security-first, performance-conscious, test-driven, maintainable code.
 
@@ -9,9 +11,14 @@
 ## 1. Code Quality
 
 ### Linting & Static Analysis
-- **Strict compliance:** Clippy pedantic lints enabled in `Cargo.toml`
-- **Centralized config:** All lint allows are in `[lints.clippy]` section with documented rationale; no crate-level `#![allow(...)]` in `lib.rs`, `main.rs` or `tests/*.rs`
-- **No scattered suppressions:** Avoid per-function `#[allow(...)]` unless truly function-specific
+- **Strict compliance:** Clippy pedantic lints enabled in `Cargo.toml`; CI runs clippy with
+  `-D warnings` (see §12 for the exact commands)
+- **Centralized config:** Crate-wide allows live in `[lints.clippy]` in `Cargo.toml`, each
+  with a one-line rationale; no crate-level `#![allow(...)]` in `lib.rs`, `main.rs` or
+  `tests/*.rs`
+- **Local allows:** A per-item `#[allow(...)]`/`#[expect(...)]` only when the reason is
+  specific to that item, with a one-line comment giving it (`#[expect]` also flags it once
+  it is no longer needed). Never repeat a lint the central config already allows
 - **Refactor over suppress:** Fix warnings through better design, not suppression
 
 ### Documentation Standards
@@ -23,6 +30,18 @@
 - **Complex logic:** Document **why**, not what (code shows what)
 - **Error semantics:** Functions that can fail must document all failure modes
 - **Technical terms:** Use backticks for identifiers (`nft`, `pkexec`, `DRFW_NFT_COMMAND`)
+- **CI checks the docs:** `cargo doc` runs with `RUSTDOCFLAGS="-D warnings"`, so broken
+  intra-doc links fail the build
+
+### Naming in User-Facing Text
+Docs, GUI text, CLI help and code comments use the same words:
+- **"Block forwarded traffic"** for the setting (not "block forwarding" or "forward
+  blocking")
+- **"Forwarded rules"** / **"Forwarded (routed through)"** for the forward chain in user
+  terms; `Chain::Forward` only when talking about code
+- **"Kept"** for the record concept: a ruleset is "applied and kept" (a confirmed guard or
+  `--no-confirm`); the file is still `confirmed-ruleset.json`
+- **"Server Mode"** (capital M, everywhere); the other egress mode is "Desktop mode"
 
 ### Modern Rust Patterns
 - **Safety first:** No `unwrap()` in production paths; use `?` or `expect()` with context
@@ -30,172 +49,32 @@
 - **Visibility:** Default to private; widen only when architecturally required
 - **Efficiency:** Prefer in-place operations (`clone_from`) over reallocations
 
-### DRY Principle Enforcement
+### DRY Principle
+- **Extract** a pattern used 3+ times, a complex one (5+ lines), or one that would cause
+  bugs if its copies drifted apart (e.g. `utils::block_on_async`, `ButtonStyleConfig` in
+  `ui_components.rs`, `audit::log_event_internal`)
+- **Don't extract** trivial (1-2 line) patterns, or where extraction would obscure intent
+- **Verify before extracting:** code that looks alike may differ (append vs truncate, sync
+  vs async); merge only paths that are really identical
+- **Wait for 3+ identical uses** before creating a helper; inline code beats a poor
+  abstraction
 
-**Extract repeated patterns into utilities:**
+### File Size and Splitting
+- **Soft limit:** consider a split past ~3000 lines with clear logical sections; logical
+  cohesion beats line counts
+- **Group by domain:** `app/view/` (one file per panel/dialog), `app/handlers/` (rules,
+  apply, profiles, settings, ui_state, export, exposure), pure helpers in `app/helpers/`
+- **Handler modules:** module docs state the domain; related handlers together; tests at
+  the bottom of the same file
 
-```rust
-// ❌ BAD: Same pattern in 4 functions
-pub fn blocking_wrapper_1() -> Type1 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.block_on(async_fn_1())
-    } else {
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create runtime")
-            .block_on(async_fn_1())
-    }
-}
-
-// ✅ GOOD: Extract to utility (see src/utils.rs:block_on_async)
-pub fn blocking_wrapper_1() -> Type1 {
-    crate::utils::block_on_async(async_fn_1())
-}
-```
-
-**When to extract:**
-- Pattern used 3+ times
-- Pattern is complex (5+ lines)
-- Pattern could introduce bugs if inconsistently modified
-
-**When NOT to extract:**
-- Pattern is trivial (1-2 lines)
-- Extraction would obscure intent
-- Pattern has subtle differences between uses
-- **Patterns that look similar but aren't:** Before extracting, verify the code paths
-  are actually identical. Example: Four "secure file write" locations appeared similar
-  but used different modes (append vs truncate) and APIs (sync vs async)—only 2 were
-  actually the same pattern. Extraction would have been wrong.
-
-**Real-world example: Button styling consolidation**
-```rust
-// ❌ BEFORE: 8 functions × ~70 lines = 560 lines of duplication
-pub fn primary_button(theme, status) -> Style {
-    let base = Style { background: theme.accent, ... };
-    match status {
-        Hovered => Style { background: brighten(theme.accent), ... },
-        Pressed => Style { background: darken(theme.accent), ... },
-        // ... repeated for all states
-    }
-}
-// ... 7 more nearly-identical functions
-
-// ✅ AFTER: Configuration-driven with shared builder
-struct ButtonStyleConfig {
-    base_color: ButtonColorSource,
-    hover_brightness: f32,
-    // ... config fields
-}
-
-impl ButtonStyleConfig {
-    const PRIMARY: Self = Self { base_color: Accent, hover_brightness: 1.08, ... };
-    const DANGER: Self = Self { base_color: Danger, hover_brightness: 1.08, ... };
-    // ... 6 more const configs
-}
-
-pub fn primary_button(theme, status) -> Style {
-    build_button_style(theme, status, ButtonStyleConfig::PRIMARY)  // 1 line
-}
-```
-Result: 8 functions reduced to single-line delegations, unified logic in `build_button_style()`.
-
-**Real-world example: Audit logging consolidation**
-```rust
-// ❌ BEFORE: 20 functions × ~20 lines each = 400+ lines of duplication
-pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
-    if !enable_event_log { return; }
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(EventType::ApplyRules, success, json!({...}), error);
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
-}
-// ... 19 more nearly-identical functions
-
-// ✅ AFTER: Internal helper + single-line delegations
-async fn log_event_internal(
-    enable_event_log: bool, event_type: EventType, success: bool,
-    details: serde_json::Value, error: Option<String>,
-) {
-    if !enable_event_log { return; }
-    if let Ok(audit) = AuditLog::new() {
-        let event = AuditEvent::new(event_type, success, details, error);
-        if let Err(e) = audit.log(event).await {
-            tracing::warn!("Failed to write audit log: {}", e);
-        }
-    }
-}
-
-pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
-    log_event_internal(enable_event_log, EventType::ApplyRules, success,
-        json!({ "rule_count": rule_count, "enabled_count": enabled_count }), error).await;
-}
-```
-Result: `audit.rs` reduced from 782 → 481 lines (38% reduction), 20 functions now single-line delegations.
-
-### File Size Guidelines
-
-- **Single file limit:** ~3000-4000 lines before considering a split
-- **When to split:** Consider submodules when a file exceeds 3000 lines with clear logical sections
-- **Module structure:** Group related functionality (`view/rules.rs`, `view/settings.rs`, `view/modals.rs`)
-- **Trade-off:** Balance between too many small files vs monolithic files
-
-**Example:** `app/view.rs` was split into `app/view/` module (~5000 lines across 15 files). `app/mod.rs` was split by extracting handlers into `app/handlers/` (~1100 lines remaining in mod.rs).
-
-**Note:** This is a soft guideline, not a hard rule. Prioritize logical cohesion over arbitrary line counts.
-
-### Refactoring Large Files
-
-When splitting monolithic files into modules:
-
-**Domain Separation:**
-```rust
-// ✅ Group by domain responsibility
-handlers/
-  rules.rs      // Rule CRUD, form handling, drag-drop
-  apply.rs      // Apply/verify/revert workflow
-  profiles.rs   // Profile management
-  settings.rs   // Configuration changes
-  ui_state.rs   // Modal state, undo/redo, keyboard
-  export.rs     // Export and audit operations
-```
-
-**Avoid Redundant Operations:**
-```rust
-// ❌ BAD: Calling internal implementation twice
-state.mark_profile_dirty();  // Calls update_cached_text() internally
-state.update_cached_text();  // Redundant second call
-
-// ✅ GOOD: Let mark_profile_dirty handle cache updates
-state.mark_profile_dirty();
-```
-
-**Check method internals** before calling multiple state-changing methods in sequence.
-
-**Handler Organization:**
-- **Module docs:** Explain domain scope at top of file
-- **Logical grouping:** Related handlers together (create/edit/delete for same entity)
-- **Tests at bottom:** Keep handler tests in same file for discoverability
-- **Pure helpers:** Extract to `helpers/` if no state mutation
-
-**Refactoring Checklist:**
-1. Read original file completely before splitting
-2. Verify all methods accounted for (count functions before/after)
-3. **Line-by-line verification of inline handlers:**
-   ```bash
-   # For EVERY inline handler in update():
-   git show COMMIT:path/to/file.rs | grep "Message::HandlerName" -A 10 > /tmp/original
-   # Compare with extracted handler:
-   diff -u /tmp/original new/handlers/file.rs
-   ```
-4. Check for internal method calls that might be duplicated
-5. Run `cargo test` and `cargo clippy` after each phase
-6. **Functional testing:** Test affected UI features (search, filters, modals)
-7. Add unit tests for extracted handlers
-
-**Critical:** Counting functions ≠ verifying logic. Must diff multi-statement inline handlers line-by-line.
-
-**Example:** `app/mod.rs` refactor (2026-01-04) split 2,940 lines into 8 handler modules. Initial review found all 38 methods but missed 4 logic bugs in inline handlers (font search, tag filter, form cancel, drag state) due to pattern-matching instead of line-by-line verification. Bugs caught by functional testing, fixed in commit 945ba6d.
+**Splitting checklist:**
+1. Read the whole file first; count functions before and after
+2. Diff every multi-statement inline handler line by line against the original
+   (counting functions does not verify logic)
+3. Check internal calls you might now duplicate (e.g. `mark_profile_dirty()` already
+   calls `update_cached_text()`)
+4. Run the §12 commands after each phase, then test the affected GUI features by hand
+5. Add unit tests for extracted handlers
 
 ---
 
@@ -326,8 +205,6 @@ audit log). Appends to the audit log are single `write`s instead (see §10).
 - There are no profile checksums (the old `.sha256` files are removed on save/startup): a
   checksum next to the data protects nothing.
 
-**Windows note:** Document ACL requirements since Unix permissions don't apply
-
 ---
 
 ## 4. Privilege Escalation
@@ -361,15 +238,20 @@ table-tested), from the `ElevationContext` the front end sets once at startup
    asks; there is no password-less mode)
 3. **GUI:** always `pkexec`, even when started from a terminal (`run0`/`sudo` would
    prompt invisibly in that terminal); no `pkexec` → `PkexecNotFound`
-4. **CLI (or no context set):** stdin is a TTY → `run0` (systemd v256+, no SUID),
-   else `sudo`; no TTY → `pkexec`
+4. **CLI (or no context set):** stdin is a TTY → `run0` (systemd v256+, no SUID) if
+   installed, else `sudo`; no TTY → `pkexec`
 
 Every elevated child uses `kill_on_drop(true)`. DRFW ships **no polkit rule**: every
 elevated operation asks once. Caching `/bin/sh` would allow arbitrary root commands;
 caching `nft` makes root `nft` (a file-read primitive: `nft -c -f <file>` echoes lines
 in errors) available to anything that can drive the DRFW process, only to save a
 prompt in the rare elevated-check fallback. Never suggest sudoers `NOPASSWD` for
-unattended applies: the elevated program is `/bin/sh`, so that is full root.
+unattended applies: the elevated program is `/bin/sh`, so that is full root. Automation
+that already runs as root runs `drfw` as root (nothing is elevated then).
+
+**Rejected approaches:** custom auth dialogs (security complexity, maintenance burden),
+PAM directly (synchronous API conflicts with the async GUI), piping passwords to stdin
+(`pkexec` doesn't support it by design).
 
 ### Root-Side Revert Guard (dead-man switch)
 `core/apply_guard.rs` + `APPLY_SCRIPT`/`WATCHER_SCRIPT`. As root, in one elevation:
@@ -381,7 +263,7 @@ unattended applies: the elevated program is `/bin/sh`, so that is full root.
 1. Save the current `inet drfw` table (stdout of `nft list table` only) or the fact
    that there is none as an atomic revert batch in root-owned `/run/drfw`
    (`GUARD_STATE_DIR`). If an earlier guard is still pending, inherit its revert file:
-   a timeout returns to the last *confirmed* state.
+   a timeout returns to the last *kept* state.
 2. Start the detached watcher (`systemd-run` when systemd is PID 1, else `setsid`)
    **before** anything changes; if it can't start, nothing changed (exit 4).
 3. Apply the new JSON (`nft --json -f -`). On rejection write the new guard's status
@@ -415,6 +297,9 @@ names the pending guard (`drfw status` reads it). Revert falls back to deleting 
 table, never to re-applying drop policies. Closing the GUI, a crash, a closed terminal
 or a dropped SSH session all end in the revert. A revert whose lock is still held after
 60 s (once armed) goes ahead anyway and logs it (journal, or `logger -t drfw`).
+A watcher stopped by `TERM`/`HUP`/`INT` (`systemctl stop`, `kill`, shutdown) without a
+status file reverts at once (`on_signal`); only `SIGKILL` ends it without a revert, and
+`drfw status` then reports "LOST since …" (`WatcherState::Gone`) instead of PENDING.
 
 ### Kept-Ruleset Record (`core::confirmed`)
 One record of the last ruleset **applied and kept**, shared by the GUI and the CLI:
@@ -440,13 +325,16 @@ the boot id (`/proc/sys/kernel/random/boot_id`).
 ### Retention Guard (`core::retention`)
 Before Apply and Save to System (GUI and CLI), `RetentionWarning::check(kept, next)`
 compares with the record's ruleset (DRFW's defaults when there is none): at least 3
-**and** at least 40 % of its enabled rules removed (matched by id; disabled = removed),
-Desktop→Server, or block forwarding turned on. GUI: computed in `update()`
+**and** at least 40 % of its enabled rules removed or changed (matched by id; disabled =
+removed; a kept rule edited to act differently, `same_effect` false, = changed: Accept→Drop,
+narrowed sources, moved chain, …; the line then reads "Removes or changes N of the M …"),
+Desktop→Server, or "Block forwarded traffic" turned on. GUI: computed in `update()`
 (`ApplySession::retention`, `SaveToSystemDialog::retention`); only the "Apply anyway"
 button (`Message::ProceedToApplyAnyway`) proceeds, Enter (`ProceedToApply`) is refused,
 and `SaveToSystemDialog::primary_source()` never picks the editor's rules then. CLI
-(`retention_guard` in `main.rs`): prints the same `lines`, asks y/N on a terminal,
-otherwise needs `--yes` (exit code 9, nothing changed).
+(`confirmation_guard` in `main.rs`, which also runs the SSH lockout check, §11): prints
+the same `lines`, asks y/N once on a terminal, otherwise needs `--yes` (exit code 9,
+nothing changed). Lockout notes (access only limited) are printed without a question.
 
 **Never** move the revert back into the DRFW process or require a second prompt for it:
 that fails exactly when the user is locked out. **Never** start the watcher after the
@@ -468,11 +356,12 @@ The script ignores `HUP`/`INT`/`QUIT`/`TERM`/`PIPE` like `APPLY_SCRIPT`.
 
 `drfw save <profile> [--enable-at-boot] [--yes]` is the same path for headless
 servers (`validate_for_apply`, unprivileged check, `write_config_file_and_enable`). A
-profile whose JSON is not the kept-ruleset record (see above) prints a loud
-"not the one last applied and confirmed; no dead-man switch at boot" warning and needs
-`--yes` (no TTY) or a y/N answer (exit 7 otherwise); the retention guard follows (exit 9). With `--enable-at-boot` a failed enable exits 8; without
-it a disabled boot service is warned about. Tests set `DRFW_TEST_SYSTEM_NFT_PATH`
-(honoured only together with `DRFW_NFT_COMMAND`).
+profile whose JSON is not the kept-ruleset record (see above) prints a loud "not the
+one last applied and kept; no dead-man switch at boot" warning and needs `--yes` (no
+TTY) or a y/N answer (exit 7 otherwise); `confirmation_guard` follows (exit 9). With
+`--enable-at-boot` a failed enable exits 8; without it a disabled boot service is warned
+about. Tests set `DRFW_TEST_SYSTEM_NFT_PATH` (honoured only together with
+`DRFW_NFT_COMMAND`).
 
 The dialog asks `core::boot::query_boot_status()` (unprivileged) when it opens, shows
 the result and an "Also enable at boot" checkbox (checked when the unit is disabled);
@@ -500,38 +389,15 @@ elsewhere; tests must compare against the constants (packagers build with overri
 - **Timeout protection:** 2-minute maximum for anything that can show an auth dialog
 - **Error translation:** Map exit codes to user actions (126=cancelled, 127=auth failed)
 - **Audit logging:** Log all privileged operations with timestamps
-- **Test bypass:** `DRFW_NFT_COMMAND=tests/mock_nft.sh` for tests with mock nft (no elevation)
+- **Test bypass:** `DRFW_NFT_COMMAND` (set by the tests themselves, §6) runs that nft or
+  `tests/mock_nft.sh` directly, without elevation
 
-### Subprocess Timeout Pattern
-**All subprocess calls should have timeouts** to prevent indefinite hangs:
-
-```rust
-// ✅ Async with timeout
-match tokio::time::timeout(Duration::from_secs(5), child.wait_with_output()).await {
-    Ok(Ok(output)) => process_output(output),
-    Ok(Err(e)) => handle_io_error(e),
-    Err(_) => handle_timeout(),
-}
-
-// ✅ Sync subprocess (for non-async contexts)
-use std::process::Command;
-let output = Command::new("pgrep")
-    .args(["-a", "polkit"])
-    .output()  // Note: no built-in timeout in std::process
-    .map_err(|e| /* handle error */)?;
-```
-
-**Note:** `std::process::Command` has no built-in timeout. For sync calls that could hang (e.g., network operations, user prompts), consider:
-1. Using `tokio::process::Command` with `tokio::time::timeout`
-2. Spawning in a separate thread with a timeout mechanism
-3. Documenting the potential hang in function docs
-
-### Rejected Approaches
-**Do not:**
-- Implement custom auth dialogs (security complexity, maintenance burden)
-- Use PAM directly (synchronous API conflicts with async GUI)
-- Pipe passwords to stdin (pkexec doesn't support this by design)
-- Add NOPASSWD sudoers rules (bypasses authentication)
+### Subprocess Timeouts
+Every subprocess call has a timeout: async children via
+`tokio::time::timeout(.., child.wait_with_output())` with `kill_on_drop(true)` (see
+`APPLY_TIMEOUT`, `SAVE_TIMEOUT`, `ELEVATED_CHECK_TIMEOUT`). `std::process::Command` has
+none; use it only for calls that cannot hang, or run it under a timeout (`tokio::process`
+or a thread), or document the possible hang in the function docs.
 
 ---
 
@@ -582,11 +448,19 @@ self.modify_state(cached_value);
 All code lives in the library crate (`src/lib.rs`), including the GUI (private
 `app` module, started by the public `drfw::run_gui()`) and the version strings
 (`drfw::build_info`). `src/main.rs` is only the CLI front end (clap `Cli`, the
-`list`/`apply`/`status`/`check`/`export` commands, the countdown) and uses the
+`list`/`apply`/`status`/`save`/`check`/`export`/`exposure` commands and the hidden
+`print-service-unit`, the countdown) and uses the
 library through its public API (`drfw::…`). Never re-declare library modules
 with `mod` in `main.rs`: that compiles them twice, as two incompatible copies,
 and runs their unit tests twice. Inside the library, always write `crate::…`;
 `drfw::…` belongs in `main.rs`, `tests/`, `tools/` and doctests.
+
+CLI facts the docs promise (keep them true): `--confirm` outside 5–120 is a clap usage
+error (exit 2), and the GUI clamps a hand-edited `auto_revert_timeout_secs` into the
+same range; keys typed before the countdown starts (e.g. during the password prompt)
+are discarded; output into a closed pipe (`drfw … | head`) ends quietly instead of
+panicking (exit 101 before); without git metadata the version is plain "0.9.0" and
+`--version` reports commit and branch "unknown" (`build_info`).
 
 Unit tests therefore run exactly once: in the lib test target, except the CLI
 tests in `src/main.rs`, which run in the bin test target.
@@ -607,16 +481,28 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/elevation.rs` | Unit + property tests for elevation, without touching the environment | Method selection table (`select_elevation`: root, `DRFW_ELEVATION_METHOD`, context, TTY, installed tools), command shapes per tool, `DRFW_NFT_COMMAND` precedence, the shell `safe_path` vs `distro::is_script_path` (differential proptest, three locales) |
 | `src/core/boot.rs` | `systemctl` output mapping | `enablement_from_output()`, `BootStatus` summaries and checkbox rules |
 | `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | Mock verification **plumbing** (one pass, one refusal) and the mock's own input checks, guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts; which applies write the kept-ruleset record), CLI `status` (incl. the SSH line)/`check`/`save`/`exposure` (table and `--json` shape on a `/proc` fixture)/`print-service-unit`, the retention guard and the SSH lockout check of `apply`/`save` (exit 9, `--yes`; a rate-limited SSH rule is a note without exit 9; interface-bound SSH against a `drfw-test-addresses` fixture; `SSH_CONNECTION` on the child only) and the `--help` exit codes (runs the real binary, in a hermetic environment), argument validation of both root scripts (every argument, unsafe state dirs; exit 1 and nothing created), save script incl. enable-at-boot (fake `systemctl`), `drfw export` output, audit log writes, profile load rebuilds caches |
-| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
+| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server Mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
 | `src/core/evaluate.rs` | Unit tests for the rule evaluator | Chain model (order, family copies, skipped rules), limits/conditions as `Limited`, reachability sets (subtracted drops, `AllExcept`, conditional access, caveats), **the modelled chain has the generator's base rules (by their real comments) in the generator's order** for every setting that changes it, ICMP section after the user rules |
 | `src/core/addr_set.rs` | Unit tests for the address-set arithmetic | Union/intersection/difference/complement, CIDR decomposition |
 | `src/core/exposure.rs` | Unit tests for socket discovery | `/proc/net` parsing (IPv4, IPv6, v4-mapped, UDP, established connections), inode → process mapping and `scan_host_in` on a fixture tree, dual-stack heuristic, exposure rows |
-| `src/core/lockout.rs` | Unit tests for the SSH lockout check | `SSH_CONNECTION` parsing (IPv4, IPv6, zones, mapped, malformed), which `/proc` connections count as SSH, merging, blocked / may-be-blocked / limited (note) / accepted and the cause split, address → interface (ambiguous, loopback, aliases, fixture file), Server-mode output order (established accepted before user rules) |
+| `src/core/lockout.rs` | Unit tests for the SSH lockout check | `SSH_CONNECTION` parsing (IPv4, IPv6, zones, mapped, malformed), which `/proc` connections count as SSH, merging, blocked / may-be-blocked / limited (note) / accepted and the cause split, address → interface (ambiguous, loopback, aliases, fixture file), Server Mode output order (established accepted before user rules) |
 | `src/app/exposure.rs` | Unit tests for the Exposure panel model | Row order and badges, editor vs applied answers, scan errors, "SSH:" lines |
 | `tests/evaluate.rs` | Evaluator property tests; kernel agreement in two `unshare -rn` namespaces over veth (own binary re-executed as server/client helpers) | Per-source verdicts agree with the reachability sets (proptest); **the evaluator agrees with real nft** on random rulesets and probes (proptest) and directed cases |
 | `tests/verify_errors.rs` | Error attribution against real `nft` in `unshare -rn`, and `drfw check` output (own binary) | A rejected ruleset names the rule that caused each error (also with per-source sets), CLI prints mapped errors without color codes |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
+| `tests/baseline.rs` | The base rules in the kernel: namespace labs over veth (`unshare -rn`, own binary as UDP helper; skips without `ip`, `nsenter`, `ping`, `timeout`, … unless `DRFW_REQUIRE_REAL_NFT=1`) | ICMP redirects of a live flow dropped (PMTU discovery still works), IGMP in and (Server Mode) out, DHCP client replies (also broadcast), local network discovery, RPF (spoofed sources dropped, full-tunnel VPN underlay kept), ICMP rate limit vs a ping flood, loopback destinations from the network dropped, Forwarded rules with "Block forwarded traffic" |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
+| `src/core/rule_constraints.rs` | Field-combination helpers shared by the form and `stress_gen` | Which protocols take ports, ICMP family vs IP version, TCP reset only for pure TCP, reject types per protocol, chain → interface kind |
+| `src/validators.rs` | Unit + property tests for input validators | Ports, interfaces (length incl. `*`, wildcard position, Unicode/zero-width/RTL rejected), label sanitizing (length, idempotence, control chars, emoji, homoglyphs), log prefix, rate/connection/log-rate limits |
+| `src/core/confirmed.rs` | The kept-ruleset record | Round trip (bytes, ruleset, kind, boot id), record from an earlier boot, legacy bare-JSON record, missing/garbage/newer records ignored, unreadable ruleset keeps the JSON |
+| `src/core/retention.rs` | The retention guard | Thresholds (3 and 40 %), matching by id, disabled = removed, capped rule names, mode changes |
+| `src/core/templates.rs` | Rule templates | Server Mode essentials, VM guest/Tailscale/"Trust <interface>" rules, `available_templates()` by interface name |
+| `src/app/templates.rs` | The "Add from template" menu model | Only templates for present interfaces, fresh rules on every use, VM template notes and duplicates |
+| `src/core/host_facts.rs` | Host facts on a `/proc` fixture | Forwarding flags, forwarding notice only when not blocked, `docker-proxy` command lines, published-port matching, container bridges |
+| `src/core/system_config.rs` | Save to System output mapping | Backup path and `enable=` outcome read from the script's stdout |
+| `src/core/profiles.rs` | Profile parsing and storage | No `version` = 1, newer version refused (even when unparseable), corrupt profile, round trip writes `version`, no-replace rename, the unreadable-profile message |
+| `src/config.rs` | Config loading | Old configs keep auto-revert off and get no notice, active-profile salvage |
+| `src/command.rs` | Undo/redo commands | Apply/undo of each command (incl. adding several rules, enabling Server Mode with its rules), history size cap, a new command clears redo |
 | `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse, exit codes distinct and documented, `drfw exposure` table and JSON |
 | `tests/root_e2e.rs` | `#[ignore]`d helpers for the disposable root e2e kit (`tools/e2e/run.sh`); no-ops without `DRFW_E2E_DISPOSABLE=1` | Save to System through the real elevation tool and the real `nft -c` |
 | `tests/common/mod.rs` | Helpers shared by the integration crates (`mod common;`): real-nft probe and `nft`/`unshare` with the library's `nft`, root-script path check, rule builders on `Rule::with_caches`, `write_profile`, `EnvVarGuard` | - |
@@ -660,9 +546,13 @@ such paths inside the async task, not when scheduling it.
 | `DRFW_NFT_COMMAND` | Path to nft binary or mock script (skips elevation) | Set by the mock-based tests themselves (`setup_mock_nft()`, or on the child `Command`). Do **not** export it for `cargo test`: the real-nft tests need the real `nft` and skip (or fail under `DRFW_REQUIRE_REAL_NFT=1`) when it is set |
 | `DRFW_TEST_DATA_DIR` | Overrides data directory (`~/.local/share/drfw/`) | Tests that access profiles |
 | `DRFW_TEST_STATE_DIR` | Overrides state directory (`~/.local/state/drfw/`) | Tests that access the audit log |
-| `DRFW_TEST_PROC_DIR` | Read instead of `/proc` by the socket and SSH session scan (`core::exposure::proc_root`); its `drfw-test-addresses` file (`name address` lines) replaces the interface addresses of the lockout check (`core::lockout::local_addresses`; none when missing, the real interfaces are never read) | CLI tests of `exposure`/`status`/`apply`/`save`: a fixture tree, or a missing dir for "no sessions" (the CLI test helpers always set one) |
+| `DRFW_TEST_PROC_DIR` | Read instead of `/proc` by the socket and SSH session scan and the host facts (`core::exposure::proc_root`); its `drfw-test-addresses` file (`name address` lines) replaces the interface addresses of the lockout check (`core::lockout::local_addresses`; none when missing, the real interfaces are never read) | CLI tests of `exposure`/`status`/`apply`/`save`: a fixture tree, or a missing dir for "no sessions" (the CLI test helpers always set one) |
 | `SSH_CONNECTION` | The session the SSH lockout check protects (not a DRFW variable) | Set on the **child** only; the CLI test helpers remove it so the runner's own SSH session never leaks in. GUI handler tests never read it (`State::new_for_testing` has no session; set `state.ssh_sessions`) |
-| `DRFW_REQUIRE_REAL_NFT` | `1` makes the real-nft tests (`tests/real_nft.rs`, `tests/evaluate.rs`, `tests/verify_errors.rs`) fail instead of skipping when `unshare -rn nft` is unavailable | CI (set); never in packaging `check()` |
+| `DRFW_REQUIRE_REAL_NFT` | `1` makes the real-nft tests (`tests/real_nft.rs`, `tests/evaluate.rs`, `tests/verify_errors.rs`, `tests/baseline.rs`) fail instead of skipping when `unshare -rn nft` (or a tool the lab needs) is unavailable | CI (set); never in packaging `check()` |
+| `DRFW_GUARD_STATE_DIR` | Guard state dir of the apply script in test mode (only read when `DRFW_NFT_COMMAND` is set; default `<state dir>/guard`, instead of root's `/run/drfw`). `tests/mock_nft.sh` also looks there for `mock-kill-apply` (kill the script mid-apply) | Guarded-apply tests in `tests/integration_tests.rs` |
+| `DRFW_TEST_SYSTEM_NFT_PATH` | Target file of `drfw save` instead of `drfw::SYSTEM_NFT_PATH`; honoured only together with `DRFW_NFT_COMMAND` (nothing elevated) | CLI `save` tests |
+| `DRFW_E2E_DISPOSABLE` | `1` lets `tools/e2e/run.sh` and the `#[ignore]`d `tests/root_e2e.rs` helpers write as root (also needs a VM/container, or `DRFW_E2E_ALLOW_BARE_METAL=1`); without it they refuse or are no-ops | Only on a disposable VM/container |
+| `DRFW_ELEVATION_METHOD` | Not a test variable: forces the elevation tool (`sudo`, `run0`, `pkexec`; case-insensitive, empty = unset, anything else is an error), e.g. `sudo` over SSH where `run0` is installed but unusable | Users. Tests never export it; `select_elevation` is table-tested with the value passed in, and `tools/e2e/run.sh` unsets it |
 
 For tests that run the `drfw` binary (`env!("CARGO_BIN_EXE_drfw")`), set these on the
 child `Command`, not with `std::env::set_var`: per-child env cannot race other tests.
@@ -677,56 +567,12 @@ leak in. Paths handed to the root scripts must pass their `safe_path`; tests tha
 that skip with a notice (`common::script_paths_usable()`) when the checkout or
 `TMPDIR` has e.g. a space.
 
-### Async vs Sync Tests
-
-**Use `#[tokio::test]` only when:**
-- The test actually calls `async` functions that need `.await`
-- Testing async workflows (verify_ruleset, apply, profile I/O)
-
-**Use `#[test]` for:**
-- Pure data transformation (JSON generation, serialization)
-- Synchronous validation
-- Cache rebuilding tests
-
-```rust
-// ❌ Unnecessary async - no await needed
-#[tokio::test]
-async fn test_json_output() {
-    let ruleset = create_test_ruleset();
-    let json = ruleset.to_nftables_json();  // Not async
-    assert!(json["nftables"].is_array());
-}
-
-// ✅ Correct - synchronous test
-#[test]
-fn test_json_output() {
-    let ruleset = create_test_ruleset();
-    let json = ruleset.to_nftables_json();
-    assert!(json["nftables"].is_array());
-}
-```
-
-### Test Patterns
-```rust
-#[test]
-fn test_validator() {
-    assert_eq!(sanitize_label("Valid_Name-123"), "Valid_Name-123");
-    assert_eq!(sanitize_label("Bad$Chars"), "BadChars");
-    assert_eq!(sanitize_label(&"x".repeat(100)).len(), 64);
-}
-
-#[tokio::test]
-async fn test_nft_operation() {
-    use crate::core::test_helpers::setup_mock_nft;
-
-    // One-time setup, safe to call before any .await
-    // Sets DRFW_NFT_COMMAND to use the mock script
-    setup_mock_nft();
-
-    let result = verify_ruleset(json).await;
-    assert!(result.is_ok());
-}
-```
+### Test Style
+- `#[tokio::test]` only when the test awaits something (verify, apply, profile I/O);
+  `#[test]` for pure transformation, validation and cache rebuilding
+- Mock-based lib tests call `setup_mock_nft()` first (safe before any `.await`)
+- Validators get example tests plus `proptest` properties (length caps, idempotence,
+  no control/Unicode characters)
 
 ### CI/CD Compatibility
 - No test needs privileges. Tests use the mock nft, or the real `nft` inside a private
@@ -739,76 +585,33 @@ async fn test_nft_operation() {
 - The non-blocking latest-stable CI job installs no nftables: its real-nft tests skip
 - Document any special requirements in module-level docs
 
-### Running Tests
-
-```bash
-# Standard test run - mock nft, plus real nft in a namespace when available
-cargo test
-
-# As CI runs it: real-nft tests must run, not skip
-DRFW_REQUIRE_REAL_NFT=1 cargo test --locked
-```
-
-**Note:** Mock-based tests set `DRFW_NFT_COMMAND` themselves (`setup_mock_nft()`; the
-mock needs `jq`). Do not run `DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test`: that is
-not equivalent, the real-nft tests need the real `nft`. Tests never require root
-privileges and never touch the host's nftables, but the real-nft tests do run the
-real `nft` (and the kernel's nftables) inside a private namespace.
+How to run the suite: the command list in §12. Mock-based tests set `DRFW_NFT_COMMAND`
+themselves (`setup_mock_nft()`; the mock needs `jq`). Do not run
+`DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test`: the real-nft tests need the real `nft`.
+Tests never require root and never touch the host's nftables, but the real-nft tests do
+run the real `nft` (and the kernel's nftables) inside a private namespace.
 
 ### Stress Test Generator
-
-The `stress_gen` tool generates profiles with comprehensive rule variations for testing:
-
+`tools/stress_gen.rs` (feature `stress_gen`) writes profiles that cover every protocol,
+action, chain, reject type and rate-limit unit:
 ```bash
-# Generate 100 rules with good coverage
-cargo run --bin stress_gen --features stress_gen -- -o profiles/stress-test.json
-
-# Generate 500 rules with edge cases (boundary values, special chars)
 cargo run --bin stress_gen --features stress_gen -- --count 500 --edge-cases -o profiles/edge-cases.json
-
-# Reproducible generation (for bug reports)
-cargo run --bin stress_gen --features stress_gen -- --count 200 --seed 12345 -o /tmp/repro.json
-
-# Generate and verify with nft --check
-cargo run --bin stress_gen --features stress_gen -- --count 100 --verify -o /tmp/verified.json
-
-# Predefined scenarios: minimal (10), typical (50), enterprise (200), chaos (1000)
-cargo run --bin stress_gen --features stress_gen -- --scenario chaos -o /tmp/chaos.json
+cargo run --bin stress_gen --features stress_gen -- --scenario chaos --seed 12345 --verify --report -o profiles/chaos.json
 ```
+`--scenario`: minimal (10), typical (50), enterprise (200), chaos (1000) rules; `--seed`
+makes a run reproducible, `--verify` runs `nft --check` on the result, `--report` prints
+the distribution.
 
-**Coverage guarantees:** The generator ensures all protocol types, actions, chains, reject types, and rate limit time units are represented. Use `--report` to see distribution.
-
-### TODO Comment Hygiene
-
-- **Mark phase/completion:** `TODO (Phase 6): Wire up to diagnostics viewer`
-- **Update or remove:** Review all TODOs after completing phases
-- **Track separately:** Consider using GitHub Issues for long-term TODOs instead of code comments
-- **Outdated TODOs:** When features are implemented differently than planned, update or remove the TODO rather than leaving stale comments
+### TODO Comments
+Give a TODO an owner or issue reference; update or remove it when the plan changes or
+the work is done (no stale "Phase N" notes).
 
 ### Handler Test Coverage
-
-App handler tests (`src/app/handlers/*.rs`) intentionally have lower unit test coverage than core modules. Most handlers are thin orchestration code that:
-
-1. Check/update state
-2. Spawn async Tasks calling external services (polkit, file dialogs, nft)
-3. Return a `Task<Message>`
-
-**What IS tested:**
-- Pure helper functions (`truncate_error_message`, `interpret_elevated_command_output`)
-- Simple state mutations (form open/close, toggle flags)
-- Core business logic in `src/core/` and `src/validators.rs`
-
-**What is NOT unit tested (by design):**
-- Handlers that call `pkexec`/`sudo`/`run0` for elevation
-- Handlers that open file dialogs (`rfd::AsyncFileDialog`)
-- Handlers that spawn Tasks requiring external services
-
-**Rationale:** Adding mocking infrastructure for these handlers would increase maintenance burden without proportional bug-finding value. These code paths are exercised by:
-- Integration tests (`tests/integration_tests.rs`)
-- Manual GUI testing
-- Rust's type system (catches many bugs at compile time)
-
-**Policy:** If bugs appear in untested handlers, add targeted tests. Otherwise, accept current coverage as reasonable for orchestration code.
+GUI handlers (`src/app/handlers/*.rs`) are mostly orchestration (update state, spawn a
+`Task` that elevates, opens a file dialog or runs `nft`) and are not unit tested by
+design. Test their pure helpers (`truncate_error_message`,
+`interpret_elevated_command_output`) and simple state changes; the external paths are
+covered by `tests/`. Add targeted tests where bugs appear.
 
 ---
 
@@ -873,94 +676,22 @@ pub fn view(&self) -> Element {
 }
 ```
 
-### Optimization Patterns
-**Cache in state:**
-- Lowercase search strings (`.to_lowercase()` once per keystroke)
-- Filtered/sorted collections (once per data change), e.g. the diagnostics event log:
-  rows are formatted once per load, the visible indices once per filter/search change
-- Syntax highlighting tokens (once per text change)
-- Display strings for frequently-rendered data (see example below)
-
-**Example: Caching formatted display strings**
-```rust
-// In your data struct (e.g., Rule)
-pub struct Rule {
-    pub action: Action,
-    pub rate_limit: Option<RateLimit>,
-    // ... other fields ...
-
-    // Cached display strings (Phase 2.3 optimization)
-    #[serde(skip)]
-    pub action_display: String,  // Pre-formatted "D (5/s)" or "A"
-
-    #[serde(skip)]
-    pub interface_display: String,  // Pre-formatted "@eth0" or "Any"
-}
-
-// Populate in rebuild_caches() (called once per data change)
-pub fn rebuild_caches(&mut self) {
-    self.action_display = if let Some(ref rate_limit) = self.rate_limit_display {
-        format!("{} ({})", self.action.as_char(), rate_limit)
-    } else {
-        self.action.as_char().to_string()
-    };
-
-    self.interface_display = if let Some(ref iface) = self.interface {
-        format!("@{}", iface)
-    } else {
-        "Any".to_string()
-    };
-}
-
-// In view() - zero allocations per frame
-pub fn view(&self) -> Element {
-    text(&rule.action_display)  // ✅ Use cached string
-    // NOT: text(format!("{}", rule.action))  // ❌ Allocates every frame
-}
-```
-
-**Pre-allocate collections:**
-```rust
-let mut cards = Vec::with_capacity(filtered_rules.len());
-let mut output = String::with_capacity(estimated_size);
-```
-
-**Avoid allocations:**
-```rust
-// ❌ Allocates every frame
-let text = format!("{}-{}", start, end);
-
-// ✅ Cache as struct field (best for repeated rendering)
-self.cached_range = format!("{}-{}", start, end);  // Once in update()
-text(&self.cached_range)  // Reference in view()
-
-// ✅ Stack buffer (for one-time use)
-let mut buf = String::with_capacity(12);
-write!(&mut buf, "{}-{}", start, end).ok();
-
-// ✅ Static reference (for simple conversions)
-"Any".into()  // Not "Any".to_string()
-```
-
-**Debounce file saves:**
-```rust
-// ❌ Excessive disk I/O
-Message::SettingChanged => {
-    self.setting = value;
-    self.save_config();  // Disk write on every change!
-}
-
-// ✅ Debounced saves with dirty flag
-Message::SettingChanged => {
-    self.setting = value;
-    self.mark_config_dirty();  // Just set flag
-}
-
-// One-shot, generation-tagged timers (src/app/debounce.rs) are re-armed from
-// state at the end of every update(): no polling subscription, so an idle app
-// does not rebuild its view 10 times a second. A timer that fires after newer
-// edits carries a stale generation and is ignored (or re-armed for the rest).
-```
+### Rules
+- **Cache in state, once per change:** lowercase search strings (once per keystroke),
+  filtered/sorted collections (once per data change; e.g. the diagnostics event log
+  formats rows once per load and the visible indices once per filter/search change),
+  syntax-highlighting tokens (once per text change), display strings of rules
+  (`Rule::rebuild_caches()`). `view()` only references them.
+- **Pre-allocate** (`Vec::with_capacity`, `String::with_capacity`) when the size is known;
+  use `&'static str` / `.into()` instead of `to_string()` for constant text.
+- **UI examples:** `STYLE.md` §9 (cached display strings, allocations in `view()`, picker
+  filtering).
+- **Debounce disk writes:** a setting change marks state dirty (`mark_config_dirty()`,
+  `mark_profile_dirty()`), never saves directly. One-shot, generation-tagged timers
+  (`src/app/debounce.rs`, armed by `State::arm_debounce_timers` at the end of every
+  `update()`) do the save: no polling subscription, so an idle app does not rebuild its
+  view. A timer that fires after newer edits carries a stale generation and is ignored
+  (or re-armed for the rest).
 
 **Honest autosave (profiles, `handlers/profiles.rs`):**
 - Clear `profile_dirty` only when the save result is `Ok` and the ruleset didn't change
@@ -978,19 +709,9 @@ Message::SettingChanged => {
 3. Profile with `cargo flamegraph` to find actual bottlenecks
 4. Don't optimize cold paths (initialization code)
 
-### Stress Test Results (2025-01-07)
-
-The architecture has been validated with **700 rules** (varied protocols, ports, sources, destinations, tags):
-
-| Metric | Result |
-|--------|--------|
-| UI scrolling | Smooth, no lag |
-| Search/filter | Instant response |
-| Memory usage | No measurable increase |
-| Apply to kernel | Works correctly |
-| Save to System | Works correctly |
-
-**Key insight:** Widget allocation for 700 rule cards completes in milliseconds. The pre-tokenization caching (`cached_nft_tokens`) and `keyed_column` widget reconciliation handle large rulesets efficiently. **Virtual scrolling (`sensor` widget) is not needed** - it would add complexity and cause layout jumping due to variable card heights.
+Validated with 700 varied rules (smooth scrolling, instant search, apply and Save to
+System fine): `cached_nft_tokens` and `keyed_column` reconciliation cope, so virtual
+scrolling is not needed (it would make variable-height cards jump).
 
 ---
 
@@ -1009,8 +730,11 @@ replace that works on every nft version; `destroy` needs nft >= 1.0.8) and a
 `drfw status` uses to recognise our boot config).
 
 ### JSON API for Applying
-Apply always uses `nft --json -f -`; the text form is only ever written to files and
-checked with `nft -c` before use. Never parse `nft list` text output.
+Apply always uses `nft --json -f -`; the text form DRFW generates is only ever written to
+files and checked with `nft -c` before use. Never parse `nft list` text output for data
+(the apply script only checks `nft list tables` for the exact line `table inet drfw`).
+Replaying it is fine: the revert batch is the saved `nft list table inet drfw` text,
+loaded unchanged with `nft -f`.
 
 ### Apply Workflow
 1. **Validate:** `validate_for_apply()` (refuses invalid applied rules)
@@ -1040,13 +764,13 @@ reference; `core::evaluate` models the same order and a test compares them):
 7. User-defined Input rules, in profile order
 8. Local network: `ip protocol igmp accept` (always), then with Local network
    discovery (Desktop only) mDNS/SSDP/WS-Discovery multicast accepts by destination
-   group and the `@discovery_reply` accepts (unicast from private/link-local sources
-   to a port that sent multicast/broadcast UDP in the last 10 s; the set is filled by
-   the output chain's first rule)
+   group and the `@discovery_reply` accepts (unicast from 10/8, 172.16/12, 192.168/16,
+   169.254/16, fe80::/10, fc00::/7 to a port that sent a genuine discovery query in the
+   last 10 s; the set is filled by the output chain's 7 per-protocol rules)
 9. ICMP allow rules (all types, or the strict set; no limit, so neighbor discovery,
    router advertisements and MLD are never rate limited)
-10. Optional drop logging (`pkttype host` only), rate-limited reject of unicast, counter,
-    then the default policy
+10. Optional drop logging (`pkttype host` only), rate-limited reject of unicast
+    (comment "rate-limited reject"), counter ("final counter"), then the default policy
 
 User rules come **before** the local network and ICMP allows so a user Drop/Reject rule
 ("drop everything from X") also stops them. Established/related traffic is accepted
@@ -1056,9 +780,10 @@ Protection").
 
 Output chain: Server Mode adds loopback, invalid drop, established, ND/MLD (incl.
 `mld-listener-done`), IGMP and DHCP/DHCPv6 client requests, then Output user rules;
-Desktop mode has no rules except the discovery port recorder. Forward chain: with
-"Block forwarding", invalid drop, established, then Forward user rules (`iifname` and
-`oifname`); without it nothing (policy accept), and Forward rules are not generated.
+Desktop has no rules except, with local discovery, the 7 discovery query recorders. Forward chain (Forwarded
+rules, `Chain::Forward`): with "Block forwarded traffic", invalid drop, established,
+then the Forwarded rules (`iifname` and `oifname`); without it nothing (policy accept),
+and Forwarded rules are not generated.
 `Rule::takes_effect()` says whether a rule is generated (validation and the GUI use it).
 
 A Drop/Reject rule with both a rate and a connection limit becomes **two** rules (same
@@ -1097,32 +822,22 @@ short-circuits, so one rule would count only over-rate connections.
 - Settings changes
 - Auto-revert events (confirmed/timed out)
 
-All logging functions delegate to an internal helper (see DRY section for details):
-
-```rust
-// Internal helper handles: enable check, AuditLog creation, error warning
-async fn log_event_internal(enable_event_log: bool, event_type: EventType, ...) { ... }
-
-// Public functions are single-line delegations
-pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
-    log_event_internal(enable_event_log, EventType::ApplyRules, success,
-        json!({ "rule_count": rule_count, "enabled_count": enabled_count }), error).await;
-}
-```
+All logging functions are one-line delegations to `log_event_internal()` (enable check,
+`AuditLog` creation, warning on failure).
 
 ---
 
 ## 11. Firewall Features
 
 ### Implemented
-- Protocol filtering (TCP, UDP, ICMP, ICMPv6, Any)
-- Port filtering (single or range)
-- Source IP/CIDR filtering
-- Interface matching (input/output; both on Forward rules)
+- Protocol filtering (TCP, UDP, TCP+UDP, ICMP, ICMPv6, ICMP (both), Any)
+- Port filtering: a list of single ports and ranges
+- Source filtering: a list of IP addresses/CIDRs (likewise destinations)
+- Interface matching (input/output; both on Forwarded rules)
 - Enable/disable without deletion
 - Rule ordering (drag-and-drop)
 - Per-rule logging (with configurable prefix)
-- Advanced: Destination IP, action (accept/drop/reject), rate limiting, connection limiting
+- Advanced: action (accept/drop/reject), rate limiting, connection limiting
 - Per-source limits: a rate or connection limit can apply per source address
   (IPv6 per /64) through named dynamic sets instead of being shared by all sources.
   **Accept rules only** (`validate.rs`, `PER_SOURCE_ACCEPT_ONLY`; the form hides the
@@ -1132,15 +847,24 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
   locks new clients out until it stops); for Drop/Reject it would fail open
 - Advanced security: Server Mode (output policy drop), strict ICMP, ICMP rate limit
   (echo requests over N/s dropped), RPF anti-spoofing (strict, new packets only, with
-  the mark), rate-limited logging of dropped unicast packets, block forwarding
+  the mark), rate-limited logging of dropped unicast packets, "Block forwarded traffic"
   (forward policy drop; off by default so Docker/libvirt/VPNs keep working) with
-  Forward-chain user rules (`Chain::Forward`, input and output interface)
-- Local network discovery (`local_discovery`, Desktop only, absent = off): mDNS, SSDP,
-  WS-Discovery multicast in, and replies to the host's own discovery queries via the
-  `discovery_reply` dynamic set (keyed by port only, deliberately). No LLMNR multicast
-  listener (poisoning-prone); LLMNR/NetBIOS answers to our queries work via the set
-- Always-on base rules: IGMP accept (and Server Mode IGMP out), DHCPv4 client replies,
-  redirect drops before established/related
+  Forwarded rules (`Chain::Forward`, input and output interface)
+- Local network discovery (`local_discovery`, Desktop only, absent = off): mDNS
+  (224.0.0.251 / ff02::fb, 5353), SSDP/WS-Discovery (239.255.255.250 / ff02::c /
+  ff05::c, 1900/3702) multicast in, and replies to the host's own discovery queries via
+  the `discovery_reply` dynamic set (keyed by port only, deliberately). Only genuine
+  queries fill it: SSDP/WS-Discovery to those groups on 1900/3702, mDNS to
+  224.0.0.251 / ff02::fb on 5353, LLMNR to 224.0.0.252 / ff02::1:3 on 5355, NetBIOS
+  name queries broadcast to 137; other broadcast/multicast never opens the sender's
+  port. Replies only from 10/8, 172.16/12, 192.168/16, 169.254/16, fe80::/10, fc00::/7.
+  No LLMNR multicast listener (poisoning-prone); LLMNR/NetBIOS answers to our queries
+  work via the set. NetBIOS datagram (138) is not supported. Exposure: UDP sockets on
+  1900/3702/5353/5355/137 read `LOCAL_DISCOVERY` ("local network (discovery)") or
+  `LOCAL_DISCOVERY_REPLIES` ("local network, for 10 s after it sends a discovery query")
+  when only the replies reach them; other ports are not shown as reachable
+- Always-on base rules: IGMP accept (and Server Mode IGMP out), DHCP and DHCPv6 client
+  replies, redirect drops before established/related
 - Rule templates (`core::templates`): Server Mode essentials (DNS, DoT, NTP,
   HTTP/HTTPS, ping as Output rules), libvirt guest DHCP/DNS on `virbr*`, Tailscale
   direct connections (UDP 41641) and "Trust <interface>"; ordinary rules, nothing
@@ -1172,6 +896,15 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
   Accepted only up to a rate/connection limit (`Access::Limited`) is a note (info
   block, CLI "Note:"), never a confirmation. The client is assumed to pass RPF.
   Also a line in `drfw status` and the Exposure panel
+- Host facts (`core::host_facts`, unprivileged `/proc` reads): notices when the kernel
+  forwards while "Block forwarded traffic" is off, and for Docker-published ports and
+  container bridges (traffic DRFW's input rules never see); nothing changes the rules.
+  A `docker-proxy` counts only when it runs as root (real and effective uid 0) and the
+  socket is root's. With "Block forwarded traffic" on, published ports read
+  `DOCKER_PUBLISHED_FORWARD_FILTERED` and the note `CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED`
+  (`ContainerFacts::note_for`); the core sets `SocketExposure::docker_forward_filtered`
+  itself (`evaluate_socket`, `mark_published_by_docker`), the GUI never does. The GUI
+  shows these core constants (capitalized), never its own copies
 
 ### Not Implemented (Intentional)
 - **Per-rule ICMP type filtering:** 99% of users don't understand 20+ ICMP types; ICMPv6 filtering is dangerous (the global strict ICMP mode allows a fixed set of essential types)
@@ -1180,11 +913,12 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - **MAC filtering:** LAN-only, easily spoofed
 - **Time-based rules:** Complex UI, better handled by cron
 
+### Rejected Baseline Choices
 - **Base rules for specific services** (Tailscale 41641, `tailscale0`, `virbr0`,
   `docker0`): offered as templates instead, visible and removable
 - **Loose RPF:** never drops on a host with a default route; strict + mark instead
 - **Forward drop by default:** Docker/libvirt accepts in their own tables cannot
-  override a drop in ours (final); "Block forwarding" stays opt-in
+  override a drop in ours (final); "Block forwarded traffic" stays opt-in
 - **Stealth drop instead of the rate-limited reject:** the reject is unicast-only and
   capped at 5/s total, so it cannot be used for reflection, and clients fail fast
 
@@ -1197,18 +931,30 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 ## 12. Development Workflow
 
 ### Toolchain
-- **Pinned:** `rust-toolchain.toml` pins the exact Rust release; `rust-version` in `Cargo.toml` matches it (MSRV == pinned toolchain, no separate MSRV job).
-- **Bumping:** When a new stable is installed, bump both deliberately in one commit and fix any new clippy lints in that same commit. CI's non-blocking "latest-stable" job gives early warning of upcoming lints.
-- **Formatting:** `rustfmt.toml` uses nightly-only options (grouped `std` / external / crate imports, formatted doc examples), so format with the dated nightly: `cargo +nightly-2026-11-14 fmt`. Stable `cargo fmt --check` accepts the result (it only warns about the options it skips), but nightly is authoritative. Bump the date in CLAUDE.md, README and CI together.
+- **Pinned:** `rust-toolchain.toml` pins the exact Rust release; `rust-version` in
+  `Cargo.toml` matches it (MSRV == pinned toolchain, no separate MSRV job).
+- **Bumping:** bump both deliberately in one commit and fix any new clippy lints in that
+  same commit. CI's non-blocking "latest-stable" job gives early warning of new lints.
+- **Formatting uses the pinned nightly:** `rustfmt.toml` uses nightly-only options
+  (grouped `std` / external / crate imports, formatted doc examples), so format with
+  `cargo +nightly-2026-11-14 fmt`. Stable `cargo fmt --check` accepts the result (it only
+  warns about the options it skips), but nightly is authoritative. Bump the date in
+  CLAUDE.md, README and CI together.
 
 ### Pre-Commit Checklist
+One list: the checks `.github/workflows/ci.yml` runs, plus the release build. Run all of
+them before a commit:
 ```bash
-cargo +nightly-2026-11-14 fmt --check  # nightly rustfmt (rustfmt.toml uses unstable options)
-cargo clippy --all-targets -- -D warnings  # pedantic lints configured in Cargo.toml
-cargo test
-cargo build --release
-cargo deny check  # advisories/licenses (config in deny.toml)
+cargo +nightly-2026-11-14 fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo clippy --all-targets --locked --features stress_gen -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+cargo test --locked                      # DRFW_REQUIRE_REAL_NFT=1 to fail instead of skip when nft is missing
+cargo build --release --locked
 ```
+CI sets `DRFW_REQUIRE_REAL_NFT=1`, runs the tests a second time with a packager's
+compile-time paths (§6), and runs `cargo deny check` (`deny.toml`; run it locally when
+dependencies change).
 
 ### Before Architectural Changes
 - Read official documentation for the specific version in use
@@ -1239,71 +985,15 @@ Functions marked `#[allow(dead_code)]` must be:
 - **Documented as public API** with examples if intended for library users
 - **Marked with TODO** if planned for future feature with issue reference
 
-### Magic Numbers
-Use named constants:
-
-```rust
-// ❌ Unclear
-let shadow = Color::from_rgba(0.0, 0.0, 0.0, 0.35);
-
-// ✅ Self-documenting
-const SHADOW_LIGHT_ALPHA: f32 = 0.35;
-let shadow = Color::from_rgba(0.0, 0.0, 0.0, SHADOW_LIGHT_ALPHA);
-```
-
-### Complex Conditionals
-Extract into named functions:
-
-```rust
-// ❌ Nested conditionals (5+ levels)
-if let Some(src) = source {
-    if self.protocol == Protocol::Icmp {
-        if src.is_ipv6() {
-            errors.source = Some("ICMP (v4) with IPv6 source".into());
-        }
-    }
-}
-
-// ✅ Extracted validation
-fn validate_source(&self, errors: &mut FormErrors) -> Option<IpNetwork> {
-    // Single-purpose validation logic
-}
-```
-
-### Premature Abstraction
-Wait for 3+ identical use cases before creating helpers. Inline code is often clearer than poorly-abstracted helpers.
-
-### The Unwrap Trap in UI Message Handlers (2026-01-02)
-
-**Pattern to Avoid:**
-```rust
-fn handle_message(&mut self) -> Task<Message> {
-    if let Some(data) = &self.optional_state {
-        // ... validation ...
-    }
-
-    // DANGER: State could theoretically desync between check and use
-    let data = self.optional_state.take().unwrap();  // ❌ Can panic
-}
-```
-
-**Safe Pattern:**
-```rust
-fn handle_message(&mut self) -> Task<Message> {
-    let Some(data) = self.optional_state.take() else {
-        tracing::error!("Message handler called with invalid state");
-        return Task::none();
-    };
-    // ... use data ...
-}
-```
-
-**Why:** UI frameworks can have subtle state desync bugs. Graceful degradation is better than panics.
-
-**When unwrap() is acceptable:**
-- In test code
-- After explicit checks where desync is impossible (e.g., `vec[0]` after checking `.len() > 0` in same scope)
-- Static initialization where failure is unrecoverable
+### Rules of Thumb
+- **Named constants, no magic numbers** (`SHADOW_LIGHT_ALPHA`, not a bare `0.35`)
+- **Flatten conditionals:** past ~3 levels of nesting, extract a named function (e.g. one
+  `validate_*` per field) or use `let-else`/guard clauses
+- **No `unwrap()` in message handlers:** state can change between a check and its use;
+  take the value with `let Some(x) = self.field.take() else { tracing::error!(..);
+  return Task::none(); };` and degrade gracefully instead of panicking
+- **`unwrap()` is acceptable** in tests, right after a check in the same scope that makes
+  failure impossible, and in static initialization where failure is unrecoverable
 
 ---
 
@@ -1318,21 +1008,10 @@ fn handle_message(&mut self) -> Task<Message> {
 - App log: `~/.local/state/drfw/drfw.log` (0o600, appended, rotated to `drfw.log.1` past 5 MiB)
 - Config: `~/.local/share/drfw/config.json` (0o600)
 - Profiles: `~/.local/share/drfw/profiles/*.json` (0o600; directory 0o700)
-- Revert guard state: `/run/drfw/` (root-owned 0755 tmpfs dir; `active`, `status-*` 0644)
+- Revert guard state: `/run/drfw/` (root-owned 0755 tmpfs dir; `active`, `status-*` 0644;
+  revert file, watcher script and `lock` 0600)
 - Confirm/revert tokens: `$XDG_RUNTIME_DIR` or the state dir, which must be owned by
   the user and 0700 or stricter; tokens 0600
 - Last ruleset applied and kept (`core::confirmed`): `~/.local/state/drfw/confirmed-ruleset.json` (0o600)
 - Boot config: `drfw::SYSTEM_NFT_PATH` (0644) with `.drfw-bak` and `.drfw-orig`; its
   directory is created 0755 if missing
-
-**Windows:** Document that users should configure ACLs on data directories (`%LOCALAPPDATA%\drfw\drfw\data`).
-
----
-
-**Last Updated:** 2026-11-20 (kept-ruleset record shared by GUI and CLI, retention
-guard, short `StateUnknown` banner with Apply Details. Before: audit fixes: signal-safe guard with the watcher started
-before the apply, `StateUnknown`; user rules before ICMP; per-source Accept-only;
-split inverted rate+connection limits; `drfw save`; CLI exit codes; elevation context;
-no polkit rule. Earlier: chrono → jiff, diagnostics view model, `drfw check`/honest `status`, docs for the revert guard, single generator and Save to System; `distro` compile-time config, boot persistence, enable-at-boot, `print-service-unit`)
-**DRFW Version:** 0.9.0
-**Iced Version:** 0.14

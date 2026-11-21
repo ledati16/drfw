@@ -164,21 +164,38 @@ fn template_menu<'a>(
         );
     }
     for (index, entry) in menu.entries.iter().enumerate() {
+        let mut content = column![
+            text(&entry.title).size(13).font(state.font_regular),
+            text(entry.detail)
+                .size(11)
+                .font(state.font_regular)
+                .color(theme.fg_muted),
+        ]
+        .spacing(2);
+        for note in &entry.notes {
+            content = content.push(
+                text(note)
+                    .size(11)
+                    .font(state.font_regular)
+                    .color(theme.warning),
+            );
+        }
+        if entry.already_added {
+            content = content.push(
+                text(crate::app::templates::ALREADY_ADDED)
+                    .size(11)
+                    .font(state.font_regular)
+                    .color(theme.fg_muted),
+            );
+        }
         items = items.push(
-            button(
-                column![
-                    text(&entry.title).size(13).font(state.font_regular),
-                    text(entry.detail)
-                        .size(11)
-                        .font(state.font_regular)
-                        .color(theme.fg_muted),
-                ]
-                .spacing(2),
-            )
-            .width(Length::Fill)
-            .padding([8, 10])
-            .style(move |_, status| secondary_button(theme, status))
-            .on_press_maybe((!edits_locked).then_some(Message::AddTemplate(index))),
+            button(content)
+                .width(Length::Fill)
+                .padding([8, 10])
+                .style(move |_, status| secondary_button(theme, status))
+                .on_press_maybe(
+                    (!edits_locked && !entry.already_added).then_some(Message::AddTemplate(index)),
+                ),
         );
     }
     container(items)
@@ -259,10 +276,10 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     ]
     .spacing(8);
 
-    // 2. Filter Logic & Tag Collection (Phase 3: Use cached tags, Phase 1: Use cached filtered indices)
+    // 2. Filter Logic & Tag Collection (cached tags and filtered indices)
     let all_tags = &state.cached_all_tags;
 
-    // Phase 1 Optimization: Use pre-filtered rule indices (updated in update(), not every frame!)
+    // Pre-filtered rule indices (updated in update(), not every frame!)
     let filtered_rules = &state.cached_filtered_rule_indices;
 
     // 3. Search and Filters Section
@@ -399,7 +416,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         .center_x(Length::Fill)
         .into()
     } else {
-        // Phase 5: Pre-allocate Vec for better performance
+        // Pre-allocate the Vec
         let mut rule_cards = Vec::with_capacity(filtered_rules.len());
 
         for &rule_index in filtered_rules {
@@ -496,7 +513,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 let action_badge = if rule.action == crate::core::firewall::Action::Accept {
                     None
                 } else {
-                    // Phase 2.3: Use cached action_display string (no allocation)
+                    // Cached action_display string (no allocation)
                     Some(
                         container(
                             text(&rule.action_display)
@@ -686,7 +703,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
 
                 // 1. Interface (Far Left)
                 if rule.interface.is_some() {
-                    // Phase 2.3: Use cached interface_display string (no allocation)
+                    // Cached interface_display string (no allocation)
                     detail_items.push(
                         container(
                             text(&rule.interface_display)
@@ -854,8 +871,10 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     )
                     .padding([14, 12])
                     .style(move |_, status| secondary_button(theme, status))
+                    // Closing always works (B.L4); opening only while edits are allowed
                     .on_press_maybe(
-                        (!edits_locked).then_some(Message::ToggleTemplateMenu(!menu_open))
+                        (menu_open || !edits_locked)
+                            .then_some(Message::ToggleTemplateMenu(!menu_open))
                     ),
                     container(
                         text("Add from template")

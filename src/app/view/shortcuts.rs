@@ -79,7 +79,8 @@ pub fn view_shortcuts_help(
                     ("Esc", "Close the top-most dialog or form"),
                     (
                         "Enter",
-                        "Run the dialog's main action (save, confirm, close)"
+                        "Run the dialog's main action (save, confirm, close); \
+                         danger buttons (\"… anyway\", strict settings) need a click"
                     ),
                     ("Tab / Shift + Tab", "Move between the dialog's text fields"),
                     (
@@ -107,7 +108,13 @@ pub fn view_shortcuts_help(
             ),
             shortcut_group(
                 "Workspace",
-                &[("Ctrl + E", "Export rules")],
+                &[
+                    ("Ctrl + E", "Export rules"),
+                    (
+                        "",
+                        "Template entries, checkboxes and notice buttons are mouse-only"
+                    ),
+                ],
                 theme,
                 regular_font,
                 mono_font,

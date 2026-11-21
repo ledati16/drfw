@@ -608,6 +608,11 @@ pub(crate) fn escape_message(state: &State) -> Option<Message> {
 /// - "Start fresh" without a backup copy, and Save to System with only
 ///   untested rules to save, have no Enter action: both lose data or skip the
 ///   safety net, so they need a click.
+/// - The danger-styled warnings (strict RPF, strict ICMP, Server Mode) have
+///   no Enter action either, like every other danger button.
+/// - "Commit Changes?" and Save to System wait for the reload of the kept
+///   record and SSH sessions (`State::context_pending`): a warning it brings
+///   must not be skipped by an Enter pressed before it arrives.
 fn enter_message(state: &State) -> Option<Message> {
     use crate::app::AppStatus;
 
@@ -643,22 +648,20 @@ fn enter_message(state: &State) -> Option<Message> {
             .as_ref()
             .is_some_and(|issue| issue.backup.is_some())
             .then_some(Message::ConfirmStartFresh),
-        TopLayer::Warning => state.pending_warning.as_ref().map(|warning| match warning {
-            crate::app::PendingWarning::EnableRpf => Message::ConfirmEnableRpf,
-            crate::app::PendingWarning::EnableServerMode(_) => Message::ConfirmServerMode,
-            crate::app::PendingWarning::EnableStrictIcmp => Message::ConfirmStrictIcmp,
-        }),
+        // Danger-styled confirmations: click only
+        TopLayer::Warning => None,
         TopLayer::RuleForm => Some(if state.confirm_discard_form {
             Message::DiscardRuleForm
         } else {
             Message::SaveRuleForm
         }),
-        TopLayer::ApplyFlow => {
-            (state.status == AppStatus::AwaitingApply).then_some(Message::ProceedToApply)
-        }
+        TopLayer::ApplyFlow => (state.status == AppStatus::AwaitingApply
+            && !state.context_pending())
+        .then_some(Message::ProceedToApply),
         TopLayer::SaveToSystem => state
             .save_dialog
             .primary_source()
+            .filter(|_| !state.context_pending())
             .map(Message::SaveToSystemConfirmed),
         TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
         // A read-only panel: Enter closes it (its highlighted button)
@@ -1413,10 +1416,20 @@ mod tests {
         assert_eq!(enter(&mut state), None);
         state.status = AppStatus::Idle;
 
+        // Waiting for the kept record and SSH sessions (B.L1)
+        state.status = AppStatus::AwaitingApply;
+        state.context_reloads_pending = 1;
+        assert_eq!(enter(&mut state), None);
+        state.context_reloads_pending = 0;
+        state.status = AppStatus::Idle;
+
+        // Danger-styled warnings are click-only (B.L6)
         state.pending_warning = Some(PendingWarning::EnableServerMode(
             crate::app::ServerEssentials::for_ruleset(&state.ruleset),
         ));
-        assert_eq!(enter(&mut state).as_deref(), Some("ConfirmServerMode"));
+        assert_eq!(enter(&mut state), None);
+        state.pending_warning = Some(PendingWarning::EnableRpf);
+        assert_eq!(enter(&mut state), None);
         state.pending_warning = None;
 
         crate::app::handlers::handle_open_profile_manager(&mut state);

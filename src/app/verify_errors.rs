@@ -18,6 +18,10 @@ pub struct VerifyErrorsPanel {
     /// What to do next ("... then apply again"), set by whoever verified
     pub next_step: &'static str,
     pub rows: Vec<VerifyErrorRow>,
+    /// The panel describes the kernel (an apply whose outcome is unknown),
+    /// not the profile: switching profiles or a passing Save to System
+    /// check does not clear it
+    pub describes_kernel: bool,
 }
 
 /// One nft error.
@@ -59,6 +63,7 @@ impl VerifyErrorsPanel {
             summary: format!("{}.", rejected_phrase(result)),
             next_step: "Nothing was changed. Fix the rules below, then apply again.",
             rows,
+            describes_kernel: false,
         };
         panel.sync_with(ruleset);
         panel
@@ -82,6 +87,7 @@ impl VerifyErrorsPanel {
                 source_line: None,
                 caret: None,
             }],
+            describes_kernel: true,
         }
     }
 

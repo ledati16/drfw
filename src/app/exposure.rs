@@ -16,7 +16,9 @@ use crate::app::{Baseline, BaselineKind};
 use crate::core::evaluate::InputChain;
 use crate::core::exposure::{SocketExposure, SocketInfo, evaluate_socket};
 use crate::core::firewall::FirewallRuleset;
-use crate::core::host_facts::{ContainerFacts, ForwardingState};
+use crate::core::host_facts::{
+    ContainerFacts, DOCKER_PUBLISHED, DOCKER_PUBLISHED_FORWARD_FILTERED, ForwardingState,
+};
 use crate::core::lockout::SshSession;
 
 /// What one Exposure scan found.
@@ -30,6 +32,9 @@ pub struct ExposureScan {
     pub forwarding: ForwardingState,
     /// Docker published ports and container networks (the Docker marking)
     pub containers: ContainerFacts,
+    /// `State::host_facts_epoch` when the scan started (which of the
+    /// sessions read is newest)
+    pub facts_epoch: u64,
 }
 
 /// One "SSH: …" line of the panel.
@@ -200,6 +205,19 @@ pub enum ReachTone {
     LocalOnly,
     /// The host side of a port Docker publishes: not decided by the rules
     PublishedByDocker,
+    /// The host side of a port Docker publishes, with "Block forwarded
+    /// traffic" on: the Forwarded rules decide it (blocked unless one allows it)
+    PublishedByDockerFiltered,
+}
+
+impl ReachTone {
+    /// Either Docker marking.
+    pub fn is_docker(self) -> bool {
+        matches!(
+            self,
+            Self::PublishedByDocker | Self::PublishedByDockerFiltered
+        )
+    }
 }
 
 /// One reachability answer, pre-formatted.
@@ -222,9 +240,17 @@ pub struct ReachView {
 impl ReachView {
     fn new(exposure: &SocketExposure, editor: &FirewallRuleset) -> Self {
         if exposure.docker_published {
+            let (text, tone) = if exposure.docker_forward_filtered {
+                (
+                    DOCKER_PUBLISHED_FORWARD_FILTERED,
+                    ReachTone::PublishedByDockerFiltered,
+                )
+            } else {
+                (DOCKER_PUBLISHED, ReachTone::PublishedByDocker)
+            };
             return Self {
-                text: DOCKER_TEXT.to_string(),
-                tone: ReachTone::PublishedByDocker,
+                text: capitalize_first(text),
+                tone,
                 badge: Some(DOCKER_BADGE.to_string()),
                 rank: exposure.rank(),
                 rule_text: String::new(),
@@ -272,13 +298,23 @@ impl ReachView {
         match self.tone {
             ReachTone::Open => Highlight::Everyone,
             ReachTone::OpenOnInterfaces | ReachTone::PublishedByDocker => Highlight::Interfaces,
-            ReachTone::Restricted | ReachTone::Closed | ReachTone::LocalOnly => Highlight::None,
+            ReachTone::Restricted
+            | ReachTone::Closed
+            | ReachTone::LocalOnly
+            | ReachTone::PublishedByDockerFiltered => Highlight::None,
         }
     }
 }
 
-/// The row text for a port Docker publishes (instead of "Reachable from: …").
-const DOCKER_TEXT: &str = "Published by Docker: not filtered by DRFW's rules";
+/// The row text for a port Docker publishes (instead of "Reachable from: …"):
+/// the core's wording ([`DOCKER_PUBLISHED`] or
+/// [`DOCKER_PUBLISHED_FORWARD_FILTERED`]), starting with a capital.
+fn capitalize_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
 
 impl ExposurePanel {
     /// A panel waiting for its first scan.
@@ -351,8 +387,10 @@ impl ExposurePanel {
             .sockets
             .iter()
             .map(|socket| {
-                // A port Docker publishes is not decided by either ruleset
+                // A port Docker publishes is not decided by the input rules;
+                // with "Block forwarded traffic" on, the Forwarded rules decide it
                 let docker = self.containers.publishes(socket);
+                // (the evaluator records whether the chain blocks forwarding)
                 let evaluate = |chain: &InputChain| {
                     let mut exposure = evaluate_socket(chain, socket);
                     if docker {
@@ -400,18 +438,26 @@ impl ExposurePanel {
 
         self.notes = crate::core::host_facts::forwarding_warning(self.forwarding, editor)
             .into_iter()
-            .chain(self.containers.note())
+            .chain(
+                self.containers
+                    .note_for(editor.advanced_security.block_forwarding),
+            )
             .collect();
 
         let total = self.rows.len();
         let count = |level: Highlight| self.rows.iter().filter(|r| r.highlight == level).count();
         let open = count(Highlight::Everyone);
+        // Docker-ness is the socket's, the same under both rulesets
         let docker = self
             .rows
             .iter()
-            .filter(|r| r.editor.tone == ReachTone::PublishedByDocker)
+            .filter(|r| r.editor.tone.is_docker())
             .count();
-        let open_on = count(Highlight::Interfaces) - docker;
+        let open_on = self
+            .rows
+            .iter()
+            .filter(|r| r.highlight == Highlight::Interfaces && !r.editor.tone.is_docker())
+            .count();
         self.summary = match (&self.error, total) {
             (Some(_), _) => "No sockets to show.".to_string(),
             (None, 0) => "No listening sockets found.".to_string(),
@@ -534,7 +580,8 @@ mod tests {
     #[test]
     fn test_docker_published_ports_and_notes() {
         use crate::core::host_facts::{
-            CONTAINER_NETWORKS_NOTE, FORWARDING_WARNING, ForwardingState, PublishedPort,
+            CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED, FORWARDING_WARNING, ForwardingState,
+            PublishedPort,
         };
         let mut editor = FirewallRuleset::new();
         editor.rules.push(rule("web", Protocol::Tcp, 8080, &[]));
@@ -584,7 +631,7 @@ mod tests {
         assert_eq!(panel.notes, [FORWARDING_WARNING], "a proxy was found");
 
         // Forwarding blocked in the editor: no forwarding note; container
-        // networks without a proxy: the general note
+        // networks without a proxy: the note for blocked forwarding
         editor.advanced_security.block_forwarding = true;
         panel.set_scan(
             Ok(ExposureScan {
@@ -602,7 +649,7 @@ mod tests {
             &editor,
             None,
         );
-        assert_eq!(panel.notes, [CONTAINER_NETWORKS_NOTE]);
+        assert_eq!(panel.notes, [CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED]);
         let web = panel
             .rows
             .iter()
@@ -613,6 +660,79 @@ mod tests {
         // A failed scan forgets them
         panel.set_scan(Err("no".into()), &editor, None);
         assert_eq!(panel.notes.len(), 0);
+    }
+
+    /// B.M2/L8: with "Block forwarded traffic" on, DRFW's forward chain
+    /// decides a port Docker publishes; the row says so, is not highlighted,
+    /// and the summary counts cannot underflow.
+    #[test]
+    fn test_docker_published_with_forwarded_traffic_blocked() {
+        use crate::core::host_facts::PublishedPort;
+        let containers = || ContainerFacts {
+            published: vec![PublishedPort {
+                transport: Transport::Tcp,
+                host_ip: Some("0.0.0.0".parse().unwrap()),
+                host_port: 8080,
+                container_ip: Some("172.17.0.2".parse().unwrap()),
+                container_port: Some(80),
+            }],
+            bridges: true,
+        };
+        let mut editor = FirewallRuleset::new();
+        editor.advanced_security.block_forwarding = true;
+        let both_blocked = editor.clone();
+        let mut panel = ExposurePanel::scanning();
+        panel.set_scan(
+            Ok(ExposureScan {
+                sockets: sockets(),
+                containers: containers(),
+                ..ExposureScan::default()
+            }),
+            &editor,
+            Some(applied_baseline(&both_blocked)),
+        );
+        let web = |panel: &ExposurePanel| {
+            panel
+                .rows
+                .iter()
+                .find(|r| r.port_proto == "TCP 8080")
+                .cloned()
+                .unwrap()
+        };
+        let row = web(&panel);
+        assert_eq!(row.editor.tone, ReachTone::PublishedByDockerFiltered);
+        assert_eq!(
+            row.editor.text,
+            "Published by Docker: decided by your Forwarded rules (blocked unless one allows it)"
+        );
+        assert_eq!(row.editor.badge.as_deref(), Some(DOCKER_BADGE));
+        assert_eq!(row.highlight, Highlight::None);
+        assert_eq!(
+            panel.summary,
+            "4 listening sockets · 0 open to everyone · 1 published by Docker"
+        );
+
+        // Kernel rules without blocking: the row shows both answers and is
+        // marked by the unfiltered one; still one Docker row, none "open on"
+        let unblocked = FirewallRuleset::new();
+        panel.set_scan(
+            Ok(ExposureScan {
+                sockets: sockets(),
+                containers: containers(),
+                ..ExposureScan::default()
+            }),
+            &editor,
+            Some(applied_baseline(&unblocked)),
+        );
+        let row = web(&panel);
+        assert_eq!(row.editor.tone, ReachTone::PublishedByDockerFiltered);
+        assert_eq!(
+            row.applied.as_ref().map(|v| v.tone),
+            Some(ReachTone::PublishedByDocker)
+        );
+        assert_eq!(row.highlight, Highlight::Interfaces);
+        assert!(panel.summary.ends_with(" · 1 published by Docker"));
+        assert!(!panel.summary.contains("open on some interfaces"));
     }
 
     #[test]

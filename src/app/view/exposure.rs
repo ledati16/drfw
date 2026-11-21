@@ -29,7 +29,7 @@ fn tone_color(theme: &AppTheme, tone: ReachTone) -> Color {
     match tone {
         ReachTone::Open => theme.danger,
         ReachTone::OpenOnInterfaces | ReachTone::PublishedByDocker => theme.warning,
-        ReachTone::Restricted => theme.fg_primary,
+        ReachTone::Restricted | ReachTone::PublishedByDockerFiltered => theme.fg_primary,
         ReachTone::Closed => theme.success,
         ReachTone::LocalOnly => theme.fg_muted,
     }
@@ -50,10 +50,7 @@ fn reach_line<'a>(
     .spacing(8)
     .align_y(Alignment::Center);
     if let Some(badge) = &view.badge {
-        let warning = matches!(
-            view.tone,
-            ReachTone::OpenOnInterfaces | ReachTone::PublishedByDocker
-        );
+        let warning = view.tone == ReachTone::OpenOnInterfaces || view.tone.is_docker();
         line = line.push(
             container(text(badge).size(10).font(mono_font))
                 .padding([2, 8])

@@ -2,8 +2,9 @@
 //!
 //! The socket scan reads `/proc` and is run on the blocking pool, never on
 //! the UI thread. It also finds the SSH sessions (kept in
-//! `State::ssh_sessions` for the lockout check). Results carry the generation of their request; a result
-//! for a closed panel or an older request is ignored.
+//! `State::ssh_sessions` for the lockout check, which an open apply or save
+//! dialog then re-runs). Results carry the generation of their request; a
+//! result for a closed panel or an older request is ignored.
 
 use iced::Task;
 
@@ -44,9 +45,17 @@ pub(crate) fn handle_exposure_scanned(
     if generation != state.exposure.generation {
         return;
     }
-    if let Ok(scan) = &result {
-        state.ssh_sessions.clone_from(&scan.sessions);
-        state.host_forwarding = scan.forwarding;
+    // Newer than what is known (see `store_host_facts`): an open apply or
+    // save dialog re-checks its lockout and forwarding warnings with it
+    if let Ok(scan) = &result
+        && crate::app::handlers::store_host_facts(
+            state,
+            scan.facts_epoch,
+            scan.sessions.clone(),
+            scan.forwarding,
+        )
+    {
+        crate::app::handlers::recheck_open_dialogs(state);
     }
     let Some(panel) = &mut state.exposure.panel else {
         return;
@@ -75,6 +84,7 @@ fn scan_blocking(env: Option<crate::core::lockout::SshSession>) -> std::io::Resu
         sessions,
         forwarding: crate::core::host_facts::forwarding_enabled(),
         containers: crate::core::host_facts::ContainerFacts::read(),
+        facts_epoch: 0, // set by `start_scan`
     })
 }
 
@@ -82,11 +92,15 @@ fn scan_blocking(env: Option<crate::core::lockout::SshSession>) -> std::io::Resu
 fn start_scan(state: &mut State) -> Task<Message> {
     state.exposure.generation = state.exposure.generation.wrapping_add(1);
     let generation = state.exposure.generation;
+    let facts_epoch = crate::app::handlers::next_host_facts_epoch(state);
     let env = state.ssh_env_session.clone();
     Task::perform(
         async move {
             match tokio::task::spawn_blocking(move || scan_blocking(env)).await {
-                Ok(Ok(scan)) => Ok(scan),
+                Ok(Ok(scan)) => Ok(ExposureScan {
+                    facts_epoch,
+                    ..scan
+                }),
                 Ok(Err(e)) => {
                     tracing::warn!("Listening socket scan failed: {e}");
                     Err(SCAN_FAILED.to_string())
@@ -148,6 +162,63 @@ mod tests {
         let panel = state.exposure.panel.as_ref().expect("open");
         assert_eq!(panel.ssh_lines.len(), 1);
         assert!(panel.ssh_lines[0].warning, "no rule allows port 22");
+    }
+
+    /// B.L2: a scan that finishes while "Commit Changes?" is open re-runs
+    /// its lockout check; a scan started before the dialog's own reload is
+    /// older and changes nothing.
+    #[test]
+    fn test_scan_rechecks_an_open_apply_dialog_unless_older() {
+        let mut state = create_test_state();
+        let _ = handle_toggle_exposure(&mut state, true);
+        let old_scan = state.exposure.generation;
+        let old_epoch = state.host_facts_epoch;
+        let _ = crate::app::handlers::handle_apply_clicked(&mut state);
+        assert!(state.apply_session.as_ref().unwrap().lockout().is_none());
+        let session =
+            crate::core::lockout::parse_ssh_connection("10.0.0.5 50000 10.0.0.1 22").unwrap();
+        // The dialog's reload (newer) arrives first, with no sessions
+        let context = crate::app::handlers::ApplyContext {
+            record_generation: state.confirmed_record_generation,
+            record: None,
+            sessions: Vec::new(),
+            forwarding: crate::core::host_facts::ForwardingState::default(),
+            facts_epoch: state.host_facts_epoch,
+        };
+        crate::app::handlers::handle_apply_context_loaded(&mut state, context);
+        // The older scan is not stored
+        handle_exposure_scanned(
+            &mut state,
+            old_scan,
+            Ok(ExposureScan {
+                sessions: vec![session.clone()],
+                facts_epoch: old_epoch,
+                ..ExposureScan::default()
+            }),
+        );
+        assert_eq!(state.ssh_sessions.len(), 0);
+        // A fresh scan is, and the open dialog now warns
+        let _ = handle_refresh_exposure(&mut state);
+        let generation = state.exposure.generation;
+        let facts_epoch = state.host_facts_epoch;
+        handle_exposure_scanned(
+            &mut state,
+            generation,
+            Ok(ExposureScan {
+                sessions: vec![session.clone()],
+                facts_epoch,
+                ..ExposureScan::default()
+            }),
+        );
+        assert_eq!(state.ssh_sessions, [session]);
+        assert!(
+            state
+                .apply_session
+                .as_ref()
+                .unwrap()
+                .lockout()
+                .is_some_and(crate::core::lockout::LockoutWarning::needs_confirmation)
+        );
     }
 
     #[test]

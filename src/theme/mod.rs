@@ -1,3 +1,6 @@
+//! GUI color themes: [`AppTheme`] with semantic colors, and the built-in
+//! presets ([`presets`], chosen by [`ThemeChoice`])
+
 pub mod presets;
 
 use iced::Color;

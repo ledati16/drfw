@@ -54,7 +54,7 @@ pub struct AppTheme {
 
 ## 2. Shadow System
 
-**Location:** `src/theme/mod.rs:94-99`
+**Location:** `src/theme/mod.rs` (`AppTheme::from_hex`, `SHADOW_LIGHT_ALPHA`, `SHADOW_DARK_ALPHA`)
 
 ### Shadow Values
 ```rust
@@ -116,6 +116,15 @@ danger_badge_container(theme)       // Solid pill badge, danger ("OPEN TO EVERYO
 warning_badge_container(theme)      // Solid pill badge, warning ("OPEN ON wg0")
 ```
 Badges always carry text: the color only repeats what the words say.
+Exposure rows and notes use the core's wording, never a GUI copy: "local network
+(discovery)" / "local network, for 10 s after it sends a discovery query"
+(`core::exposure::LOCAL_DISCOVERY`, `LOCAL_DISCOVERY_REPLIES`) are shown as restricted
+(no badge, no highlight). A Docker-published port always gets the warning "PUBLISHED BY
+DOCKER" badge, with the text `host_facts::DOCKER_PUBLISHED` (warning color, amber card)
+or, with "Block forwarded traffic" on, `DOCKER_PUBLISHED_FORWARD_FILTERED` (primary text
+color, no card highlight), capitalized ("Published by Docker: decided by your Forwarded
+rules (blocked unless one allows it)"). The container note is
+`ContainerFacts::note_for()`.
 One-time notices above the preview (auto-revert off, local network
 discovery off) go through `workspace::one_time_notice`: an "INFO" label, the
 sentence, a primary and a secondary answer; either answer hides it for good
@@ -135,7 +144,7 @@ sentence, a primary and a secondary answer; either answer hides it for good
 .padding([10, 20]).size(14)  // Cancel, Close, Export
 
 // Tab navigation
-.padding([8, 16]).size(13)   // nftables.conf, JSON, Settings
+.padding([8, 16]).size(13)   // Ruleset, Settings (`workspace::view_tab_button`)
 
 // Filter tags
 .padding([4, 8]).size(10)    // Sidebar tag filters
@@ -194,7 +203,7 @@ container(text("FILTERS").size(9).font(mono).color(fg_muted))
 - Section headers (PROFILE, FILTERS, RULES, etc.)
 - Status badges (Unsaved Changes*, Saved)
 - Numeric counters (5/10 rules shown)
-- Code/configuration previews (nftables, JSON)
+- Code/configuration previews (the nftables ruleset and its diff)
 - Technical identifiers (port numbers, IP addresses, interface names like @eth0)
 - Protocol badges (TCP, UDP, ICMP)
 - Line numbers in code views
@@ -331,7 +340,13 @@ style.border = Border {
 
 **Never use `..Default::default()`** for border—it resets radius to 0.
 
----
+### Scrolling Dialog Bodies
+A dialog whose body can grow (warning blocks, long lists) wraps it in
+`scrollable_body()` (`src/app/view/confirmation.rs`, used by the "Commit Changes?" and
+Save to System dialogs): a shrink-to-fit scrollable (embedded scrollbar,
+`Scrollbar::new().spacing(0)`, 12px right padding) inside a container capped at
+`DIALOG_BODY_MAX_HEIGHT` (420px), so the body scrolls and the buttons below it stay on
+screen in the default 700px window. Keep the buttons outside the scrollable.
 
 ### Layer Order
 `view::LAYERS` is the draw order of all dialogs, bottom to top, and must
@@ -340,9 +355,11 @@ test checks it. Notification banners are the last layer, so no dialog hides
 an error. Banners carry a severity word (OK/INFO/WARNING/ERROR) besides the
 color, and diff lines a "+"/"-" marker, so nothing relies on color alone.
 
+---
+
 ## 7. Dropdown Menus (Pick Lists)
 
-**Location:** `src/app/ui_components.rs:themed_pick_list()`
+**Location:** `src/app/ui_components.rs` (`themed_pick_list()`, `themed_pick_list_menu()`)
 
 ### Control States
 ```rust
@@ -371,11 +388,6 @@ border: transparent,
 shadow: Shadow { offset: (0.0, 2.0), blur: 3.0 }
 ```
 
-### Height Limiting
-**Selective application:** Only apply `.menu_height(300.0)` to dropdowns with many items (Service Presets).
-
-**Never apply to short dropdowns** (Protocol, Interface) — Iced's `menu_height()` sets fixed height, not maximum.
-
 ---
 
 ## 8. Floating Tooltips
@@ -395,32 +407,33 @@ container(tooltip_content)
 
 ---
 
-## 9. Performance Requirements
+## 9. Performance in Views
 
-### Cache in update(), Reference in view()
+The rule (never compute in `view()`, cache in `update()`) and the debounce/autosave rules
+are in CLAUDE.md §8. The UI-specific patterns:
+
+### Cached Display Strings
+Per-rule display text is built once per data change in `Rule::rebuild_caches()`
+(`#[serde(skip)]` fields such as `port_display`, `sources_display`, `action_display`
+("D (5/s)" / "A"), `interface_display` ("@eth0" / "Any"), `badge_display`); `view()`
+only borrows them:
 ```rust
-// ❌ BAD - Runs 60 times/second
-pub fn view(&self) -> Element {
-    let highlighted = compute_expensive_thing();  // NEVER
-}
-
-// ✅ GOOD - Compute once on change
-fn update(&mut self, msg: Message) {
-    self.cached_result = compute_expensive_thing();
-}
-
-pub fn view(&self) -> Element {
-    container(&self.cached_result)  // Just reference
-}
+text(&rule.action_display)               // ✅ borrowed, no allocation
+text(format!("{}", rule.action))         // ❌ allocates every frame
 ```
 
-### Applied Optimizations
-- **Lowercase search:** Cache `.to_lowercase()` once per keystroke
-- **Tag collections:** Pre-sort/dedupe in `update()`
-- **Syntax tokens:** Cache highlighted lines
-- **Font names:** Single static allocation vs 100+ leaks
-
-**Reference:** See CLAUDE.md Section 8 for detailed patterns.
+### Other View Caches
+- **Search:** the lowercase search term is stored once per keystroke
+  (`rule_search_lowercase`, the pickers' `search_lowercase`); rules carry lowercase
+  copies of their fields
+- **Collections:** tags, filtered rule lists and picker results are built in `update()`
+  (see §13 for the pickers)
+- **Syntax:** the ruleset preview and diff are tokenized once per change
+  (`cached_nft_tokens`, `cached_diff_tokens`) with their widths (§11)
+- **Fonts:** the system font list and its names are built once per process (`OnceLock`
+  statics in `src/fonts.rs`, `fonts::all_options()`)
+- **One-off formatting:** a constant label is `"Any".into()`, not `"Any".to_string()`;
+  a number formatted in `view()` belongs in a cached string field
 
 ---
 
@@ -453,23 +466,21 @@ if theme.is_light() {
 
 ## 11. Dynamic Horizontal Scrolling
 
-**Location:** `src/app/mod.rs:353-399`
+**Location:** width calculation in `src/app/helpers/caching.rs`
+(`calculate_max_content_width*`), selection in `preview_content()` (`src/app/view/mod.rs`)
 
 ### View-Specific Widths
 ```rust
 pub struct State {
-    cached_nft_width_px: f32,   // NFT view (active rules only)
-    cached_json_width_px: f32,  // JSON view
-    cached_diff_width_px: f32,  // Diff view (includes disabled)
+    cached_nft_width_px: f32,   // Ruleset view (active rules only)
+    cached_diff_width_px: f32,  // Diff view (includes disabled, plus the "+"/"-" gutter)
 }
 
-// Select based on current tab/diff state
-let content_width = match (state.active_tab, state.show_diff) {
-    (WorkspaceTab::Nftables, true) => state.cached_diff_width_px,
-    (WorkspaceTab::Nftables, false) => state.cached_nft_width_px,
-    (WorkspaceTab::Json, _) => state.cached_json_width_px,
-    _ => state.cached_nft_width_px,
-};
+// The Ruleset tab shows the diff when it is on and there are changes
+match (state.show_diff, &state.cached_diff_tokens) {
+    (true, Some(diff)) => /* diff tokens */ state.cached_diff_width_px,
+    _ => /* ruleset tokens */ state.cached_nft_width_px,
+}
 ```
 
 ### Calculation
@@ -495,7 +506,8 @@ let width = (LINE_NUMBER_WIDTH_PX + (max_chars as f32 * CHAR_WIDTH_PX) + TRAILIN
 
 ## 12. Inset Progress Bar
 
-**Location:** `src/app/view.rs:1790-1920`
+**Location:** `build_confirmation_body()` in `src/app/view/confirmation.rs` (the
+auto-revert countdown)
 
 ### Two-Layer Structure
 ```rust
@@ -533,17 +545,17 @@ let (rim_top, rim_bottom) = if theme.is_light() {
 **Dark themes:** Colored fill (accent → danger at 5s), darkened 15%
 **Light themes:** Gray fill (70% → 65% at 5s for urgency)
 
-### Smooth Animation
+### Animation
 ```rust
-// 60 FPS linear animation
-self.progress_animation = Animation::new(1.0)
-    .easing(animation::Easing::Linear)  // Constant speed
-    .duration(Duration::from_secs(timeout))
+// Linear animation from full to empty over the guard's timeout (handlers/apply.rs)
+state.progress_animation = iced::Animation::new(1.0)
+    .easing(iced::animation::Easing::Linear)
+    .duration(timeout)
     .go(0.0, iced::time::Instant::now());
-
-// Subscription for frame updates
-iced::time::every(Duration::from_millis(17))  // ~60 FPS
 ```
+The view interpolates it on every redraw; the only timer while the countdown runs is
+the 1-second `CountdownTick` subscription (the number changes once per second; so does
+the bar). Do not add a frame-rate subscription: every tick rebuilds the whole view.
 
 ---
 
@@ -553,10 +565,11 @@ iced::time::every(Duration::from_millis(17))  // ~60 FPS
 **Use comfortable width with slack, not exact calculations:**
 
 ```rust
+// view_theme_picker() in src/app/view/pickers.rs
 const CARD_WIDTH: f32 = 150.0;
-const CARD_SPACING: f32 = 16.0;
-const GRID_PADDING: f32 = 8.0;
-const MODAL_WIDTH: f32 = 556.0;  // Fine-tuned (not calculated)
+const CARD_SPACING: f32 = 10.0;
+const GRID_PADDING: f32 = 10.0;
+const MODAL_WIDTH: f32 = 548.0;  // Fine-tuned (not calculated)
 ```
 
 **Rule:** Choose width, add ~24px slack for scrollbar, fine-tune ±10px visually.
@@ -565,9 +578,7 @@ const MODAL_WIDTH: f32 = 556.0;  // Fine-tuned (not calculated)
 **Filter in `update()`, never in `view()`:** `ThemePickerState` / `FontPickerState`
 keep the filtered index list and count label, recomputed by `refilter()` only when
 the search text changes. `view()` just iterates the cached indices; converted
-`AppTheme`s are cached the same way.
-
-**Use ASCII-only search:** `to_ascii_lowercase()` vs `to_lowercase()` (theme names are ASCII).
+`AppTheme`s are cached the same way (`ThemePickerState::cached_themes`).
 
 ---
 
@@ -586,7 +597,9 @@ the search text changes. `view()` just iterates the cached indices; converted
 - **`src/theme/mod.rs`** - Theme struct, shadow/gradient calculations
 - **`src/theme/presets.rs`** - Built-in theme definitions
 - **`src/app/ui_components.rs`** - All button/container style functions
-- **`src/app/view.rs`** - View rendering, widget usage
+- **`src/app/view/`** - View rendering, one file per panel or dialog (`mod.rs` holds the
+  layer order and the ruleset preview)
+- **`src/app/helpers/`** - Pure helpers for cached widths, filtering and formatting
 
 ---
 
@@ -597,7 +610,6 @@ the search text changes. `view()` just iterates the cached indices; converted
 - Use gradients on interactive elements (breaks shadows)
 - Create inline button styles or duplicate button functions
 - Use `..Default::default()` for borders (resets radius)
-- Apply fixed `menu_height()` to short dropdowns
 - Compute expensive operations in `view()` (e.g., `format!()`, `.to_string()`)
 - Use hardcoded RGB colors
 - Forget to set `.font()` on text widgets (won't respect user font choice)
@@ -663,11 +675,7 @@ scrollable(
 - **Result:** Content has consistent breathing room from bordered container
 
 **Applied Locations:**
-- Profile Manager modal (profile.rs:196-208)
-- Font Picker modal (pickers.rs)
+- Profile Manager modal (`view_profile_manager()` in `profile.rs`)
+- Theme and Font Picker modals (`pickers.rs`)
+- Dialog bodies via `scrollable_body()` (`confirmation.rs`, §6)
 
----
-
-**Last Updated:** 2026-01-09 (Added container style functions, removed shadow_strong, updated hybrid calculations)
-**DRFW Version:** 0.9.0
-**Iced Version:** 0.14

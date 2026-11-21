@@ -1,6 +1,6 @@
 //! DRFW - Dumb Rust Firewall
 //!
-//! A graphical nftables firewall manager with a focus on safety and usability.
+//! A safe, transparent nftables firewall for Linux, with a GUI and CLI.
 //!
 //! All of DRFW lives in this library; the `drfw` binary (`src/main.rs`) is the
 //! command-line front end and calls [`run_gui`] when no subcommand is given.
@@ -16,6 +16,8 @@
 //! - [`validators`] - Input validation and sanitization
 //! - [`config`] - Configuration persistence
 //! - [`distro`] - Compile-time paths and service name for distro packagers
+//! - [`fonts`] - Font discovery for the GUI's font pickers
+//! - [`theme`] - GUI color themes (`AppTheme`, presets)
 //! - [`utils`] - Utility functions (XDG directories, etc.)
 //!
 //! # Safety Features
