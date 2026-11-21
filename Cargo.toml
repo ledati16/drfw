@@ -91,7 +91,7 @@ tracing-subscriber = "0.3"  # Logging configuration and output formatting
 # ═══════════════════════════════════════════════════════════════════════════
 # Security & System Integration
 # ═══════════════════════════════════════════════════════════════════════════
-fontdb = "0.23"  # System font enumeration for font picker
+fontdb = "0.24"  # System font enumeration for font picker
 clap = { version = "4", features = ["derive"] }  # CLI argument parsing
 nix = { version = "0.32", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty, memfd_create)
 crossterm = "0.29"  # Terminal control for CLI countdown timers
