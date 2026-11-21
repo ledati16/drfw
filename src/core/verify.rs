@@ -165,11 +165,14 @@ enum UnprivilegedCheck {
 /// Runs `unshare -rn nft <args>` with `payload` on stdin: no privileges, no
 /// prompt.
 async fn unprivileged_check(args: &[&str], payload: &[u8]) -> UnprivilegedCheck {
-    // nft usually lives in sbin, which is not on every user's PATH (Debian)
-    let nft = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
-        .into_iter()
-        .find(|path| std::path::Path::new(path).is_file())
-        .unwrap_or("nft");
+    // The packager's nft (`DRFW_NFT_PATH`) if set; otherwise nft usually lives
+    // in sbin, which is not on every user's PATH (Debian)
+    let nft = crate::distro::NFT_PATH.unwrap_or_else(|| {
+        ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+            .unwrap_or("nft")
+    });
     let mut command = tokio::process::Command::new("unshare");
     command.arg("-rn").arg(nft).args(args);
     match run_check(command, payload, UNPRIVILEGED_CHECK_TIMEOUT).await {

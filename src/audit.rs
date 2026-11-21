@@ -52,6 +52,8 @@ pub enum EventType {
 
     // System configuration
     SaveToSystem,
+    /// `systemctl enable` of the boot service, run by Save to System
+    EnableAtBoot,
 
     // Audit log maintenance (always the first line of a cleared log)
     LogCleared,
@@ -511,6 +513,23 @@ pub async fn log_redone(enable_event_log: bool, description: &str) {
         true,
         serde_json::json!({ "description": description }),
         None,
+    )
+    .await;
+}
+
+/// Logs the result of enabling the boot service during Save to System
+pub async fn log_enable_at_boot(
+    enable_event_log: bool,
+    success: bool,
+    service: &str,
+    error: Option<String>,
+) {
+    log_event_internal(
+        enable_event_log,
+        EventType::EnableAtBoot,
+        success,
+        serde_json::json!({ "service": service }),
+        error,
     )
     .await;
 }

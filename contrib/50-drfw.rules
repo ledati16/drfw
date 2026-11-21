@@ -13,7 +13,9 @@
 // - Confirm: none. DRFW only creates a token file in the user's runtime dir.
 // - Auto-revert (timeout, Rollback button, closed window, crash, lost SSH
 //   session): none. The root-side guard started by Apply does it on its own.
-// - Save to System: one prompt (`pkexec /bin/sh -c <fixed script>`).
+// - Save to System: one prompt (`pkexec /bin/sh -c <fixed script>`), also
+//   when "Also enable at boot" is checked (the same script runs
+//   `systemctl enable`).
 //
 // WHY /bin/sh IS NOT CACHED HERE:
 // Caching "/bin/sh" would let the DRFW process (or anything that can make it
@@ -30,7 +32,8 @@
 // - subject.active: Only active sessions (not background/locked)
 // - subject.local: Only local console sessions (not SSH/VNC)
 // - Full paths prevent PATH manipulation attacks; nft lives in /usr/bin on
-//   some distributions and /usr/sbin on others
+//   some distributions and /usr/sbin on others. A build with DRFW_NFT_PATH
+//   elsewhere needs that path added here.
 //
 // Install to: /usr/share/polkit-1/rules.d/50-drfw.rules
 

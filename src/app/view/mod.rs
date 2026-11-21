@@ -128,6 +128,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             ),
             AppStatus::AwaitingSaveToSystem => Some(
                 center(confirmation::view_save_to_system_modal(
+                    &state.save_dialog,
                     theme,
                     state.font_regular,
                 ))

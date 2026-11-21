@@ -1,10 +1,11 @@
 //! Apply confirmation dialogs and countdown modals
 
-use iced::widget::{button, column, container, progress_bar, row, text};
+use iced::widget::{button, checkbox, column, container, progress_bar, row, text};
 use iced::{Alignment, Background, Border, Color, Element, Gradient, Padding, Shadow};
 
 use crate::app::ui_components::{
     card_container, danger_button, primary_button, secondary_button, section_header_container,
+    themed_checkbox,
 };
 use crate::app::{AppStatus, Message};
 
@@ -399,47 +400,87 @@ pub fn view_apply_flow_modal<'a>(
 // Save to System Modal
 // ============================================================================
 
-/// Explanation shown in the Save to System modal (built once; the path is a
+/// Question shown in the Save to System modal (built once; the path is a
 /// compile-time constant but not a literal, so `concat!` cannot be used).
+static SAVE_TO_SYSTEM_QUESTION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("Save current configuration to {}?", crate::SYSTEM_NFT_PATH)
+});
+
+/// Explanation shown in the Save to System modal (built once).
 static SAVE_TO_SYSTEM_DETAILS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
         "The file is checked with nft before it replaces the current one, which is \
-         kept as {}.drfw-bak. {} loads it at boot when enabled.",
-        crate::SYSTEM_NFT_PATH,
-        crate::SYSTEM_NFT_SERVICE
+         kept as {}.drfw-bak.",
+        crate::SYSTEM_NFT_PATH
     )
 });
 
+/// Label of the "enable at boot" checkbox (built once).
+static ENABLE_AT_BOOT_LABEL: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("Also enable {} at boot", crate::SYSTEM_NFT_SERVICE));
+
 /// Modal for confirming the Save to System operation.
 /// Shows when `AppStatus::AwaitingSaveToSystem` is active.
-pub fn view_save_to_system_modal(
-    theme: &crate::theme::AppTheme,
+///
+/// `dialog` holds the boot persistence line and the "Also enable at boot"
+/// checkbox, both prepared in `update()` from an unprivileged `systemctl`
+/// query.
+pub fn view_save_to_system_modal<'a>(
+    dialog: &'a crate::app::handlers::SaveToSystemDialog,
+    theme: &'a crate::theme::AppTheme,
     font: iced::Font,
-) -> Element<'_, Message> {
-    let body = column![
+) -> Element<'a, Message> {
+    let boot_color = if dialog.boot.is_none() {
+        theme.fg_muted
+    } else if dialog.boot_warning {
+        theme.warning
+    } else {
+        theme.success
+    };
+    let mut body = column![
         text("✓ Rules verified.")
             .size(14)
             .font(font)
             .color(theme.success)
             .width(400)
             .align_x(Alignment::Center),
-        text(format!(
-            "Save current configuration to {}?",
-            crate::SYSTEM_NFT_PATH
-        ))
-        .size(14)
-        .font(font)
-        .color(theme.fg_primary)
-        .width(400)
-        .align_x(Alignment::Center),
+        text(SAVE_TO_SYSTEM_QUESTION.as_str())
+            .size(14)
+            .font(font)
+            .color(theme.fg_primary)
+            .width(400)
+            .align_x(Alignment::Center),
         text(SAVE_TO_SYSTEM_DETAILS.as_str())
             .size(12)
             .font(font)
             .color(theme.fg_muted)
             .width(400)
             .align_x(Alignment::Center),
+        text(dialog.boot_text.as_str())
+            .size(12)
+            .font(font)
+            .color(boot_color)
+            .width(400)
+            .align_x(Alignment::Center),
     ]
-    .spacing(5);
+    .spacing(5)
+    .align_x(Alignment::Center);
+
+    if dialog.offer_enable {
+        body = body.push(
+            container(
+                checkbox(dialog.enable_at_boot)
+                    .label(ENABLE_AT_BOOT_LABEL.as_str())
+                    .on_toggle(Message::SaveToSystemEnableToggled)
+                    .size(16)
+                    .spacing(8)
+                    .text_size(12)
+                    .font(font)
+                    .style(move |_, status| themed_checkbox(theme, status)),
+            )
+            .padding([6, 0]),
+        );
+    }
 
     let buttons = row![
         button(text("Cancel").size(14).font(font))

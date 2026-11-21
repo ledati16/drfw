@@ -5,6 +5,7 @@
 //!
 //! - [`firewall`]: Data structures for representing firewall rules and rulesets
 //! - [`apply_guard`]: Applying rules with a root-side auto-revert guard
+//! - [`boot`]: Whether a systemd unit loads the saved rules at boot
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
@@ -15,6 +16,7 @@
 //! - [`validate`]: Rule and ruleset validation (shared by the form, loader and apply)
 
 pub mod apply_guard;
+pub mod boot;
 pub mod error;
 pub mod firewall;
 pub mod nft_errors;

@@ -40,7 +40,7 @@
 //!
 //! # CLI commands
 //! drfw list                            # List available profiles
-//! drfw status                          # Active profile, pending revert, system config
+//! drfw status                          # Active profile, pending revert, boot config/service
 //! drfw check my-profile                # Validate + unprivileged nft check, no changes
 //! drfw apply my-profile                # Apply with 15s auto-revert (default)
 //! drfw apply my-profile --confirm 60   # Apply with 60s auto-revert (5-120)
@@ -360,7 +360,8 @@ enum Commands {
         #[arg(long, conflicts_with = "confirm")]
         no_confirm: bool,
     },
-    /// Show the active profile, a pending auto-revert and the boot config
+    /// Show the active profile, a pending auto-revert, the boot config and
+    /// whether a systemd unit loads it at boot
     ///
     /// Reads only what an unprivileged user can read. The live kernel ruleset
     /// needs root to list: run `sudo nft list table inet drfw` for that.
@@ -382,6 +383,13 @@ enum Commands {
         #[arg(short, long, value_enum, default_value_t = ExportFormat::Nft)]
         format: ExportFormat,
     },
+    /// Print the systemd unit `drfw.service` for this build (for packagers)
+    ///
+    /// Fills `contrib/drfw.service.in` with the paths this binary was compiled
+    /// with (`DRFW_SYSTEM_NFT_PATH`, `DRFW_NFT_PATH`), so the packaged unit
+    /// loads exactly the file Save to System writes.
+    #[command(hide = true)]
+    PrintServiceUnit,
 }
 
 /// Output format of `drfw export`
@@ -394,8 +402,15 @@ enum ExportFormat {
 }
 
 fn main() -> ExitCode {
-    let _ = drfw::utils::ensure_dirs();
     let cli = Cli::parse();
+
+    // Runs at package time (often as a build user or under fakeroot): no
+    // runtime, no data directories
+    if matches!(cli.command, Some(Commands::PrintServiceUnit)) {
+        print!("{}", drfw::distro::service_unit());
+        return ExitCode::SUCCESS;
+    }
+    let _ = drfw::utils::ensure_dirs();
 
     if let Some(command) = cli.command {
         // Create Tokio runtime only for CLI commands
@@ -505,6 +520,8 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Commands::Status => print_status_report().await,
+        // Handled in main() before the runtime starts
+        Commands::PrintServiceUnit => print!("{}", drfw::distro::service_unit()),
         Commands::Check { name } => check_profile(&name).await?,
         Commands::Export { name, format } => {
             let ruleset = core::profiles::load_profile(&name).await?;
@@ -520,8 +537,8 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-/// Width of the label column in `drfw status`
-const STATUS_LABEL_WIDTH: usize = 16;
+/// Width of the label column in `drfw status` ("Boot persistence:" + 1)
+const STATUS_LABEL_WIDTH: usize = 18;
 
 /// Prints one `label: value` line of `drfw status`.
 fn status_line(label: &str, value: &str) {
@@ -610,6 +627,10 @@ async fn print_status_report() {
     };
     status_line("Auto-revert", &guard);
     status_line("Boot config", &system_config_status(drfw::SYSTEM_NFT_PATH));
+    status_line(
+        "Boot persistence",
+        &core::boot::query_boot_status().await.summary(),
+    );
     status_line(
         "Kernel",
         "not checked (listing it needs root); run `sudo nft list table inet drfw` to inspect it",

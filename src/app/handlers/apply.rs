@@ -20,7 +20,9 @@ use super::audit_task;
 use crate::app::{AppStatus, BannerSeverity, Message, State};
 use crate::audit;
 use crate::core::apply_guard::{ApplyError, GuardError, GuardHandle, GuardOutcome};
+use crate::core::boot::BootStatus;
 use crate::core::firewall::FirewallRuleset;
+use crate::core::system_config::EnableOutcome;
 use crate::core::verify::{VerifyError, VerifyResult};
 use crate::elevation::AuthError;
 
@@ -599,6 +601,61 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
     )
 }
 
+/// Boot persistence part of the Save to System dialog, prepared in `update()`
+/// (the view only reads it).
+#[derive(Debug, Clone, Default)]
+pub struct SaveToSystemDialog {
+    /// What `systemctl` said; `None` while it is being asked
+    pub boot: Option<BootStatus>,
+    /// The line shown in the dialog
+    pub boot_text: String,
+    /// `boot_text` is a warning: the rules will not (or may not) load at boot
+    pub boot_warning: bool,
+    /// The "Also enable ... at boot" checkbox is shown
+    pub offer_enable: bool,
+    /// The checkbox is checked
+    pub enable_at_boot: bool,
+}
+
+impl SaveToSystemDialog {
+    /// The dialog while `systemctl` is being asked.
+    fn checking() -> Self {
+        Self {
+            boot_text: format!(
+                "Checking whether {} loads it at boot…",
+                crate::SYSTEM_NFT_SERVICE
+            ),
+            ..Self::default()
+        }
+    }
+
+    /// Fills in the answer; the checkbox starts checked when the unit is
+    /// disabled.
+    fn set_boot(&mut self, boot: BootStatus) {
+        self.boot_text = boot.summary();
+        self.boot_warning = boot.loads_at_boot() != Some(true);
+        self.offer_enable = boot.offers_enable();
+        self.enable_at_boot = boot.suggests_enable();
+        self.boot = Some(boot);
+    }
+
+    /// The unit the save script should enable, if the user asked for it.
+    fn service_to_enable(&self) -> Option<&'static str> {
+        (self.offer_enable && self.enable_at_boot).then_some(crate::SYSTEM_NFT_SERVICE)
+    }
+}
+
+/// Result of a successful Save to System.
+#[derive(Debug, Clone)]
+pub struct SaveOutcome {
+    /// Where the previous file was backed up, if there was one
+    pub backup: Option<String>,
+    /// Result of `systemctl enable`, if it was requested
+    pub enable: Option<EnableOutcome>,
+    /// Boot persistence queried right after the save
+    pub boot: BootStatus,
+}
+
 /// Handles Save to System verification result
 pub(crate) fn handle_save_to_system_verify_result(
     state: &mut State,
@@ -609,10 +666,15 @@ pub(crate) fn handle_save_to_system_verify_result(
     }
     match result {
         Ok(verify_result) if verify_result.success => {
-            // Verification passed - show confirmation modal
+            // Verification passed - show confirmation modal, then ask systemd
+            // (unprivileged) whether the file is loaded at boot
             state.status = AppStatus::AwaitingSaveToSystem;
             clear_verify_errors(state);
-            Task::none()
+            state.save_dialog = SaveToSystemDialog::checking();
+            Task::perform(
+                crate::core::boot::query_boot_status(),
+                Message::SaveToSystemBootChecked,
+            )
         }
         Ok(verify_result) => {
             state.status = AppStatus::Idle;
@@ -626,12 +688,27 @@ pub(crate) fn handle_save_to_system_verify_result(
     }
 }
 
+/// Handles the boot persistence answer for the open Save to System dialog
+pub(crate) fn handle_save_to_system_boot_checked(state: &mut State, boot: BootStatus) {
+    if state.status == AppStatus::AwaitingSaveToSystem && state.save_dialog.boot.is_none() {
+        state.save_dialog.set_boot(boot);
+    }
+}
+
+/// Handles the "Also enable ... at boot" checkbox
+pub(crate) fn handle_save_to_system_enable_toggled(state: &mut State, enabled: bool) {
+    if state.status == AppStatus::AwaitingSaveToSystem && state.save_dialog.offer_enable {
+        state.save_dialog.enable_at_boot = enabled;
+    }
+}
+
 /// Handles user confirming Save to System - proceeds with file write
 ///
 /// One elevated invocation writes the text to a temp file next to the target,
-/// checks it with `nft -c -f`, backs up the existing file and atomically
-/// renames the new one into place (see `elevation::SAVE_CONFIG_SCRIPT`). The
-/// earlier JSON verification only gates the modal; the text check here is the
+/// checks it with `nft -c -f`, backs up the existing file, atomically renames
+/// the new one into place and, if the checkbox is checked, enables the boot
+/// service (see `elevation::SAVE_CONFIG_SCRIPT`). The earlier JSON
+/// verification only gates the modal; the text check here is the
 /// authoritative one because it covers the exact bytes being installed.
 pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message> {
     if state.status != AppStatus::AwaitingSaveToSystem {
@@ -640,16 +717,24 @@ pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message
     state.status = AppStatus::SavingToSystem;
 
     let text = state.ruleset.to_nft_text();
+    let enable = state.save_dialog.service_to_enable();
 
     Task::perform(
         async move {
-            let output =
-                crate::core::system_config::write_config_file(&text, crate::SYSTEM_NFT_PATH)
-                    .await
-                    .map_err(|e| e.to_string())?;
+            let output = crate::core::system_config::write_config_file_and_enable(
+                &text,
+                crate::SYSTEM_NFT_PATH,
+                enable,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
             interpret_elevated_command_output(&output)?;
-            Ok(crate::core::system_config::backup_path_from_output(&output)
-                .map(|p| p.display().to_string()))
+            Ok(SaveOutcome {
+                backup: crate::core::system_config::backup_path_from_output(&output)
+                    .map(|p| p.display().to_string()),
+                enable: crate::core::system_config::enable_outcome_from_output(&output),
+                boot: crate::core::boot::query_boot_status().await,
+            })
         },
         Message::SaveToSystemResult,
     )
@@ -659,43 +744,94 @@ pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message
 pub(crate) fn handle_save_to_system_cancelled(state: &mut State) {
     if state.status == AppStatus::AwaitingSaveToSystem {
         state.status = AppStatus::Idle;
+        state.save_dialog = SaveToSystemDialog::default();
     }
 }
 
 /// Handles save to system result
+///
+/// Success: one banner for the saved file (with "Loaded at boot by ..." when
+/// the boot service is enabled), plus a warning when enabling failed or the
+/// rules will not load at boot.
 pub(crate) fn handle_save_to_system_result(
     state: &mut State,
-    result: Result<Option<String>, String>,
+    result: Result<SaveOutcome, String>,
 ) -> Task<Message> {
     if state.status != AppStatus::SavingToSystem {
         return Task::none();
     }
     state.status = AppStatus::Idle;
+    state.save_dialog = SaveToSystemDialog::default();
     let enable_event_log = state.enable_event_log;
     let target_path = crate::SYSTEM_NFT_PATH.to_string();
 
-    match result {
-        Ok(backup) => {
-            let message = match backup {
-                Some(backup) => format!(
-                    "Configuration saved to {} (previous file kept as {backup})",
-                    crate::SYSTEM_NFT_PATH
-                ),
-                None => format!("Configuration saved to {}", crate::SYSTEM_NFT_PATH),
-            };
-            state.push_banner(message, BannerSeverity::Success);
-            audit_task(async move {
-                audit::log_save_to_system(enable_event_log, true, &target_path, None).await;
-            })
-        }
+    let outcome = match result {
+        Ok(outcome) => outcome,
         Err(e) => {
             let msg = truncate_error_message("Save failed: ", &e, 80);
             state.push_banner(&msg, BannerSeverity::Error);
-            audit_task(async move {
+            return audit_task(async move {
                 audit::log_save_to_system(enable_event_log, false, &target_path, Some(e)).await;
-            })
+            });
         }
+    };
+
+    let mut message = match &outcome.backup {
+        Some(backup) => format!(
+            "Configuration saved to {} (previous file kept as {backup})",
+            crate::SYSTEM_NFT_PATH
+        ),
+        None => format!("Configuration saved to {}", crate::SYSTEM_NFT_PATH),
+    };
+    let loads_at_boot = outcome.boot.loads_at_boot() == Some(true);
+    if loads_at_boot {
+        message.push_str(". ");
+        message.push_str(&outcome.boot.summary());
     }
+    state.push_banner(message, BannerSeverity::Success);
+
+    if let Some(EnableOutcome::Failed(error)) = &outcome.enable {
+        let msg = truncate_error_message(
+            &format!("Saved, but {} was not enabled: ", crate::SYSTEM_NFT_SERVICE),
+            error,
+            120,
+        );
+        state.push_banner(msg, BannerSeverity::Warning);
+    } else if !loads_at_boot {
+        state.push_banner(
+            format!("Saved, but {}", lowercase_first(&outcome.boot.summary())),
+            BannerSeverity::Warning,
+        );
+    }
+
+    let mut tasks = vec![audit_task(async move {
+        audit::log_save_to_system(enable_event_log, true, &target_path, None).await;
+    })];
+    if let Some(enable) = outcome.enable {
+        tasks.push(audit_task(async move {
+            let error = match enable {
+                EnableOutcome::Enabled => None,
+                EnableOutcome::Failed(error) => Some(error),
+            };
+            audit::log_enable_at_boot(
+                enable_event_log,
+                error.is_none(),
+                crate::SYSTEM_NFT_SERVICE,
+                error,
+            )
+            .await;
+        }));
+    }
+    Task::batch(tasks)
+}
+
+/// `text` with its first character in lowercase ("Could not" -> "could not");
+/// unit names and "systemd" already start in lowercase.
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_lowercase().chain(chars).collect()
+    })
 }
 
 #[cfg(test)]
@@ -931,6 +1067,151 @@ mod tests {
         let _ = handle_save_to_system_clicked(&mut state);
         let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
         assert!(state.verify_errors.is_none());
+    }
+
+    fn boot(enablement: crate::core::boot::Enablement) -> BootStatus {
+        BootStatus {
+            unit: crate::SYSTEM_NFT_SERVICE.to_string(),
+            enablement,
+            active: None,
+        }
+    }
+
+    /// Save to System up to the open dialog
+    fn state_awaiting_save() -> State {
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        let _ = handle_save_to_system_clicked(&mut state);
+        let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
+        assert_eq!(state.status, AppStatus::AwaitingSaveToSystem);
+        state
+    }
+
+    #[test]
+    fn test_save_dialog_offers_enable_when_the_service_is_disabled() {
+        use crate::core::boot::Enablement;
+
+        let mut state = state_awaiting_save();
+        assert!(state.save_dialog.boot.is_none(), "still checking");
+        assert!(state.save_dialog.boot_text.starts_with("Checking"));
+        assert_eq!(state.save_dialog.service_to_enable(), None);
+
+        handle_save_to_system_boot_checked(&mut state, boot(Enablement::Disabled));
+        assert!(state.save_dialog.boot_warning);
+        assert!(
+            state
+                .save_dialog
+                .boot_text
+                .contains("will NOT load at boot")
+        );
+        assert!(state.save_dialog.offer_enable && state.save_dialog.enable_at_boot);
+        assert_eq!(
+            state.save_dialog.service_to_enable(),
+            Some(crate::SYSTEM_NFT_SERVICE)
+        );
+        handle_save_to_system_enable_toggled(&mut state, false);
+        assert_eq!(state.save_dialog.service_to_enable(), None);
+
+        handle_save_to_system_cancelled(&mut state);
+        assert_eq!(state.status, AppStatus::Idle);
+        assert!(!state.save_dialog.offer_enable);
+        // A late answer for the closed dialog is ignored
+        handle_save_to_system_boot_checked(&mut state, boot(Enablement::Disabled));
+        assert!(state.save_dialog.boot.is_none());
+    }
+
+    #[test]
+    fn test_save_dialog_without_checkbox_when_enabled_or_unavailable() {
+        use crate::core::boot::Enablement;
+
+        for enablement in [
+            Enablement::Enabled,
+            Enablement::Masked,
+            Enablement::NotFound,
+            Enablement::SystemdUnavailable,
+        ] {
+            let mut state = state_awaiting_save();
+            handle_save_to_system_boot_checked(&mut state, boot(enablement.clone()));
+            assert!(!state.save_dialog.offer_enable, "{enablement:?}");
+            handle_save_to_system_enable_toggled(&mut state, true);
+            assert_eq!(
+                state.save_dialog.service_to_enable(),
+                None,
+                "{enablement:?}"
+            );
+            assert_eq!(
+                state.save_dialog.boot_warning,
+                enablement != Enablement::Enabled
+            );
+        }
+    }
+
+    #[test]
+    fn test_save_result_reports_boot_persistence() {
+        use crate::core::boot::Enablement;
+
+        let saved = |state: &mut State, enable, enablement| {
+            *state = state_awaiting_save();
+            let _ = handle_save_to_system_confirmed(state);
+            assert_eq!(state.status, AppStatus::SavingToSystem);
+            let _ = handle_save_to_system_result(
+                state,
+                Ok(SaveOutcome {
+                    backup: None,
+                    enable,
+                    boot: boot(enablement),
+                }),
+            );
+            assert_eq!(state.status, AppStatus::Idle);
+        };
+        let mut state = create_test_state();
+
+        // Enabled: one success banner that says so
+        saved(
+            &mut state,
+            Some(EnableOutcome::Enabled),
+            Enablement::Enabled,
+        );
+        assert_eq!(state.banners.len(), 1);
+        let (message, severity) = last_banner(&state);
+        assert_eq!(severity, BannerSeverity::Success);
+        assert!(
+            message.ends_with(&format!("Loaded at boot by {}", crate::SYSTEM_NFT_SERVICE)),
+            "{message}"
+        );
+
+        // Still disabled: saved, plus a warning that nothing loads at boot
+        saved(&mut state, None, Enablement::Disabled);
+        let (message, severity) = last_banner(&state);
+        assert_eq!(severity, BannerSeverity::Warning);
+        assert_eq!(
+            message,
+            format!(
+                "Saved, but {} is disabled: the rules will NOT load at boot",
+                crate::SYSTEM_NFT_SERVICE
+            )
+        );
+
+        // Enabling failed: the warning names the failure
+        saved(
+            &mut state,
+            Some(EnableOutcome::Failed("Unit is masked.".into())),
+            Enablement::Masked,
+        );
+        let (message, severity) = last_banner(&state);
+        assert_eq!(severity, BannerSeverity::Warning);
+        assert!(
+            message.contains("was not enabled: Unit is masked."),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_lowercase_first() {
+        assert_eq!(lowercase_first("Could not check"), "could not check");
+        assert_eq!(lowercase_first("nftables.service"), "nftables.service");
+        assert_eq!(lowercase_first(""), "");
     }
 
     #[test]

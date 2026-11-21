@@ -159,6 +159,9 @@ pub struct State {
     pub verify_errors: Option<verify_errors::VerifyErrorsPanel>,
     /// The "Verification Errors" panel is open (needs `verify_errors`)
     pub show_verify_errors: bool,
+    /// Boot persistence shown in the Save to System dialog (and its "Also
+    /// enable at boot" checkbox), filled in `update()` from `systemctl`
+    pub save_dialog: handlers::SaveToSystemDialog,
     pub diagnostics_filter: DiagnosticsFilter,
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
@@ -502,10 +505,14 @@ pub enum Message {
     SaveToSystemVerifyResult(
         Result<crate::core::verify::VerifyResult, crate::core::verify::VerifyError>,
     ),
+    /// Whether the saved file loads at boot (`systemctl`, unprivileged)
+    SaveToSystemBootChecked(crate::core::boot::BootStatus),
+    /// The "Also enable <service> at boot" checkbox
+    SaveToSystemEnableToggled(bool),
     SaveToSystemConfirmed,
     SaveToSystemCancelled,
-    /// Ok carries the backup path of the previous file, if there was one
-    SaveToSystemResult(Result<Option<String>, String>),
+    /// Backup path, `systemctl enable` result and boot persistence after saving
+    SaveToSystemResult(Result<handlers::SaveOutcome, String>),
     /// A keyboard event, with whether a widget (e.g. a focused text input)
     /// already handled it
     EventOccurred(iced::Event, iced::event::Status),
@@ -740,6 +747,7 @@ impl State {
             show_diagnostics: false,
             verify_errors: None,
             show_verify_errors: false,
+            save_dialog: handlers::SaveToSystemDialog::default(),
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
             show_shortcuts_help: false,
@@ -857,6 +865,7 @@ impl State {
             show_diagnostics: false,
             verify_errors: None,
             show_verify_errors: false,
+            save_dialog: handlers::SaveToSystemDialog::default(),
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
             show_shortcuts_help: false,
@@ -1413,6 +1422,12 @@ impl State {
             Message::SaveToSystemClicked => return handlers::handle_save_to_system_clicked(self),
             Message::SaveToSystemVerifyResult(result) => {
                 return handlers::handle_save_to_system_verify_result(self, result);
+            }
+            Message::SaveToSystemBootChecked(boot) => {
+                handlers::handle_save_to_system_boot_checked(self, boot);
+            }
+            Message::SaveToSystemEnableToggled(enabled) => {
+                handlers::handle_save_to_system_enable_toggled(self, enabled);
             }
             Message::SaveToSystemConfirmed => {
                 return handlers::handle_save_to_system_confirmed(self);

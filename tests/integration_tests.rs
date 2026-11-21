@@ -756,3 +756,318 @@ fn test_cli_check_missing_profile_fails() {
     let output = run_drfw(root.path(), &["check", "nope"]);
     assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
 }
+
+// ============================================================================
+// Boot persistence: fake `systemctl`, the save script's enable step, `drfw
+// status` and `drfw print-service-unit`
+// ============================================================================
+
+/// A fake `systemctl` for the save script and the boot status query.
+///
+/// It appends its arguments to `<dir>/calls`. `is-enabled <unit>` prints the
+/// content of `<dir>/state-<unit>` (else `not-found`), `is-active` prints
+/// `inactive`, and `enable` succeeds unless `<dir>/enable-fails` exists.
+const FAKE_SYSTEMCTL: &str = r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/calls"
+case $1 in
+    enable)
+        if [ -e "$dir/enable-fails" ]; then
+            echo "Failed to enable unit: Unit $3 is masked." >&2
+            exit 1
+        fi
+        exit 0 ;;
+    is-enabled)
+        if [ -e "$dir/state-$2" ]; then
+            cat "$dir/state-$2"
+        else
+            echo not-found
+        fi
+        exit 1 ;;
+    is-active)
+        echo inactive
+        exit 3 ;;
+esac
+exit 1
+"#;
+
+/// Creates a directory holding only the fake `systemctl`.
+fn fake_systemctl_dir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("systemctl");
+    std::fs::write(&path, FAKE_SYSTEMCTL).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+/// `PATH` with `dir` first, so `systemctl` resolves to the fake one.
+fn path_with(dir: &std::path::Path) -> String {
+    format!("{}:{}", dir.display(), env::var("PATH").unwrap_or_default())
+}
+
+/// The fake `systemctl`'s recorded calls, one per line.
+fn systemctl_calls(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("calls"))
+        .unwrap_or_default()
+        .lines()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Runs the save script (mock nft, unelevated) with the fake `systemctl` first
+/// on the child's `PATH`. Only the child's environment is changed, so tests
+/// running in parallel are not affected.
+async fn run_save_script(
+    content: &str,
+    target: &str,
+    service: Option<&str>,
+    fake_bin: &std::path::Path,
+) -> std::process::Output {
+    use tokio::io::AsyncWriteExt;
+    setup_mock_nft();
+    let mut child = drfw::elevation::create_elevated_save_config_command(target, service)
+        .unwrap()
+        .env("PATH", path_with(fake_bin))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    // The script exits without reading stdin when it rejects its arguments
+    if let Err(e) = stdin.write_all(content.as_bytes()).await {
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+    }
+    drop(stdin);
+    child.wait_with_output().await.unwrap()
+}
+
+#[tokio::test]
+async fn test_save_script_enables_the_service_after_saving() {
+    use drfw::core::system_config::{EnableOutcome, enable_outcome_from_output};
+
+    let bin = fake_systemctl_dir();
+    let dir = tempfile::tempdir().unwrap();
+    // A missing directory (e.g. a custom DRFW_SYSTEM_NFT_PATH) is created
+    let target = dir.path().join("etc-drfw").join("rules.nft");
+    let target_str = target.to_str().unwrap();
+    let text = create_test_ruleset().to_nft_text();
+
+    let output = run_save_script(&text, target_str, Some("nftables.service"), bin.path()).await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+    assert_eq!(
+        enable_outcome_from_output(&output),
+        Some(EnableOutcome::Enabled)
+    );
+    // enable, never start (that would reload the rules mid-session)
+    assert_eq!(systemctl_calls(bin.path()), ["enable -- nftables.service"]);
+
+    // A failure to enable is a warning: the file is saved, exit status 0
+    std::fs::write(bin.path().join("enable-fails"), "").unwrap();
+    let output = run_save_script(&text, target_str, Some("nftables.service"), bin.path()).await;
+    assert!(output.status.success());
+    assert_eq!(
+        enable_outcome_from_output(&output),
+        Some(EnableOutcome::Failed(
+            "Failed to enable unit: Unit nftables.service is masked.".to_string()
+        ))
+    );
+    assert_eq!(
+        drfw::core::system_config::backup_path_from_output(&output),
+        Some(dir.path().join("etc-drfw").join("rules.nft.drfw-bak"))
+    );
+    assert_eq!(systemctl_calls(bin.path()).len(), 2);
+}
+
+#[tokio::test]
+async fn test_save_script_skips_systemctl_without_a_service_or_a_save() {
+    let bin = fake_systemctl_dir();
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("nftables.conf");
+    let target_str = target.to_str().unwrap();
+    let text = create_test_ruleset().to_nft_text();
+
+    // No service: saved, systemctl never called, no enable line
+    let output = run_save_script(&text, target_str, None, bin.path()).await;
+    assert!(output.status.success());
+    assert_eq!(
+        drfw::core::system_config::enable_outcome_from_output(&output),
+        None
+    );
+
+    // nft rejects the file: nothing is enabled either
+    let output = run_save_script(
+        "not nft\n",
+        target_str,
+        Some("nftables.service"),
+        bin.path(),
+    )
+    .await;
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+    assert_eq!(systemctl_calls(bin.path()), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn test_save_script_rejects_bad_arguments_before_writing() {
+    let bin = fake_systemctl_dir();
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("nftables.conf");
+    let target_str = target.to_str().unwrap();
+    let text = create_test_ruleset().to_nft_text();
+
+    for service in [
+        "-nftables.service",
+        ".nftables.service",
+        "nftables",
+        ".service",
+        "nft;id.service",
+        "nft tables.service",
+        "nft$x.service",
+        "nftables.socket",
+    ] {
+        let output = run_save_script(&text, target_str, Some(service), bin.path()).await;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{service}: {stderr}");
+        assert!(
+            stderr.contains("invalid service name"),
+            "{service}: {stderr}"
+        );
+    }
+    let output = run_save_script(&text, "relative/nftables.conf", None, bin.path()).await;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid target path"));
+
+    assert!(!target.exists(), "nothing may be written");
+    assert_eq!(systemctl_calls(bin.path()), Vec::<String>::new());
+}
+
+/// Runs `drfw status` with `path` as `PATH`.
+fn run_drfw_status_with_path(root: &std::path::Path, path: &str) -> String {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .arg("status")
+        .env("DRFW_TEST_DATA_DIR", root)
+        .env("DRFW_TEST_STATE_DIR", root)
+        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
+        .env("PATH", path)
+        .output()
+        .expect("run drfw");
+    assert!(output.status.success(), "{}", all_output(&output));
+    stdout_of(&output)
+}
+
+/// The "Boot persistence" line of `drfw status` output.
+fn boot_persistence_line(out: &str) -> &str {
+    out.lines()
+        .find(|line| line.starts_with("Boot persistence:"))
+        .unwrap_or_else(|| panic!("no boot persistence line in\n{out}"))
+}
+
+#[test]
+fn test_cli_status_reports_boot_persistence() {
+    let service = drfw::SYSTEM_NFT_SERVICE;
+    let bundled = drfw::distro::BUNDLED_SERVICE;
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    let path = path_with(bin.path());
+    let state = |unit: &str, value: &str| {
+        std::fs::write(
+            bin.path().join(format!("state-{unit}")),
+            format!("{value}\n"),
+        )
+        .unwrap();
+    };
+
+    state(service, "disabled");
+    let out = run_drfw_status_with_path(root.path(), &path);
+    assert!(
+        boot_persistence_line(&out).ends_with(&format!(
+            "{service} is disabled: the rules will NOT load at boot"
+        )),
+        "{out}"
+    );
+    let calls = systemctl_calls(bin.path());
+    assert!(
+        calls.contains(&format!("is-enabled {service}")),
+        "{calls:?}"
+    );
+    assert!(calls.contains(&format!("is-active {service}")), "{calls:?}");
+
+    // drfw.service loads the same file: it counts when the service is not enabled
+    if service != bundled {
+        state(bundled, "enabled");
+        let out = run_drfw_status_with_path(root.path(), &path);
+        assert!(
+            boot_persistence_line(&out).ends_with(&format!("Loaded at boot by {bundled}")),
+            "{out}"
+        );
+    }
+
+    state(service, "enabled");
+    let out = run_drfw_status_with_path(root.path(), &path);
+    assert!(
+        boot_persistence_line(&out).ends_with(&format!("Loaded at boot by {service}")),
+        "{out}"
+    );
+
+    if service != bundled {
+        std::fs::remove_file(bin.path().join(format!("state-{bundled}"))).unwrap();
+    }
+    state(service, "masked");
+    let out = run_drfw_status_with_path(root.path(), &path);
+    assert!(boot_persistence_line(&out).contains("is masked"), "{out}");
+}
+
+#[test]
+fn test_cli_status_without_systemctl() {
+    let root = tempfile::tempdir().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let out = run_drfw_status_with_path(root.path(), empty.path().to_str().unwrap());
+    assert!(
+        boot_persistence_line(&out).contains("systemd is not available"),
+        "{out}"
+    );
+}
+
+#[test]
+fn test_cli_print_service_unit() {
+    // Runs at package time: prints the unit and creates no data directories
+    let home = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .arg("print-service-unit")
+        .env_remove("DRFW_TEST_DATA_DIR")
+        .env_remove("DRFW_TEST_STATE_DIR")
+        .env("HOME", home.path())
+        .env("XDG_DATA_HOME", home.path().join("data"))
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .env("XDG_CONFIG_HOME", home.path().join("config"))
+        .output()
+        .expect("run drfw");
+    assert!(output.status.success(), "{}", all_output(&output));
+    let unit = stdout_of(&output);
+    assert_eq!(unit, drfw::distro::service_unit());
+    assert!(unit.contains(&format!(
+        "ExecStart={} -f {}\n",
+        drfw::distro::UNIT_NFT_PATH,
+        drfw::SYSTEM_NFT_PATH
+    )));
+    assert!(
+        !unit.contains("@SYSTEM_NFT_PATH@") && !unit.contains("@NFT_PATH@"),
+        "placeholder left:\n{unit}"
+    );
+    assert_eq!(
+        std::fs::read_dir(home.path()).unwrap().count(),
+        0,
+        "print-service-unit must not create data directories"
+    );
+
+    // Hidden from --help: it is for packagers
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .arg("--help")
+        .output()
+        .expect("run drfw");
+    assert!(!stdout_of(&help).contains("print-service-unit"));
+}

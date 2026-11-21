@@ -6,7 +6,11 @@
 //!
 //! - **nft**: Firewall rule verification and application
 //! - **/bin/sh** running the fixed [`SAVE_CONFIG_SCRIPT`]: verified, atomic writes of
-//!   the system nftables configuration (Save to System)
+//!   the system nftables configuration (Save to System), optionally followed by
+//!   `systemctl enable` of the boot service
+//!
+//! `nft` is [`crate::distro::NFT_COMMAND`]: the packager's `DRFW_NFT_PATH`, or
+//! plain `nft` resolved by the elevation tool.
 //! - **/bin/sh** running the fixed [`APPLY_SCRIPT`]: applies a ruleset and arms the
 //!   root-side revert guard ([`WATCHER_SCRIPT`]); see [`crate::core::apply_guard`]
 //!
@@ -321,7 +325,7 @@ pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationEr
         return Ok(unelevated_command(&nft_path, args));
     }
 
-    build_elevated_command("nft", args)
+    build_elevated_command(crate::distro::NFT_COMMAND, args)
 }
 
 /// Returns `DRFW_NFT_COMMAND` when set and non-empty (test mode: no elevation).
@@ -331,47 +335,104 @@ pub fn test_nft_command() -> Option<String> {
         .filter(|path| !path.is_empty())
 }
 
+/// Shell function shared by [`SAVE_CONFIG_SCRIPT`] and [`APPLY_SCRIPT`]: true if
+/// `$1` is an absolute path of `[A-Za-z0-9/._@+-]` characters. The same
+/// allowlist as [`crate::distro::is_safe_path_byte`], which checks the
+/// compile-time paths.
+macro_rules! safe_path_fn {
+    () => {
+        r#"safe_path() {
+    case $1 in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case $1 in
+        *[!A-Za-z0-9/._@+-]*) return 1 ;;
+    esac
+    return 0
+}
+"#
+    };
+}
+
 /// Fixed shell script run (elevated) by Save to System.
 ///
-/// Arguments: `$1` = target path, `$2` = nft command. The new file content
-/// arrives on stdin. No user-controlled data is ever interpolated into the
-/// script text; the target path is a compile-time constant
-/// ([`crate::SYSTEM_NFT_PATH`]) in the GUI and is only ever passed as argv.
+/// Arguments: `$1` = target path, `$2` = nft command (`nft` or an absolute
+/// path), `$3` = service to enable at boot (optional; empty = do not enable).
+/// The new file content arrives on stdin. No user-controlled data is ever
+/// interpolated into the script text; the target path and the service are
+/// compile-time constants ([`crate::SYSTEM_NFT_PATH`],
+/// [`crate::SYSTEM_NFT_SERVICE`]) in the GUI and are only ever passed as argv.
+/// All three are checked against allowlists first (paths: absolute,
+/// `[A-Za-z0-9/._@+-]`; service: `[A-Za-z0-9:_.@-]+.service`, not starting
+/// with `-` or `.`).
 ///
 /// Steps:
-/// 1. Write stdin to `<dir>/.<name>.drfw-tmp` (mode 644) in the target's own
+/// 1. Create the target's directory (mode 755) if it is missing.
+/// 2. Write stdin to `<dir>/.<name>.drfw-tmp` (mode 644) in the target's own
 ///    directory, so the final rename is atomic (same filesystem).
-/// 2. `nft -c -f` that temp file: the authoritative check of the exact bytes
+/// 3. `nft -c -f` that temp file: the authoritative check of the exact bytes
 ///    that will be installed.
-/// 3. Copy the existing target (if any) to `<target>.drfw-bak`, preserving
+/// 4. Copy the existing target (if any) to `<target>.drfw-bak`, preserving
 ///    mode/owner/timestamps. Done after the check so a rejected file never
 ///    overwrites a good backup.
 ///    The first time DRFW replaces a file, it is also copied once to
 ///    `<target>.drfw-orig`, which is never overwritten, so the distribution's or
 ///    user's original config can always be recovered (`.drfw-bak` only holds the
 ///    previous save).
-/// 4. Flush the temp file to disk, then `mv -f` it over the target (atomic
+/// 5. Flush the temp file to disk, then `mv -f` it over the target (atomic
 ///    rename), so a crash cannot leave an empty or truncated config.
+/// 6. With a service: `systemctl enable <service>` (never `start`: that would
+///    reload the rules in the middle of the session). `systemctl` is called by
+///    name, through the `PATH` the elevation tool sets for root. A failure
+///    here is reported, not fatal: the file was saved.
 ///
-/// Any failure removes the temp file and leaves the original untouched. On
-/// success, prints `backup=<path>` on stdout when a backup was made.
+/// Any failure before step 6 removes the temp file and leaves the original
+/// untouched. On success, prints `key=value` lines on stdout:
+/// `backup=<path>` when a backup was made, and with a service either
+/// `enable=ok` or `enable=failed: <systemctl output on one line>`.
 ///
-/// Exit codes: 0 success, 3 nft rejected the file, 1 other failures. 126/127
-/// are deliberately never used: callers interpret those as authentication
-/// errors from pkexec/sudo/run0.
-pub const SAVE_CONFIG_SCRIPT: &str = r#"set -u
+/// Exit codes: 0 success (even if enabling failed), 3 nft rejected the file,
+/// 1 other failures. 126/127 are deliberately never used: callers interpret
+/// those as authentication errors from pkexec/sudo/run0.
+pub const SAVE_CONFIG_SCRIPT: &str = concat!(
+    r#"set -u
+umask 022
 target=$1
 nft=$2
-dir=$(dirname -- "$target") || exit 1
-name=$(basename -- "$target") || exit 1
-tmp="$dir/.$name.drfw-tmp"
-backup="$target.drfw-bak"
-orig="$target.drfw-orig"
+service=${3-}
+tmp=
 fail() {
-    rm -f -- "$tmp"
+    if [ -n "$tmp" ]; then
+        rm -f -- "$tmp"
+    fi
     printf 'drfw: %s\n' "$1" >&2
     exit "$2"
 }
+"#,
+    safe_path_fn!(),
+    r#"safe_path "$target" || fail "invalid target path" 1
+case $nft in
+    nft) ;;
+    *) safe_path "$nft" || fail "invalid nft command" 1 ;;
+esac
+if [ -n "$service" ]; then
+    case $service in
+        -*|.*|*[!A-Za-z0-9:_.@-]*) fail "invalid service name" 1 ;;
+    esac
+    case $service in
+        ?*.service) ;;
+        *) fail "invalid service name" 1 ;;
+    esac
+fi
+dir=$(dirname -- "$target") || exit 1
+name=$(basename -- "$target") || exit 1
+backup="$target.drfw-bak"
+orig="$target.drfw-orig"
+if [ ! -d "$dir" ]; then
+    mkdir -p -m 755 -- "$dir" || fail "cannot create $dir" 1
+fi
+tmp="$dir/.$name.drfw-tmp"
 rm -f -- "$tmp" || fail "cannot remove stale temporary file $tmp" 1
 install -m 644 /dev/stdin "$tmp" || fail "cannot write $tmp" 1
 if ! check_output=$("$nft" -c -f "$tmp" 2>&1); then
@@ -388,11 +449,21 @@ else
 fi
 sync -- "$tmp" 2>/dev/null || sync
 mv -f -- "$tmp" "$target" || fail "cannot replace $target" 1
+tmp=
 if [ "$made_backup" = 1 ]; then
     printf 'backup=%s\n' "$backup"
 fi
+if [ -n "$service" ]; then
+    if out=$(systemctl enable -- "$service" 2>&1); then
+        printf 'enable=ok\n'
+    else
+        out=$(printf '%s' "$out" | tr '\n' ' ')
+        printf 'enable=failed: %s\n' "${out:-systemctl enable failed}"
+    fi
+fi
 exit 0
-"#;
+"#
+);
 
 /// `$0` for [`SAVE_CONFIG_SCRIPT`] (shows up in `ps` and in shell error messages).
 const SAVE_CONFIG_SCRIPT_NAME: &str = "drfw-save-config";
@@ -408,12 +479,15 @@ const SHELL_PATH: &str = "/bin/sh";
 /// # Arguments
 ///
 /// * `target` - Path of the file to replace (normally [`crate::SYSTEM_NFT_PATH`])
+/// * `enable_service` - Unit to `systemctl enable` after a successful save
+///   (normally [`crate::SYSTEM_NFT_SERVICE`]), or `None`
 ///
 /// # Testing
 ///
 /// When `DRFW_NFT_COMMAND` is set, the script runs **without elevation** and
 /// uses that command for the `nft -c` check, mirroring
-/// [`create_elevated_nft_command`]. Tests point `target` at a temporary directory.
+/// [`create_elevated_nft_command`]. Tests point `target` at a temporary
+/// directory and put a fake `systemctl` first on the child's `PATH`.
 ///
 /// # Errors
 ///
@@ -425,12 +499,17 @@ const SHELL_PATH: &str = "/bin/sh";
 /// use drfw::elevation::create_elevated_save_config_command;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut cmd = create_elevated_save_config_command(drfw::SYSTEM_NFT_PATH)?;
+/// let mut cmd =
+///     create_elevated_save_config_command(drfw::SYSTEM_NFT_PATH, Some(drfw::SYSTEM_NFT_SERVICE))?;
 /// cmd.stdin(std::process::Stdio::piped());
 /// # Ok(())
 /// # }
 /// ```
-pub fn create_elevated_save_config_command(target: &str) -> Result<Command, ElevationError> {
+pub fn create_elevated_save_config_command(
+    target: &str,
+    enable_service: Option<&str>,
+) -> Result<Command, ElevationError> {
+    let service = enable_service.unwrap_or_default();
     if let Some(nft_path) = test_nft_command() {
         return Ok(unelevated_command(
             SHELL_PATH,
@@ -440,6 +519,7 @@ pub fn create_elevated_save_config_command(target: &str) -> Result<Command, Elev
                 SAVE_CONFIG_SCRIPT_NAME,
                 target,
                 &nft_path,
+                service,
             ],
         ));
     }
@@ -451,7 +531,8 @@ pub fn create_elevated_save_config_command(target: &str) -> Result<Command, Elev
             SAVE_CONFIG_SCRIPT,
             SAVE_CONFIG_SCRIPT_NAME,
             target,
-            "nft",
+            crate::distro::NFT_COMMAND,
+            service,
         ],
     )
 }
@@ -602,7 +683,7 @@ done
 pub const WATCHER_SCRIPT: &str = watcher_script!();
 
 /// True if `haystack` contains `needle` (usable in constants).
-const fn const_contains(haystack: &str, needle: &str) -> bool {
+pub(crate) const fn const_contains(haystack: &str, needle: &str) -> bool {
     let (h, n) = (haystack.as_bytes(), needle.as_bytes());
     let mut start = 0;
     while start + n.len() <= h.len() {
@@ -679,17 +760,9 @@ fail() {
     printf 'drfw: %s\n' "$1" >&2
     exit "$2"
 }
-safe_path() {
-    case $1 in
-        /*) ;;
-        *) return 1 ;;
-    esac
-    case $1 in
-        *[!A-Za-z0-9/._@+-]*) return 1 ;;
-    esac
-    return 0
-}
-safe_path "$state_dir" || fail "invalid state directory" 1
+"#,
+    safe_path_fn!(),
+    r#"safe_path "$state_dir" || fail "invalid state directory" 1
 safe_path "$confirm_dir" || fail "invalid confirmation directory" 1
 case $nft in
     nft) ;;
@@ -912,7 +985,7 @@ pub fn create_elevated_apply_command(
             &timeout,
             nonce,
             confirm_dir,
-            "nft",
+            crate::distro::NFT_COMMAND,
             WatcherLauncher::Auto.as_arg(),
         ],
     )?;
@@ -965,7 +1038,10 @@ mod tests {
         unsafe {
             std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
         }
-        let cmd = create_elevated_save_config_command("/nonexistent/nftables.conf");
+        let cmd = create_elevated_save_config_command(
+            "/nonexistent/nftables.conf",
+            Some("nftables.service"),
+        );
         unsafe {
             std::env::remove_var("DRFW_NFT_COMMAND");
         }
@@ -978,6 +1054,7 @@ mod tests {
         assert_eq!(args[1], SAVE_CONFIG_SCRIPT);
         assert_eq!(args[3], "/nonexistent/nftables.conf");
         assert_eq!(args[4], mock_path.as_str());
+        assert_eq!(args[5], "nftables.service");
     }
 
     #[test]

@@ -464,6 +464,14 @@ fn describe_event(event: &AuditEvent) -> (RowTone, String) {
             RowTone::Danger,
             format!("Failed to save: {}", error_text(event)),
         ),
+        (EventType::EnableAtBoot, true) => (
+            RowTone::Success,
+            format!("Enabled {} at boot", d("service")),
+        ),
+        (EventType::EnableAtBoot, false) => (
+            RowTone::Warning,
+            format!("Could not enable {}: {}", d("service"), error_text(event)),
+        ),
         (EventType::SnapshotFailed, _) => (
             RowTone::Warning,
             format!("Snapshot failed: {}", error_text(event)),

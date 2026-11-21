@@ -126,7 +126,7 @@ Full command-line support for scripting and automation:
 drfw              # Launch GUI
 drfw --help       # Show all commands
 drfw list         # List all profiles
-drfw status       # Active profile, rule/invalid counts, mode, pending auto-revert, boot config
+drfw status       # Active profile, rule/invalid counts, mode, pending auto-revert, boot config + service
 drfw check <profile>                 # Validate + nft --check without privileges; changes nothing
 drfw apply <profile>                 # Apply with 15s auto-revert safety
 drfw apply <profile> --confirm 30    # Apply with 30s timeout (5-120)
@@ -139,9 +139,10 @@ drfw export <profile> --format json  # Export as nftables JSON
   never asks for a password: the nft check runs in a private user + network
   namespace (`unshare -rn`).
 - `drfw status` only reports what an unprivileged user can read: the profile, whether
-  an apply is still waiting for confirmation (`/run/drfw`), and whether
-  `/etc/nftables.conf` was written by DRFW. It does **not** read the live kernel
-  ruleset (that needs root); run `sudo nft list table inet drfw` for that.
+  an apply is still waiting for confirmation (`/run/drfw`), whether
+  `/etc/nftables.conf` was written by DRFW, and whether a systemd unit loads it at
+  boot ("Boot persistence", from `systemctl is-enabled`). It does **not** read the live
+  kernel ruleset (that needs root); run `sudo nft list table inet drfw` for that.
 - `drfw apply` changes the running ruleset only. Use **Save to System** (GUI) to make
   rules survive a reboot.
 - Run `drfw` as your user, not with `sudo`: it asks for elevation itself, and under
@@ -234,21 +235,31 @@ revert point: a timeout always goes back to the last *confirmed* rules.
 
 ## Save to System
 
-**Save to System** makes the rules load at boot. It runs one fixed, elevated
-script (one prompt) that:
+**Save to System** makes the rules load at boot. Before you confirm, the dialog shows
+whether the boot service (`nftables.service` by default) is enabled, asked without
+privileges (`systemctl is-enabled`). If it is disabled, an **Also enable
+nftables.service at boot** checkbox is offered, checked by default. Saving runs one
+fixed, elevated script (one prompt) that:
 
 1. writes the new file next to the target, then runs `nft -c -f` on **exactly those
    bytes** — a file nft rejects never replaces the current one;
 2. copies the current file to `/etc/nftables.conf.drfw-bak` (the previous save);
 3. the first time only, copies it to `/etc/nftables.conf.drfw-orig`, which is never
    overwritten, so your distribution's or hand-written config can always be recovered;
-4. flushes the new file to disk and renames it into place atomically.
+4. flushes the new file to disk and renames it into place atomically;
+5. if the checkbox is checked, runs `systemctl enable nftables.service` (never `start`:
+   that would reload the rules in the middle of your session). If enabling fails, the
+   file is still saved and you get a warning.
+
+Afterwards a banner says either "Loaded at boot by nftables.service" or that the rules
+will **not** load at boot (service disabled, masked or missing).
 
 The file starts with `table inet drfw` / `delete table inet drfw`, so loading it
 (`nft -f /etc/nftables.conf`, `systemctl reload`) replaces only DRFW's table and never
-duplicates rules. Enable `nftables.service` or the bundled `contrib/drfw.service` to
-load it at boot (see [contrib/README.md](contrib/README.md)). `drfw status` tells you
-whether the current `/etc/nftables.conf` was written by DRFW.
+duplicates rules. Enable `nftables.service` or the bundled `drfw.service` to load it at
+boot (see [contrib/README.md](contrib/README.md)); DRFW counts either one as loading it.
+`drfw status` tells you whether the current `/etc/nftables.conf` was written by DRFW
+and whether it is loaded at boot.
 
 To go back to the original config:
 
@@ -411,29 +422,87 @@ This means most rules "just work" for both protocols without extra configuration
 
 ### Compile-Time Configuration
 
-Distro packagers can customize paths at build time using environment variables:
+Distro packagers adapt DRFW to the distribution's layout with environment variables
+read at **build** time (see `src/distro.rs`):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DRFW_SYSTEM_NFT_PATH` | `/etc/nftables.conf` | System nftables config path |
-| `DRFW_SYSTEM_NFT_SERVICE` | `nftables.service` | Systemd service name |
+| `DRFW_SYSTEM_NFT_PATH` | `/etc/nftables.conf` | File Save to System writes |
+| `DRFW_SYSTEM_NFT_SERVICE` | `nftables.service` | systemd unit that loads that file at boot (reported, and optionally enabled) |
+| `DRFW_NFT_PATH` | unset | Absolute `nft` path. Unset: the no-prompt check searches `/usr/sbin`, `/sbin`, `/usr/bin`, and elevated commands run plain `nft` |
 
-**Examples:**
+Values are checked at compile time and a bad one fails the build: paths must be
+absolute and use only `A-Z a-z 0-9 / . _ @ + -` (the characters DRFW's root scripts
+accept), the service must be a unit name ending in `.service`. An empty value counts
+as unset.
 
 ```bash
-# Debian/Ubuntu/Arch (default)
+# Arch, Debian, Ubuntu (defaults; DRFW_NFT_PATH recommended, see the table below)
 cargo build --release
 
 # Fedora/RHEL
-DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf cargo build --release
+DRFW_SYSTEM_NFT_PATH=/etc/sysconfig/nftables.conf DRFW_NFT_PATH=/usr/sbin/nft \
+cargo build --release
 
-# Custom setup
+# Custom setup: DRFW's own file, loaded by DRFW's own unit
 DRFW_SYSTEM_NFT_PATH=/etc/drfw/rules.nft \
 DRFW_SYSTEM_NFT_SERVICE=drfw.service \
 cargo build --release
+./target/release/drfw print-service-unit | sudo tee /etc/systemd/system/drfw.service
 ```
 
-The configured path is baked into the binary at compile time and shown in the UI when using "Save to System".
+In the custom setup, Save to System creates `/etc/drfw/` if needed, and its **Also
+enable drfw.service at boot** checkbox enables the unit you just installed.
+
+### The systemd Unit
+
+`contrib/drfw.service.in` is a template with `@SYSTEM_NFT_PATH@` and `@NFT_PATH@`.
+Generate the unit from the **built binary**, which fills in its own compile-time values,
+so the unit and Save to System can never disagree about the file:
+
+```bash
+target/release/drfw print-service-unit > drfw.service   # hidden command, for packagers
+install -Dm644 drfw.service "$pkgdir/usr/lib/systemd/system/drfw.service"
+```
+
+`@NFT_PATH@` becomes `DRFW_NFT_PATH`, or `/usr/sbin/nft` when that is unset.
+`print-service-unit` creates no files or directories, so it is safe to run in
+`package()`.
+
+### Per-Distribution Notes
+
+| Distribution | Config (`DRFW_SYSTEM_NFT_PATH`) | Service | `nft` (`DRFW_NFT_PATH`) | Caveats |
+|--------------|-------------------------------|---------|-------------------------|---------|
+| Arch | `/etc/nftables.conf` (default) | `nftables.service` (default; not enabled after install) | `/usr/bin/nft` | `contrib/PKGBUILD` sets these. `/usr/sbin` is a symlink to `/usr/bin`. |
+| Debian / Ubuntu | `/etc/nftables.conf` (default) | `nftables.service` (default) | `/usr/sbin/nft` | Set `DRFW_NFT_PATH`: `/usr/sbin` is not on a normal user's `PATH`, so a bare `pkexec nft` (the elevated fallback check) may not find nft. Ubuntu ships `ufw`, which is a second firewall if it is active (`sudo ufw status`). |
+| Fedora / RHEL | `/etc/sysconfig/nftables.conf` | `nftables.service` (default) | `/usr/sbin/nft` | The distribution's file holds only comments and `include` lines for the samples in `/etc/nftables/`. Save to System replaces the whole file, so those includes are no longer loaded; the original stays in `/etc/sysconfig/nftables.conf.drfw-orig`. `firewalld` is enabled by default and manages its own tables; decide which one owns the firewall. |
+| openSUSE | check your distro | check your distro | `/usr/sbin/nft` | `firewalld` is the usual default firewall. Check which file and unit the `nftables` package ships before overriding the defaults. |
+| NixOS | see below | see below | `/run/current-system/sw/bin/nft` | Declarative `networking.nftables` owns the ruleset; see below. |
+
+**NixOS.** With `networking.nftables.enable`, NixOS generates the ruleset and its
+own `nftables.service` from your configuration: an imperatively written
+`/etc/nftables.conf` is not what it loads, and the units NixOS manages are not meant to
+be changed with `systemctl enable`. The recommended way is to keep DRFW for designing and testing rules
+(Apply works on the live kernel) and put the exported rules into your configuration:
+
+```bash
+drfw export my-profile --format nft > /etc/nixos/drfw.nft
+```
+
+```nix
+networking.nftables.enable = true;
+networking.nftables.ruleset = builtins.readFile ./drfw.nft;
+```
+
+Note that the NixOS firewall (`networking.firewall`) adds its own tables when
+nftables is enabled. If you prefer Save to System on NixOS, build with
+`DRFW_SYSTEM_NFT_PATH=/var/lib/drfw/rules.nft DRFW_SYSTEM_NFT_SERVICE=drfw.service
+DRFW_NFT_PATH=/run/current-system/sw/bin/nft`, leave `networking.nftables` off, and
+declare `drfw.service` in your configuration (from `drfw print-service-unit`, with
+`wantedBy = [ "multi-user.target" ]`) instead of using the "enable at boot" checkbox.
+This setup is untested: DRFW's elevated scripts call coreutils and `systemctl` by name,
+and some elevation tools reset `PATH` to directories that are empty on NixOS; check
+your setup.
 
 ## Development
 
@@ -442,7 +511,8 @@ The configured path is baked into the binary at compile time and shown in the UI
 ```
 src/
 ├── main.rs              # CLI front end (commands, countdown); everything else is the library
-├── lib.rs               # Library root: all modules, `run_gui()`, compile-time paths
+├── lib.rs               # Library root: all modules, `run_gui()`
+├── distro.rs            # Compile-time paths/service for packagers, `print-service-unit`
 ├── build_info.rs        # Version strings (git commit, build time) from build.rs
 ├── app/                 # GUI application (private to the library)
 │   ├── mod.rs          # State machine, messages
@@ -455,6 +525,7 @@ src/
 │   ├── verify.rs       # Pre-apply `nft --check`
 │   ├── apply_guard.rs  # Apply + root-side revert guard
 │   ├── system_config.rs # Save to System
+│   ├── boot.rs         # Boot persistence (`systemctl is-enabled`, unprivileged)
 │   └── profiles.rs     # Profile persistence
 ├── theme/              # 27 color themes + accessibility
 ├── config.rs           # Application configuration
@@ -462,7 +533,7 @@ src/
 ├── audit.rs            # Audit logging
 └── elevation.rs        # Privilege escalation, fixed apply/watcher/save scripts
 tests/
-├── integration_tests.rs # Mock-nft flows, CLI binary (`status`, `check`)
+├── integration_tests.rs # Mock-nft flows, save script + fake systemctl, CLI binary (`status`, `check`)
 ├── profile_storage.rs   # Profile/config files on disk
 └── real_nft.rs          # Real nft in an unprivileged namespace (unshare -rn)
 ```
