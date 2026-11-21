@@ -11,19 +11,27 @@
 //! The evaluator walks a model of the input chain that
 //! [`FirewallRuleset::to_nftables_json`] generates, in the generator's order:
 //!
-//! 1. optional anti-spoofing (RPF) drop
-//! 2. loopback accept (`iifname "lo"`)
-//! 3. `ct state invalid` drop and `ct state established,related` accept:
-//!    never match a **new** connection, so they are not modelled
-//! 4. `DHCPv6` client replies accept (UDP 547 → 546 from `fe80::/10`)
-//! 5. ICMP and `ICMPv6` redirect drops
-//! 6. **user rules**, in profile order
-//! 7. with an ICMP rate limit: the `ICMPv6` neighbor discovery accept that
-//!    the limit never applies to
-//! 8. the ICMP and `ICMPv6` accepts (all types, or the essential types in
-//!    strict mode), within the ICMP rate limit when one is set
-//! 9. (the optional drop logging: logs, decides nothing; not modelled)
-//! 10. the rate-limited `reject` of unicast packets, then the chain's drop
+//! 1. loopback accept (`iifname "lo"`)
+//! 2. `ct state invalid` drop: never matches a **new** connection, so it is
+//!    not modelled
+//! 3. ICMP and `ICMPv6` redirect drops
+//! 4. with an ICMP rate limit: the drops of echo requests over the limit
+//! 5. `ct state established,related` accept: never matches a new
+//!    connection, not modelled
+//! 6. the drops of loopback source and destination addresses arriving from
+//!    the network (see "Loopback addresses" below)
+//! 7. optional anti-spoofing (RPF) drop
+//! 8. DHCP client replies accept (UDP 67 → 68) and `DHCPv6` client replies
+//!    accept (UDP 547 → 546 from `fe80::/10`)
+//! 9. **user rules** (Input chain), in profile order
+//! 10. the IGMP accept
+//! 11. with local network discovery (Desktop mode): the mDNS, SSDP and
+//!     WS-Discovery multicast accepts and the accepts of replies to this
+//!     computer's own discovery queries
+//! 12. the ICMP and `ICMPv6` accepts (all types, or the essential types in
+//!     strict mode)
+//! 13. (the optional drop logging: logs, decides nothing; not modelled)
+//! 14. the rate-limited `reject` of unicast packets, then the chain's drop
 //!     policy
 //!
 //! A test compares this order, base rule by base rule, with the generated
@@ -31,18 +39,19 @@
 //!
 //! # TCP and UDP only
 //!
-//! [`Probe`]s are new TCP or UDP connections; ICMP messages are not
-//! evaluated. The ICMP rules (5, 7, 8) are modelled so the chain mirrors the
-//! generator, but they never match a TCP or UDP probe, and neither do user
-//! rules for ICMP. Answering for ICMP would need the message type as part of
+//! [`Probe`]s are new TCP or UDP connections; ICMP and IGMP messages are
+//! not evaluated. The ICMP and IGMP rules (3, 4, 10, 12) are modelled so the
+//! chain mirrors the generator, but they never match a TCP or UDP probe, and
+//! neither do user rules for ICMP. Answering for ICMP would need the message type as part of
 //! the probe (strict mode and the neighbor discovery exemption depend on it),
 //! and checking it against the kernel would need raw sockets; neither is
 //! needed by the Exposure view or the lockout check, which ask about TCP/UDP
 //! services.
 //!
 //! A user rule is modelled the way the generator emits it: disabled rules and
-//! OUTPUT rules are skipped (Server/Desktop mode only changes the output
-//! chain), a rule is split into one copy per address family when it has
+//! rules of the Output and Forward chains are skipped (they never see a
+//! packet addressed to this computer; Server Mode and "Block forwarding"
+//! only change those chains), a rule is split into one copy per address family when it has
 //! addresses or a per-source limit, a copy is only made for a family that
 //! every non-empty address list has, and rules that cannot be expressed
 //! (interface empty after sanitizing, no common family) are skipped. Ports on
@@ -53,8 +62,10 @@
 //!
 //! Some rules only decide under a condition the probe cannot settle: a rate or
 //! connection limit (whether it is reached depends on traffic), an interface
-//! or destination address the probe leaves open, the RPF check, the source
-//! port of `DHCPv6` replies, or "unicast" for the final reject. Such a rule
+//! or destination address the probe leaves open (the multicast group of a
+//! discovery protocol, too), the RPF check, the source port of DHCP and
+//! `DHCPv6` replies, "a reply to one of our discovery queries", or "unicast"
+//! for the discovery replies and the final reject. Such a rule
 //! yields [`Verdict::Limited`]: what it does while the conditions hold, and
 //! what happens otherwise (evaluation continues). An Accept rule with a limit
 //! accepts *up to* the limit; packets over it fall through to later rules. A
@@ -76,8 +87,16 @@
 //!   ([`Reachability::conditional`]) with their conditions.
 //! - The probe's interface, when not given, is some non-loopback interface;
 //!   the loopback accept does not apply.
-//! - Broadcast and multicast are not modelled (only "unicast" as a condition
-//!   of the final reject).
+//! - Broadcast and multicast are not modelled beyond the discovery groups as
+//!   destinations and "unicast" as a condition.
+//!
+//! # Loopback addresses
+//!
+//! The drops of 127.0.0.0/8 sources and destinations arriving on another
+//! interface than `lo` are modelled for the order only: they never match a
+//! probe. The kernel drops such packets as martians before the input hook
+//! (unless `route_localnet` is set), so they never reach the ruleset in the
+//! default configuration the evaluator assumes.
 
 use std::fmt;
 use std::net::IpAddr;
@@ -86,22 +105,45 @@ use ipnetwork::IpNetwork;
 use uuid::Uuid;
 
 use super::addr_set::AddrSet;
-use super::firewall::{Action, Chain, FirewallRuleset, Protocol, RateLimit, Rule, TimeUnit};
+use super::firewall::{
+    Action, Chain, EgressProfile, FirewallRuleset, Protocol, RateLimit, Rule, TimeUnit,
+};
 use super::rule_constraints::{protocol_requires_ipv4, protocol_requires_ipv6};
 
 /// Comment of the generated anti-spoofing rule.
-pub const BASE_RPF: &str = "drop packets with spoofed source addresses (RPF)";
+pub const BASE_RPF: &str = "drop new packets with spoofed source addresses (RPF)";
 /// Comment of the generated loopback accept.
 pub const BASE_LOOPBACK: &str = "allow from loopback";
+/// Comment of the generated drop of loopback source addresses (from the network).
+pub const BASE_LOOPBACK_SOURCE: &str = "drop loopback source addresses from the network";
+/// Comment of the generated drop of loopback destination addresses (from the network).
+pub const BASE_LOOPBACK_DESTINATION: &str = "drop loopback destination addresses from the network";
+/// Comment of the generated drop of ICMP echo requests over the ICMP rate limit.
+pub const BASE_PING_LIMIT: &str = "limit incoming pings";
+/// Comment of the generated drop of `ICMPv6` echo requests over the ICMP rate limit.
+pub const BASE_PING_LIMIT_V6: &str = "limit incoming pings (ipv6)";
+/// Comment of the generated DHCP (v4) client replies accept.
+pub const BASE_DHCP: &str = "allow dhcp client replies";
 /// Comment of the generated `DHCPv6` client replies accept.
 pub const BASE_DHCPV6: &str = "allow dhcpv6 client replies";
 /// Comment of the generated ICMP redirect drop.
 pub const BASE_ICMP_REDIRECT: &str = "drop icmp redirects";
 /// Comment of the generated `ICMPv6` redirect drop.
 pub const BASE_ICMPV6_REDIRECT: &str = "drop icmpv6 redirects";
-/// Comment of the generated `ICMPv6` neighbor discovery accept (only with an
-/// ICMP rate limit; it is exempt from the limit).
-pub const BASE_ICMPV6_ND: &str = "allow icmpv6 neighbor discovery (not rate limited)";
+/// Comment of the generated IGMP accept.
+pub const BASE_IGMP: &str = "allow igmp (multicast group membership)";
+/// Comment of the generated mDNS accept (local discovery).
+pub const BASE_MDNS: &str = "allow mdns";
+/// Comment of the generated mDNS accept for IPv6 (local discovery).
+pub const BASE_MDNS_V6: &str = "allow mdns (ipv6)";
+/// Comment of the generated SSDP / WS-Discovery accept (local discovery).
+pub const BASE_SSDP: &str = "allow ssdp and ws-discovery";
+/// Comment of the generated SSDP / WS-Discovery accept for IPv6 (local discovery).
+pub const BASE_SSDP_V6: &str = "allow ssdp and ws-discovery (ipv6)";
+/// Comment of the generated accept of replies to our discovery queries.
+pub const BASE_DISCOVERY_REPLY: &str = "allow replies to our discovery queries";
+/// Comment of the generated accept of replies to our discovery queries (IPv6).
+pub const BASE_DISCOVERY_REPLY_V6: &str = "allow replies to our discovery queries (ipv6)";
 /// Comment of the generated ICMP accept (default mode).
 pub const BASE_ICMP: &str = "allow icmp";
 /// Comment of the generated `ICMPv6` accept (default mode).
@@ -116,10 +158,55 @@ pub const BASE_FINAL_REJECT: &str = "rate-limited reject";
 
 /// Rate of the final reject (`limit rate 5/second`); over it, the policy drops.
 const FINAL_REJECT_RATE: u32 = 5;
+/// DHCP server port (source port of the replies the base rule accepts).
+const DHCP_SERVER_PORT: u16 = 67;
+/// DHCP client port.
+const DHCP_CLIENT_PORT: u16 = 68;
 /// `DHCPv6` server port (source port of the replies the base rule accepts).
 const DHCPV6_SERVER_PORT: u16 = 547;
 /// `DHCPv6` client port.
 const DHCPV6_CLIENT_PORT: u16 = 546;
+/// mDNS port.
+const MDNS_PORT: u16 = 5353;
+/// SSDP (`UPnP` discovery) port.
+const SSDP_PORT: u16 = 1900;
+/// WS-Discovery port.
+const WS_DISCOVERY_PORT: u16 = 3702;
+/// The discovery multicast groups: (family, groups, ports, comment).
+const DISCOVERY_GROUPS: [(IpFamily, &[&str], &[u16], &str); 4] = [
+    (IpFamily::V4, &["224.0.0.251/32"], &[MDNS_PORT], BASE_MDNS),
+    (IpFamily::V6, &["ff02::fb/128"], &[MDNS_PORT], BASE_MDNS_V6),
+    (
+        IpFamily::V4,
+        &["239.255.255.250/32"],
+        &[SSDP_PORT, WS_DISCOVERY_PORT],
+        BASE_SSDP,
+    ),
+    (
+        IpFamily::V6,
+        &["ff02::c/128", "ff05::c/128"],
+        &[SSDP_PORT, WS_DISCOVERY_PORT],
+        BASE_SSDP_V6,
+    ),
+];
+/// Sources whose replies to our discovery queries are accepted, per family.
+const DISCOVERY_REPLY_SOURCES: [(IpFamily, &[&str], &str); 2] = [
+    (
+        IpFamily::V4,
+        &[
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "169.254.0.0/16",
+        ],
+        BASE_DISCOVERY_REPLY,
+    ),
+    (
+        IpFamily::V6,
+        &["fe80::/10", "fc00::/7"],
+        BASE_DISCOVERY_REPLY_V6,
+    ),
+];
 /// Name of the loopback interface.
 const LOOPBACK_INTERFACE: &str = "lo";
 
@@ -253,6 +340,10 @@ pub enum Condition {
     Destination(Vec<IpNetwork>),
     /// The packet comes from this source port (probes have none)
     SourcePort(u16),
+    /// The packet is a reply to one of this computer's own local discovery
+    /// queries: its destination port sent multicast or broadcast UDP within
+    /// the last seconds (probes are not replies)
+    DiscoveryReply,
     /// The source fails the reverse-path check (it would not be routed back
     /// through the input interface)
     ReversePathFails,
@@ -276,13 +367,13 @@ impl Condition {
 
     /// Whether the condition holds for the **first** packet of a fresh
     /// ruleset, from an ephemeral source port, unicast, with a source that
-    /// passes the reverse-path check; `None` if that does not settle it
-    /// (interface, destination).
+    /// passes the reverse-path check, to a port that sent no discovery query;
+    /// `None` if that does not settle it (interface, destination).
     pub const fn holds_for_first_packet(&self) -> Option<bool> {
         match self {
             // A fresh budget: within every limit
             Self::Rate { over, .. } | Self::Connections { over, .. } => Some(!*over),
-            Self::SourcePort(_) | Self::ReversePathFails => Some(false),
+            Self::SourcePort(_) | Self::ReversePathFails | Self::DiscoveryReply => Some(false),
             Self::Unicast => Some(true),
             Self::Interface(_) | Self::Destination(_) => None,
         }
@@ -330,6 +421,7 @@ impl fmt::Display for Condition {
                 write_networks(f, networks)
             }
             Self::SourcePort(port) => write!(f, "from source port {port}"),
+            Self::DiscoveryReply => f.write_str("replying to our own discovery queries"),
             Self::ReversePathFails => f.write_str("failing the reverse-path check"),
             Self::Unicast => f.write_str("unicast"),
         }
@@ -691,7 +783,7 @@ enum ProtoMatch {
     TcpUdp,
     Tcp,
     Udp,
-    /// ICMP / `ICMPv6`: never a TCP or UDP probe
+    /// ICMP / `ICMPv6` / IGMP: never a TCP or UDP probe
     Icmp,
 }
 
@@ -753,7 +845,7 @@ struct Node {
     sources: Option<AddrSet>,
     /// Destination networks (`None` = any); only with a `family`
     destinations: Option<(Vec<IpNetwork>, AddrSet)>,
-    /// Required source port (`DHCPv6` replies)
+    /// Required source port (DHCP and `DHCPv6` replies)
     source_port: Option<u16>,
     /// Limits and other conditions the probe cannot settle
     conditions: Vec<Condition>,
@@ -836,58 +928,64 @@ impl InputChain {
     /// Models the input chain [`FirewallRuleset::to_nftables_json`] generates.
     pub fn new(ruleset: &FirewallRuleset) -> Self {
         let advanced = &ruleset.advanced_security;
-        let mut nodes = Vec::with_capacity(12 + ruleset.rules.len());
+        let mut nodes = Vec::with_capacity(24 + ruleset.rules.len());
 
+        let mut loopback = Node::base(BASE_LOOPBACK, Action::Accept);
+        loopback.interface = Some(InterfaceMatch::new(LOOPBACK_INTERFACE));
+        nodes.push(loopback);
+        // (ct state invalid drop: never a new connection)
+        nodes.push(Node::icmp(BASE_ICMP_REDIRECT, IpFamily::V4, Action::Drop));
+        nodes.push(Node::icmp(BASE_ICMPV6_REDIRECT, IpFamily::V6, Action::Drop));
+        if advanced.icmp_rate_limit > 0 {
+            nodes.push(Node::icmp(BASE_PING_LIMIT, IpFamily::V4, Action::Drop));
+            nodes.push(Node::icmp(BASE_PING_LIMIT_V6, IpFamily::V6, Action::Drop));
+        }
+        // (ct state established,related accept: never a new connection)
+        for name in [BASE_LOOPBACK_SOURCE, BASE_LOOPBACK_DESTINATION] {
+            // Never reaches the ruleset (see the module docs)
+            let mut martian = Node::base(name, Action::Drop);
+            martian.family = Some(IpFamily::V4);
+            martian.never = true;
+            nodes.push(martian);
+        }
         if advanced.enable_rpf {
             let mut rpf = Node::base(BASE_RPF, Action::Drop);
             rpf.conditions.push(Condition::ReversePathFails);
             nodes.push(rpf);
         }
-        let mut loopback = Node::base(BASE_LOOPBACK, Action::Accept);
-        loopback.interface = Some(InterfaceMatch::new(LOOPBACK_INTERFACE));
-        nodes.push(loopback);
-        // (ct state invalid drop / established accept: never a new connection)
+        let mut dhcp = Node::base(BASE_DHCP, Action::Accept);
+        dhcp.protocols = ProtoMatch::Udp;
+        dhcp.ports = vec![(DHCP_CLIENT_PORT, DHCP_CLIENT_PORT)];
+        dhcp.source_port = Some(DHCP_SERVER_PORT);
+        nodes.push(dhcp);
         let mut dhcpv6 = Node::base(BASE_DHCPV6, Action::Accept);
         dhcpv6.family = Some(IpFamily::V6);
         dhcpv6.protocols = ProtoMatch::Udp;
         dhcpv6.ports = vec![(DHCPV6_CLIENT_PORT, DHCPV6_CLIENT_PORT)];
         dhcpv6.source_port = Some(DHCPV6_SERVER_PORT);
-        let link_local =
-            ipnetwork::Ipv6Network::new(std::net::Ipv6Addr::new(0xFE80, 0, 0, 0, 0, 0, 0, 0), 10)
-                .map(IpNetwork::V6);
-        dhcpv6.sources = Some(AddrSet::from_networks(true, link_local.as_ref().ok()));
+        dhcpv6.sources = Some(AddrSet::from_networks(
+            true,
+            &parse_networks(&["fe80::/10"]),
+        ));
         nodes.push(dhcpv6);
-        nodes.push(Node::icmp(BASE_ICMP_REDIRECT, IpFamily::V4, Action::Drop));
-        nodes.push(Node::icmp(BASE_ICMPV6_REDIRECT, IpFamily::V6, Action::Drop));
 
         for rule in &ruleset.rules {
             push_user_rule(&mut nodes, rule);
         }
 
-        // ICMP accepts come after the user rules (a user Drop rule stops ICMP
-        // too); the neighbor discovery accept is exempt from the ICMP limit
-        let icmp_rate = (advanced.icmp_rate_limit > 0).then_some(Condition::Rate {
-            limit: RateLimit {
-                count: advanced.icmp_rate_limit,
-                unit: TimeUnit::Second,
-                burst: None,
-                per_source: false,
-            },
-            over: false,
-        });
-        if icmp_rate.is_some() {
-            nodes.push(Node::icmp(BASE_ICMPV6_ND, IpFamily::V6, Action::Accept));
+        // Local network, ICMP: after the user rules (a user Drop rule stops
+        // them too)
+        nodes.push(Node::icmp(BASE_IGMP, IpFamily::V4, Action::Accept));
+        if advanced.local_discovery && advanced.egress_profile == EgressProfile::Desktop {
+            push_discovery_nodes(&mut nodes);
         }
         let (icmp, icmpv6) = if advanced.strict_icmp {
             (BASE_ICMP_STRICT, BASE_ICMPV6_STRICT)
         } else {
             (BASE_ICMP, BASE_ICMPV6)
         };
-        for (comment, family) in [(icmp, IpFamily::V4), (icmpv6, IpFamily::V6)] {
-            let mut node = Node::icmp(comment, family, Action::Accept);
-            node.conditions.extend(icmp_rate.clone());
-            nodes.push(node);
-        }
+        nodes.push(Node::icmp(icmp, IpFamily::V4, Action::Accept));
+        nodes.push(Node::icmp(icmpv6, IpFamily::V6, Action::Accept));
 
         // (drop logging, if enabled: logs only)
         let mut reject = Node::base(BASE_FINAL_REJECT, Action::Reject);
@@ -1035,10 +1133,45 @@ impl InputChain {
     }
 }
 
+/// Parses networks of the built-in rules (constants, valid by construction;
+/// an invalid one would be skipped, and the tests compare the model with the
+/// generator).
+fn parse_networks(list: &[&str]) -> Vec<IpNetwork> {
+    list.iter().filter_map(|n| n.parse().ok()).collect()
+}
+
+/// Adds the local discovery nodes: the multicast accepts (scoped by
+/// destination group) and the accepts of unicast replies to our own queries
+/// from private and link-local sources.
+fn push_discovery_nodes(nodes: &mut Vec<Node>) {
+    for (family, groups, ports, name) in DISCOVERY_GROUPS {
+        let groups = parse_networks(groups);
+        let mut node = Node::base(name, Action::Accept);
+        node.family = Some(family);
+        node.protocols = ProtoMatch::Udp;
+        node.ports = ports.iter().map(|&p| (p, p)).collect();
+        let set = AddrSet::from_networks(family.is_v6(), &groups);
+        node.destinations = Some((groups, set));
+        nodes.push(node);
+    }
+    for (family, sources, name) in DISCOVERY_REPLY_SOURCES {
+        let mut node = Node::base(name, Action::Accept);
+        node.family = Some(family);
+        node.protocols = ProtoMatch::Udp;
+        node.sources = Some(AddrSet::from_networks(
+            family.is_v6(),
+            &parse_networks(sources),
+        ));
+        node.conditions = vec![Condition::Unicast, Condition::DiscoveryReply];
+        nodes.push(node);
+    }
+}
+
 /// Adds the nodes for one user rule, mirroring the generator's
 /// `add_user_rule` (family copies, skipped rules).
 fn push_user_rule(nodes: &mut Vec<Node>, rule: &Rule) {
-    // Output rules never see inbound packets (and are skipped in Desktop mode)
+    // Output and Forward rules never see packets addressed to this computer
+    // (and are only generated in Server Mode / with "Block forwarding")
     if !rule.enabled || rule.chain != Chain::Input {
         return;
     }
@@ -1604,7 +1737,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dhcpv6_and_rpf_base_rules_are_conditional() {
+    fn test_dhcp_and_rpf_base_rules_are_conditional() {
         let mut rs = ruleset(vec![]);
         let r = reach(&rs, &unknown(Transport::Udp, 546, IpFamily::V6));
         assert_eq!(r.to_string(), "fe80::/10 (from source port 547)");
@@ -1613,6 +1746,14 @@ mod tests {
             Some(&Decider::BaseRule(BASE_DHCPV6)),
             "the base rule decides"
         );
+        for family in [IpFamily::V4, IpFamily::V6] {
+            let r = reach(&rs, &unknown(Transport::Udp, 68, family));
+            assert_eq!(r.to_string(), "everyone (from source port 67)");
+            assert_eq!(r.deciding(), Some(&Decider::BaseRule(BASE_DHCP)));
+        }
+        let v = evaluate_inbound(&rs, &probe(Transport::Udp, 68, "10.0.0.1"));
+        assert_eq!(first(&v), Action::Reject, "not from port 67");
+        assert!(reach(&rs, &unknown(Transport::Tcp, 68, IpFamily::V4)).nobody());
         rs.advanced_security.enable_rpf = true;
         rs.rules.push(rule("all", Protocol::Any, &[], &[]));
         let v = evaluate_inbound(&rs, &probe(Transport::Tcp, 80, "10.0.0.1"));
@@ -1623,6 +1764,53 @@ mod tests {
         );
         let r = reach(&rs, &unknown(Transport::Tcp, 80, IpFamily::V4));
         assert!(!r.exact, "the RPF drop is not subtracted");
+    }
+
+    /// Local discovery: the multicast accepts depend on the destination
+    /// (the group), the reply accepts on being a reply to our own query, so
+    /// neither decides a unicast probe; a user drop rule comes first.
+    #[test]
+    fn test_local_discovery_is_conditional() {
+        let mut rs = ruleset(vec![]);
+        rs.advanced_security.local_discovery = true;
+        let r = reach(&rs, &unknown(Transport::Udp, 5353, IpFamily::V4));
+        assert!(r.open == Reach::Nobody, "{r}");
+        assert_eq!(r.conditional[0].by, Decider::BaseRule(BASE_MDNS));
+        assert_eq!(
+            r.conditional[0].when,
+            [Condition::Destination(vec![
+                "224.0.0.251/32".parse().unwrap()
+            ])]
+        );
+        assert_eq!(r.conditional[1].by, Decider::BaseRule(BASE_DISCOVERY_REPLY));
+        assert_eq!(
+            r.conditional[1].to_string(),
+            "10.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 \
+             (unicast and replying to our own discovery queries)"
+        );
+        let r6 = reach(&rs, &unknown(Transport::Udp, 3702, IpFamily::V6));
+        assert_eq!(r6.conditional[0].by, Decider::BaseRule(BASE_SSDP_V6));
+        assert!(reach(&rs, &unknown(Transport::Tcp, 5353, IpFamily::V4)).nobody());
+
+        // A unicast probe to our own address: neither applies
+        let mut p = probe(Transport::Udp, 1900, "192.168.1.20");
+        p.destination = Some("192.168.1.10".parse().unwrap());
+        assert_eq!(first(&evaluate_inbound(&rs, &p)), Action::Reject);
+        // ... a probe to the group: accepted
+        p.destination = Some("239.255.255.250".parse().unwrap());
+        assert_eq!(
+            evaluate_inbound(&rs, &p),
+            Verdict::Accepted(Decider::BaseRule(BASE_SSDP))
+        );
+        // A user drop rule comes first
+        let mut drop = rule("no lan", Protocol::Any, &[], &["192.168.1.0/24"]);
+        drop.action = Action::Drop;
+        rs.rules.push(drop);
+        assert_eq!(first(&evaluate_inbound(&rs, &p)), Action::Drop);
+        // Server Mode ignores the setting
+        rs.rules.clear();
+        rs.advanced_security.egress_profile = crate::core::firewall::EgressProfile::Server;
+        assert_eq!(first(&evaluate_inbound(&rs, &p)), Action::Reject);
     }
 
     #[test]
@@ -1705,19 +1893,41 @@ mod tests {
 
     /// The modelled chain has the generator's base rules, by their real
     /// comments, in the generator's order relative to each other and to the
-    /// user rules, for every setting that changes the chain.
+    /// user rules, for every combination of the settings that change it.
+    /// Output and Forward user rules are part of every ruleset: they must not
+    /// show up in the input chain, whether or not their chain is active.
     #[test]
     fn test_chain_order_matches_the_generator() {
-        for bits in 0..16u8 {
-            let mut rs = ruleset(vec![rule("web", Protocol::Tcp, &[80], &[])]);
+        for bits in 0..128u8 {
+            let mut output = rule("out", Protocol::Udp, &[53], &[]);
+            output.chain = Chain::Output;
+            let mut forward = rule("fwd", Protocol::Tcp, &[8080], &[]);
+            forward.chain = Chain::Forward;
+            let mut rs = ruleset(vec![
+                rule("web", Protocol::Tcp, &[80], &[]),
+                output,
+                forward,
+            ]);
             let advanced = &mut rs.advanced_security;
             advanced.enable_rpf = bits & 1 != 0;
             advanced.strict_icmp = bits & 2 != 0;
             advanced.icmp_rate_limit = if bits & 4 == 0 { 0 } else { 10 };
             advanced.log_dropped = bits & 8 != 0;
+            advanced.local_discovery = bits & 16 != 0;
+            advanced.block_forwarding = bits & 32 != 0;
+            advanced.egress_profile = if bits & 64 == 0 {
+                EgressProfile::Desktop
+            } else {
+                EgressProfile::Server
+            };
             let modelled = modelled_order(&InputChain::new(&rs));
-            assert_eq!(modelled, generated_order(&rs), "settings {bits:04b}");
+            assert_eq!(modelled, generated_order(&rs), "settings {bits:07b}");
             assert!(modelled.contains(&USER_RULES));
+            assert_eq!(
+                modelled.contains(&BASE_MDNS),
+                bits & 16 != 0 && bits & 64 == 0,
+                "discovery only in Desktop mode"
+            );
             // The names are the comments in the ruleset (the final reject has
             // none; its origin names it)
             let text = rs.to_nft_text();
@@ -1727,24 +1937,23 @@ mod tests {
                 }
             }
         }
-        // Server mode only changes the output chain
-        let mut rs = ruleset(vec![rule("web", Protocol::Tcp, &[80], &[])]);
-        rs.advanced_security.egress_profile = crate::core::firewall::EgressProfile::Server;
-        assert_eq!(modelled_order(&InputChain::new(&rs)), generated_order(&rs));
     }
 
-    /// The ICMP rules sit after the user rules (as generated), with the
-    /// neighbor discovery exemption first when ICMP is rate limited; none of
+    /// The ping limit sits before the user rules (as generated, before the
+    /// established accept), the IGMP and ICMP accepts after them; none of
     /// them changes a TCP/UDP verdict.
     #[test]
     fn test_icmp_section_follows_user_rules_and_never_decides_tcp_udp() {
-        let mut rs = ruleset(vec![]);
+        let mut rs = ruleset(vec![rule("x", Protocol::Icmp, &[], &[])]);
         rs.advanced_security.icmp_rate_limit = 5;
         let order = modelled_order(&InputChain::new(&rs));
         let at = |name: &str| order.iter().position(|n| *n == name).unwrap();
-        assert!(at(BASE_ICMPV6_REDIRECT) < at(BASE_ICMPV6_ND));
-        assert!(at(BASE_ICMPV6_ND) < at(BASE_ICMP));
+        assert!(at(BASE_ICMPV6_REDIRECT) < at(BASE_PING_LIMIT));
+        assert!(at(BASE_PING_LIMIT_V6) < at(USER_RULES));
+        assert!(at(USER_RULES) < at(BASE_IGMP));
+        assert!(at(BASE_IGMP) < at(BASE_ICMP));
         assert!(at(BASE_ICMPV6) < at(BASE_FINAL_REJECT));
+        rs.rules.clear();
 
         let mut all = rule("everything", Protocol::Any, &[], &[]);
         all.action = Action::Drop;

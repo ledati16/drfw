@@ -626,7 +626,7 @@ prop_compose! {
         ],
         interface in arb_interface(),
         enabled in prop::bool::weighted(0.9),
-        output_chain in prop::bool::weighted(0.1),
+        chain in prop_oneof![8 => Just(Chain::Input), 1 => Just(Chain::Output), 1 => Just(Chain::Forward)],
         action in prop_oneof![2 => Just(Action::Accept), 2 => Just(Action::Drop), 1 => Just(Action::Reject)],
         reject_type in prop_oneof![
             Just(RejectType::Default),
@@ -656,10 +656,15 @@ prop_compose! {
         r.sources = sources.into_iter().filter(keep).collect();
         r.destinations = destinations.into_iter().filter(keep).collect();
         r.enabled = enabled;
-        if output_chain {
-            r.chain = Chain::Output;
-        } else {
-            r.interface = interface;
+        r.chain = chain;
+        match chain {
+            Chain::Input => r.interface = interface,
+            Chain::Output => {}
+            // Forwarded: both interfaces (the probe's input interface too)
+            Chain::Forward => {
+                r.interface = interface;
+                r.output_interface = Some(SERVER_IFACE.to_string());
+            }
         }
         r.action = action;
         r.reject_type = if reject_type == RejectType::TcpReset && protocol != Protocol::Tcp {
@@ -684,7 +689,8 @@ prop_compose! {
 prop_compose! {
     fn arb_ruleset()(
         rules in prop::collection::vec(arb_rule(), 0..9),
-        settings in any::<[bool; 4]>(),
+        settings in any::<[bool; 6]>(),
+        icmp_rate in prop_oneof![3 => Just(0u32), 1 => 1u32..20],
     ) -> FirewallRuleset {
         let mut ruleset = FirewallRuleset::new();
         ruleset.rules = rules;
@@ -693,6 +699,9 @@ prop_compose! {
         adv.egress_profile = if settings[1] { EgressProfile::Server } else { EgressProfile::Desktop };
         adv.strict_icmp = settings[2];
         adv.log_dropped = settings[3];
+        adv.local_discovery = settings[4];
+        adv.block_forwarding = settings[5];
+        adv.icmp_rate_limit = icmp_rate;
         ruleset
     }
 }
@@ -915,6 +924,26 @@ fn test_evaluator_agrees_with_kernel_on_directed_cases() {
         probe(true, "fd09::2", "fd09::1", 80),
         probe(false, "fd09::3", "fd09::1", 5353),
         probe(true, "10.9.0.3", "10.9.0.1", 22),
+    ];
+    assert_agrees(&ruleset, &probes).unwrap_or_else(|e| panic!("{e}"));
+
+    // Local discovery, the DHCP replies accept, the ping limit and a
+    // Forward rule: none of them decides a unicast probe to the host
+    let mut ruleset = FirewallRuleset::new();
+    let adv = &mut ruleset.advanced_security;
+    adv.local_discovery = true;
+    adv.block_forwarding = true;
+    adv.icmp_rate_limit = 5;
+    let mut forward = user_rule("forward drop", Protocol::Any, vec![]);
+    forward.chain = Chain::Forward;
+    forward.action = Action::Drop;
+    let web = user_rule("web", Protocol::Tcp, vec![PortEntry::Single(80)]);
+    ruleset.rules = vec![forward, web];
+    let probes = [
+        probe(false, "10.9.0.2", "10.9.0.1", 5353), // rejected (mDNS is multicast)
+        probe(false, "fd09::2", "fd09::1", 1900),   // rejected (no query sent)
+        probe(false, "10.9.0.2", "10.9.0.1", 68),   // rejected (not from port 67)
+        probe(true, "10.9.0.2", "10.9.0.1", 80),    // accepted (forward rule ignored)
     ];
     assert_agrees(&ruleset, &probes).unwrap_or_else(|e| panic!("{e}"));
 }

@@ -25,8 +25,7 @@ use std::fmt;
 use uuid::Uuid;
 
 use super::firewall::{
-    Action, AdvancedSecuritySettings, Chain, EgressProfile, FirewallRuleset, MAX_RULES, PortEntry,
-    Rule,
+    Action, AdvancedSecuritySettings, Chain, FirewallRuleset, MAX_RULES, PortEntry, Rule,
 };
 use super::rule_constraints::{
     ip_compatible_with_protocol, protocol_is_icmp, reject_type_valid_for_protocol,
@@ -362,7 +361,7 @@ impl Rule {
         }
 
         // nftables only sets iifname on input and oifname on output; the other
-        // one would make the rule never match.
+        // one would make the rule never match. Forwarded packets have both.
         if self.interface.is_some() && self.chain == Chain::Output {
             issues.push(RuleIssue::new(
                 RuleField::Interface,
@@ -431,11 +430,6 @@ impl Rule {
             }
         }
     }
-
-    /// `true` when this rule would be part of the applied ruleset.
-    fn is_applied(&self, egress: EgressProfile) -> bool {
-        self.enabled && !(egress == EgressProfile::Desktop && self.chain == Chain::Output)
-    }
 }
 
 impl AdvancedSecuritySettings {
@@ -486,7 +480,6 @@ impl FirewallRuleset {
     /// Returns the full report when anything is wrong.
     pub fn validate(&self) -> Result<(), ValidationReport> {
         let mut report = ValidationReport::default();
-        let egress = self.advanced_security.egress_profile;
 
         if self.rules.len() > MAX_RULES {
             report.ruleset.push(RulesetIssue::TooManyRules {
@@ -505,7 +498,7 @@ impl FirewallRuleset {
                 report.rules.push(RuleProblem {
                     rule_id: rule.id,
                     label: rule.label.clone(),
-                    applies: rule.is_applied(egress),
+                    applies: rule.takes_effect(&self.advanced_security),
                     issues,
                 });
             }
@@ -593,7 +586,7 @@ impl FirewallRuleset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::firewall::{Protocol, RateLimit, RejectType, TimeUnit};
+    use crate::core::firewall::{EgressProfile, Protocol, RateLimit, RejectType, TimeUnit};
     use crate::core::test_helpers::create_test_rule;
 
     fn base_rule() -> Rule {
@@ -755,6 +748,25 @@ mod tests {
         rule.chain = Chain::Output;
         rule.interface = Some("eth0".into());
         assert_eq!(fields(&rule), vec![RuleField::Interface]);
+        // Forwarded packets have both an input and an output interface
+        rule.chain = Chain::Forward;
+        rule.output_interface = Some("veth*".into());
+        assert!(rule.validate().is_ok());
+    }
+
+    /// Forward rules only take part in the applied ruleset (and only block
+    /// applying when invalid) with "Block forwarding" on.
+    #[test]
+    fn test_forward_rules_apply_only_with_block_forwarding() {
+        let mut rule = base_rule();
+        rule.chain = Chain::Forward;
+        rule.ports = vec![PortEntry::Single(0)];
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.push(rule);
+        assert!(ruleset.validate().is_err(), "reported");
+        assert!(ruleset.validate_for_apply().is_ok(), "not applied");
+        ruleset.advanced_security.block_forwarding = true;
+        assert!(ruleset.validate_for_apply().is_err());
     }
 
     #[test]

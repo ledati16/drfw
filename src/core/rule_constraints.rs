@@ -285,6 +285,8 @@ pub enum InterfaceType {
 /// In nftables:
 /// - Input chain: packets arrive on an interface (iif is relevant)
 /// - Output chain: packets leave on an interface (oif is relevant)
+/// - Forward chain: packets arrive on one interface and leave on another
+///   (both are relevant)
 ///
 /// # Examples
 ///
@@ -293,11 +295,12 @@ pub enum InterfaceType {
 /// use drfw::core::rule_constraints::chain_uses_input_interface;
 ///
 /// assert!(chain_uses_input_interface(Chain::Input));
+/// assert!(chain_uses_input_interface(Chain::Forward));
 /// assert!(!chain_uses_input_interface(Chain::Output));
 /// ```
 #[inline]
 pub fn chain_uses_input_interface(chain: Chain) -> bool {
-    chain == Chain::Input
+    matches!(chain, Chain::Input | Chain::Forward)
 }
 
 /// Returns `true` if the chain uses output interface (oif) matching.
@@ -309,17 +312,20 @@ pub fn chain_uses_input_interface(chain: Chain) -> bool {
 /// use drfw::core::rule_constraints::chain_uses_output_interface;
 ///
 /// assert!(chain_uses_output_interface(Chain::Output));
+/// assert!(chain_uses_output_interface(Chain::Forward));
 /// assert!(!chain_uses_output_interface(Chain::Input));
 /// ```
 #[inline]
 pub fn chain_uses_output_interface(chain: Chain) -> bool {
-    chain == Chain::Output
+    matches!(chain, Chain::Output | Chain::Forward)
 }
 
 /// Returns which interface type is semantically appropriate for a chain.
 ///
 /// While both interface fields can technically be set, this indicates
-/// which one is most relevant for the chain direction.
+/// which one is most relevant for the chain direction. Forward rules use
+/// both ([`chain_uses_input_interface`] and [`chain_uses_output_interface`]);
+/// for them this returns the input interface, where the traffic comes from.
 ///
 /// # Examples
 ///
@@ -333,7 +339,7 @@ pub fn chain_uses_output_interface(chain: Chain) -> bool {
 #[inline]
 pub fn chain_interface_type(chain: Chain) -> InterfaceType {
     match chain {
-        Chain::Input => InterfaceType::Input,
+        Chain::Input | Chain::Forward => InterfaceType::Input,
         Chain::Output => InterfaceType::Output,
     }
 }
@@ -462,6 +468,7 @@ mod tests {
     #[test]
     fn test_chain_uses_input_interface() {
         assert!(chain_uses_input_interface(Chain::Input));
+        assert!(chain_uses_input_interface(Chain::Forward));
         assert!(!chain_uses_input_interface(Chain::Output));
     }
 

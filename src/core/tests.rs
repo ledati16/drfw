@@ -53,17 +53,20 @@ mod tests_impl {
         assert!(json["nftables"].is_array());
         let nft = json["nftables"].as_array().unwrap();
 
-        // table(3: add, delete, add) + chains(3) + base(8: lo, invalid, ct, dhcpv6, icmp_redir, icmpv6_redir, icmp, icmpv6) + rejection(1) + counter(1) = 16
-        assert_eq!(nft.len(), 16);
+        // table(3: add, delete, add) + chains(3) + base(9: lo, invalid, icmp_redir,
+        // icmpv6_redir, ct, loopback src, loopback dst, dhcp, dhcpv6) + local(1: igmp)
+        // + icmp(2) + rejection(1) + counter(1) = 20
+        assert_eq!(nft.len(), 20);
 
         assert_eq!(nft[0]["add"]["table"]["name"], "drfw");
         assert_eq!(nft[1]["delete"]["table"]["name"], "drfw");
         assert_eq!(nft[2]["add"]["table"]["name"], "drfw");
     }
     /// Index of the first user rule in a default ruleset: table setup (3),
-    /// chains (3), loopback, invalid, established, `DHCPv6`, two redirect
-    /// drops. The ICMP allow rules follow the user rules.
-    const FIRST_USER_RULE: usize = 12;
+    /// chains (3), loopback, invalid, two redirect drops, established, two
+    /// loopback-address drops, DHCP, `DHCPv6`. The IGMP and ICMP allow rules
+    /// follow the user rules.
+    const FIRST_USER_RULE: usize = 15;
 
     #[test]
     fn test_single_rule_json() {
@@ -77,8 +80,8 @@ mod tests_impl {
         let json = ruleset.to_nftables_json();
         let nft = json["nftables"].as_array().unwrap();
 
-        // 16 base + 1 user rule = 17
-        assert_eq!(nft.len(), 17);
+        // 20 base + 1 user rule = 21
+        assert_eq!(nft.len(), 21);
 
         let user_rule = &nft[FIRST_USER_RULE]["add"]["rule"];
         assert_eq!(user_rule["chain"], "input");
@@ -120,8 +123,8 @@ mod tests_impl {
         let json = ruleset.to_nftables_json();
         let nft = json["nftables"].as_array().unwrap();
 
-        // 16 base + 1 user rule = 17
-        assert_eq!(nft.len(), 17);
+        // 20 base + 1 user rule = 21
+        assert_eq!(nft.len(), 21);
 
         let user_rule = &nft[FIRST_USER_RULE]["add"]["rule"];
         let expr = user_rule["expr"].as_array().unwrap();
@@ -192,15 +195,99 @@ mod tests_impl {
             }
         }
 
-        // Verify correct ordering (loopback → invalid → established → dhcpv6 → drop redirects → icmp → icmpv6)
-        assert_eq!(rule_comments[0], "allow from loopback");
-        assert_eq!(rule_comments[1], "early drop of invalid connections");
-        assert_eq!(rule_comments[2], "allow tracked connections");
-        assert_eq!(rule_comments[3], "allow dhcpv6 client replies");
-        assert_eq!(rule_comments[4], "drop icmp redirects");
-        assert_eq!(rule_comments[5], "drop icmpv6 redirects");
-        assert_eq!(rule_comments[6], "allow icmp");
-        assert_eq!(rule_comments[7], "allow icmp v6");
+        // Redirect drops before the established/related accept (a redirect
+        // quoting one of our connections is `related`); checks of new
+        // packets after it; IGMP and ICMP after the (no) user rules
+        assert_eq!(
+            rule_comments,
+            [
+                "allow from loopback",
+                "early drop of invalid connections",
+                "drop icmp redirects",
+                "drop icmpv6 redirects",
+                "allow tracked connections",
+                "drop loopback source addresses from the network",
+                "drop loopback destination addresses from the network",
+                "allow dhcp client replies",
+                "allow dhcpv6 client replies",
+                "allow igmp (multicast group membership)",
+                "allow icmp",
+                "allow icmp v6",
+            ]
+        );
+        let text = ruleset.to_nft_text();
+        for line in [
+            "icmp type redirect drop comment \"drop icmp redirects\"",
+            "iifname != \"lo\" ip saddr 127.0.0.0/8 drop comment",
+            "iifname != \"lo\" ip daddr 127.0.0.0/8 drop comment",
+            "udp sport 67 udp dport 68 accept comment \"allow dhcp client replies\"",
+            "ip protocol igmp accept comment \"allow igmp (multicast group membership)\"",
+            "pkttype host limit rate 5/second burst 5 packets counter reject with icmpx type admin-prohibited",
+        ] {
+            assert!(text.contains(line), "{line} missing:\n{text}");
+        }
+    }
+
+    /// The ICMP rate limit drops echo requests over the limit, before the
+    /// established accept (every echo request of a running ping is
+    /// `established`); the ICMP accepts carry no limit, so neighbor
+    /// discovery, router advertisements and MLD are never limited.
+    #[test]
+    fn test_icmp_rate_limit_limits_echo_requests_before_established() {
+        for strict in [false, true] {
+            let mut ruleset = FirewallRuleset::new();
+            ruleset.advanced_security.strict_icmp = strict;
+            ruleset.advanced_security.icmp_rate_limit = 10;
+            let json = ruleset.to_nftables_json();
+            let comments: Vec<&str> = json["nftables"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item["add"]["rule"]["comment"].as_str())
+                .collect();
+            let at = |c: &str| comments.iter().position(|x| *x == c).unwrap();
+            assert!(at("drop icmpv6 redirects") < at("limit incoming pings"));
+            assert!(at("limit incoming pings (ipv6)") < at("allow tracked connections"));
+            let text = ruleset.to_nft_text();
+            for line in [
+                "meta l4proto icmp icmp type echo-request limit rate over 10/second burst 5 packets drop comment \"limit incoming pings\"",
+                "meta l4proto ipv6-icmp icmpv6 type echo-request limit rate over 10/second burst 5 packets drop comment \"limit incoming pings (ipv6)\"",
+            ] {
+                assert!(text.contains(line), "{line} missing:\n{text}");
+            }
+            assert_eq!(
+                text.matches("limit rate").count(),
+                3,
+                "pings + final reject:\n{text}"
+            );
+            assert!(!text.contains("neighbor discovery (not rate limited)"));
+        }
+        let text = FirewallRuleset::new().to_nft_text();
+        assert!(!text.contains("echo-request limit"), "{text}");
+    }
+
+    /// Strict `ICMPv6` accepts the types RFC 4890 4.4.1 says must not be
+    /// dropped, including router solicitations and MLD reports (hosts that
+    /// act as a router for VMs or a hotspot receive them).
+    #[test]
+    fn test_strict_icmpv6_types() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.advanced_security.strict_icmp = true;
+        let text = ruleset.to_nft_text();
+        assert!(
+            text.contains(
+                "meta l4proto ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, \
+                 time-exceeded, parameter-problem, echo-request, echo-reply, mld-listener-query, \
+                 mld-listener-report, mld-listener-done, nd-router-solicit, nd-router-advert, \
+                 nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } accept \
+                 comment \"allow essential icmpv6 (strict mode)\""
+            ),
+            "{text}"
+        );
+        assert!(text.contains(
+            "meta l4proto icmp icmp type { echo-reply, destination-unreachable, echo-request, \
+             time-exceeded, parameter-problem } accept comment \"allow essential icmp (strict mode)\""
+        ));
     }
 
     /// User rules sit between the redirect drops and the ICMP allow rules,
@@ -238,54 +325,6 @@ mod tests_impl {
         }
     }
 
-    /// With an ICMP rate limit, neighbor discovery, router advertisements and
-    /// MLD queries are accepted unlimited, before the rate-limited rule.
-    #[test]
-    fn test_icmp_rate_limit_exempts_neighbor_discovery() {
-        for strict in [false, true] {
-            let mut ruleset = FirewallRuleset::new();
-            ruleset.advanced_security.strict_icmp = strict;
-            ruleset.advanced_security.icmp_rate_limit = 10;
-            let json = ruleset.to_nftables_json();
-            let rules: Vec<&serde_json::Value> = json["nftables"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|item| item["add"].get("rule"))
-                .collect();
-            let nd = rules
-                .iter()
-                .position(|r| r["comment"] == "allow icmpv6 neighbor discovery (not rate limited)")
-                .expect("ND exemption");
-            let nd_text = rules[nd]["expr"].to_string();
-            assert!(!nd_text.contains("\"limit\""), "{nd_text}");
-            for t in [
-                "nd-neighbor-solicit",
-                "nd-neighbor-advert",
-                "nd-router-advert",
-                "mld-listener-query",
-            ] {
-                assert!(nd_text.contains(t), "{t} missing: {nd_text}");
-            }
-            let limited_v6 = rules
-                .iter()
-                .position(|r| {
-                    r["comment"].as_str().is_some_and(|c| c.contains("icmp"))
-                        && r["expr"].to_string().contains("ipv6-icmp")
-                        && r["expr"].to_string().contains("\"limit\"")
-                })
-                .expect("rate-limited icmpv6 rule");
-            assert!(nd < limited_v6);
-        }
-        // Without a rate limit there is nothing to exempt
-        let json = FirewallRuleset::new().to_nftables_json();
-        assert!(
-            !json
-                .to_string()
-                .contains("neighbor discovery (not rate limited)")
-        );
-    }
-
     #[test]
     fn test_text_json_ordering_match() {
         // Verify that text and JSON generation produce the same rule order
@@ -317,7 +356,7 @@ mod tests_impl {
         // Verify JSON has same order
         assert_eq!(comments[0], "allow from loopback");
         assert_eq!(comments[1], "early drop of invalid connections");
-        assert_eq!(comments[2], "allow tracked connections");
+        assert_eq!(comments[4], "allow tracked connections");
     }
 
     #[test]
@@ -379,15 +418,16 @@ mod tests_impl {
         // Verify all expected rules are present
         assert_eq!(
             json_comments.len(),
-            11,
-            "Should have 8 base rules + 3 user rules"
+            15,
+            "Should have 12 base rules + 3 user rules"
         );
-        // 6 base rules, the user rules, then the 2 ICMP allow rules
-        assert_eq!(json_comments[6], "SSH Access");
-        assert_eq!(json_comments[7], "Web Server");
-        assert_eq!(json_comments[8], "DNS");
-        assert_eq!(json_comments[9], "allow icmp");
-        assert_eq!(json_comments[10], "allow icmp v6");
+        // 9 base rules, the user rules, then IGMP and the 2 ICMP allow rules
+        assert_eq!(json_comments[9], "SSH Access");
+        assert_eq!(json_comments[10], "Web Server");
+        assert_eq!(json_comments[11], "DNS");
+        assert_eq!(json_comments[12], "allow igmp (multicast group membership)");
+        assert_eq!(json_comments[13], "allow icmp");
+        assert_eq!(json_comments[14], "allow icmp v6");
     }
 
     #[test]
@@ -889,8 +929,8 @@ mod integration_tests {
         let json = ruleset.to_nftables_json();
         let nft_array = json["nftables"].as_array().unwrap();
 
-        // Should have base rules (16) + 3 user rules
-        assert_eq!(nft_array.len(), 19);
+        // Should have base rules (20) + 3 user rules
+        assert_eq!(nft_array.len(), 23);
 
         // Verify JSON can be serialized
         let json_str = serde_json::to_string(&json);
@@ -1732,6 +1772,7 @@ mod generation_semantics_tests {
                 "early drop of invalid outbound connections",
                 "allow outbound tracked connections",
                 "allow outbound ipv6 neighbor discovery",
+                "allow outbound igmp (multicast group membership)",
                 "allow outbound dhcp client requests",
                 "allow outbound dhcpv6 client requests",
                 "Outbound HTTPS",
@@ -1772,6 +1813,166 @@ mod generation_semantics_tests {
         let settings: crate::core::firewall::AdvancedSecuritySettings =
             serde_json::from_str("{}").unwrap();
         assert!(!settings.block_forwarding);
+        assert!(!settings.local_discovery, "existing profiles do not change");
+    }
+
+    /// Forward rules go into the forward chain, after its base rules, only
+    /// with "Block forwarding" on; both interfaces are matched.
+    #[test]
+    fn test_forward_user_rules() {
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = create_test_rule("Routed web", Some(8080));
+        rule.chain = Chain::Forward;
+        rule.interface = Some("veth-a".into());
+        rule.output_interface = Some("veth-b".into());
+        rule.rebuild_caches();
+        ruleset.rules.push(rule);
+        let text = ruleset.to_nft_text();
+        assert!(
+            !text.contains("Routed web"),
+            "forward policy accepts: {text}"
+        );
+
+        ruleset.advanced_security.block_forwarding = true;
+        let cmds = ruleset.build_commands();
+        let comments: Vec<&str> = rules_in_chain(&cmds, "forward")
+            .iter()
+            .filter_map(|r| r["comment"].as_str())
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                "drop invalid forwarded connections",
+                "allow tracked forwarded connections",
+                "Routed web"
+            ]
+        );
+        assert!(
+            rules_in_chain(&cmds, "input")
+                .iter()
+                .all(|r| r["comment"] != "Routed web")
+        );
+        let text = ruleset.to_nft_text();
+        assert!(
+            text.contains(
+                "meta l4proto tcp iifname \"veth-a\" oifname \"veth-b\" tcp dport 8080 accept \
+                 comment \"Routed web\""
+            ),
+            "{text}"
+        );
+        // Serialized as "Forward"
+        let json = serde_json::to_value(&ruleset.rules[0]).unwrap();
+        assert_eq!(json["chain"], "Forward");
+    }
+
+    /// Anti-spoofing: strict reverse-path check keyed with the mark (policy
+    /// routing by fwmark), after the established accept and the loopback
+    /// accept, before the DHCP replies and user rules.
+    #[test]
+    fn test_rpf_after_established_with_mark() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.advanced_security.enable_rpf = true;
+        let cmds = ruleset.build_commands();
+        let comments: Vec<&str> = rules_in_chain(&cmds, "input")
+            .iter()
+            .filter_map(|r| r["comment"].as_str())
+            .collect();
+        let at = |c: &str| comments.iter().position(|x| *x == c).unwrap();
+        let rpf = at("drop new packets with spoofed source addresses (RPF)");
+        assert!(at("allow from loopback") < rpf);
+        assert!(at("allow tracked connections") < rpf);
+        assert!(rpf < at("allow dhcp client replies"));
+        let text = ruleset.to_nft_text();
+        assert!(text.contains(
+            "fib saddr . mark . iif oif missing drop comment \
+             \"drop new packets with spoofed source addresses (RPF)\""
+        ));
+    }
+
+    /// Local discovery: the set, the output rule that fills it, and the
+    /// input accepts after the user rules and IGMP, before ICMP; Desktop
+    /// mode only.
+    #[test]
+    fn test_local_discovery_rules() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.push(create_test_rule("User", Some(22)));
+        ruleset.advanced_security.local_discovery = true;
+        let text = ruleset.to_nft_text();
+        let set = "    set discovery_reply {\n        type inet_service\n        flags dynamic,timeout\n        timeout 10s\n        size 1024\n    }";
+        assert!(text.contains(set), "{text}");
+        let input = [
+            "ip protocol igmp accept comment \"allow igmp (multicast group membership)\"",
+            "ip daddr 224.0.0.251 udp dport 5353 accept comment \"allow mdns\"",
+            "ip6 daddr ff02::fb udp dport 5353 accept comment \"allow mdns (ipv6)\"",
+            "ip daddr 239.255.255.250 udp dport { 1900, 3702 } accept comment \"allow ssdp and ws-discovery\"",
+            "ip6 daddr { ff02::c, ff05::c } udp dport { 1900, 3702 } accept comment \"allow ssdp and ws-discovery (ipv6)\"",
+            "pkttype host ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } udp dport @discovery_reply accept comment \"allow replies to our discovery queries\"",
+            "pkttype host ip6 saddr { fe80::/10, fc00::/7 } udp dport @discovery_reply accept comment \"allow replies to our discovery queries (ipv6)\"",
+        ];
+        let mut last = text.find("comment \"User\"").unwrap();
+        for line in input {
+            let at = text
+                .find(line)
+                .unwrap_or_else(|| panic!("{line} missing:\n{text}"));
+            assert!(at > last, "{line} out of order");
+            last = at;
+        }
+        assert!(last < text.find("# --- ICMP ---").unwrap());
+        let output = &text[text.find("chain output").unwrap()..];
+        assert!(output.contains(
+            "meta l4proto udp fib daddr type { broadcast, multicast } update @discovery_reply { udp sport } \
+             comment \"remember ports we send discovery queries from\""
+        ), "{output}");
+        // The output policy stays accept: the rule only records ports
+        assert_eq!(chain_policy(&ruleset, "output"), "accept");
+
+        // Off, or in Server Mode: none of it (IGMP stays)
+        for (on, egress) in [
+            (false, EgressProfile::Desktop),
+            (true, EgressProfile::Server),
+        ] {
+            ruleset.advanced_security.local_discovery = on;
+            ruleset.advanced_security.egress_profile = egress;
+            let text = ruleset.to_nft_text();
+            assert!(!text.contains("discovery_reply"), "{egress:?}: {text}");
+            assert!(!text.contains("discovery queries"), "{egress:?}: {text}");
+            assert!(!text.contains("mdns"));
+            assert!(text.contains("ip protocol igmp accept"));
+        }
+    }
+
+    /// Server Mode lets IGMP membership reports and MLD "done" messages out.
+    #[test]
+    fn test_server_mode_multicast_membership_out() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.advanced_security.egress_profile = EgressProfile::Server;
+        let text = ruleset.to_nft_text();
+        let output = &text[text.find("chain output").unwrap()..];
+        assert!(
+            output.contains(
+                "meta l4proto ipv6-icmp icmpv6 type { nd-router-solicit, nd-neighbor-solicit, \
+             nd-neighbor-advert, mld-listener-report, mld-listener-done, mld2-listener-report } \
+             accept comment \"allow outbound ipv6 neighbor discovery\""
+            ),
+            "{output}"
+        );
+        assert!(output.contains(
+            "ip protocol igmp accept comment \"allow outbound igmp (multicast group membership)\""
+        ));
+    }
+
+    /// Drop logging only logs unicast packets (like the reject after it).
+    #[test]
+    fn test_drop_log_is_unicast_only() {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.advanced_security.log_dropped = true;
+        let text = ruleset.to_nft_text();
+        assert!(
+            text.contains(
+                "pkttype host limit rate 5/minute burst 5 packets log prefix \"DRFW-DROP: \" level info"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

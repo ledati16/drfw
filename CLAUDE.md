@@ -1021,20 +1021,45 @@ checked with `nft -c` before use. Never parse `nft list` text output.
 4. **Confirm or revert:** token file; the root-side watcher reports the outcome
 
 ### Rule Ordering
-Input chain, in `build_commands()`:
-1. Optional RPF drop, loopback (bypass all checks)
-2. Invalid packet drops (avoid wasted cycles)
-3. Established/related connections (bulk traffic), `DHCPv6` client replies
-4. ICMP redirect drops
-5. User-defined rules, in profile order
-6. ICMP allow rules (with an ICMP rate limit: neighbor discovery, router
-   advertisements and MLD queries first, unlimited)
-7. Optional drop logging, rate-limited reject, counter, then the default policy
+Input chain, in `build_commands()` (the doc comment of `to_nftables_json()` is the
+reference; `core::evaluate` models the same order and a test compares them):
+1. Loopback accept, `ct state invalid` drop
+2. ICMP/ICMPv6 redirect drops: **before** established/related, because a redirect
+   quoting one of our connections is `related` (it would be accepted otherwise)
+3. With an ICMP rate limit: `icmp(v6) type echo-request limit rate over N/second drop`,
+   also before established/related (every echo request of a running ping is
+   `established`; a limit after it would only limit new pings)
+4. Established/related accept (bulk traffic)
+5. Checks of new packets only: drops of 127.0.0.0/8 source/destination from non-`lo`
+   (matters with `route_localnet=1`), optional RPF `fib saddr . mark . iif oif missing
+   drop`. After established/related so conntrack-vouched replies pass (a full-tunnel
+   VPN's underlay, de-NATed container replies to 127.0.0.1); the mark honours fwmark
+   policy routing
+6. DHCP (`udp sport 67 udp dport 68`) and `DHCPv6` client replies (untracked: the
+   request went to broadcast/multicast)
+7. User-defined Input rules, in profile order
+8. Local network: `ip protocol igmp accept` (always), then with Local network
+   discovery (Desktop only) mDNS/SSDP/WS-Discovery multicast accepts by destination
+   group and the `@discovery_reply` accepts (unicast from private/link-local sources
+   to a port that sent multicast/broadcast UDP in the last 10 s; the set is filled by
+   the output chain's first rule)
+9. ICMP allow rules (all types, or the strict set; no limit, so neighbor discovery,
+   router advertisements and MLD are never rate limited)
+10. Optional drop logging (`pkttype host` only), rate-limited reject of unicast, counter,
+    then the default policy
 
-User rules come **before** the ICMP allows so a user Drop/Reject rule ("drop
-everything from X") also stops ICMP. Established/related traffic is accepted before any
-user rule: standard stateful behaviour, a Drop rule stops new connections only (and not
-ICMP errors related to existing ones). Keep this in README ("Default Protection").
+User rules come **before** the local network and ICMP allows so a user Drop/Reject rule
+("drop everything from X") also stops them. Established/related traffic is accepted
+before any user rule: standard stateful behaviour, a Drop rule stops new connections
+only (and not ICMP errors related to existing ones). Keep this in README ("Default
+Protection").
+
+Output chain: Server Mode adds loopback, invalid drop, established, ND/MLD (incl.
+`mld-listener-done`), IGMP and DHCP/DHCPv6 client requests, then Output user rules;
+Desktop mode has no rules except the discovery port recorder. Forward chain: with
+"Block forwarding", invalid drop, established, then Forward user rules (`iifname` and
+`oifname`); without it nothing (policy accept), and Forward rules are not generated.
+`Rule::takes_effect()` says whether a rule is generated (validation and the GUI use it).
 
 A Drop/Reject rule with both a rate and a connection limit becomes **two** rules (same
 matches, one limit each, both tagged `UserRule(id)`): statements AND, and `limit`
@@ -1093,7 +1118,7 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - Protocol filtering (TCP, UDP, ICMP, ICMPv6, Any)
 - Port filtering (single or range)
 - Source IP/CIDR filtering
-- Interface matching (input/output)
+- Interface matching (input/output; both on Forward rules)
 - Enable/disable without deletion
 - Rule ordering (drag-and-drop)
 - Per-rule logging (with configurable prefix)
@@ -1105,9 +1130,21 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
   it is full new sources are not tracked. For Accept that fails closed (new clients
   fall through to the policy, so a flood from more distinct, e.g. spoofed, addresses
   locks new clients out until it stops); for Drop/Reject it would fail open
-- Advanced security: Server Mode (output policy drop), strict ICMP, RPF
-  anti-spoofing, rate-limited logging of dropped packets, block forwarding
-  (forward policy drop; off by default so Docker/libvirt/VPNs keep working)
+- Advanced security: Server Mode (output policy drop), strict ICMP, ICMP rate limit
+  (echo requests over N/s dropped), RPF anti-spoofing (strict, new packets only, with
+  the mark), rate-limited logging of dropped unicast packets, block forwarding
+  (forward policy drop; off by default so Docker/libvirt/VPNs keep working) with
+  Forward-chain user rules (`Chain::Forward`, input and output interface)
+- Local network discovery (`local_discovery`, Desktop only, absent = off): mDNS, SSDP,
+  WS-Discovery multicast in, and replies to the host's own discovery queries via the
+  `discovery_reply` dynamic set (keyed by port only, deliberately). No LLMNR multicast
+  listener (poisoning-prone); LLMNR/NetBIOS answers to our queries work via the set
+- Always-on base rules: IGMP accept (and Server Mode IGMP out), DHCPv4 client replies,
+  redirect drops before established/related
+- Rule templates (`core::templates`): Server Mode essentials (DNS, DoT, NTP,
+  HTTP/HTTPS, ping as Output rules), libvirt guest DHCP/DNS on `virbr*`, Tailscale
+  direct connections (UDP 41641) and "Trust <interface>"; ordinary rules, nothing
+  hidden. `available_templates()` picks them by interface name
 - Validation before apply (`core::validate`): one validator for the rule form,
   the sidebar and the apply / Save to System paths; profiles may contain invalid
   rules, but applying is refused while an applied rule is invalid
@@ -1142,6 +1179,14 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - **TCP flags matching:** Too advanced for target audience
 - **MAC filtering:** LAN-only, easily spoofed
 - **Time-based rules:** Complex UI, better handled by cron
+
+- **Base rules for specific services** (Tailscale 41641, `tailscale0`, `virbr0`,
+  `docker0`): offered as templates instead, visible and removable
+- **Loose RPF:** never drops on a host with a default route; strict + mark instead
+- **Forward drop by default:** Docker/libvirt accepts in their own tables cannot
+  override a drop in ours (final); "Block forwarding" stays opt-in
+- **Stealth drop instead of the rate-limited reject:** the reject is unicast-only and
+  capped at 5/s total, so it cannot be used for reflection, and clients fail fast
 
 ### Deferred
 - **NAT/Port forwarding:** Different scope; would be separate major feature

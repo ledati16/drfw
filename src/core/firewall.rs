@@ -507,7 +507,13 @@ impl fmt::Display for RateLimit {
     }
 }
 
-/// Firewall chain for rule direction (only relevant in Server Mode)
+/// Firewall chain a user rule belongs to.
+///
+/// Input rules always apply. Output rules only apply in Server Mode (the
+/// Desktop output policy accepts everything), and Forward rules only apply
+/// with "Block forwarding" on (otherwise the forward policy accepts
+/// everything); rules of an inactive chain stay in the profile but are not
+/// generated (see [`Rule::takes_effect`]).
 #[derive(
     Debug,
     Clone,
@@ -530,6 +536,11 @@ pub enum Chain {
     /// Outgoing traffic (only useful in Server Mode with OUTPUT DROP policy)
     #[strum(serialize = "output")]
     Output,
+    /// Routed traffic passing through this computer (containers, VMs, other
+    /// networks); only useful with "Block forwarding" (forward policy drop).
+    /// Both the input and the output interface can be matched.
+    #[strum(serialize = "forward")]
+    Forward,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -547,11 +558,12 @@ pub struct Rule {
     pub sources: Vec<IpNetwork>,
     /// Input interface filter (iifname). Supports wildcards (e.g., "eth*")
     pub interface: Option<String>,
-    /// Output interface filter (oifname). Only for OUTPUT chain in Server Mode.
+    /// Output interface filter (oifname). Only for OUTPUT and FORWARD rules.
     /// Supports wildcards (e.g., "eth*")
     #[serde(default)]
     pub output_interface: Option<String>,
-    /// Chain direction (Input/Output) - only relevant in Server Mode
+    /// Chain the rule belongs to (Input, Output in Server Mode, Forward with
+    /// "Block forwarding")
     #[serde(default)]
     pub chain: Chain,
     #[serde(default = "default_true")]
@@ -765,6 +777,47 @@ impl Rule {
         );
     }
 
+    /// Returns `true` when this rule is part of the generated ruleset under
+    /// `advanced`: it is enabled, and its chain is active (Output rules only
+    /// in Server Mode, Forward rules only with `block_forwarding`).
+    ///
+    /// Rules that do not take effect stay in the profile; the GUI shows them
+    /// as inactive.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use drfw::core::firewall::{AdvancedSecuritySettings, Chain, Protocol, Rule};
+    ///
+    /// let mut rule = Rule::with_caches(
+    ///     uuid::Uuid::new_v4(),
+    ///     "Routed web".into(),
+    ///     Protocol::Tcp,
+    ///     vec![80.into()],
+    ///     vec![],
+    ///     None,
+    ///     Chain::Forward,
+    ///     true,
+    ///     jiff::Timestamp::now(),
+    ///     vec![],
+    /// );
+    /// let mut advanced = AdvancedSecuritySettings::default();
+    /// assert!(
+    ///     !rule.takes_effect(&advanced),
+    ///     "forward policy accepts anyway"
+    /// );
+    /// advanced.block_forwarding = true;
+    /// assert!(rule.takes_effect(&advanced));
+    /// ```
+    pub fn takes_effect(&self, advanced: &AdvancedSecuritySettings) -> bool {
+        self.enabled
+            && match self.chain {
+                Chain::Input => true,
+                Chain::Output => advanced.egress_profile == EgressProfile::Server,
+                Chain::Forward => advanced.block_forwarding,
+            }
+    }
+
     /// Returns `true` when a rate or connection limit of this rule is kept per
     /// source address (and therefore generates nftables dynamic sets).
     pub fn has_per_source_limit(&self) -> bool {
@@ -917,15 +970,21 @@ pub enum EgressProfile {
 /// Optional advanced security settings (all OFF/disabled by default for desktop compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AdvancedSecuritySettings {
-    /// Restrict ICMP to only essential types (may break network tools and games)
+    /// Accept only the essential ICMP/ICMPv6 types that start a conversation
+    /// (ping, and the IPv6 neighbor/router/multicast-listener messages);
+    /// ICMP errors of known connections are accepted either way.
     #[serde(default)]
     pub strict_icmp: bool,
 
-    /// ICMP rate limit in packets/second (0 = disabled)
+    /// Limit on incoming ICMP and `ICMPv6` echo requests (pings), per
+    /// second and per family (0 = disabled). Over the limit, echo requests
+    /// are dropped, also those of a ping that is already running.
     #[serde(default)]
     pub icmp_rate_limit: u32,
 
-    /// Enable anti-spoofing via reverse path filtering (breaks Docker/VPNs)
+    /// Anti-spoofing: drop new connections whose source address would not be
+    /// routed back through the interface the packet arrived on (strict
+    /// reverse-path check, honouring the packet mark for policy routing).
     #[serde(default)]
     pub enable_rpf: bool,
 
@@ -953,6 +1012,14 @@ pub struct AdvancedSecuritySettings {
     /// policy should turn this on.
     #[serde(default)]
     pub block_forwarding: bool,
+
+    /// Local network discovery: accept mDNS, SSDP and WS-Discovery multicast
+    /// and the unicast replies to this computer's own discovery queries.
+    ///
+    /// Absent in older profiles (`false`). Only effective in Desktop mode;
+    /// the generator ignores it in Server Mode.
+    #[serde(default)]
+    pub local_discovery: bool,
 }
 
 fn default_log_rate() -> u32 {
@@ -974,6 +1041,7 @@ impl Default for AdvancedSecuritySettings {
             log_prefix: default_log_prefix(),
             egress_profile: EgressProfile::Desktop,
             block_forwarding: false,
+            local_discovery: false,
         }
     }
 }
@@ -1011,19 +1079,37 @@ impl FirewallRuleset {
     /// dynamic sets of per-source limits (their state starts fresh on every
     /// apply, and sets of deleted rules do not linger).
     ///
-    /// Rule ordering (per chain):
-    /// 1. Base rules (optional RPF, loopback, invalid drop, established/related,
-    ///    `DHCPv6` client replies)
-    /// 2. ICMP redirect drops
-    /// 3. User rules, in profile order
-    /// 4. ICMP allow rules (input chain)
-    /// 5. End of input chain: optional drop logging, rate-limited reject, counter
+    /// Input chain order:
     ///
-    /// User rules come before the ICMP allow rules so that a Drop/Reject rule
-    /// (e.g. "drop everything from X") also stops ICMP. Traffic of established
-    /// or related connections is accepted before any user rule (standard
-    /// stateful filtering): a Drop rule stops new connections, not ones that
-    /// already exist (and not related ICMP errors).
+    /// 1. Loopback accept, `ct state invalid` drop
+    /// 2. ICMP/`ICMPv6` redirect drops: **before** the established/related
+    ///    accept, because a redirect quoting one of our connections is
+    ///    `related` and would otherwise be accepted
+    /// 3. With an ICMP rate limit: echo requests over the limit are dropped
+    ///    (before the established accept, which takes every echo request of
+    ///    a running ping)
+    /// 4. Established/related accept
+    /// 5. Checks of new packets only: loopback addresses arriving from the
+    ///    network, the optional reverse-path check (RPF). After the
+    ///    established accept so that replies vouched for by conntrack (a
+    ///    full-tunnel VPN's underlay, de-NATed container replies) pass.
+    /// 6. DHCP and `DHCPv6` client replies (untracked: the request went to a
+    ///    broadcast/multicast address)
+    /// 7. User rules, in profile order
+    /// 8. Local network: IGMP, and with local discovery the mDNS/SSDP/
+    ///    WS-Discovery accepts
+    /// 9. ICMP allow rules
+    /// 10. End of chain: optional drop logging, rate-limited reject, counter
+    ///
+    /// User rules come before the local network and ICMP allow rules so that
+    /// a Drop/Reject rule (e.g. "drop everything from X") also stops those.
+    /// Traffic of established or related connections is accepted before any
+    /// user rule (standard stateful filtering): a Drop rule stops new
+    /// connections, not ones that already exist (and not related ICMP
+    /// errors).
+    ///
+    /// Output rules are generated in Server Mode only, Forward rules with
+    /// `block_forwarding` only (see [`Rule::takes_effect`]).
     ///
     /// # Per-source limits
     ///
@@ -1080,19 +1166,15 @@ impl FirewallRuleset {
         Self::add_base_chains(&mut cmds, advanced);
         Self::add_base_rules(&mut cmds, advanced);
 
-        // ICMP comes after the user rules: a user Drop/Reject rule must also
-        // stop ICMP (see the ordering above)
+        // Local network and ICMP accepts come after the user rules: a user
+        // Drop/Reject rule must also stop them (see the ordering above)
         cmds.section = SECTION_USER;
-        for rule in &self.rules {
-            if !rule.enabled {
-                continue;
-            }
-            // OUTPUT rules only matter in Server Mode (Desktop output policy is accept)
-            if advanced.egress_profile == EgressProfile::Desktop && rule.chain == Chain::Output {
-                continue;
-            }
+        for rule in self.rules.iter().filter(|r| r.takes_effect(advanced)) {
             Self::add_user_rule(&mut cmds, rule);
         }
+
+        cmds.section = SECTION_LOCAL;
+        Self::add_local_network_rules(&mut cmds, advanced);
 
         cmds.section = SECTION_ICMP;
         Self::add_icmp_rules(&mut cmds, advanced);
@@ -1110,6 +1192,13 @@ impl FirewallRuleset {
     fn match_eq(left: serde_json::Value, right: impl Serialize) -> serde_json::Value {
         let mut expr = serde_json::json!({ "match": { "op": "==", "right": right } });
         expr["match"]["left"] = left;
+        expr
+    }
+
+    /// Creates a negated match expression `left != right`.
+    fn match_ne(left: serde_json::Value, right: impl Serialize) -> serde_json::Value {
+        let mut expr = Self::match_eq(left, right);
+        expr["match"]["op"] = serde_json::json!("!=");
         expr
     }
 
@@ -1246,30 +1335,8 @@ impl FirewallRuleset {
     fn add_base_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
         use serde_json::json;
 
-        // Rule ordering matters for performance and correctness:
-        // 0. [OPTIONAL] Anti-spoofing (RPF) - must be first to check all packets
-        // 1. Loopback - most common, should bypass all checks
-        // 2. Drop invalid early - avoid wasting cycles on malformed packets
-        // 3. Established/related - most traffic will match here
-        // 4. DHCPv6 client replies (not tracked: the request went to multicast)
-        // 5. Block ICMP redirects - prevent MITM attacks
-        // (The ICMP allow rules follow the user rules; see `build_commands`.)
+        // See `to_nftables_json` for the order and why
         cmds.section = SECTION_BASE;
-
-        // Optional: Anti-spoofing (RPF) - WARNING: Breaks Docker/VPNs
-        if advanced.enable_rpf {
-            cmds.push_base_rule(
-                "input",
-                vec![
-                    Self::match_eq(
-                        json!({ "fib": { "flags": ["saddr", "iif"], "result": "oif" } }),
-                        false,
-                    ),
-                    json!({ "drop": null }),
-                ],
-                "drop packets with spoofed source addresses (RPF)",
-            );
-        }
 
         cmds.push_base_rule(
             "input",
@@ -1281,13 +1348,111 @@ impl FirewallRuleset {
             vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
             "early drop of invalid connections",
         );
+        // A redirect that quotes one of our connections is `related`: these
+        // must come before the established/related accept to stop it
+        cmds.push_base_rule(
+            "input",
+            vec![
+                Self::meta_match("l4proto", "icmp"),
+                Self::payload_match("icmp", "type", "redirect"),
+                json!({ "drop": null }),
+            ],
+            "drop icmp redirects",
+        );
+        cmds.push_base_rule(
+            "input",
+            vec![
+                Self::meta_match("l4proto", "ipv6-icmp"),
+                Self::payload_match("icmpv6", "type", "nd-redirect"),
+                json!({ "drop": null }),
+            ],
+            "drop icmpv6 redirects",
+        );
+        // Every echo request of a running ping is `established`: a limit
+        // after the established accept would only limit new pings
+        if advanced.icmp_rate_limit > 0 {
+            for (l4proto, icmp, comment) in [
+                ("icmp", "icmp", "limit incoming pings"),
+                ("ipv6-icmp", "icmpv6", "limit incoming pings (ipv6)"),
+            ] {
+                cmds.push_base_rule(
+                    "input",
+                    vec![
+                        Self::meta_match("l4proto", l4proto),
+                        Self::payload_match(icmp, "type", "echo-request"),
+                        json!({ "limit": {
+                            "rate": advanced.icmp_rate_limit,
+                            "per": "second",
+                            "inv": true
+                        } }),
+                        json!({ "drop": null }),
+                    ],
+                    comment,
+                );
+            }
+        }
         cmds.push_base_rule(
             "input",
             vec![Self::ct_established(), json!({ "accept": null })],
             "allow tracked connections",
         );
-        // DHCPv6 replies come from the server's link-local address to ours; the
-        // request went to a multicast group so conntrack cannot associate them.
+
+        // From here on only packets that conntrack does not vouch for.
+        // Loopback addresses never come from the network: the kernel drops
+        // them unless `route_localnet` is set (kube-proxy, some container
+        // setups), which would expose services bound to 127.0.0.1.
+        for (field, comment) in [
+            ("saddr", "drop loopback source addresses from the network"),
+            (
+                "daddr",
+                "drop loopback destination addresses from the network",
+            ),
+        ] {
+            cmds.push_base_rule(
+                "input",
+                vec![
+                    Self::match_ne(json!({ "meta": { "key": "iifname" } }), "lo"),
+                    Self::payload_match(
+                        "ip",
+                        field,
+                        json!({ "prefix": { "addr": "127.0.0.0", "len": 8 } }),
+                    ),
+                    json!({ "drop": null }),
+                ],
+                comment,
+            );
+        }
+
+        // Strict reverse-path check of new packets. The mark is part of the
+        // lookup so that policy routing by fwmark (wg-quick, Tailscale exit
+        // nodes, connmark restore) is honoured.
+        if advanced.enable_rpf {
+            cmds.push_base_rule(
+                "input",
+                vec![
+                    Self::match_eq(
+                        json!({ "fib": { "flags": ["saddr", "mark", "iif"], "result": "oif" } }),
+                        false,
+                    ),
+                    json!({ "drop": null }),
+                ],
+                "drop new packets with spoofed source addresses (RPF)",
+            );
+        }
+
+        // DHCP replies: the request went to a broadcast (DHCPv4) or multicast
+        // (DHCPv6) address, so conntrack cannot associate the reply. (Most
+        // DHCPv4 clients receive on a packet socket before netfilter; clients
+        // using a UDP socket need this.)
+        cmds.push_base_rule(
+            "input",
+            vec![
+                Self::payload_match("udp", "sport", 67),
+                Self::payload_match("udp", "dport", 68),
+                json!({ "accept": null }),
+            ],
+            "allow dhcp client replies",
+        );
         cmds.push_base_rule(
             "input",
             vec![
@@ -1316,29 +1481,13 @@ impl FirewallRuleset {
             );
         }
 
-        if advanced.egress_profile == EgressProfile::Server {
-            Self::add_server_output_base_rules(cmds);
+        match advanced.egress_profile {
+            EgressProfile::Server => Self::add_server_output_base_rules(cmds),
+            EgressProfile::Desktop if advanced.local_discovery => {
+                Self::add_discovery_output_rules(cmds);
+            }
+            EgressProfile::Desktop => {}
         }
-
-        cmds.section = SECTION_SECURITY;
-        cmds.push_base_rule(
-            "input",
-            vec![
-                Self::meta_match("l4proto", "icmp"),
-                Self::payload_match("icmp", "type", "redirect"),
-                json!({ "drop": null }),
-            ],
-            "drop icmp redirects",
-        );
-        cmds.push_base_rule(
-            "input",
-            vec![
-                Self::meta_match("l4proto", "ipv6-icmp"),
-                Self::payload_match("icmpv6", "type", "nd-redirect"),
-                json!({ "drop": null }),
-            ],
-            "drop icmpv6 redirects",
-        );
     }
 
     /// Base rules for the output chain in Server Mode (policy drop).
@@ -1378,12 +1527,24 @@ impl FirewallRuleset {
                         "nd-neighbor-solicit",
                         "nd-neighbor-advert",
                         "mld-listener-report",
+                        "mld-listener-done",
                         "mld2-listener-report"
                     ] }),
                 ),
                 json!({ "accept": null }),
             ],
             "allow outbound ipv6 neighbor discovery",
+        );
+        // The IPv4 counterpart of the MLD reports above: without IGMP
+        // membership reports, snooping switches stop forwarding multicast
+        // (SSDP, IPTV) to this host after a few minutes.
+        cmds.push_base_rule(
+            "output",
+            vec![
+                Self::payload_match("ip", "protocol", "igmp"),
+                json!({ "accept": null }),
+            ],
+            "allow outbound igmp (multicast group membership)",
         );
 
         // DHCP client traffic. Lease renewals go out from ordinary UDP sockets
@@ -1405,46 +1566,149 @@ impl FirewallRuleset {
         }
     }
 
-    fn add_icmp_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
+    /// The `discovery_reply` set and the output rule that fills it (local
+    /// discovery, Desktop mode).
+    ///
+    /// Answers to SSDP, WS-Discovery, LLMNR, `NetBIOS` and one-shot mDNS
+    /// queries are unicast to the port the query was sent from, from the
+    /// answering device's address, so conntrack cannot match them to the
+    /// multicast/broadcast query. The set remembers the source ports of
+    /// outgoing multicast/broadcast UDP for [`DISCOVERY_REPLY_TIMEOUT_SECS`]
+    /// (`UPnP` devices answer within the query's MX, at most 5 s); the input
+    /// rules accept unicast UDP to those ports from private and link-local
+    /// sources. Keyed by port only, deliberately: the answering devices are
+    /// not known in advance.
+    fn add_discovery_output_rules(cmds: &mut CommandList) {
         use serde_json::json;
 
-        // Builds an ICMP accept rule with optional type filter and rate limit
-        let build_icmp_rule = |protocol: &str, type_filter: Option<serde_json::Value>| {
-            let mut expr = vec![Self::meta_match("l4proto", protocol)];
-            if let Some(filter) = type_filter {
-                expr.push(filter);
-            }
-            if advanced.icmp_rate_limit > 0 {
-                expr.push(Self::rate_limit(advanced.icmp_rate_limit, "second"));
-            }
-            expr.push(json!({ "accept": null }));
-            expr
-        };
+        cmds.section = SECTION_LOCAL;
+        cmds.set_names.insert(DISCOVERY_REPLY_SET.to_string());
+        cmds.push(
+            CommandOrigin::BaseRule(DISCOVERY_SET_ORIGIN),
+            json!({ "add": { "set": {
+                "family": NFT_FAMILY,
+                "table": NFT_TABLE,
+                "name": DISCOVERY_REPLY_SET,
+                "type": "inet_service",
+                "flags": ["dynamic", "timeout"],
+                "timeout": DISCOVERY_REPLY_TIMEOUT_SECS,
+                "size": DISCOVERY_REPLY_SET_SIZE,
+            } } }),
+        );
+        cmds.push_base_rule(
+            "output",
+            vec![
+                Self::meta_match("l4proto", "udp"),
+                Self::match_eq(
+                    json!({ "fib": { "flags": ["daddr"], "result": "type" } }),
+                    json!({ "set": ["broadcast", "multicast"] }),
+                ),
+                json!({ "set": {
+                    "op": "update",
+                    "elem": { "payload": { "protocol": "udp", "field": "sport" } },
+                    "set": format!("@{DISCOVERY_REPLY_SET}"),
+                } }),
+            ],
+            "remember ports we send discovery queries from",
+        );
+    }
 
-        // IPv6 does not work without neighbor discovery, router advertisements
-        // and multicast listener queries; a burst of them (e.g. many neighbors
-        // resolving at once) must never be dropped by the ICMP rate limit.
-        // Without a rate limit the rules below accept them anyway.
-        if advanced.icmp_rate_limit > 0 {
+    /// The local network section of the input chain (after the user rules):
+    /// IGMP always, the discovery accepts with `local_discovery` in Desktop
+    /// mode.
+    fn add_local_network_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
+        use serde_json::json;
+
+        // Multicast group membership (queries from the local router or
+        // switch). MLD, its IPv6 counterpart, is ICMPv6 and accepted below.
+        cmds.push_base_rule(
+            "input",
+            vec![
+                Self::payload_match("ip", "protocol", "igmp"),
+                json!({ "accept": null }),
+            ],
+            "allow igmp (multicast group membership)",
+        );
+
+        if !(advanced.local_discovery && advanced.egress_profile == EgressProfile::Desktop) {
+            return;
+        }
+        // Scoped by destination (the protocols' multicast groups), not by
+        // source: these groups are link-local or site-local already, and
+        // source lists would break networks with public or CGNAT addresses.
+        let discovery_ports = json!({ "set": [1900, 3702] });
+        let multicast: [(&str, serde_json::Value, serde_json::Value, &'static str); 4] = [
+            ("ip", json!("224.0.0.251"), json!(5353), "allow mdns"),
+            ("ip6", json!("ff02::fb"), json!(5353), "allow mdns (ipv6)"),
+            (
+                "ip",
+                json!("239.255.255.250"),
+                discovery_ports.clone(),
+                "allow ssdp and ws-discovery",
+            ),
+            (
+                "ip6",
+                json!({ "set": ["ff02::c", "ff05::c"] }),
+                discovery_ports,
+                "allow ssdp and ws-discovery (ipv6)",
+            ),
+        ];
+        for (family, group, ports, comment) in multicast {
             cmds.push_base_rule(
                 "input",
                 vec![
-                    Self::meta_match("l4proto", "ipv6-icmp"),
-                    Self::payload_match(
-                        "icmpv6",
-                        "type",
-                        json!({ "set": [
-                            "mld-listener-query",
-                            "nd-router-advert",
-                            "nd-neighbor-solicit",
-                            "nd-neighbor-advert"
-                        ] }),
-                    ),
+                    Self::payload_match(family, "daddr", group),
+                    Self::payload_match("udp", "dport", ports),
                     json!({ "accept": null }),
                 ],
-                "allow icmpv6 neighbor discovery (not rate limited)",
+                comment,
             );
         }
+
+        let prefix = |addr: &str, len: u8| json!({ "prefix": { "addr": addr, "len": len } });
+        let replies = [
+            (
+                "ip",
+                vec![
+                    prefix("10.0.0.0", 8),
+                    prefix("172.16.0.0", 12),
+                    prefix("192.168.0.0", 16),
+                    prefix("169.254.0.0", 16),
+                ],
+                "allow replies to our discovery queries",
+            ),
+            (
+                "ip6",
+                vec![prefix("fe80::", 10), prefix("fc00::", 7)],
+                "allow replies to our discovery queries (ipv6)",
+            ),
+        ];
+        for (family, sources, comment) in replies {
+            cmds.push_base_rule(
+                "input",
+                vec![
+                    Self::meta_match("pkttype", "host"),
+                    Self::payload_match(family, "saddr", json!({ "set": sources })),
+                    Self::payload_match("udp", "dport", format!("@{DISCOVERY_REPLY_SET}")),
+                    json!({ "accept": null }),
+                ],
+                comment,
+            );
+        }
+    }
+
+    fn add_icmp_rules(cmds: &mut CommandList, advanced: &AdvancedSecuritySettings) {
+        use serde_json::json;
+
+        // (The ICMP rate limit is a drop of excess echo requests before the
+        // established accept, see `add_base_rules`; these rules are unlimited,
+        // so neighbor discovery is never rate limited.)
+        let icmp_rule = |protocol: &str, type_filter: Option<serde_json::Value>| {
+            let mut expr = vec![Self::meta_match("l4proto", protocol)];
+            expr.extend(type_filter);
+            expr.push(json!({ "accept": null }));
+            expr
+        };
 
         if advanced.strict_icmp {
             // IPv4 ICMP - essential types only
@@ -1461,11 +1725,11 @@ impl FirewallRuleset {
             );
             cmds.push_base_rule(
                 "input",
-                build_icmp_rule("icmp", Some(ipv4_types)),
+                icmp_rule("icmp", Some(ipv4_types)),
                 "allow essential icmp (strict mode)",
             );
 
-            // IPv6 ICMP - essential types only (more types required for IPv6 to function)
+            // IPv6 ICMP - the types RFC 4890 (4.4.1) says must not be dropped
             let ipv6_types = Self::payload_match(
                 "icmpv6",
                 "type",
@@ -1477,20 +1741,24 @@ impl FirewallRuleset {
                     "echo-request",            // Type 128
                     "echo-reply",              // Type 129
                     "mld-listener-query",      // Type 130: multicast listener discovery
+                    "mld-listener-report",     // Type 131
+                    "mld-listener-done",       // Type 132
+                    "nd-router-solicit",       // Type 133: hosts that act as router (VMs, hotspot)
                     "nd-router-advert",        // Type 134: SLAAC / default route
                     "nd-neighbor-solicit",     // Type 135 (CRITICAL for IPv6)
-                    "nd-neighbor-advert"       // Type 136 (CRITICAL for IPv6)
+                    "nd-neighbor-advert",      // Type 136 (CRITICAL for IPv6)
+                    "mld2-listener-report"     // Type 143: MLDv2 reports
                 ] }),
             );
             cmds.push_base_rule(
                 "input",
-                build_icmp_rule("ipv6-icmp", Some(ipv6_types)),
+                icmp_rule("ipv6-icmp", Some(ipv6_types)),
                 "allow essential icmpv6 (strict mode)",
             );
         } else {
             // Default mode: Allow all ICMP (except redirects which are already blocked)
-            cmds.push_base_rule("input", build_icmp_rule("icmp", None), "allow icmp");
-            cmds.push_base_rule("input", build_icmp_rule("ipv6-icmp", None), "allow icmp v6");
+            cmds.push_base_rule("input", icmp_rule("icmp", None), "allow icmp");
+            cmds.push_base_rule("input", icmp_rule("ipv6-icmp", None), "allow icmp v6");
         }
     }
 
@@ -1835,12 +2103,15 @@ impl FirewallRuleset {
 
         cmds.section = SECTION_END;
 
-        // Optional: Log dropped packets before rejection
+        // Optional: Log dropped packets before rejection. Unicast only, like
+        // the reject: broadcast and multicast noise of the LAN would fill the
+        // log budget.
         if advanced.log_dropped {
             let prefix = crate::validators::sanitize_nft_quoted(&advanced.log_prefix);
             cmds.push_base_rule(
                 "input",
                 vec![
+                    Self::meta_match("pkttype", "host"),
                     Self::rate_limit(advanced.log_rate_per_minute, "minute"),
                     json!({ "log": { "prefix": prefix, "level": "info" } }),
                 ],
@@ -1971,10 +2242,19 @@ const NFT_TABLE: &str = "drfw";
 /// Priority of drfw's base chains (runs just before the default filter priority 0).
 const CHAIN_PRIORITY: i32 = -10;
 
+/// Name of the dynamic set of local discovery query ports.
+const DISCOVERY_REPLY_SET: &str = "discovery_reply";
+/// How long a discovery query's source port accepts replies (`UPnP`: MX <= 5 s).
+const DISCOVERY_REPLY_TIMEOUT_SECS: u32 = 10;
+/// Maximum number of remembered discovery query ports.
+const DISCOVERY_REPLY_SET_SIZE: u32 = 1024;
+/// Origin name of the `discovery_reply` set declaration (error messages).
+const DISCOVERY_SET_ORIGIN: &str = "discovery reply set";
+
 // Preview section headings (text output only; see `NftCommand::section`).
 const SECTION_SETUP: &str = "Setup";
 const SECTION_BASE: &str = "Base rules";
-const SECTION_SECURITY: &str = "Security";
+const SECTION_LOCAL: &str = "Local network";
 const SECTION_ICMP: &str = "ICMP";
 const SECTION_USER: &str = "User rules";
 const SECTION_END: &str = "End of chain";

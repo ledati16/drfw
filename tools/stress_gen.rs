@@ -174,6 +174,7 @@ impl CoverageTracker {
             .entry(match rule.chain {
                 Chain::Input => "input",
                 Chain::Output => "output",
+                Chain::Forward => "forward",
             })
             .or_insert(0) += 1;
 
@@ -291,6 +292,9 @@ impl CoverageTracker {
         if !self.chains.contains_key("output") {
             missing.push("Chain::Output".to_string());
         }
+        if !self.chains.contains_key("forward") {
+            missing.push("Chain::Forward".to_string());
+        }
 
         // Check reject types (only if we have Reject actions)
         if self.actions.contains_key("reject") {
@@ -338,7 +342,7 @@ const PROTOCOLS: [Protocol; 7] = [
 
 const ACTIONS: [Action; 3] = [Action::Accept, Action::Drop, Action::Reject];
 
-const CHAINS: [Chain; 2] = [Chain::Input, Chain::Output];
+const CHAINS: [Chain; 3] = [Chain::Input, Chain::Output, Chain::Forward];
 
 const REJECT_TYPES: [RejectType; 5] = [
     RejectType::Default,
@@ -513,10 +517,20 @@ fn random_reject_type(rng: &mut impl Rng, protocol: Protocol) -> RejectType {
 
 fn random_chain(rng: &mut impl Rng) -> Chain {
     // Weight towards Input (more common)
-    if rng.random_bool(0.7) {
-        Chain::Input
-    } else {
-        Chain::Output
+    match rng.random_range(0..20) {
+        0..14 => Chain::Input,
+        14..17 => Chain::Output,
+        _ => Chain::Forward,
+    }
+}
+
+/// Input and output interface for a rule of `chain`: the ones the chain can
+/// match (forwarded packets have both).
+fn random_interfaces(rng: &mut impl Rng, chain: Chain) -> (Option<String>, Option<String>) {
+    match chain {
+        Chain::Input => (random_interface(rng), None),
+        Chain::Output => (None, random_interface(rng)),
+        Chain::Forward => (random_interface(rng), random_interface(rng)),
     }
 }
 
@@ -1077,12 +1091,7 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
     let action = random_action(rng);
     let chain = random_chain(rng);
 
-    // Use centralized constraint logic for interface-chain relationship
-    let (interface, output_interface) = if chain_uses_input_interface(chain) {
-        (random_interface(rng), None)
-    } else {
-        (None, random_interface(rng))
-    };
+    let (interface, output_interface) = random_interfaces(rng, chain);
 
     let mut config = RuleConfig {
         protocol,
@@ -1121,12 +1130,7 @@ fn generate_coverage_rule(
     reject_type: Option<RejectType>,
     time_unit: Option<TimeUnit>,
 ) -> Rule {
-    // Use centralized constraint logic for interface-chain relationship
-    let (interface, output_interface) = if chain_uses_input_interface(chain) {
-        (random_interface(rng), None)
-    } else {
-        (None, random_interface(rng))
-    };
+    let (interface, output_interface) = random_interfaces(rng, chain);
 
     // Use centralized constraint logic for port support
     #[allow(clippy::if_not_else)]
@@ -1357,6 +1361,7 @@ fn generate_ruleset(
             EgressProfile::Server
         },
         block_forwarding: rng.random_bool(0.2),
+        local_discovery: rng.random_bool(0.4),
     };
 
     (

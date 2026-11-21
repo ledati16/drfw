@@ -17,6 +17,7 @@
 //! - [`error`]: Error types for firewall operations
 //! - [`profiles`]: Firewall profile management
 //! - [`rule_constraints`]: Business rules for valid field combinations
+//! - [`templates`]: Ready-made rules for common setups (Server Mode, VMs, Tailscale)
 //! - [`validate`]: Rule and ruleset validation (shared by the form, loader and apply)
 //! - [`retention`]: Confirmation before dropping most of the kept rules
 
@@ -35,6 +36,7 @@ pub mod profiles;
 pub mod retention;
 pub mod rule_constraints;
 pub mod system_config;
+pub mod templates;
 pub mod validate;
 pub mod verify;
 

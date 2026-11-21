@@ -10,8 +10,10 @@
 //! Only the expression subset drfw emits is supported: matches on `meta`, `ct`,
 //! `payload` and `fib` (values: strings, numbers, sets, prefixes, ranges),
 //! `limit` (burst, inverted), `ct count` (inverted), `log`, `counter`, the
-//! `accept`/`drop`/`reject` verdicts, and per-source limits (named dynamic
-//! sets plus `add`/`update @set { <saddr key> <limit or ct count> }`).
+//! `accept`/`drop`/`reject` verdicts, named dynamic sets with the
+//! `add`/`update @set { <key> [<limit or ct count>] }` statements that fill
+//! them (per-source limits, the local discovery reply ports), and matches on
+//! a set (`udp dport @set`).
 //! Anything else is a programming error; it is rendered as an invalid
 //! statement so that `nft -c` rejects the file instead of silently loading a
 //! rule with a match missing.
@@ -453,8 +455,9 @@ fn render_statement(expr: &Value) -> Result<String, String> {
     }
 }
 
-/// Renders a per-source set statement:
-/// `update @name { ip saddr limit rate … }` or `add @name { ip6 saddr & mask ct count … }`.
+/// Renders a set statement: `update @name { ip saddr limit rate … }`,
+/// `add @name { ip6 saddr & mask ct count … }`, or one without a statement
+/// (`update @name { udp sport }`).
 fn render_set_statement(body: &Value) -> Result<String, String> {
     check_keys(body, &["op", "elem", "set", "stmt"], "set statement")?;
     let op = match str_field(body, "op")? {
@@ -486,11 +489,14 @@ fn render_set_statement(body: &Value) -> Result<String, String> {
     };
 
     let mut parts = vec![key];
-    for stmt in body
-        .get("stmt")
-        .and_then(Value::as_array)
-        .ok_or("set statement without stmt list")?
-    {
+    let stmts = match body.get("stmt") {
+        None => &[][..],
+        Some(stmts) => stmts
+            .as_array()
+            .ok_or("set statement stmt is not a list")?
+            .as_slice(),
+    };
+    for stmt in stmts {
         match single_entry(stmt) {
             Some(("limit" | "ct count", _)) => parts.push(render_statement(stmt)?),
             _ => return Err("unsupported statement in set statement".to_string()),
@@ -589,6 +595,8 @@ fn render_match(body: &Value) -> Result<String, String> {
 fn render_value(value: &Value, quote: bool) -> Result<String, String> {
     match value {
         Value::String(s) if quote => Ok(quoted(s)),
+        // A named set (`udp dport @discovery_reply`)
+        Value::String(s) if s.starts_with('@') => Ok(format!("@{}", symbol(&s[1..])?)),
         Value::String(s) => symbol(s).map(str::to_string),
         Value::Number(n) => Ok(n.to_string()),
         Value::Object(_) => {
@@ -770,6 +778,35 @@ mod tests {
         let text = render_rule_exprs(&json!([
             { "match": { "left": { "ct": { "key": "state" } }, "op": "==",
                          "right": "established accept" } },
+            { "accept": null }
+        ]));
+        assert!(text.contains(RENDER_ERROR_STATEMENT));
+    }
+
+    #[test]
+    fn test_set_reference_and_update_without_statement() {
+        let text = render_rule_exprs(&json!([
+            { "match": { "left": { "fib": { "flags": ["daddr"], "result": "type" } }, "op": "==",
+                         "right": { "set": ["broadcast", "multicast"] } } },
+            { "set": { "op": "update",
+                       "elem": { "payload": { "protocol": "udp", "field": "sport" } },
+                       "set": "@ports" } },
+            { "match": { "left": { "payload": { "protocol": "udp", "field": "dport" } }, "op": "==",
+                         "right": "@ports" } },
+            { "match": { "left": { "meta": { "key": "iifname" } }, "op": "!=", "right": "lo" } },
+            { "accept": null }
+        ]));
+        assert!(
+            text.contains(
+                "fib daddr type { broadcast, multicast } update @ports { udp sport } \
+                 udp dport @ports iifname != \"lo\" accept"
+            ),
+            "{text}"
+        );
+        // A set reference is a symbol after the `@`, nothing else
+        let text = render_rule_exprs(&json!([
+            { "match": { "left": { "payload": { "protocol": "udp", "field": "dport" } }, "op": "==",
+                         "right": "@ports accept" } },
             { "accept": null }
         ]));
         assert!(text.contains(RENDER_ERROR_STATEMENT));

@@ -1394,6 +1394,7 @@ impl State {
                     let arrow = match rule.chain {
                         crate::core::firewall::Chain::Input => '↓',
                         crate::core::firewall::Chain::Output => '↑',
+                        crate::core::firewall::Chain::Forward => '→',
                     };
                     format!("{arrow}{}", rule.badge_display)
                 } else {

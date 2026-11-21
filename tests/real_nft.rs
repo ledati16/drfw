@@ -311,6 +311,23 @@ fn kitchen_sink_rules() -> Vec<Rule> {
     r.output_interface = Some("eth*".to_string());
     rules.push(r);
 
+    // Forward rules (generated with "Block forwarding" only): both interfaces
+    let mut r = rule("Routed web", Protocol::Tcp, vec![PortEntry::Single(8080)]);
+    r.chain = Chain::Forward;
+    r.interface = Some("veth-a".to_string());
+    r.output_interface = Some("br-*".to_string());
+    r.sources = nets(&["10.0.0.0/8", "fd00::/8"]);
+    r.log_enabled = true;
+    rules.push(r);
+    let mut r = rule(
+        "Routed limited",
+        Protocol::Udp,
+        vec![PortEntry::Single(51820)],
+    );
+    r.chain = Chain::Forward;
+    r.rate_limit = Some(per_source_rate(10, TimeUnit::Second, None));
+    rules.push(r);
+
     let mut r = rule("Disabled", Protocol::Tcp, vec![PortEntry::Single(9)]);
     r.enabled = false;
     rules.push(r);
@@ -387,7 +404,7 @@ fn per_source_rules() -> Vec<Rule> {
 /// Every combination of the global settings, each with the kitchen-sink rules.
 fn varied_rulesets() -> Vec<(String, FirewallRuleset)> {
     let mut out = Vec::new();
-    for bits in 0u8..32 {
+    for bits in 0u8..64 {
         let mut ruleset = FirewallRuleset::new();
         ruleset.rules = kitchen_sink_rules();
         let adv = &mut ruleset.advanced_security;
@@ -400,8 +417,9 @@ fn varied_rulesets() -> Vec<(String, FirewallRuleset)> {
         } else {
             EgressProfile::Desktop
         };
+        adv.local_discovery = bits & 32 != 0;
         adv.icmp_rate_limit = if bits % 3 == 0 { 10 } else { 0 };
-        out.push((format!("settings {bits:05b}"), ruleset));
+        out.push((format!("settings {bits:06b}"), ruleset));
     }
     out.push(("empty".to_string(), FirewallRuleset::new()));
     out
@@ -1475,7 +1493,7 @@ prop_compose! {
         destinations in prop::collection::vec(arb_ip(), 0..3),
         interface in arb_interface(),
         output_interface in arb_interface(),
-        output_chain in any::<bool>(),
+        chain in prop_oneof![Just(Chain::Input), Just(Chain::Output), Just(Chain::Forward)],
         action in prop_oneof![Just(Action::Accept), Just(Action::Drop), Just(Action::Reject)],
         reject_type in prop_oneof![
             Just(RejectType::Default),
@@ -1497,7 +1515,7 @@ prop_compose! {
             ports,
             sources,
             interface,
-            if output_chain { Chain::Output } else { Chain::Input },
+            chain,
             true,
             jiff::Timestamp::now(),
             tags,
@@ -1528,7 +1546,7 @@ prop_compose! {
 prop_compose! {
     fn arb_ruleset()(
         rules in prop::collection::vec(arb_rule(), 0..8),
-        settings in any::<[bool; 5]>(),
+        settings in any::<[bool; 6]>(),
         icmp_rate in prop_oneof![Just(0u32), 1u32..50],
     ) -> FirewallRuleset {
         let mut ruleset = FirewallRuleset::new();
@@ -1539,6 +1557,7 @@ prop_compose! {
         adv.block_forwarding = settings[2];
         adv.log_dropped = settings[3];
         adv.egress_profile = if settings[4] { EgressProfile::Server } else { EgressProfile::Desktop };
+        adv.local_discovery = settings[5];
         adv.icmp_rate_limit = icmp_rate;
         ruleset
     }
