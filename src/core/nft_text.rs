@@ -162,7 +162,11 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
         text: String::with_capacity(512 + chains.iter().map(|c| c.lines.len() * 96).sum::<usize>()),
         lines: Vec::with_capacity(line_count),
     };
-    doc.line(LineSource::Header, format_args!("#!/usr/sbin/nft -f"));
+    // Same nft the bundled service unit runs (compile-time `DRFW_NFT_PATH`)
+    doc.line(
+        LineSource::Header,
+        format_args!("#!{} -f", crate::distro::UNIT_NFT_PATH),
+    );
     doc.line(
         LineSource::Header,
         format_args!(
@@ -723,7 +727,7 @@ mod tests {
     #[test]
     fn test_header_and_idempotent_preamble() {
         let text = render(&table_and_chain());
-        assert!(text.starts_with("#!/usr/sbin/nft -f\n"));
+        assert!(text.starts_with(&format!("#!{} -f\n", crate::distro::UNIT_NFT_PATH)));
         let table = text.find("\ntable inet drfw\n").expect("table line");
         let delete = text
             .find("\ndelete table inet drfw\n")
