@@ -3,11 +3,9 @@
 //! Handles:
 //! - Exporting rules as JSON
 //! - Exporting rules as nft text
-//! - Clearing audit log
-//! - Opening logs folder
-//! - Loading audit entries
+//! - Diagnostics event log: change-checked reloads, search, clearing
 
-use crate::app::{BannerSeverity, Message, State};
+use crate::app::{BannerSeverity, Message, State, diagnostics};
 use crate::audit;
 use iced::Task;
 
@@ -95,28 +93,90 @@ pub(crate) fn handle_export_result(
     }
 }
 
-/// Handles clearing event log
+/// Starts a diagnostics log reload unless one is running. The load stats the
+/// log first and only re-reads it if its size or modification time changed.
+pub(crate) fn refresh_audit_log(state: &mut State) -> Task<Message> {
+    let today = diagnostics::local_today();
+    let Some((generation, known)) = state.diagnostics.begin_load(today) else {
+        return Task::none();
+    };
+    Task::perform(
+        diagnostics::load_if_changed(audit::audit_log_path(), known, today),
+        move |load| Message::AuditLogLoaded(generation, load),
+    )
+}
+
+/// Handles a finished diagnostics log load (stale generations are dropped)
+pub(crate) fn handle_audit_log_loaded(
+    state: &mut State,
+    generation: u64,
+    load: diagnostics::AuditLoad,
+) {
+    state
+        .diagnostics
+        .finish_load(generation, load, state.diagnostics_filter);
+}
+
+/// Handles a change of the diagnostics search text
+pub(crate) fn handle_diagnostics_search_changed(state: &mut State, search: String) {
+    state
+        .diagnostics
+        .set_search(search, state.diagnostics_filter);
+}
+
+/// Handles "Clear Log": asks for confirmation first
 pub(crate) fn handle_clear_event_log(state: &mut State) {
-    if let Some(mut path) = crate::utils::get_state_dir() {
-        path.push("audit.log");
-        let _ = std::fs::remove_file(path);
-        state.audit_log_dirty = true; // Refresh after clearing
+    if !state.diagnostics.clearing {
+        state.diagnostics.confirm_clear = true;
     }
 }
 
-/// Handles audit entries loaded
-pub(crate) fn handle_audit_entries_loaded(
-    state: &mut State,
-    entries: Vec<crate::audit::AuditEvent>,
-) {
-    state.cached_audit_entries = entries;
-    state.audit_log_dirty = false;
+/// Handles cancelling the clear confirmation
+pub(crate) fn handle_cancel_clear_event_log(state: &mut State) {
+    state.diagnostics.confirm_clear = false;
 }
 
-/// Handles audit log write completed
-pub(crate) fn handle_audit_log_written(state: &mut State) {
-    if state.enable_event_log {
-        state.audit_log_dirty = true;
+/// Handles the confirmed clear: replaces the log off the UI thread with one
+/// whose first line records the clearing (when event logging is enabled).
+pub(crate) fn handle_confirm_clear_event_log(state: &mut State) -> Task<Message> {
+    if state.diagnostics.clearing {
+        return Task::none();
+    }
+    state.diagnostics.confirm_clear = false;
+    state.diagnostics.clearing = true;
+    // A load already running would show the log as it was before the clear
+    state.diagnostics.invalidate();
+    let enable_event_log = state.enable_event_log;
+    Task::perform(
+        async move {
+            audit::clear_log(enable_event_log)
+                .await
+                .map_err(|e| e.to_string())
+        },
+        Message::EventLogCleared,
+    )
+}
+
+/// Handles the end of a clear: reports the outcome and reloads the log
+pub(crate) fn handle_event_log_cleared(
+    state: &mut State,
+    result: Result<(), String>,
+) -> Task<Message> {
+    state.diagnostics.clearing = false;
+    match result {
+        Ok(()) => state.push_banner("Event log cleared", BannerSeverity::Success),
+        Err(e) => {
+            tracing::error!("Failed to clear the event log: {e}");
+            state.push_banner(
+                format!("Could not clear the event log: {e}"),
+                BannerSeverity::Error,
+            );
+        }
+    }
+    if state.show_diagnostics {
+        refresh_audit_log(state)
+    } else {
+        Task::none()
     }
 }
 
@@ -134,10 +194,40 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_audit_log_written() {
+    fn test_clear_event_log_asks_first() {
         let mut state = create_test_state();
-        state.enable_event_log = true;
-        handle_audit_log_written(&mut state);
-        assert!(state.audit_log_dirty);
+        handle_clear_event_log(&mut state);
+        assert!(state.diagnostics.confirm_clear);
+        assert!(!state.diagnostics.clearing);
+        handle_cancel_clear_event_log(&mut state);
+        assert!(!state.diagnostics.confirm_clear);
+        assert!(!state.diagnostics.clearing);
+    }
+
+    #[test]
+    fn test_confirmed_clear_supersedes_running_load() {
+        let mut state = create_test_state();
+        state.show_diagnostics = true;
+        let _ = refresh_audit_log(&mut state); // a load is now in flight
+        handle_clear_event_log(&mut state);
+        let _ = handle_confirm_clear_event_log(&mut state);
+        assert!(!state.diagnostics.confirm_clear);
+        assert!(state.diagnostics.clearing);
+        // No reloads while clearing, and a second confirm does nothing
+        let today = crate::app::diagnostics::local_today();
+        assert!(state.diagnostics.begin_load(today).is_none());
+        let _ = handle_confirm_clear_event_log(&mut state);
+        assert!(state.diagnostics.clearing);
+    }
+
+    #[test]
+    fn test_clear_failure_is_reported() {
+        let mut state = create_test_state();
+        state.diagnostics.clearing = true;
+        let _ = handle_event_log_cleared(&mut state, Err("Permission denied".to_string()));
+        assert!(!state.diagnostics.clearing);
+        let banner = state.banners.back().expect("an error banner");
+        assert_eq!(banner.severity, BannerSeverity::Error);
+        assert!(banner.message.contains("Permission denied"));
     }
 }

@@ -246,12 +246,7 @@ impl RuleForm {
     /// fresh values, an edited rule keeps its own (editing must not re-enable a
     /// disabled rule or reset its creation time). Unparseable numbers are
     /// left out; call [`Self::validate`] first.
-    pub fn to_rule(
-        &self,
-        id: uuid::Uuid,
-        enabled: bool,
-        created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Rule {
+    pub fn to_rule(&self, id: uuid::Uuid, enabled: bool, created_at: jiff::Timestamp) -> Rule {
         let (rate_limit, connection_limit) = self.parse_numbers(&mut FormErrors::default());
         self.build_rule(id, enabled, created_at, rate_limit, connection_limit)
     }
@@ -260,7 +255,7 @@ impl RuleForm {
         &self,
         id: uuid::Uuid,
         enabled: bool,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: jiff::Timestamp,
         rate_limit: Option<RateLimit>,
         connection_limit: u32,
     ) -> Rule {
@@ -304,7 +299,7 @@ impl RuleForm {
         let candidate = self.build_rule(
             uuid::Uuid::nil(),
             true,
-            chrono::DateTime::UNIX_EPOCH,
+            jiff::Timestamp::UNIX_EPOCH,
             rate_limit,
             connection_limit,
         );
@@ -359,7 +354,7 @@ mod tests {
         assert!(form.validate().unwrap().rate_limit.is_some());
         form.rate_limit_burst = "10".into();
         assert!(form.validate().is_none());
-        let rule = form.to_rule(uuid::Uuid::nil(), true, chrono::Utc::now());
+        let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
         assert_eq!(
             rule.rate_limit,
             Some(RateLimit {
@@ -488,7 +483,7 @@ mod property_tests {
         /// rejects is never accepted by the form.
         #[test]
         fn test_form_agrees_with_core(form in any_form()) {
-            let rule = form.to_rule(uuid::Uuid::new_v4(), true, chrono::Utc::now());
+            let rule = form.to_rule(uuid::Uuid::new_v4(), true, jiff::Timestamp::now());
             let core_ok = rule.validate().is_ok();
             let form_ok = form.validate().is_none();
             if form_ok {

@@ -142,7 +142,7 @@ impl ValidationReport {
     /// let mut ruleset = FirewallRuleset::new();
     /// ruleset.rules.push(Rule::with_caches(
     ///     uuid::Uuid::new_v4(), "Bad".into(), Protocol::Tcp, vec![PortEntry::single(0)],
-    ///     vec![], None, Chain::Input, true, chrono::Utc::now(), vec![],
+    ///     vec![], None, Chain::Input, true, jiff::Timestamp::now(), vec![],
     /// ));
     /// let report = ruleset.validate().unwrap_err();
     /// assert!(report.blocking_summary().unwrap().contains("Bad"));
@@ -871,7 +871,7 @@ mod property_tests {
             let reject_types = available_reject_types_for_protocol(protocol);
             let mut rule = Rule::with_caches(
                 Uuid::new_v4(), label, protocol, ports, sources, None, chain, enabled,
-                chrono::Utc::now(), tags,
+                jiff::Timestamp::now(), tags,
             );
             if output {
                 rule.output_interface = iface;

@@ -6,9 +6,36 @@
 use crate::core::firewall::{
     Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use std::sync::{Mutex, Once};
 use uuid::Uuid;
+
+/// Timestamps exactly as earlier, chrono-based DRFW builds wrote them (and as
+/// hand-edited files may contain them), with their Unix time in nanoseconds.
+///
+/// chrono 0.4 serialized `DateTime<Utc>` as RFC 3339 with `Z` and 0, 3, 6 or 9
+/// fractional digits (whichever is exact). Its deserializer also accepted any
+/// offset, so `+00:00` and non-UTC offsets are covered too. Used by the
+/// `Rule.created_at` and `AuditEvent.timestamp` compatibility tests.
+pub const CHRONO_TIMESTAMPS: &[(&str, i128)] = &[
+    // Utc::now() as written by chrono (nanosecond precision)
+    ("2026-11-20T22:39:15.366180715Z", 1_795_214_355_366_180_715),
+    ("2026-11-20T22:39:15.000000001Z", 1_795_214_355_000_000_001),
+    // Microsecond and millisecond precision (trailing zeros dropped in groups)
+    ("2026-11-20T22:39:15.366180Z", 1_795_214_355_366_180_000),
+    ("2026-11-20T22:39:15.366Z", 1_795_214_355_366_000_000),
+    // Whole seconds
+    ("2026-11-20T22:39:15Z", 1_795_214_355_000_000_000),
+    ("1970-01-01T00:00:00Z", 0),
+    // Explicit offsets (to_rfc3339(), hand edits)
+    ("2026-11-20T22:39:15+00:00", 1_795_214_355_000_000_000),
+    (
+        "2026-11-20T22:39:15.366180715+00:00",
+        1_795_214_355_366_180_715,
+    ),
+    ("2026-11-20T23:39:15.5+01:00", 1_795_214_355_500_000_000),
+    ("2026-11-20T17:39:15-05:00", 1_795_214_355_000_000_000),
+];
 
 /// Mutex for tests that need exclusive access to environment variables.
 ///
@@ -103,7 +130,7 @@ pub fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         chain: Chain::Input,
         enabled: true,
         tags: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         action: Action::Accept,
         reject_type: RejectType::Default,
         rate_limit: None,
@@ -159,7 +186,7 @@ pub fn create_full_test_rule(
         chain: Chain::Input,
         enabled: true,
         tags: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         action: Action::Accept,
         reject_type: RejectType::Default,
         rate_limit: None,

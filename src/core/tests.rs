@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests_impl {
     use crate::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
-    use chrono::Utc;
+    use jiff::Timestamp;
     use uuid::Uuid;
 
     /// Helper to create a minimal test rule with sensible defaults
@@ -18,7 +18,7 @@ mod tests_impl {
             chain: crate::core::firewall::Chain::Input,
             enabled: true,
             tags: Vec::new(),
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             action: Action::Accept,
             reject_type: RejectType::Default,
             rate_limit: None,
@@ -454,7 +454,7 @@ mod property_tests {
     use crate::core::firewall::{
         Action, FirewallRuleset, PortEntry, PortRange, Protocol, RejectType, Rule,
     };
-    use chrono::Utc;
+    use jiff::Timestamp;
     use proptest::prelude::*;
     use uuid::Uuid;
 
@@ -562,7 +562,7 @@ mod property_tests {
                 interface,
                 if output_chain { Chain::Output } else { Chain::Input },
                 true,
-                Utc::now(),
+                Timestamp::now(),
                 tags,
             );
             rule.destinations = destinations;
@@ -1755,5 +1755,70 @@ mod generation_semantics_tests {
         // Non-ASCII is stripped by the tag allowlist; empty results are dropped
         assert_eq!(rule.tags, vec!["web-servers-production".to_string()]);
         assert_eq!(rule.tags_truncated, vec!["web-servers-pro…".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod timestamp_compat_tests {
+    //! `Rule.created_at` must stay readable in both directions across the
+    //! chrono -> jiff migration: old profiles load, and what we write loads in
+    //! older (chrono-based) DRFW builds.
+
+    use crate::core::firewall::Rule;
+    use crate::core::test_helpers::{CHRONO_TIMESTAMPS, create_test_rule};
+
+    /// A rule as an older DRFW build saved it, with `created_at` = `stamp`.
+    fn legacy_rule_json(stamp: &str) -> String {
+        format!(
+            r#"{{"id":"6f1c0f5e-2b9e-4a7c-9f5d-111111111111","label":"SSH",
+                "protocol":"Tcp","ports":[22],"interface":null,"chain":"Input",
+                "enabled":true,"created_at":"{stamp}","tags":[]}}"#
+        )
+    }
+
+    #[test]
+    fn test_rule_created_at_reads_chrono_strings() {
+        for &(stamp, nanos) in CHRONO_TIMESTAMPS {
+            let rule: Rule = serde_json::from_str(&legacy_rule_json(stamp))
+                .unwrap_or_else(|e| panic!("{stamp}: {e}"));
+            assert_eq!(rule.created_at.as_nanosecond(), nanos, "{stamp}");
+        }
+    }
+
+    #[test]
+    fn test_rule_created_at_writes_rfc3339_utc() {
+        // chrono's deserializer (older builds) reads RFC 3339 with a `Z` or an
+        // offset and 0-9 fractional digits; jiff writes exactly that subset.
+        for &(stamp, nanos) in CHRONO_TIMESTAMPS {
+            let mut rule = create_test_rule("SSH", Some(22));
+            rule.created_at = jiff::Timestamp::from_nanosecond(nanos).unwrap();
+            let json = serde_json::to_value(&rule).unwrap();
+            let written = json["created_at"].as_str().unwrap();
+            assert!(written.ends_with('Z'), "{stamp} -> {written}");
+            assert!(written.contains('T') && written.len() >= 20, "{written}");
+            // Round trip is lossless
+            let back: Rule = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(back.created_at.as_nanosecond(), nanos);
+        }
+        // The common case is byte-identical to what chrono wrote
+        let mut rule = create_test_rule("SSH", Some(22));
+        rule.created_at = "2026-11-20T22:39:15.366180715Z".parse().unwrap();
+        assert_eq!(
+            serde_json::to_value(&rule).unwrap()["created_at"],
+            "2026-11-20T22:39:15.366180715Z"
+        );
+        rule.created_at = "2026-11-20T22:39:15Z".parse().unwrap();
+        assert_eq!(
+            serde_json::to_value(&rule).unwrap()["created_at"],
+            "2026-11-20T22:39:15Z"
+        );
+    }
+
+    #[test]
+    fn test_rule_created_at_rejects_garbage() {
+        for bad in ["", "yesterday", "2026-13-01T00:00:00Z", "1795214355"] {
+            let json = legacy_rule_json(bad);
+            assert!(serde_json::from_str::<Rule>(&json).is_err(), "{bad:?}");
+        }
     }
 }

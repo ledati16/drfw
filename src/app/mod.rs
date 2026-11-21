@@ -1,4 +1,5 @@
 mod debounce;
+mod diagnostics;
 mod forms;
 mod handlers;
 mod helpers;
@@ -139,12 +140,9 @@ pub struct State {
     pub active_profile_name: String,
     pub available_profiles: Vec<String>,
     pub pending_profile_switch: Option<String>,
-    // Audit log caching (Phase 1.1: Async diagnostics)
-    /// Cached audit log entries for diagnostics modal
-    /// Loaded asynchronously when modal opens, refreshed on demand
-    pub cached_audit_entries: Vec<crate::audit::AuditEvent>,
-    /// Tracks if audit log needs refresh (dirty flag)
-    pub audit_log_dirty: bool,
+    /// Diagnostics modal: pre-formatted event log rows, filter/search
+    /// results and reload bookkeeping (see `app::diagnostics`)
+    pub diagnostics: diagnostics::DiagnosticsLog,
     /// Set when the active profile exists but could not be loaded. The profile
     /// is then open read-only (empty, edits and autosave blocked) until the user
     /// switches profile or chooses "Start fresh".
@@ -475,13 +473,20 @@ pub enum Message {
     ConfirmServerMode,
     ToggleDiagnostics(bool),
     DiagnosticsFilterChanged(DiagnosticsFilter),
-    /// Audit log entries loaded asynchronously (Phase 1.1)
-    AuditEntriesLoaded(Vec<crate::audit::AuditEvent>),
-    /// Check if audit log needs refresh (auto-refresh subscription)
+    DiagnosticsSearchChanged(String),
+    /// A diagnostics log load finished (generation, result)
+    AuditLogLoaded(u64, diagnostics::AuditLoad),
+    /// Timer tick while the diagnostics modal is open: reload if the log changed
     CheckAuditLogRefresh,
-    /// Audit log write completed (mark cache dirty)
+    /// An audit log write completed (completion message for logging tasks;
+    /// the diagnostics modal notices the change by the log's size/mtime)
     AuditLogWritten,
+    /// "Clear Log" pressed: ask for confirmation
     ClearEventLog,
+    ClearEventLogCancelled,
+    ClearEventLogConfirmed,
+    /// Clearing finished (error text on failure)
+    EventLogCleared(Result<(), String>),
     ExportAsJson,
     ExportAsNft,
     ExportResult(Result<String, String>),
@@ -699,8 +704,7 @@ impl State {
             active_profile_name,
             available_profiles,
             pending_profile_switch: None,
-            cached_audit_entries: Vec::new(),
-            audit_log_dirty: true, // Load on first open
+            diagnostics: diagnostics::DiagnosticsLog::default(),
             unreadable_profile,
             profile_generation: 0,
             switch_request: 0,
@@ -815,8 +819,7 @@ impl State {
             active_profile_name: "test".to_string(),
             available_profiles: vec!["test".to_string()],
             pending_profile_switch: None,
-            cached_audit_entries: Vec::new(),
-            audit_log_dirty: false,
+            diagnostics: diagnostics::DiagnosticsLog::default(),
             unreadable_profile: None,
             profile_generation: 0,
             switch_request: 0,
@@ -1416,12 +1419,22 @@ impl State {
             Message::DiagnosticsFilterChanged(filter) => {
                 handlers::handle_diagnostics_filter_changed(self, filter);
             }
-            Message::AuditEntriesLoaded(entries) => {
-                handlers::handle_audit_entries_loaded(self, entries);
+            Message::DiagnosticsSearchChanged(search) => {
+                handlers::handle_diagnostics_search_changed(self, search);
             }
-            Message::CheckAuditLogRefresh => return handlers::handle_check_audit_log_refresh(self),
-            Message::AuditLogWritten => handlers::handle_audit_log_written(self),
+            Message::AuditLogLoaded(generation, load) => {
+                handlers::handle_audit_log_loaded(self, generation, load);
+            }
+            Message::CheckAuditLogRefresh => return handlers::refresh_audit_log(self),
+            Message::AuditLogWritten => {}
             Message::ClearEventLog => handlers::handle_clear_event_log(self),
+            Message::ClearEventLogCancelled => handlers::handle_cancel_clear_event_log(self),
+            Message::ClearEventLogConfirmed => {
+                return handlers::handle_confirm_clear_event_log(self);
+            }
+            Message::EventLogCleared(result) => {
+                return handlers::handle_event_log_cleared(self, result);
+            }
             Message::ToggleShortcutsHelp(show) => {
                 handlers::handle_toggle_shortcuts_help(self, show);
             }
@@ -1572,9 +1585,10 @@ impl State {
             } else {
                 iced::Subscription::none()
             },
-            // Audit log auto-refresh when diagnostics modal is open
+            // Audit log auto-refresh while the diagnostics modal is open: each
+            // tick stats the log and re-reads it only if it changed
             if self.show_diagnostics {
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckAuditLogRefresh)
+                iced::time::every(Duration::from_millis(250)).map(|_| Message::CheckAuditLogRefresh)
             } else {
                 iced::Subscription::none()
             },

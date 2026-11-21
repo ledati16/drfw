@@ -69,7 +69,6 @@ pub(crate) fn handle_toggle_event_log(state: &mut State, enabled: bool) -> Task<
     let old_value = state.enable_event_log;
     state.enable_event_log = enabled;
     state.mark_config_dirty();
-    state.audit_log_dirty = true; // Mark for refresh
     let desc = if enabled {
         "Event logging enabled"
     } else {

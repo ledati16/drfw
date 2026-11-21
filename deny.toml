@@ -21,7 +21,6 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
-    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; direct dep for rule timestamps, migration tracked as a separate task" },
 ]
 
 [licenses]

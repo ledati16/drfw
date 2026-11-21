@@ -311,7 +311,8 @@ temp.persist(&final_path)?;   // Atomic rename
 Use `utils::write_atomic_private[_async]()` (unique temp file, 0600, sync, rename) rather
 than a fixed `*.tmp` name: two overlapping saves must never share a temp file.
 
-**Required for:** Config files, profiles, snapshots, audit logs
+**Required for:** Config files, profiles, and any file replaced wholesale (clearing the
+audit log). Appends to the audit log are single `write`s instead (see §10).
 
 **Never replace user data silently:**
 - Creating or renaming a profile never overwrites an existing one (names compared
@@ -331,31 +332,67 @@ than a fixed `*.tmp` name: two overlapping saves must never share a temp file.
 
 ## 4. Privilege Escalation
 
+### What Runs Elevated
+Only three things, all in `src/elevation.rs`:
+
+1. **`nft --json --check -f -`**: the authoritative verify, used only when the
+   unprivileged check (`unshare -rn nft --check`, private user + network namespace)
+   does not pass. Only a *pass* in the namespace is trusted.
+2. **`/bin/sh` + `APPLY_SCRIPT`**: apply and arm the revert guard (one prompt per apply).
+3. **`/bin/sh` + `SAVE_CONFIG_SCRIPT`**: Save to System (one prompt).
+
+The scripts are compile-time constants. Data reaches them only as argv (checked
+against an allowlist inside the script) and stdin; nothing is ever interpolated into
+script text. Exit codes are structured, and 126/127 are never used by the scripts:
+callers read those as authentication failures of the elevation tool.
+
 ### Elevation Strategy
-Automatic fallback based on environment:
+Chosen in `build_elevated_command()`:
 
-1. **Preferred:** `run0` (systemd v256+) - No SUID, better security
-2. **CLI:** `sudo` for terminal environments
-3. **GUI:** `pkexec` for graphical authentication
+1. **Already root:** run directly (no prompt)
+2. **`DRFW_ELEVATION_METHOD`** (`sudo`/`run0`/`pkexec`): forced method, for scripts
+3. **Terminal (stdin is a TTY):** `run0` (systemd v256+, no SUID), else `sudo`
+4. **GUI (no TTY):** `pkexec` (polkit credential caching), else `run0`
 
-```rust
-fn create_elevated_command(args: &[&str]) -> Result<Command> {
-    if binary_exists("run0") {
-        return Ok(Command::new("run0").arg("nft").args(args));
-    }
+Every elevated child uses `kill_on_drop(true)`. `contrib/50-drfw.rules` caches pkexec
+for `nft` only, never for `/bin/sh` (that would allow arbitrary root commands without
+a prompt).
 
-    let is_tty = nix::unistd::isatty(std::io::stdin())?;
-    let tool = if is_tty { "sudo" } else { "pkexec" };
-    Ok(Command::new(tool).arg("nft").args(args))
-}
-```
+### Root-Side Revert Guard (dead-man switch)
+`core/apply_guard.rs` + `APPLY_SCRIPT`/`WATCHER_SCRIPT`. As root, in one elevation:
+
+1. Save the current `inet drfw` table (or the fact that there is none) as an atomic
+   revert batch in root-owned `/run/drfw` (`GUARD_STATE_DIR`). If an earlier guard is
+   still pending, inherit its revert file: a timeout returns to the last *confirmed*
+   state.
+2. Apply the new JSON (`nft --json -f -`); on rejection nothing changed (exit 3).
+3. Supersede the earlier guard, then start a detached watcher (`systemd-run` when
+   systemd is PID 1, else `setsid`). If it can't start, roll back at once (exit 4/5).
+
+The watcher polls once per second on `/proc/uptime` (immune to clock changes). The
+user side confirms or reverts by creating `drfw-confirm-<nonce>` / `drfw-revert-<nonce>`
+token files in its own runtime dir (no privileges); the watcher only lists that dir,
+never follows or writes into it, and writes the outcome to world-readable
+`/run/drfw/status-<nonce>`. `/run/drfw/active` names the pending guard (`drfw status`
+reads it). Revert falls back to deleting the drfw table, never to re-applying drop
+policies. Closing the GUI, a crash, a closed terminal or a dropped SSH session all end
+in the revert.
+
+**Never** move the revert back into the DRFW process or require a second prompt for it:
+that fails exactly when the user is locked out.
+
+### Save to System
+`SAVE_CONFIG_SCRIPT` (target path = `drfw::SYSTEM_NFT_PATH`, a compile-time constant):
+write stdin to a temp file next to the target, `nft -c -f` **that exact file**, copy the
+old target to `.drfw-bak` (and, once, to `.drfw-orig`, never overwritten), sync, then
+rename into place. Any failure leaves the target untouched.
 
 ### Security Requirements
-- **Verify before apply:** Run `nft --check` to validate syntax before applying rules
-- **Timeout protection:** 2-minute default maximum
+- **Validate, then verify, then apply:** `validate_for_apply()` → `nft --check` → apply
+- **Timeout protection:** 2-minute maximum for anything that can show an auth dialog
 - **Error translation:** Map exit codes to user actions (126=cancelled, 127=auth failed)
 - **Audit logging:** Log all privileged operations with timestamps
-- **Test bypass:** `DRFW_NFT_COMMAND=tests/mock_nft.sh` for tests with mock nft
+- **Test bypass:** `DRFW_NFT_COMMAND=tests/mock_nft.sh` for tests with mock nft (no elevation)
 
 ### Subprocess Timeout Pattern
 **All subprocess calls should have timeouts** to prevent indefinite hangs:
@@ -438,11 +475,15 @@ self.modify_state(cached_value);
 |------|---------|-------------------|
 | `src/core/tests.rs` | Unit tests for JSON generation, property tests, JSON format details | JSON output structure, rule ordering, protocol handling, IP format compliance |
 | `src/core/verify.rs` | Unit tests for error parsing functions | `parse_nft_errors()`, `VerifyResult` constructors |
-| `src/core/nft_json.rs` | Module tests for snapshot and checksum functions | Snapshot validation, checksums, emergency ruleset |
-| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI operations, profiles | **Verification flow** (valid/empty/multi-rule), CLI exports, profile operations, audit logging |
+| `src/core/nft_text.rs` | Unit tests for the text renderer | Header/idempotent preamble, statement rendering, render errors |
+| `src/core/apply_guard.rs` | Unit tests for the guard's user side | Outcome parsing, exit-code mapping, tokens, `pending_guard()` |
+| `src/audit.rs` | Unit tests for the audit log | Event (de)serialization, chrono-era timestamps, rotation, clearing |
+| `src/app/diagnostics.rs` | Unit tests for the event log view model | Row precompute (local time/date), filter + search cache, in-flight/generation reload logic |
+| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing, CLI `status`/`check` (runs the real binary), exports, audit logging |
+| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, Server-mode loopback, Save to System script, revert guard end to end |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
-| `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup) | - |
+| `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup, `CHRONO_TIMESTAMPS`) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
 | `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
 
@@ -476,7 +517,11 @@ use crate::core::test_helpers::ENV_VAR_MUTEX;
 |----------|---------|-------------|
 | `DRFW_NFT_COMMAND` | Path to nft binary or mock script (skips elevation) | All tests that use nft operations |
 | `DRFW_TEST_DATA_DIR` | Overrides data directory (`~/.local/share/drfw/`) | Tests that access profiles |
-| `DRFW_TEST_STATE_DIR` | Overrides state directory (`~/.local/state/drfw/`) | Tests that access audit logs/snapshots |
+| `DRFW_TEST_STATE_DIR` | Overrides state directory (`~/.local/state/drfw/`) | Tests that access the audit log |
+| `DRFW_REQUIRE_REAL_NFT` | `1` makes `tests/real_nft.rs` fail instead of skipping when `unshare -rn nft` is unavailable | CI (set); never in packaging `check()` |
+
+For tests that run the `drfw` binary (`env!("CARGO_BIN_EXE_drfw")`), set these on the
+child `Command`, not with `std::env::set_var`: per-child env cannot race other tests.
 
 ### Async vs Sync Tests
 
@@ -530,22 +575,24 @@ async fn test_nft_operation() {
 ```
 
 ### CI/CD Compatibility
-- All tests use mock nft and require no privileges
-- Tests should never touch real nftables or require elevation
+- No test needs privileges. Tests use the mock nft, or the real `nft` inside a private
+  user + network namespace (`unshare -rn`), never the host's ruleset
+- `tests/real_nft.rs` skips itself without `nft`/user namespaces; CI installs nftables,
+  allows user namespaces and sets `DRFW_REQUIRE_REAL_NFT=1` so a skip is a failure
 - Document any special requirements in module-level docs
 
 ### Running Tests
 
 ```bash
-# Standard test run - uses mock nft, no privileges needed
+# Standard test run - mock nft, plus real nft in a namespace when available
 cargo test
 
-# Explicit mock path (equivalent to above, tests set this automatically)
-DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test
+# As CI runs it: real-nft tests must run, not skip
+DRFW_REQUIRE_REAL_NFT=1 cargo test --locked
 ```
 
-**Note:** All tests automatically use the mock nft script via `setup_mock_nft()`.
-Tests never require root privileges or touch real nftables.
+**Note:** Mock-based tests set `DRFW_NFT_COMMAND` themselves (`setup_mock_nft()`; the
+mock needs `jq`). Tests never require root privileges or touch the host's nftables.
 
 ### Stress Test Generator
 
@@ -668,7 +715,8 @@ pub fn view(&self) -> Element {
 ### Optimization Patterns
 **Cache in state:**
 - Lowercase search strings (`.to_lowercase()` once per keystroke)
-- Filtered/sorted collections (once per data change)
+- Filtered/sorted collections (once per data change), e.g. the diagnostics event log:
+  rows are formatted once per load, the visible indices once per filter/search change
 - Syntax highlighting tokens (once per text change)
 - Display strings for frequently-rendered data (see example below)
 
@@ -790,20 +838,29 @@ The architecture has been validated with **700 rules** (varied protocols, ports,
 
 ## 9. nftables Integration
 
-### JSON API Only
-```rust
-// ✅ Structured parsing
-Command::new("nft").args(["--json", "list", "ruleset"])
+### One Command List, Two Renderers
+`FirewallRuleset::build_commands()` produces the single list of nft commands. It is
+serialized as JSON (`to_nftables_json()`, what Apply sends) and rendered as an `nft -f`
+text file (`to_nft_text()` in `core/nft_text.rs`: preview, diff, `drfw export --format
+nft`, Save to System). Never write a second generator: change `build_commands()` and
+both outputs follow. `tests/real_nft.rs` checks that both load identical kernel rulesets.
 
-// ❌ Text parsing (fragile)
-Command::new("nft").args(["list", "ruleset"])
-```
+The text file starts with `table inet drfw` / `delete table inet drfw` (idempotent
+replace that works on every nft version; `destroy` needs nft >= 1.0.8) and a
+`# Generated by DRFW <version>` header (`nft_text::GENERATED_HEADER`, which
+`drfw status` uses to recognise our boot config).
 
-### Validation Workflow
-1. **Syntax check:** `nft --json --check -f -` (requires elevation)
-2. **Capture snapshot:** Current state for rollback
-3. **Apply with elevation:** `run0/sudo/pkexec nft -f -`
-4. **Verify state:** Confirm rules applied correctly
+### JSON API for Applying
+Apply always uses `nft --json -f -`; the text form is only ever written to files and
+checked with `nft -c` before use. Never parse `nft list` text output.
+
+### Apply Workflow
+1. **Validate:** `validate_for_apply()` (refuses invalid applied rules)
+2. **Verify:** `verify_ruleset()`: unprivileged namespace check, elevated `nft --check`
+   only if that does not pass. `drfw check` uses `verify_ruleset_unprivileged()` (never
+   prompts)
+3. **Apply + guard:** `apply_guarded()` (one elevation; see §4)
+4. **Confirm or revert:** token file; the root-side watcher reports the outcome
 
 ### Rule Ordering
 Optimize for common traffic patterns:
@@ -825,12 +882,22 @@ Optimize for common traffic patterns:
 - **One write per line:** event + newline in a single `write` (lines can't interleave);
   the reader skips damaged lines instead of stopping
 - **No per-keystroke events:** text and slider settings go through `schedule_slider_log()`
-- **Contents:** Timestamps (UTC), event type, success/failure, error messages
+- **Contents:** Timestamps, event type, success/failure, error messages
+- **Timestamps:** `jiff::Timestamp`, serialized as RFC 3339 UTC
+  (`2026-11-20T22:39:15.366180715Z`), the format chrono-based builds wrote: old logs and
+  profiles (`Rule.created_at`) load, and older builds read ours. Keep it that way (tests
+  use `test_helpers::CHRONO_TIMESTAMPS`). Display in local time only, in the view model
+- **Clearing:** "Clear Log" asks first, runs off the UI thread and atomically replaces the
+  log with one whose first line is a `log_cleared` event (or removes it when event
+  logging is off), together with `audit.log.old`; failures show a banner
+- **Reading:** the diagnostics modal re-reads the log only when its size or mtime
+  changed, one load at a time, dropping results of superseded loads (generation)
 - **Exclude:** Passwords, API keys, private network details
 
 ### Events to Log
-- Rule applications (success/failure, rule count)
-- Snapshot operations (save/restore)
+- Rule applications (success/failure, rule count), verify results, Save to System
+- Reverts (with the guard's outcome)
+- Log cleared
 - Profile operations (create/delete/rename/switch), logged with their **real** outcome
   (from the async result, never optimistically before the operation ran)
 - Settings changes
@@ -993,12 +1060,13 @@ fn handle_message(&mut self) -> Task<Message> {
 - App log: `~/.local/state/drfw/drfw.log` (0o600, appended, rotated to `drfw.log.1` past 5 MiB)
 - Config: `~/.local/share/drfw/config.json` (0o600)
 - Profiles: `~/.local/share/drfw/profiles/*.json` (0o600; directory 0o700)
-- Snapshots: `~/.local/state/drfw/snapshots/*.json` (0o600)
+- Revert guard state: `/run/drfw/` (root-owned 0755 tmpfs dir; `active`, `status-*` 0644)
+- Boot config: `drfw::SYSTEM_NFT_PATH` (0644) with `.drfw-bak` and `.drfw-orig`
 
 **Windows:** Document that users should configure ACLs on data directories (`%LOCALAPPDATA%\drfw\drfw\data`).
 
 ---
 
-**Last Updated:** 2026-11-20 (Central rule validator, no-loss profile/config loading, profile format version, checksums removed, honest autosave)
+**Last Updated:** 2026-11-20 (chrono → jiff, diagnostics view model, `drfw check`/honest `status`, docs for the revert guard, single generator and Save to System)
 **DRFW Version:** 0.9.0
 **Iced Version:** 0.14

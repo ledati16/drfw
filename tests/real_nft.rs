@@ -188,7 +188,7 @@ fn rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
         None,
         Chain::Input,
         true,
-        chrono::Utc::now(),
+        jiff::Timestamp::now(),
         Vec::new(),
     )
 }
@@ -1018,7 +1018,7 @@ prop_compose! {
             interface,
             if output_chain { Chain::Output } else { Chain::Input },
             true,
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
             tags,
         );
         r.destinations = destinations;

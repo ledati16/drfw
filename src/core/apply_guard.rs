@@ -349,6 +349,48 @@ fn classify_apply_exit(code: Option<i32>, stderr: &str) -> Result<(), ApplyError
     })
 }
 
+/// A revert guard that has been armed but has not finished yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingGuard {
+    /// When the guarded apply armed it (modification time of the `active` file)
+    pub armed_at: Option<std::time::SystemTime>,
+    /// How the watcher was started (`systemd` or `setsid`)
+    pub launcher: String,
+}
+
+/// Looks for an unfinished revert guard in `state_dir` (normally
+/// [`crate::elevation::GUARD_STATE_DIR`]). Needs no privileges: the apply
+/// script keeps the directory and its `active`/`status-*` files
+/// world-readable.
+///
+/// A guard is pending while `active` names a nonce that has no `status-<nonce>`
+/// outcome yet (see [`crate::elevation::APPLY_SCRIPT`]).
+///
+/// # Errors
+///
+/// Returns `Err` if `active` exists but cannot be read.
+pub fn pending_guard(state_dir: &Path) -> std::io::Result<Option<PendingGuard>> {
+    let active = state_dir.join("active");
+    let content = match std::fs::read_to_string(&active) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut fields = content.split_whitespace();
+    let nonce = fields.next().unwrap_or_default();
+    let valid_nonce = nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !valid_nonce || state_dir.join(format!("status-{nonce}")).exists() {
+        return Ok(None);
+    }
+    Ok(Some(PendingGuard {
+        armed_at: std::fs::metadata(&active).and_then(|m| m.modified()).ok(),
+        launcher: fields.next().unwrap_or("unknown").to_string(),
+    }))
+}
+
 /// Applies `json` with one elevation and, if `timeout_secs > 0`, arms the
 /// root-side revert guard.
 ///
@@ -450,6 +492,27 @@ mod tests {
             GuardOutcome::parse("garbage"),
             GuardOutcome::RevertFailed(_)
         ));
+    }
+
+    #[test]
+    fn test_pending_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonce = "0123456789abcdef0123456789abcdef";
+        // No active file: nothing pending
+        assert_eq!(pending_guard(dir.path()).unwrap(), None);
+
+        std::fs::write(dir.path().join("active"), format!("{nonce} systemd\n")).unwrap();
+        let pending = pending_guard(dir.path()).unwrap().expect("pending");
+        assert_eq!(pending.launcher, "systemd");
+        assert!(pending.armed_at.is_some());
+
+        // An outcome for that nonce means the guard has finished
+        std::fs::write(dir.path().join(format!("status-{nonce}")), "confirmed\n").unwrap();
+        assert_eq!(pending_guard(dir.path()).unwrap(), None);
+
+        // A malformed active file is never reported as pending
+        std::fs::write(dir.path().join("active"), "../../etc/passwd setsid\n").unwrap();
+        assert_eq!(pending_guard(dir.path()).unwrap(), None);
     }
 
     #[cfg(unix)]

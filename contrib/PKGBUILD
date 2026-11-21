@@ -8,6 +8,7 @@ url="https://github.com/ledati16/drfw"
 license=('MIT')
 depends=('nftables' 'gcc-libs' 'glibc')
 makedepends=('git' 'cargo')
+checkdepends=('jq')  # tests/mock_nft.sh validates JSON with jq
 optdepends=(
     'polkit: for pkexec elevation in GUI environments'
     'sudo: for sudo elevation in terminal environments'
@@ -38,8 +39,14 @@ build() {
 check() {
     cd "${pkgname%-git}"
     export RUSTUP_TOOLCHAIN=stable
-    # Debug mode intentional: catches overflow checks and debug_assert!() failures
-    DRFW_NFT_COMMAND="$PWD/tests/mock_nft.sh" cargo test --frozen
+    # Debug build on purpose: overflow checks and debug_assert!() are active.
+    # Runs as the build user, no root needed. Most tests use the mock nft
+    # (tests/mock_nft.sh, set up by the tests themselves). tests/real_nft.rs
+    # uses the real nft inside an unprivileged user + network namespace
+    # (`unshare -rn`), never the host firewall, and skips itself where such
+    # namespaces are unavailable (e.g. some clean chroots). Do not set
+    # DRFW_REQUIRE_REAL_NFT here: it turns those skips into failures.
+    cargo test --frozen
 }
 
 package() {

@@ -31,7 +31,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
-use chrono::{TimeZone, Utc};
 use clap::{Parser, ValueEnum};
 use drfw::core::firewall::{
     Action, AdvancedSecuritySettings, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol,
@@ -45,6 +44,7 @@ use drfw::validators::{
     MAX_CONNECTION_LIMIT, MAX_LABEL_LENGTH, MAX_RATE_LIMIT_PER_MINUTE, MAX_RATE_LIMIT_PER_SECOND,
 };
 use ipnetwork::IpNetwork;
+use jiff::Timestamp;
 use rand::prelude::*;
 use uuid::Uuid;
 
@@ -413,7 +413,7 @@ struct RuleConfig {
     log_enabled: bool,
     enabled: bool,
     tags: Vec<String>,
-    timestamp: chrono::DateTime<Utc>,
+    timestamp: Timestamp,
 }
 
 impl RuleConfig {
@@ -659,15 +659,15 @@ fn random_label(rng: &mut impl Rng, index: usize) -> String {
     format!("{service} {chosen_suffix} #{index}")
 }
 
-fn random_timestamp(rng: &mut impl Rng, vary: bool) -> chrono::DateTime<Utc> {
+fn random_timestamp(rng: &mut impl Rng, vary: bool) -> Timestamp {
     if vary {
         // Vary timestamps: past year to now
-        let now = Utc::now().timestamp();
+        let now = Timestamp::now().as_second();
         let year_ago = now - 365 * 24 * 3600;
         let random_ts = rng.random_range(year_ago..=now);
-        Utc.timestamp_opt(random_ts, 0).unwrap()
+        Timestamp::from_second(random_ts).unwrap()
     } else {
-        Utc::now()
+        Timestamp::now()
     }
 }
 
@@ -903,16 +903,16 @@ fn edge_case_connection_limit(rng: &mut impl Rng) -> u32 {
     *cases.choose(rng).unwrap()
 }
 
-fn edge_case_timestamp(rng: &mut impl Rng) -> chrono::DateTime<Utc> {
+fn edge_case_timestamp(rng: &mut impl Rng) -> Timestamp {
     let cases = [
         // Unix epoch
-        Utc.timestamp_opt(0, 0).unwrap(),
+        Timestamp::UNIX_EPOCH,
         // Very old (Y2K)
-        Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).unwrap(),
+        "2000-01-01T00:00:00Z".parse().unwrap(),
         // Future (next year)
-        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
+        "2027-01-01T00:00:00Z".parse().unwrap(),
         // Now
-        Utc::now(),
+        Timestamp::now(),
     ];
 
     *cases.choose(rng).unwrap()
@@ -1091,7 +1091,7 @@ fn generate_coverage_rule(
         log_enabled: rng.random_bool(0.1),
         enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
     }
     .into_rule()
 }

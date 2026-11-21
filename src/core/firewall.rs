@@ -35,7 +35,7 @@
 //!     output_interface: None,
 //!     chain: Chain::Input,
 //!     enabled: true,
-//!     created_at: chrono::Utc::now(),
+//!     created_at: jiff::Timestamp::now(),
 //!     tags: vec![],
 //!     // Advanced options
 //!     destinations: vec![],  // Empty = any destination. Can mix IPv4/IPv6
@@ -528,7 +528,7 @@ pub struct Rule {
     pub chain: Chain,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
     /// Tags for organizing and filtering rules
     #[serde(default)]
     pub tags: Vec<String>,
@@ -792,7 +792,7 @@ impl Rule {
         interface: Option<String>,
         chain: Chain,
         enabled: bool,
-        created_at: chrono::DateTime<chrono::Utc>,
+        created_at: jiff::Timestamp,
         tags: Vec<String>,
     ) -> Self {
         let mut rule = Self {

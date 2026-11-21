@@ -77,7 +77,13 @@ async fn run_check(
 
     let work = async {
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(payload).await?;
+            // nft may exit before reading all of its input (e.g. an option
+            // error); its exit status and stderr are the verdict, not EPIPE
+            if let Err(e) = stdin.write_all(payload).await
+                && e.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Err(e);
+            }
         }
         child.wait_with_output().await
     };
@@ -107,11 +113,20 @@ fn check_verdict(
     Ok(VerifyResult::failure(parse_nft_errors(&stderr)))
 }
 
-/// Tries the check without privileges in a private namespace.
-///
-/// Returns `true` only if nft accepted the ruleset there; every other outcome
-/// is inconclusive.
-async fn unprivileged_check_passes(payload: &[u8]) -> bool {
+/// Outcome of the check in a private namespace.
+enum UnprivilegedCheck {
+    /// nft accepted the ruleset: it is valid
+    Passed,
+    /// nft refused it (its stderr). Usually a real error, but it can also
+    /// mean that a kernel module could not be loaded from the namespace.
+    Refused(String),
+    /// The check could not run (no `unshare`/`nft`, user namespaces
+    /// disabled, timeout)
+    Unavailable(String),
+}
+
+/// Runs `unshare -rn nft --json --check -f -`: no privileges, no prompt.
+async fn unprivileged_check(payload: &[u8]) -> UnprivilegedCheck {
     // nft usually lives in sbin, which is not on every user's PATH (Debian)
     let nft = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
         .into_iter()
@@ -120,22 +135,73 @@ async fn unprivileged_check_passes(payload: &[u8]) -> bool {
     let mut command = tokio::process::Command::new("unshare");
     command.arg("-rn").arg(nft).args(CHECK_ARGS);
     match run_check(command, payload, UNPRIVILEGED_CHECK_TIMEOUT).await {
-        Ok(Some(output)) if output.status.success() => true,
+        Ok(Some(output)) if output.status.success() => UnprivilegedCheck::Passed,
         Ok(Some(output)) => {
-            info!(
-                "Unprivileged check inconclusive, falling back to elevated check: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            // unshare itself failing (EPERM: user namespaces disabled) is not nft's verdict
+            if stderr.starts_with("unshare:") {
+                UnprivilegedCheck::Unavailable(stderr)
+            } else {
+                UnprivilegedCheck::Refused(stderr)
+            }
+        }
+        Ok(None) => UnprivilegedCheck::Unavailable("timed out".to_string()),
+        Err(e) => UnprivilegedCheck::Unavailable(e.to_string()),
+    }
+}
+
+/// Tries the check without privileges in a private namespace.
+///
+/// Returns `true` only if nft accepted the ruleset there; every other outcome
+/// is inconclusive.
+async fn unprivileged_check_passes(payload: &[u8]) -> bool {
+    match unprivileged_check(payload).await {
+        UnprivilegedCheck::Passed => true,
+        UnprivilegedCheck::Refused(stderr) => {
+            info!("Unprivileged check inconclusive, falling back to elevated check: {stderr}");
             false
         }
-        Ok(None) => {
-            info!("Unprivileged check timed out, falling back to elevated check");
+        UnprivilegedCheck::Unavailable(reason) => {
+            info!("Unprivileged check unavailable ({reason}), falling back to elevated check");
             false
         }
-        Err(e) => {
-            info!("Unprivileged check unavailable ({e}), falling back to elevated check");
-            false
-        }
+    }
+}
+
+/// Verifies a ruleset **without privileges and without any prompt**
+/// (`drfw check`): `nft --json --check` in a private user + network
+/// namespace. With `DRFW_NFT_COMMAND` set (tests), that command is used.
+///
+/// Unlike [`verify_ruleset`], a refusal is reported as-is
+/// ([`VerifyResult::success`] false). It is nearly always a real error, but
+/// in rare setups a kernel module that cannot be loaded from the namespace
+/// also causes one; only the elevated check is authoritative.
+///
+/// # Errors
+///
+/// [`VerifyError::Failed`] if the check cannot run (no `unshare` or `nft`,
+/// unprivileged user namespaces disabled, timeout).
+pub async fn verify_ruleset_unprivileged(
+    json_payload: &serde_json::Value,
+) -> Result<VerifyResult, VerifyError> {
+    let payload =
+        serde_json::to_vec(json_payload).map_err(|e| VerifyError::Failed(e.to_string()))?;
+
+    if let Some(nft) = crate::elevation::test_nft_command() {
+        let mut command = tokio::process::Command::new(nft);
+        command.args(CHECK_ARGS);
+        let Some(output) = run_check(command, &payload, UNPRIVILEGED_CHECK_TIMEOUT).await? else {
+            return Err(VerifyError::Failed("nft --check timed out".to_string()));
+        };
+        return check_verdict(&output, false);
+    }
+
+    match unprivileged_check(&payload).await {
+        UnprivilegedCheck::Passed => Ok(VerifyResult::success()),
+        UnprivilegedCheck::Refused(stderr) => Ok(VerifyResult::failure(parse_nft_errors(&stderr))),
+        UnprivilegedCheck::Unavailable(reason) => Err(VerifyError::Failed(format!(
+            "the unprivileged check (unshare -rn nft) is not available: {reason}"
+        ))),
     }
 }
 

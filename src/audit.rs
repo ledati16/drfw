@@ -52,6 +52,9 @@ pub enum EventType {
     // System configuration
     SaveToSystem,
 
+    // Audit log maintenance (always the first line of a cleared log)
+    LogCleared,
+
     // Generic errors (fallthrough cases)
     GenericError,
 }
@@ -59,8 +62,10 @@ pub enum EventType {
 /// A single audit log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
-    /// When the event occurred (UTC)
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// When the event occurred, serialized as an RFC 3339 UTC string
+    /// (`2026-11-20T22:39:15.366180715Z`), the same format the earlier
+    /// chrono-based builds wrote and read.
+    pub timestamp: jiff::Timestamp,
 
     /// Type of event
     pub event_type: EventType,
@@ -84,7 +89,7 @@ impl AuditEvent {
         error: Option<String>,
     ) -> Self {
         Self {
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             event_type,
             success,
             details,
@@ -108,12 +113,31 @@ impl AuditLog {
     ///
     /// Returns `Err` if state directory cannot be determined
     pub fn new() -> std::io::Result<Self> {
-        let mut log_path = crate::utils::get_state_dir().ok_or_else(|| {
+        let log_path = audit_log_path().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "State directory not found")
         })?;
-        log_path.push("audit.log");
 
         Ok(Self { log_path })
+    }
+
+    /// Replaces the log with one that holds only `first_entry`, or removes it
+    /// when `first_entry` is `None`, and deletes the rotated `audit.log.old`.
+    ///
+    /// The new log is written atomically (temp file + rename, mode 0600), so a
+    /// failure leaves the old log in place. A missing file is not an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the new log cannot be written or a file cannot be removed.
+    async fn clear(&self, first_entry: Option<AuditEvent>) -> std::io::Result<()> {
+        if let Some(event) = first_entry {
+            let mut line = serde_json::to_vec(&event)?;
+            line.push(b'\n');
+            crate::utils::write_atomic_private_async(self.log_path.clone(), line).await?;
+        } else {
+            remove_if_exists(&self.log_path).await?;
+        }
+        remove_if_exists(&self.log_path.with_extension("log.old")).await
     }
 
     /// Rotates the audit log if it exceeds the size limit.
@@ -174,6 +198,36 @@ impl AuditLog {
 
         Ok(())
     }
+}
+
+/// Path of the audit log (`<state dir>/audit.log`), or `None` if the state
+/// directory cannot be determined.
+pub fn audit_log_path() -> Option<PathBuf> {
+    crate::utils::get_state_dir().map(|dir| dir.join("audit.log"))
+}
+
+async fn remove_if_exists(path: &std::path::Path) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Clears the event log (and its rotated backup).
+///
+/// With event logging enabled, the new log starts with a `log_cleared` entry,
+/// so the clearing itself stays on record; with it disabled the log file is
+/// simply removed.
+///
+/// # Errors
+///
+/// Returns `Err` if the state directory is unknown or the log cannot be
+/// replaced or removed; the old log is then left as it was.
+pub async fn clear_log(enable_event_log: bool) -> std::io::Result<()> {
+    let audit = AuditLog::new()?;
+    let first_entry = enable_event_log
+        .then(|| AuditEvent::new(EventType::LogCleared, true, serde_json::json!({}), None));
+    audit.clear(first_entry).await
 }
 
 /// Internal helper that handles the common audit logging pattern.
@@ -564,6 +618,85 @@ mod tests {
 
         assert!(event.success);
         std::assert_matches!(event.event_type, EventType::ApplyRules);
+    }
+
+    #[test]
+    fn test_event_timestamp_reads_chrono_strings() {
+        use crate::core::test_helpers::CHRONO_TIMESTAMPS;
+        for &(stamp, nanos) in CHRONO_TIMESTAMPS {
+            let line = format!(
+                r#"{{"timestamp":"{stamp}","event_type":"apply_rules","success":true,"details":{{}},"error":null}}"#
+            );
+            let event: AuditEvent =
+                serde_json::from_str(&line).unwrap_or_else(|e| panic!("{stamp}: {e}"));
+            assert_eq!(event.timestamp.as_nanosecond(), nanos, "{stamp}");
+        }
+    }
+
+    #[test]
+    fn test_event_timestamp_written_as_chrono_did() {
+        let mut event = AuditEvent::new(EventType::ApplyRules, true, serde_json::json!({}), None);
+        event.timestamp = "2026-11-20T22:39:15.366180715Z".parse().unwrap();
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["timestamp"], "2026-11-20T22:39:15.366180715Z");
+    }
+
+    #[tokio::test]
+    async fn test_clear_replaces_log_with_cleared_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = AuditLog {
+            log_path: dir.path().join("audit.log"),
+        };
+        let old = dir.path().join("audit.log.old");
+        for _ in 0..3 {
+            audit
+                .log(AuditEvent::new(
+                    EventType::ApplyRules,
+                    true,
+                    serde_json::json!({}),
+                    None,
+                ))
+                .await
+                .unwrap();
+        }
+        std::fs::write(&old, "old\n").unwrap();
+
+        let entry = AuditEvent::new(EventType::LogCleared, true, serde_json::json!({}), None);
+        audit.clear(Some(entry)).await.unwrap();
+        let content = std::fs::read_to_string(&audit.log_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 1, "{content}");
+        assert!(lines[0].contains("\"log_cleared\""), "{content}");
+        assert!(!old.exists());
+        cfg_select! {
+            unix => {
+                let mode = std::os::unix::fs::PermissionsExt::mode(
+                    &std::fs::metadata(&audit.log_path).unwrap().permissions(),
+                );
+                assert_eq!(mode & 0o777, 0o600);
+            }
+            _ => {}
+        }
+
+        // New events append after the "cleared" line
+        audit
+            .log(AuditEvent::new(
+                EventType::ApplyRules,
+                true,
+                serde_json::json!({}),
+                None,
+            ))
+            .await
+            .unwrap();
+        let content = std::fs::read_to_string(&audit.log_path).unwrap();
+        assert!(content.lines().next().unwrap().contains("log_cleared"));
+        assert_eq!(content.lines().count(), 2);
+
+        // Without an entry (event logging disabled) the log is removed; a
+        // missing log is not an error
+        audit.clear(None).await.unwrap();
+        assert!(!audit.log_path.exists());
+        audit.clear(None).await.unwrap();
     }
 
     #[test]

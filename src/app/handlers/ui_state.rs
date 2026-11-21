@@ -33,10 +33,11 @@ pub(crate) fn handle_toggle_shortcuts_help(state: &mut State, show: bool) {
 /// Handles toggling diagnostics view
 pub(crate) fn handle_toggle_diagnostics(state: &mut State, show: bool) -> Task<Message> {
     state.show_diagnostics = show;
+    state.diagnostics.confirm_clear = false;
 
-    // Load audit log asynchronously if opening modal and cache is dirty
-    if show && state.audit_log_dirty {
-        return Task::perform(load_audit_entries(), Message::AuditEntriesLoaded);
+    // Read the log on open if it changed since it was last shown
+    if show {
+        return super::export::refresh_audit_log(state);
     }
 
     Task::none()
@@ -45,6 +46,7 @@ pub(crate) fn handle_toggle_diagnostics(state: &mut State, show: bool) -> Task<M
 /// Handles diagnostics filter change
 pub(crate) fn handle_diagnostics_filter_changed(state: &mut State, filter: DiagnosticsFilter) {
     state.diagnostics_filter = filter;
+    state.diagnostics.refilter(filter);
 }
 
 /// Handles undo
@@ -327,54 +329,6 @@ pub(crate) fn handle_delete_rule_requested(state: &mut State, id: uuid::Uuid) {
 /// Handles canceling delete
 pub(crate) fn handle_cancel_delete(state: &mut State) {
     state.deleting_id = None;
-}
-
-/// Handles checking if audit log needs refresh (auto-refresh subscription)
-pub(crate) fn handle_check_audit_log_refresh(state: &mut State) -> Task<Message> {
-    // Auto-refresh: only load if dirty (subscription fires every 100ms while modal open)
-    if state.audit_log_dirty {
-        return Task::perform(load_audit_entries(), Message::AuditEntriesLoaded);
-    }
-    Task::none()
-}
-
-/// Maximum number of audit entries to load for display
-const MAX_DISPLAY_ENTRIES: usize = 1000;
-
-/// Loads audit log entries asynchronously
-/// Returns parsed events, most recent first (reversed order), limited to 1000 entries
-pub(crate) async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
-    use tokio::io::AsyncBufReadExt;
-
-    let Some(mut path) = crate::utils::get_state_dir() else {
-        return Vec::new();
-    };
-    path.push("audit.log");
-
-    let Ok(file) = tokio::fs::File::open(&path).await else {
-        return Vec::new();
-    };
-
-    // Split on raw bytes: a damaged line (invalid UTF-8, truncated JSON) is
-    // skipped instead of ending the whole read.
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.split(b'\n');
-    let mut events = Vec::new();
-
-    while let Ok(Some(line)) = lines.next_segment().await {
-        if let Ok(event) = serde_json::from_slice::<crate::audit::AuditEvent>(&line) {
-            events.push(event);
-        }
-    }
-
-    // Keep only the most recent entries (file is oldest-first, so drain from front)
-    if events.len() > MAX_DISPLAY_ENTRIES {
-        events.drain(..events.len() - MAX_DISPLAY_ENTRIES);
-    }
-
-    // Most recent first
-    events.reverse();
-    events
 }
 
 /// Upper bound for flushing saves when the window closes, so a hung disk

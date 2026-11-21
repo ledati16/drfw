@@ -38,7 +38,8 @@
 //!
 //! # CLI commands
 //! drfw list                            # List available profiles
-//! drfw status                          # Show active profile
+//! drfw status                          # Active profile, pending revert, system config
+//! drfw check my-profile                # Validate + unprivileged nft check, no changes
 //! drfw apply my-profile                # Apply with 15s auto-revert (default)
 //! drfw apply my-profile --confirm 60   # Apply with 60s auto-revert (5-120)
 //! drfw apply my-profile --no-confirm   # Apply without auto-revert
@@ -66,7 +67,7 @@ mod validators;
 // Embed build-time information (git commit, dirty status, build timestamp)
 shadow_rs::shadow!(build);
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Returns the version string with git info: "0.8.0 (a3f8c21)" or "0.8.0 (a3f8c21*)" if dirty
 #[must_use]
@@ -331,16 +332,37 @@ enum Commands {
         #[arg(long, conflicts_with = "confirm")]
         no_confirm: bool,
     },
-    /// Show current active profile and kernel status
+    /// Show the active profile, a pending auto-revert and the boot config
+    ///
+    /// Reads only what an unprivileged user can read. The live kernel ruleset
+    /// needs root to list: run `sudo nft list table inet drfw` for that.
     Status,
+    /// Check a profile without applying it
+    ///
+    /// Validates every rule, then runs `nft --check` on the generated ruleset
+    /// in a private namespace (no privileges, no password prompt). Nothing is
+    /// changed. Exits with 0 if the profile can be applied, 1 otherwise.
+    Check {
+        /// Name of the profile to check
+        name: String,
+    },
     /// Export a profile to nftables or JSON format
     Export {
         /// Name of the profile to export
         name: String,
-        /// Export format (nft or json)
-        #[arg(short, long, default_value = "nft")]
-        format: String,
+        /// Export format
+        #[arg(short, long, value_enum, default_value_t = ExportFormat::Nft)]
+        format: ExportFormat,
     },
+}
+
+/// Output format of `drfw export`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExportFormat {
+    /// nftables text (`nft -f` file), the same text Save to System writes
+    Nft,
+    /// nftables JSON (`nft --json -f`), what Apply sends to the kernel
+    Json,
 }
 
 fn main() -> ExitCode {
@@ -457,35 +479,159 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         }
-        Commands::Status => {
-            let config = config::load_config().await;
-            println!("Active profile: {}", config.active_profile);
-            if let Ok(ruleset) = core::profiles::load_profile(&config.active_profile).await {
-                println!("Rules: {}", ruleset.rules.len());
-                println!(
-                    "Advanced Security: {}",
-                    if ruleset.advanced_security
-                        == crate::core::firewall::AdvancedSecuritySettings::default()
-                    {
-                        "Default"
-                    } else {
-                        "Custom"
-                    }
-                );
-            }
-        }
+        Commands::Status => print_status_report().await,
+        Commands::Check { name } => check_profile(&name).await?,
         Commands::Export { name, format } => {
             let ruleset = core::profiles::load_profile(&name).await?;
-            match format.as_str() {
-                "nft" => println!("{}", ruleset.to_nft_text()),
-                "json" => println!(
+            match format {
+                ExportFormat::Nft => println!("{}", ruleset.to_nft_text()),
+                ExportFormat::Json => println!(
                     "{}",
                     serde_json::to_string_pretty(&ruleset.to_nftables_json())?
                 ),
-                _ => return Err("Invalid format. Use 'nft' or 'json'.".into()),
             }
         }
     }
+    Ok(())
+}
+
+/// Width of the label column in `drfw status`
+const STATUS_LABEL_WIDTH: usize = 16;
+
+/// Prints one `label: value` line of `drfw status`.
+fn status_line(label: &str, value: &str) {
+    println!("{:<STATUS_LABEL_WIDTH$}{value}", format!("{label}:"));
+}
+
+/// Formats a file time in the local time zone (`YYYY-MM-DD HH:MM:SS`).
+fn local_time(time: std::time::SystemTime) -> String {
+    jiff::Timestamp::try_from(time).map_or_else(
+        |_| "unknown time".to_string(),
+        |t| {
+            t.to_zoned_datetime(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        },
+    )
+}
+
+/// What `drfw status` says about the boot config (`drfw::SYSTEM_NFT_PATH`).
+fn system_config_status(path: &str) -> String {
+    use std::io::Read;
+
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return format!("{path} does not exist (Save to System has not been used)");
+        }
+        Err(e) => return format!("{path} cannot be read: {e}"),
+    };
+    // The header is on the first two lines; never read a whole (huge) file
+    let mut head = Vec::with_capacity(512);
+    if let Err(e) = file.take(512).read_to_end(&mut head) {
+        return format!("{path} cannot be read: {e}");
+    }
+    match core::nft_text::generated_by_drfw(&String::from_utf8_lossy(&head)) {
+        Some(version) => format!("{path} was written by DRFW {version} (Save to System)"),
+        None => format!("{path} was not written by DRFW"),
+    }
+}
+
+/// `drfw status`: what an unprivileged user can know without asking for a
+/// password. Never fails; each line reports its own problem.
+async fn print_status_report() {
+    let config = config::load_config().await;
+    status_line("Active profile", &config.active_profile);
+
+    match core::profiles::load_profile(&config.active_profile).await {
+        Ok(ruleset) => {
+            let enabled = ruleset.rules.iter().filter(|r| r.enabled).count();
+            status_line(
+                "Rules",
+                &format!("{} ({enabled} enabled)", ruleset.rules.len()),
+            );
+            let invalid = match ruleset.validate() {
+                Ok(()) => "0".to_string(),
+                Err(report) if report.blocks_apply() => format!(
+                    "{} (the profile cannot be applied; see `drfw check {}`)",
+                    report.rules.len(),
+                    config.active_profile
+                ),
+                Err(report) => format!("{} (disabled or not applied)", report.rules.len()),
+            };
+            status_line("Invalid rules", &invalid);
+            let mode = match ruleset.advanced_security.egress_profile {
+                core::firewall::EgressProfile::Desktop => "Desktop (outgoing traffic allowed)",
+                core::firewall::EgressProfile::Server => "Server (outgoing traffic needs rules)",
+            };
+            status_line("Mode", mode);
+        }
+        Err(e) => status_line("Rules", &format!("profile cannot be loaded: {e}")),
+    }
+
+    let guard_dir = std::path::Path::new(elevation::GUARD_STATE_DIR);
+    let guard = match core::apply_guard::pending_guard(guard_dir) {
+        Ok(None) => "none pending".to_string(),
+        Ok(Some(pending)) => format!(
+            "PENDING since {}: the last apply reverts automatically unless it is confirmed",
+            pending
+                .armed_at
+                .map_or_else(|| "an unknown time".to_string(), local_time)
+        ),
+        Err(e) => format!(
+            "unknown ({}/active cannot be read: {e})",
+            elevation::GUARD_STATE_DIR
+        ),
+    };
+    status_line("Auto-revert", &guard);
+    status_line("Boot config", &system_config_status(drfw::SYSTEM_NFT_PATH));
+    status_line(
+        "Kernel",
+        "not checked (listing it needs root); run `sudo nft list table inet drfw` to inspect it",
+    );
+}
+
+/// `drfw check`: validation plus the unprivileged nft check; changes nothing.
+async fn check_profile(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let ruleset = core::profiles::load_profile(name).await?;
+    let enabled = ruleset.rules.iter().filter(|r| r.enabled).count();
+    let total = ruleset.rules.len();
+    let noun = if total == 1 { "rule" } else { "rules" };
+    println!("Checking profile '{name}' ({total} {noun}, {enabled} enabled)...");
+
+    if let Err(report) = ruleset.validate() {
+        if report.blocks_apply() {
+            print_status(
+                "✗",
+                Color::Red,
+                "The profile has rules that cannot be applied:",
+            );
+            eprintln!("{report}");
+            return Err("Validation failed".into());
+        }
+        print_status(
+            "!",
+            Color::Yellow,
+            "Some rules are invalid, but none of them would be applied:",
+        );
+        println!("{report}");
+    } else {
+        print_status("✓", Color::Green, "All rules are valid.");
+    }
+
+    let result = core::verify::verify_ruleset_unprivileged(&ruleset.to_nftables_json()).await?;
+    if !result.success {
+        print_status("✗", Color::Red, "nft rejected the generated ruleset:");
+        for error in &result.errors {
+            eprintln!("  {error}");
+        }
+        return Err("nft check failed".into());
+    }
+    print_status(
+        "✓",
+        Color::Green,
+        "nft accepts the generated ruleset (checked without privileges; nothing was changed).",
+    );
     Ok(())
 }
 
@@ -612,6 +758,9 @@ mod tests {
             &["drfw", "apply", "my-profile", "--confirm", "60"],
             &["drfw", "apply", "my-profile", "--no-confirm"],
             &["drfw", "export", "my-profile", "--format", "nft"],
+            &["drfw", "export", "my-profile", "--format", "json"],
+            &["drfw", "export", "my-profile"],
+            &["drfw", "check", "my-profile"],
             &["drfw", "list"],
             &["drfw", "status"],
         ] {
@@ -622,5 +771,7 @@ mod tests {
         }
         // A bare `--confirm` needs a value
         assert!(Cli::try_parse_from(["drfw", "apply", "my-profile", "--confirm"]).is_err());
+        // Unknown export formats are rejected by clap, not at run time
+        assert!(Cli::try_parse_from(["drfw", "export", "my-profile", "--format", "xml"]).is_err());
     }
 }

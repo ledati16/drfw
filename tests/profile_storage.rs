@@ -120,6 +120,68 @@ async fn test_newer_version_profile_is_refused_with_clear_message() {
 }
 
 #[tokio::test]
+async fn test_chrono_era_profile_loads_and_saves_compatibly() {
+    // created_at strings exactly as chrono-based DRFW builds wrote them
+    // (nanoseconds, whole seconds) plus offset forms from hand edits
+    let (_guard, root) = isolated().await;
+    let dir = profiles_dir(root.path());
+    let stamps = [
+        (
+            "2026-11-20T22:39:15.366180715Z",
+            1_795_214_355_366_180_715_i128,
+        ),
+        ("2026-11-20T22:39:15Z", 1_795_214_355_000_000_000),
+        ("2026-11-20T22:39:15.366+00:00", 1_795_214_355_366_000_000),
+        ("2026-11-20T23:39:15+01:00", 1_795_214_355_000_000_000),
+    ];
+    let rules: Vec<String> = stamps
+        .iter()
+        .enumerate()
+        .map(|(i, (stamp, _))| {
+            rule_json(&format!("00000000-0000-4000-8000-00000000000{i}"), "R", 22)
+                .replace("2026-01-01T00:00:00Z", stamp)
+        })
+        .collect();
+    // Version-less file, as written before the format version existed
+    std::fs::write(
+        dir.join("old.json"),
+        format!(r#"{{ "rules": [{}] }}"#, rules.join(",")),
+    )
+    .unwrap();
+
+    let ruleset = profiles::load_profile("old")
+        .await
+        .expect("old profile loads");
+    let loaded: Vec<i128> = ruleset
+        .rules
+        .iter()
+        .map(|r| r.created_at.as_nanosecond())
+        .collect();
+    let expected: Vec<i128> = stamps.iter().map(|(_, n)| *n).collect();
+    assert_eq!(loaded, expected);
+
+    // Saved back as RFC 3339 UTC, which chrono-based builds read
+    profiles::save_profile("old", &ruleset).await.unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("old.json")).unwrap()).unwrap();
+    let written: Vec<&str> = saved["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["created_at"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        written,
+        [
+            "2026-11-20T22:39:15.366180715Z",
+            "2026-11-20T22:39:15Z",
+            "2026-11-20T22:39:15.366Z",
+            "2026-11-20T22:39:15Z",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_oversized_profile_is_refused() {
     let (_guard, root) = isolated().await;
     let dir = profiles_dir(root.path());

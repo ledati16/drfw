@@ -58,7 +58,7 @@ serde = { version = "1", features = ["derive"] }  # Serialization framework
 serde_json = "1"  # Config files, profiles, nftables JSON generation
 tempfile = "3"  # Atomic write pattern for security (temp → rename)
 directories = "6"  # XDG Base Directory spec compliance
-chrono = { version = "0.4", features = ["serde"] }  # Rule creation timestamps
+jiff = { version = "1.0.1", features = ["serde"] }  # Rule creation and audit timestamps (RFC 3339)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # UI Helpers

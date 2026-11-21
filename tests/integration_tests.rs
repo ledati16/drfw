@@ -94,7 +94,7 @@ fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
         chain: drfw::core::firewall::Chain::Input,
         enabled: true,
         tags: vec![],
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         action: Action::Accept,
         reject_type: RejectType::Default,
         rate_limit: None,
@@ -142,7 +142,7 @@ fn create_full_test_rule(
         chain: drfw::core::firewall::Chain::Input,
         enabled: true,
         tags: vec![],
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         action: Action::Accept,
         reject_type: RejectType::Default,
         rate_limit: None,
@@ -592,4 +592,170 @@ async fn test_guarded_apply_with_mock_nft() {
         handle.wait_for_timeout_outcome().await,
         Ok(GuardOutcome::Reverted)
     );
+}
+
+// ============================================================================
+// CLI binary tests (`drfw status`, `drfw check`)
+// ============================================================================
+//
+// These run the real `drfw` binary. Each child gets its own environment
+// (data/state dirs, mock nft), so they never race with the env-var users above.
+
+/// Writes `ruleset` as profile `name` (current on-disk format) under `root`.
+fn write_profile(root: &std::path::Path, name: &str, ruleset: &FirewallRuleset) {
+    let dir = root.join("profiles");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut json = serde_json::to_value(ruleset).unwrap();
+    json["version"] = serde_json::json!(drfw::core::profiles::PROFILE_FORMAT_VERSION);
+    std::fs::write(
+        dir.join(format!("{name}.json")),
+        serde_json::to_vec_pretty(&json).unwrap(),
+    )
+    .unwrap();
+}
+
+/// Runs the `drfw` binary against `root` with `nft` as `DRFW_NFT_COMMAND`.
+fn run_drfw_with_nft(root: &std::path::Path, nft: &str, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .args(args)
+        .env("DRFW_TEST_DATA_DIR", root)
+        .env("DRFW_TEST_STATE_DIR", root)
+        .env("DRFW_NFT_COMMAND", nft)
+        .output()
+        .expect("run drfw")
+}
+
+/// Runs the `drfw` binary against `root` with the mock nft.
+fn run_drfw(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    run_drfw_with_nft(root, get_mock_nft_path().to_str().unwrap(), args)
+}
+
+fn stdout_of(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn all_output(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[test]
+fn test_cli_status_reports_profile_validity_and_does_not_claim_kernel_state() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = create_test_ruleset();
+    let mut broken = create_test_rule("Broken", Some(0)); // port 0 is invalid
+    broken.enabled = false;
+    ruleset.rules.push(broken);
+    write_profile(root.path(), "default", &ruleset);
+
+    let output = run_drfw(root.path(), &["status"]);
+    let out = stdout_of(&output);
+    assert!(output.status.success(), "{}", all_output(&output));
+    assert!(
+        out.contains("Active profile:") && out.contains("default"),
+        "{out}"
+    );
+    assert!(out.contains("2 (1 enabled)"), "{out}");
+    assert!(
+        out.contains("Invalid rules:") && out.contains("1 (disabled or not applied)"),
+        "{out}"
+    );
+    assert!(out.contains("Mode:") && out.contains("Desktop"), "{out}");
+    assert!(out.contains("Auto-revert:"), "{out}");
+    assert!(out.contains("Boot config:"), "{out}");
+    // Honest about the kernel: it is not read, and the user is told how to
+    assert!(
+        out.contains("not checked") && out.contains("sudo nft list table inet drfw"),
+        "{out}"
+    );
+}
+
+#[test]
+fn test_cli_status_flags_blocking_invalid_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = create_test_ruleset();
+    ruleset.rules.push(create_test_rule("Broken", Some(0)));
+    write_profile(root.path(), "default", &ruleset);
+
+    let output = run_drfw(root.path(), &["status"]);
+    let out = stdout_of(&output);
+    assert!(output.status.success(), "{}", all_output(&output));
+    assert!(out.contains("cannot be applied"), "{out}");
+}
+
+#[test]
+fn test_cli_status_without_profile_still_succeeds() {
+    let root = tempfile::tempdir().unwrap();
+    let output = run_drfw(root.path(), &["status"]);
+    let out = stdout_of(&output);
+    assert!(output.status.success(), "{}", all_output(&output));
+    assert!(out.contains("profile cannot be loaded"), "{out}");
+}
+
+#[test]
+fn test_cli_check_valid_profile_exits_zero() {
+    let root = tempfile::tempdir().unwrap();
+    write_profile(root.path(), "web", &create_test_ruleset());
+
+    let output = run_drfw(root.path(), &["check", "web"]);
+    assert!(output.status.success(), "{}", all_output(&output));
+    assert!(
+        stdout_of(&output).contains("nft accepts"),
+        "{}",
+        all_output(&output)
+    );
+}
+
+#[test]
+fn test_cli_check_invalid_enabled_rule_fails_without_running_nft() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = create_test_ruleset();
+    ruleset.rules.push(create_test_rule("Broken", Some(0)));
+    write_profile(root.path(), "web", &ruleset);
+
+    // `false` as nft: if the check reached nft, the message would differ
+    let output = run_drfw_with_nft(root.path(), "false", &["check", "web"]);
+    let all = all_output(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(
+        all.contains("cannot be applied") && all.contains("Broken"),
+        "{all}"
+    );
+    assert!(!all.contains("nft rejected"), "{all}");
+}
+
+#[test]
+fn test_cli_check_invalid_disabled_rule_only_warns() {
+    let root = tempfile::tempdir().unwrap();
+    let mut ruleset = create_test_ruleset();
+    let mut broken = create_test_rule("Broken", Some(0));
+    broken.enabled = false;
+    ruleset.rules.push(broken);
+    write_profile(root.path(), "web", &ruleset);
+
+    let output = run_drfw(root.path(), &["check", "web"]);
+    let all = all_output(&output);
+    assert!(output.status.success(), "{all}");
+    assert!(all.contains("none of them would be applied"), "{all}");
+}
+
+#[test]
+fn test_cli_check_nft_refusal_fails() {
+    let root = tempfile::tempdir().unwrap();
+    write_profile(root.path(), "web", &create_test_ruleset());
+
+    let output = run_drfw_with_nft(root.path(), "false", &["check", "web"]);
+    let all = all_output(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("nft rejected"), "{all}");
+}
+
+#[test]
+fn test_cli_check_missing_profile_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let output = run_drfw(root.path(), &["check", "nope"]);
+    assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
 }

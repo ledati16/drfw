@@ -12,9 +12,9 @@
 //!
 //! # Safety Features
 //!
+//! - One validator ([`core::validate`]) gates every apply and Save to System
 //! - Pre-apply verification with `nft --check` (unprivileged when possible)
 //! - Root-side dead-man switch: unconfirmed applies revert even if DRFW dies
-//! - SHA-256 profile checksums
 //! - Input sanitization and validation
 //! - Atomic file operations with secure permissions
 

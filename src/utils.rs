@@ -177,7 +177,7 @@ pub async fn write_atomic_private_async(path: PathBuf, data: Vec<u8>) -> std::io
 pub fn preserve_unreadable_file(path: &std::path::Path) -> std::io::Result<PathBuf> {
     // Streamed, not read into memory: the file may be one rejected as too large
     let mut source = std::fs::File::open(path)?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let stamp = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
     let file_name = path
         .file_name()
         .map_or_default(|n| n.to_string_lossy().into_owned());

@@ -15,8 +15,8 @@ use crate::command::{
 use crate::core::firewall::{Chain, MAX_RULES, Protocol};
 use crate::core::rule_constraints::{protocol_supports_ports, reject_type_valid_for_protocol};
 use crate::validators;
-use chrono::Utc;
 use iced::Task;
+use jiff::Timestamp;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -107,7 +107,7 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             .and_then(|id| state.ruleset.rules.iter().find(|r| r.id == id))
             .map(|r| (r.id, r.enabled, r.created_at));
         let (id, enabled, created_at) =
-            existing.unwrap_or_else(|| (Uuid::new_v4(), true, Utc::now()));
+            existing.unwrap_or_else(|| (Uuid::new_v4(), true, Timestamp::now()));
         let rule = form.to_rule(id, enabled, created_at);
 
         let is_edit = state.ruleset.rules.iter().any(|r| r.id == rule.id);
@@ -681,7 +681,7 @@ mod tests {
         let mut state = create_test_state();
         let mut rule = crate::core::test_helpers::create_test_rule("SSH", Some(22));
         rule.enabled = false;
-        rule.created_at = chrono::DateTime::UNIX_EPOCH;
+        rule.created_at = jiff::Timestamp::UNIX_EPOCH;
         let id = rule.id;
         state.ruleset.rules.push(rule);
 
@@ -695,7 +695,7 @@ mod tests {
             !edited.enabled,
             "editing must not re-enable a disabled rule"
         );
-        assert_eq!(edited.created_at, chrono::DateTime::UNIX_EPOCH);
+        assert_eq!(edited.created_at, jiff::Timestamp::UNIX_EPOCH);
         assert_eq!(edited.id, id);
     }
 

@@ -38,7 +38,7 @@
 //!     chain: Chain::Input,
 //!     enabled: true,
 //!     tags: vec![],
-//!     created_at: chrono::Utc::now(),
+//!     created_at: jiff::Timestamp::now(),
 //!     action: Action::Accept,
 //!     reject_type: RejectType::Default,
 //!     rate_limit: None,
@@ -347,7 +347,7 @@ mod tests {
             None,                                // interface
             crate::core::firewall::Chain::Input, // chain
             true,                                // enabled
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
             Vec::new(), // tags
         )
     }
