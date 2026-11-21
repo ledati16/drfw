@@ -57,8 +57,8 @@ pub const SYSTEM_NFT_SERVICE: &str = match non_empty(option_env!("DRFW_SYSTEM_NF
 /// When set, it is the only `nft` the unprivileged check tries, and it is
 /// passed to the elevated scripts and to `pkexec`/`sudo`/`run0` instead of a
 /// bare `nft` (which they resolve through root's `PATH`). Set it where `nft`
-/// is not in `/usr/sbin`, `/sbin` or `/usr/bin` (e.g. NixOS), or to match a
-/// polkit rule that names one exact path.
+/// is not in `/usr/sbin`, `/sbin` or `/usr/bin` (e.g. NixOS), or to pin the
+/// exact binary root runs.
 pub const NFT_PATH: Option<&str> = non_empty(option_env!("DRFW_NFT_PATH"));
 
 /// What elevated commands run as `nft`: [`NFT_PATH`], else plain `nft`.

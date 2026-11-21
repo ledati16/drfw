@@ -323,7 +323,7 @@ impl RuleForm {
                     count,
                     unit: self.rate_limit_unit,
                     burst: parsed_burst.unwrap_or(None),
-                    per_source: self.rate_limit_per_source,
+                    per_source: self.per_source_allowed() && self.rate_limit_per_source,
                 })
             } else {
                 errors.rate_limit = Some("Invalid rate limit number".to_string());
@@ -342,6 +342,11 @@ impl RuleForm {
         };
 
         (rate_limit, connection_limit)
+    }
+
+    /// Per-source limits are only offered (and applied) for Accept rules.
+    fn per_source_allowed(&self) -> bool {
+        self.action == crate::core::firewall::Action::Accept
     }
 
     /// Builds the rule this form describes.
@@ -385,7 +390,10 @@ impl RuleForm {
         rule.reject_type = self.reject_type;
         rule.rate_limit = rate_limit;
         rule.connection_limit = connection_limit;
-        rule.connection_limit_per_source = self.connection_limit_per_source;
+        // The checkboxes are hidden (not cleared) for Drop/Reject, so
+        // switching back to Accept restores them
+        rule.connection_limit_per_source =
+            self.per_source_allowed() && self.connection_limit_per_source;
         rule.log_enabled = self.log_enabled;
         rule.rebuild_caches();
         rule
@@ -524,6 +532,18 @@ mod tests {
         let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
         assert!(rule.connection_limit_per_source);
         assert_eq!(rule.connection_limit, 4);
+
+        // Drop/Reject: the (hidden) flags are not applied, and come back
+        // when switching back to Accept
+        form.action = Action::Drop;
+        assert!(form.validate().is_none());
+        let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
+        assert!(rule.rate_limit.is_some_and(|rl| !rl.per_source));
+        assert!(!rule.connection_limit_per_source);
+        form.action = Action::Accept;
+        let rule = form.to_rule(uuid::Uuid::nil(), true, jiff::Timestamp::now());
+        assert!(rule.rate_limit.is_some_and(|rl| rl.per_source));
+        assert!(rule.connection_limit_per_source);
     }
 
     #[test]

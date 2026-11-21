@@ -16,24 +16,28 @@
 //!
 //! # Elevation Strategy
 //!
-//! Elevation method is chosen based on environment:
+//! The front end declares its [`ElevationContext`] once at startup
+//! ([`set_context`]); the method follows from it:
 //!
-//! - **CLI (TTY present)**: Prefers `run0` (systemd v256+, no SUID), falls back to `sudo`
-//! - **GUI (no TTY)**: Prefers `pkexec` (proper credential caching), falls back to `run0`
+//! - **GUI** ([`ElevationContext::Gui`]): always `pkexec` (a graphical polkit
+//!   dialog), even when the GUI was started from a terminal: `run0` or `sudo`
+//!   would ask for the password in that terminal, invisibly. Without `pkexec`
+//!   elevation fails with [`ElevationError::PkexecNotFound`].
+//! - **CLI** ([`ElevationContext::Cli`]), or no context declared: with a TTY on
+//!   stdin, `run0` (systemd v256+, no SUID) if installed, else `sudo`; without
+//!   one, `pkexec`.
 //!
-//! This distinction matters because `run0` uses TTY-based session binding for credential
-//! caching. When launched from a GUI without a TTY, `run0` creates a new PTY for each
-//! invocation, breaking caching.
+//! `DRFW_ELEVATION_METHOD` overrides both.
 //!
-//! # Credential Caching (pkexec)
+//! # Prompts
 //!
-//! With the polkit rules file (`contrib/50-drfw.rules`), pkexec enables `AUTH_ADMIN_KEEP`
-//! which caches credentials **per-process (PID)**, not per-desktop-session:
-//!
-//! - Once DRFW authenticates for nft, all subsequent pkexec calls from that process
-//!   are authorized without re-prompting
-//! - Cache expires after ~5 minutes OR when DRFW exits (whichever comes first)
-//! - Restarting DRFW requires reauthentication (new PID = new polkit subject)
+//! Every elevated operation asks once: Apply and Save to System each run one
+//! fixed `/bin/sh` script (see [`APPLY_SCRIPT`], [`SAVE_CONFIG_SCRIPT`]), and
+//! the rare elevated `nft --check` fallback asks too. DRFW ships no polkit rule
+//! that caches authorizations: caching `/bin/sh` would allow arbitrary root
+//! commands, and caching `nft` would make root `nft` (which can read any file
+//! via `nft -c -f <file>`) available to anything that can drive the DRFW
+//! process, just to save a prompt in a fallback path.
 //!
 //! # Environment Variables
 //!
@@ -41,9 +45,12 @@
 //!   directly without elevation. Used for testing with mock nft.
 //!   Example: `DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test`
 //!
-//! - `DRFW_ELEVATION_METHOD`: Force a specific elevation method (`sudo`, `run0`, or `pkexec`).
-//!   Useful for scripts with sudoers NOPASSWD rules where you want to bypass run0/polkit.
-//!   Example: `DRFW_ELEVATION_METHOD=sudo drfw apply --no-confirm production`
+//! - `DRFW_ELEVATION_METHOD`: Force a specific elevation method (`sudo`, `run0`, or `pkexec`),
+//!   e.g. `sudo` where `run0` is installed but not usable. It changes only which tool asks
+//!   for the password. There is deliberately no unattended (password-less) mode: the
+//!   elevated program is `/bin/sh`, so a sudoers `NOPASSWD` rule for it would grant
+//!   unrestricted root. Automation that already runs as root can run `drfw` as root
+//!   (it then elevates nothing), or load `drfw export` output with `nft -f`.
 //!
 //! # Security
 //!
@@ -53,7 +60,9 @@
 //! - All inputs are validated before elevation
 //! - Commands are constructed safely without shell interpolation
 //! - Audit logging tracks all privileged operations (via caller)
-//! - Binaries (pkexec/sudo, target program) are checked for availability
+//! - The elevation tool is checked for availability before use; the target
+//!   program is resolved by the elevation tool (root's `PATH`) unless the
+//!   packager set an absolute `DRFW_NFT_PATH`
 //!
 //! # Example
 //!
@@ -68,8 +77,34 @@
 //! ```
 
 use std::io;
+use std::sync::OnceLock;
 
 use tokio::process::Command;
+
+/// Which front end is asking for elevation; selects the method (see the
+/// module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElevationContext {
+    /// The iced GUI: always `pkexec`
+    Gui,
+    /// The command line: `run0`/`sudo` with a TTY, else `pkexec`
+    Cli,
+}
+
+static CONTEXT: OnceLock<ElevationContext> = OnceLock::new();
+
+/// Declares the front end, once, at startup ([`crate::run_gui`] and the CLI's
+/// `main`). Later calls are ignored: the context never changes mid-process.
+pub fn set_context(context: ElevationContext) {
+    if CONTEXT.set(context).is_err() && CONTEXT.get() != Some(&context) {
+        tracing::warn!("Elevation context already set; ignoring {context:?}");
+    }
+}
+
+/// The declared context; [`ElevationContext::Cli`] (TTY detection) if none.
+fn context() -> ElevationContext {
+    CONTEXT.get().copied().unwrap_or(ElevationContext::Cli)
+}
 
 /// Error type for privilege elevation operations
 #[derive(Debug, thiserror::Error)]
@@ -203,7 +238,7 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
         return Ok(unelevated_command(program, args));
     }
 
-    // 2. Explicit elevation method override (for scripts with sudoers NOPASSWD, etc.)
+    // 2. Explicit elevation method override
     if let Ok(method) = std::env::var("DRFW_ELEVATION_METHOD") {
         let method = method.to_lowercase();
         if !method.is_empty() {
@@ -237,13 +272,11 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
         }
     }
 
-    // 3. Automatic detection based on environment
-    //
-    // Run0 uses TTY-based session binding for credential caching. When launched
-    // from a GUI (no TTY), run0 creates a new PTY for each invocation, breaking
-    // caching. Pkexec uses D-Bus/XDG session identification which persists across
-    // the desktop session, making it better suited for GUI applications.
-    let is_atty = nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
+    // 3. From the front end. The GUI always uses pkexec: even when it was
+    // started from a terminal, run0/sudo would prompt in that terminal, which
+    // nobody is looking at. The CLI uses run0/sudo on a TTY (works over SSH).
+    let is_atty = context() == ElevationContext::Cli
+        && nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
 
     if is_atty {
         // CLI environment: prefer run0 (modern, no SUID), fallback to sudo
@@ -252,11 +285,14 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
             cmd.arg(program).args(args);
             return Ok(cmd);
         }
+        if !binary_exists("sudo") {
+            return Err(ElevationError::MethodNotAvailable("run0 or sudo".into()));
+        }
         let mut cmd = Command::new("sudo");
         cmd.arg(program).args(args);
         Ok(cmd)
     } else {
-        // GUI environment: pkexec only (run0/sudo use terminal auth which can't work in GUI)
+        // GUI, or no terminal to ask on: pkexec only
         if binary_exists("pkexec") {
             let mut cmd = Command::new("pkexec");
             cmd.args(["--disable-internal-agent", program]).args(args);
@@ -275,8 +311,10 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
 /// # Elevation Strategy
 ///
 /// 1. **Custom command**: If `DRFW_NFT_COMMAND` is set, uses that path directly (no elevation)
-/// 2. **CLI (TTY present)**: `run0 nft` preferred, falls back to `sudo nft`
-/// 3. **GUI (no TTY)**: `pkexec nft` preferred (proper session caching), falls back to `run0 nft`
+/// 2. **Already root**: runs `nft` directly
+/// 3. `DRFW_ELEVATION_METHOD`, else by [`ElevationContext`]: the GUI uses
+///    `pkexec nft`; the CLI uses `run0 nft` (else `sudo nft`) with a TTY and
+///    `pkexec nft` without one
 ///
 /// # Arguments
 ///
@@ -288,8 +326,9 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
 ///
 /// # Errors
 ///
-/// - [`ElevationError::PkexecNotFound`] - No TTY (GUI) and `pkexec` is not installed
-/// - [`ElevationError::MethodNotAvailable`] - `DRFW_ELEVATION_METHOD` names a tool that is not installed
+/// - [`ElevationError::PkexecNotFound`] - GUI (or no TTY) and `pkexec` is not installed
+/// - [`ElevationError::MethodNotAvailable`] - `DRFW_ELEVATION_METHOD` names a tool that is not
+///   installed, or the CLI on a TTY finds neither `run0` nor `sudo`
 /// - [`ElevationError::InvalidMethod`] - `DRFW_ELEVATION_METHOD` is not `sudo`, `run0` or `pkexec`
 ///
 /// # Example
@@ -387,8 +426,10 @@ macro_rules! safe_path_fn {
 ///    name, through the `PATH` the elevation tool sets for root. A failure
 ///    here is reported, not fatal: the file was saved.
 ///
-/// Any failure before step 6 removes the temp file and leaves the original
-/// untouched. On success, prints `key=value` lines on stdout:
+/// The script ignores `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGPIPE`,
+/// so a dropped SSH session or Ctrl-C after the password cannot stop it
+/// between the steps. Any failure before step 6 removes the temp file and
+/// leaves the original untouched. On success, prints `key=value` lines on stdout:
 /// `backup=<path>` when a backup was made, and with a service either
 /// `enable=ok` or `enable=failed: <systemctl output on one line>`.
 ///
@@ -396,7 +437,8 @@ macro_rules! safe_path_fn {
 /// 1 other failures. 126/127 are deliberately never used: callers interpret
 /// those as authentication errors from pkexec/sudo/run0.
 pub const SAVE_CONFIG_SCRIPT: &str = concat!(
-    r#"set -u
+    r#"trap '' HUP INT QUIT TERM PIPE
+set -u
 umask 022
 target=$1
 nft=$2
@@ -430,6 +472,7 @@ name=$(basename -- "$target") || exit 1
 backup="$target.drfw-bak"
 orig="$target.drfw-orig"
 if [ ! -d "$dir" ]; then
+    # shellcheck disable=SC2174 # parents get 755 from the umask anyway
     mkdir -p -m 755 -- "$dir" || fail "cannot create $dir" 1
 fi
 tmp="$dir/.$name.drfw-tmp"
@@ -561,8 +604,11 @@ timeout=$2
 nonce=$3
 confirm_dir=$4
 nft=$5
+uid=$6
+launcher=$7
 revert_file="$state_dir/revert-$nonce.nft"
 status_file="$state_dir/status-$nonce"
+armed_file="$state_dir/armed-$nonce"
 active_file="$state_dir/active"
 watcher_file="$state_dir/watcher-$nonce.sh"
 
@@ -574,24 +620,55 @@ now_cs() {
     echo $(( secs * 100 + 1$frac - 100 ))
 }
 
-# True if the user created token $1 in confirm_dir. confirm_dir belongs to the
-# user, so it is only ever listed (readdir via find, which never follows
-# symlinks); nothing in it is opened, created or stat()ed through a symlink.
-token_present() {
-    [ -n "$(find "$confirm_dir/" -maxdepth 1 -name "$1" -print 2>/dev/null)" ]
+# To the journal: stderr under systemd-run, else syslog if logger exists
+log() {
+    if [ "$launcher" = systemd ]; then
+        printf 'drfw revert guard %s: %s\n' "$nonce" "$1" >&2
+    elif command -v logger >/dev/null 2>&1; then
+        logger -t drfw -- "revert guard $nonce: $1" >/dev/null 2>&1
+    fi
+    return 0
 }
 
+# A hung user directory (NFS, FUSE) must not stall the watcher forever
+if command -v timeout >/dev/null 2>&1; then
+    bounded() { timeout -k 1 2 "$@"; }
+else
+    bounded() { "$@"; }
+fi
+
+# True if the user (uid $uid) created token $1 in confirm_dir. confirm_dir
+# belongs to the user, so it is only ever listed (readdir via find, which
+# never follows symlinks; -user uses lstat); nothing in it is opened, created
+# or followed.
+token_present() {
+    [ -n "$(bounded find "$confirm_dir/" -maxdepth 1 -name "$1" -user "$uid" -print 2>/dev/null)" ]
+}
+
+# Serializes with applies. Waits for an apply that is still running (it holds
+# the lock until its outcome is recorded). Once this guard is armed, a lock
+# held for more than 60 s no longer blocks it: reverting matters more.
 lock() {
-    if command -v flock >/dev/null 2>&1; then
-        exec 9>"$state_dir/lock" && flock -w 60 9
+    command -v flock >/dev/null 2>&1 || return 0
+    if ! ( : >> "$state_dir/lock" ) 2>/dev/null; then
+        log "cannot open $state_dir/lock; going ahead without the lock"
+        return 0
     fi
+    exec 9>>"$state_dir/lock"
+    while ! flock -w 60 9; do
+        if [ -e "$armed_file" ]; then
+            log "the lock is still held after 60 s; going ahead without it"
+            return 0
+        fi
+        log "the apply has not finished after 60 s; still waiting for it"
+    done
     return 0
 }
 
 finish() {
     tmp="$state_dir/.status-$nonce.tmp"
     printf '%s\n' "$1" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$status_file"
-    rm -f -- "$revert_file" "$watcher_file"
+    rm -f -- "$revert_file" "$watcher_file" "$armed_file"
     if [ -f "$active_file" ]; then
         active_nonce=
         read -r active_nonce _ < "$active_file" || true
@@ -604,18 +681,25 @@ finish() {
 
 revert() {
     lock
-    # A newer apply superseded this guard (it wrote our status file)
+    # Superseded by a newer apply, or this apply failed (nothing to undo)
     if [ -e "$status_file" ]; then
         exit 0
     fi
-    if err=$("$nft" -f "$revert_file" 2>&1); then
+    if [ ! -e "$armed_file" ]; then
+        # The apply ended without recording an outcome (killed): its rules may
+        # be live. Restoring the saved state is right either way.
+        log "the apply was interrupted; restoring the previous rules"
+    fi
+    if err=$("$nft" -f "$revert_file" 2>&1 >/dev/null); then
         finish reverted
     fi
     err=$(printf '%s' "$err" | tr '\n' ' ')
     # Last resort: drop the drfw table so drfw cannot keep anyone locked out
     if printf 'add table inet drfw\ndelete table inet drfw\n' | "$nft" -f - >/dev/null 2>&1; then
+        log "restoring failed ($err); removed table inet drfw instead"
         finish "removed: $err"
     fi
+    log "restoring failed and table inet drfw could not be removed: $err"
     finish "revert-failed: $err"
 }
 
@@ -627,19 +711,30 @@ confirm() {
     finish confirmed
 }
 
+# Counted from now until the apply arms the guard, then afresh from that
+# moment, so the user gets the full timeout once the new rules are live
 deadline=$(( $(now_cs) + timeout * 100 ))
+armed=0
 while :; do
     if [ -e "$status_file" ]; then
         exit 0
     fi
-    if token_present "drfw-confirm-$nonce"; then
-        confirm
+    if [ "$armed" = 0 ] && [ -e "$armed_file" ]; then
+        armed=1
+        deadline=$(( $(now_cs) + timeout * 100 ))
     fi
-    if token_present "drfw-revert-$nonce"; then
-        revert
-    fi
+    # The deadline first: nothing in the user's directory can delay a revert
     if [ "$(now_cs)" -ge "$deadline" ]; then
         revert
+    fi
+    # Tokens only count once the apply succeeded
+    if [ "$armed" = 1 ]; then
+        if token_present "drfw-confirm-$nonce"; then
+            confirm
+        fi
+        if token_present "drfw-revert-$nonce"; then
+            revert
+        fi
     fi
     sleep 1
 done
@@ -650,36 +745,57 @@ done
 /// Fixed shell script run as root, detached, to revert an unconfirmed apply.
 ///
 /// Arguments: `$1` state dir, `$2` timeout in seconds, `$3` nonce, `$4`
-/// confirmation dir, `$5` nft command. Started by [`APPLY_SCRIPT`] (via
-/// `systemd-run` or `setsid`), never by DRFW directly.
+/// confirmation dir, `$5` nft command, `$6` uid of the user who may confirm,
+/// `$7` how it was started (`systemd` or `setsid`; only selects where it
+/// logs). Started by [`APPLY_SCRIPT`] (via `systemd-run` or `setsid`) **before** the
+/// new ruleset is applied, never by DRFW directly.
 ///
-/// Once per second, until the timeout (measured on `/proc/uptime`, so clock
-/// changes do not matter) it checks:
-/// - `<confirm_dir>/drfw-confirm-<nonce>` exists: write status `confirmed`, exit;
-/// - `<confirm_dir>/drfw-revert-<nonce>` exists: revert now;
-/// - its own status file exists: a newer apply superseded it, exit silently.
+/// The timeout is measured on `/proc/uptime` (clock changes do not matter):
+/// from the watcher's start until the guard is armed, then afresh from the
+/// moment it sees the `armed` marker, so the user gets the whole timeout once
+/// the new rules are live. Once per second, in this order:
+/// 1. its status file exists: the apply failed (`not-applied`) or a newer
+///    apply superseded it: exit silently;
+/// 2. the deadline has passed: revert;
+/// 3. only once `<state_dir>/armed-<nonce>` exists (written by the apply
+///    script after the new rules went live):
+///    `<confirm_dir>/drfw-confirm-<nonce>` owned by `uid` exists: write
+///    status `confirmed`, exit; `<confirm_dir>/drfw-revert-<nonce>` exists:
+///    revert now.
 ///
-/// On timeout it reverts. Revert = `nft -f <state_dir>/revert-<nonce>.nft` (one
-/// atomic batch that recreates exactly the pre-apply `inet drfw` table, or
-/// removes it if there was none). If that fails it deletes the `inet drfw`
-/// table instead (status `removed: <error>`), so DRFW never keeps a host locked
-/// out; only if even that fails is the status `revert-failed: <error>`.
-/// Status files are written atomically (temp + rename), mode 644, as
-/// `<state_dir>/status-<nonce>`.
+/// Revert = `nft -f <state_dir>/revert-<nonce>.nft` (one atomic batch that
+/// recreates exactly the pre-apply `inet drfw` table, or removes it if there
+/// was none). If that fails it deletes the `inet drfw` table instead (status
+/// `removed: <error>`), so DRFW never keeps a host locked out; only if even
+/// that fails is the status `revert-failed: <error>`. Status files are written
+/// atomically (temp + rename), mode 644, as `<state_dir>/status-<nonce>`.
+///
+/// A revert first takes the state dir's lock, so it waits for an apply that
+/// is still running. If the apply script died without an outcome (no `armed`
+/// marker, no status: e.g. `SIGKILL`), the watcher reverts anyway: the revert
+/// file holds the state from before the apply, so restoring it is correct
+/// whether or not the new rules went live. Problems are logged to the journal
+/// (stderr under systemd, else `logger -t drfw`).
 ///
 /// # Trust boundary
 ///
-/// `confirm_dir` is the user's `$XDG_RUNTIME_DIR` (or DRFW's state dir). It is
-/// user-controlled, so the watcher only ever lists it with `find -maxdepth 1
-/// -name` (readdir, no symlinks followed). It never writes, creates, opens or
-/// follows anything there: root writing to a user directory would invite a
-/// symlink attack, and even `test -e` would follow a planted symlink and leak
-/// whether a root-only path exists.
+/// `confirm_dir` is the user's `$XDG_RUNTIME_DIR` (or DRFW's state dir),
+/// which DRFW only uses when it is owned by the user and not accessible to
+/// anyone else. It is user-controlled, so the watcher only ever lists it with
+/// `find -maxdepth 1 -name … -user <uid>` (readdir and lstat, no symlinks
+/// followed), bounded by `timeout 2` where available. It never writes,
+/// creates, opens or follows anything there: root writing to a user directory
+/// would invite a symlink attack, and even `test -e` would follow a planted
+/// symlink and leak whether a root-only path exists.
 ///
-/// Any process of the same user can create the confirm token. That is not an
+/// The nonce is **not** a secret: it is visible to every local user (in
+/// `ps`, in the `drfw-revert-<nonce>` unit name and in the world-readable
+/// `/run/drfw/active`). What protects the guard is ownership: only files
+/// owned by `uid` count as tokens, in a directory only that user can write.
+/// Any process of that user can create the confirm token. That is not an
 /// escalation: all it does is keep rules that the user just authenticated to
-/// apply. The 128-bit random nonce, new for every apply, keeps stale or
-/// pre-created tokens from matching a later guard.
+/// apply. A fresh nonce for every apply keeps stale tokens from matching a
+/// later guard.
 pub const WATCHER_SCRIPT: &str = watcher_script!();
 
 /// True if `haystack` contains `needle` (usable in constants).
@@ -713,49 +829,67 @@ const _: () = assert!(
 /// Arguments: `$1` state dir ([`GUARD_STATE_DIR`]), `$2` timeout in seconds
 /// (0 = no guard, just apply), `$3` nonce (32 lowercase hex digits), `$4`
 /// confirmation dir, `$5` nft command, `$6` watcher launcher (`auto` or
-/// `setsid`; tests force `setsid`). The nftables JSON arrives on stdin. No
-/// argument is ever interpolated into script text, and every argument is
-/// validated against an allowlist first (paths: absolute, `[A-Za-z0-9/._@+-]`;
-/// they also travel through `systemd-run`, which would expand `$`).
+/// `setsid`; tests force `setsid`), `$7` uid of the user who may confirm.
+/// The nftables JSON arrives on stdin. No argument is ever interpolated into
+/// script text, and every argument is validated against an allowlist first
+/// (paths: absolute, `[A-Za-z0-9/._@+-]`; they also travel through
+/// `systemd-run`, which would expand `$`).
 ///
-/// Steps (under `flock` on `<state_dir>/lock` when available, so watchers and
-/// concurrent applies serialize):
-/// 1. Create `<state_dir>` (mode 755) and require it to be a real directory
-///    (not a symlink) owned by the caller (root) and not group/world-writable.
-/// 2. With a guard: write `<state_dir>/revert-<nonce>.nft`, a complete atomic
+/// The script ignores `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGPIPE`
+/// (an SSH drop, Ctrl-C after the password or a killed elevation tool must not
+/// stop it halfway), and the watcher is started **before** the new rules go
+/// live, so even `SIGKILL` cannot leave them without a guard.
+///
+/// Steps:
+/// 1. Print `drfw-apply-started` (DRFW then knows authentication succeeded).
+/// 2. Validate the arguments. Create `<state_dir>` (mode 755) and require it
+///    to be a real directory (not a symlink) owned by the caller (root) and
+///    not group/world-writable. Take `flock` on `<state_dir>/lock` when
+///    available, so watchers and concurrent applies serialize; it is held
+///    (also by nft) until the outcome is recorded.
+/// 3. With a guard: write `<state_dir>/revert-<nonce>.nft`, a complete atomic
 ///    batch: `add table inet drfw`, `delete table inet drfw`, then
-///    `nft list table inet drfw` if that table exists. If the table did not
-///    exist, the revert therefore removes it. If an earlier guard is still
-///    pending (never confirmed), its revert file is inherited instead: a
-///    timeout must go back to the last *confirmed* state, not to rules that
-///    were themselves on probation.
-/// 3. `nft --json -f -` the new ruleset. On failure: exit 3, nothing changed,
-///    any earlier guard keeps running.
-/// 4. Supersede the earlier guard: write its status `superseded` (its watcher
-///    exits on the next poll) and `systemctl stop` its unit if it had one.
-/// 5. With a guard: write the watcher to `<state_dir>/watcher-<nonce>.sh` and
+///    `nft list table inet drfw` (stdout only) if that table exists. If the
+///    table did not exist, the revert therefore removes it. If an earlier
+///    guard is still pending (never confirmed), its revert file is inherited
+///    instead: a timeout must go back to the last *confirmed* state, not to
+///    rules that were themselves on probation.
+/// 4. With a guard: write the watcher to `<state_dir>/watcher-<nonce>.sh` and
 ///    start it detached: `systemd-run --unit=drfw-revert-<nonce> --collect` when
 ///    systemd is PID 1 (required under `run0`, whose transient unit would kill
-///    leftover children), else `setsid` with stdio on `/dev/null`. If it cannot
-///    be started, the rules are rolled back at once (exit 4).
-/// 6. Print `revert_file=<path>` and `watcher=<systemd:unit|setsid:pid|none>`.
+///    leftover children), else `setsid` with stdio on `/dev/null`. It cannot
+///    act on tokens yet (not armed). If it cannot be started: exit 4, nothing
+///    changed.
+/// 5. `nft --json -f -` the new ruleset. On failure: write the new guard's
+///    status `not-applied` (its watcher exits without reverting), exit 3;
+///    nothing changed and any earlier guard keeps running.
+/// 6. Supersede the earlier guard: write its status `superseded` (its watcher
+///    exits on the next poll) and `systemctl stop` its unit if it had one.
+/// 7. With a guard: create `<state_dir>/armed-<nonce>` (from now on the
+///    watcher accepts confirm/revert tokens) and record the guard in
+///    `<state_dir>/active` (`<nonce> <systemd|setsid>`). Without one: remove
+///    `active`.
+/// 8. Print `revert_file=<path>` and `watcher=<systemd:unit|setsid:pid|none>`.
 ///
 /// Exit codes: 0 success; 1 failure before anything changed; 3 nft rejected
-/// the ruleset (nothing changed); 4 the rules were applied but the guard could
-/// not be started, so they were rolled back; 5 the guard could not be started
-/// AND the rollback failed: the new rules are still active. 126/127 are never
-/// used: callers read those as authentication errors from pkexec.
+/// the ruleset (nothing changed); 4 the guard could not be started (nothing
+/// changed); 5 the rules were applied but the guard could not be armed: they
+/// revert at the deadline and cannot be confirmed. 126/127 are never used:
+/// callers read those as authentication errors from pkexec.
 pub const APPLY_SCRIPT: &str = concat!(
-    r#"set -u
+    r#"trap '' HUP INT QUIT TERM PIPE
+set -u
 umask 022
 LC_ALL=C
 export LC_ALL
+printf 'drfw-apply-started\n'
 state_dir=$1
 timeout=$2
 nonce=$3
 confirm_dir=$4
 nft=$5
 launcher=$6
+uid=$7
 fail() {
     printf 'drfw: %s\n' "$1" >&2
     exit "$2"
@@ -780,6 +914,10 @@ case $launcher in
     auto|setsid) ;;
     *) fail "invalid watcher launcher" 1 ;;
 esac
+case $uid in
+    ''|*[!0-9]*) fail "invalid uid" 1 ;;
+esac
+[ "${#uid}" -le 10 ] || fail "invalid uid" 1
 
 # shellcheck disable=SC2174 # only the last component is new (/run exists)
 mkdir -p -m 755 -- "$state_dir" || fail "cannot create $state_dir" 1
@@ -794,11 +932,19 @@ fi
 
 # Forget outcomes and leftovers older than a day (guards last at most an hour)
 find "$state_dir/" -maxdepth 1 -type f \( -name 'status-*' -o -name 'revert-*' \
-    -o -name 'watcher-*' -o -name '.*.tmp' \) -mmin +1440 -exec rm -f -- {} + 2>/dev/null
+    -o -name 'watcher-*' -o -name 'armed-*' -o -name '.*.tmp' \) -mmin +1440 \
+    -exec rm -f -- {} + 2>/dev/null
 
 active_file="$state_dir/active"
 revert_file="$state_dir/revert-$nonce.nft"
 watcher_file="$state_dir/watcher-$nonce.sh"
+armed_file="$state_dir/armed-$nonce"
+
+# Atomically writes status $2 for nonce $1
+write_status() {
+    tmp="$state_dir/.status-$1.tmp"
+    printf '%s\n' "$2" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$state_dir/status-$1"
+}
 
 # An earlier guard that has not finished yet (no status file)
 prev_nonce=
@@ -819,77 +965,81 @@ if [ "$timeout" -gt 0 ]; then
         cp -- "$state_dir/revert-$prev_nonce.nft" "$tmp" \
             || fail "cannot copy the pending revert file" 1
     else
-        tables=$("$nft" list tables 2>&1) || fail "cannot list nftables tables: $tables" 1
+        # stdout only: nft's warnings or errors must never end up in the batch
+        tables=$("$nft" list tables) || fail "cannot list nftables tables" 1
         current=
         if printf '%s\n' "$tables" | grep -qx 'table inet drfw'; then
-            current=$("$nft" list table inet drfw 2>&1) \
-                || fail "cannot save the current drfw table: $current" 1
+            current=$("$nft" list table inet drfw) \
+                || fail "cannot save the current drfw table" 1
         fi
         printf 'add table inet drfw\ndelete table inet drfw\n%s\n' "$current" > "$tmp" \
             || { rm -f -- "$tmp"; fail "cannot write the revert file" 1; }
     fi
     mv -f -- "$tmp" "$revert_file" || { rm -f -- "$tmp"; fail "cannot write $revert_file" 1; }
+
+    not_started() {
+        rm -f -- "$revert_file" "$watcher_file"
+        fail "could not start the revert guard ($1); nothing was changed" 4
+    }
+
+    cat > "$watcher_file" <<'DRFW_WATCHER_EOF' || not_started "cannot write $watcher_file"
+"#,
+    watcher_script!(),
+    r#"DRFW_WATCHER_EOF
+
+    if [ "$launcher" = auto ] && [ -d /run/systemd/system ]; then
+        unit="drfw-revert-$nonce"
+        if ! out=$(systemd-run --unit="$unit" --collect --quiet --service-type=exec \
+                --description="drfw: revert firewall rules unless confirmed" \
+                /bin/sh "$watcher_file" "$state_dir" "$timeout" "$nonce" "$confirm_dir" \
+                "$nft" "$uid" systemd 2>&1); then
+            not_started "systemd-run failed: $out"
+        fi
+        launched=systemd
+        watcher="systemd:$unit.service"
+    else
+        command -v setsid >/dev/null 2>&1 || not_started "setsid not found"
+        setsid /bin/sh "$watcher_file" "$state_dir" "$timeout" "$nonce" "$confirm_dir" \
+            "$nft" "$uid" setsid </dev/null >/dev/null 2>&1 9>&- &
+        pid=$!
+        kill -0 "$pid" 2>/dev/null || not_started "setsid failed"
+        launched=setsid
+        watcher="setsid:$pid"
+    fi
 fi
 
 if ! apply_err=$("$nft" --json -f - 2>&1 >/dev/null); then
-    rm -f -- "$revert_file"
+    if [ "$timeout" -gt 0 ]; then
+        # The new watcher exits without reverting
+        write_status "$nonce" not-applied
+        rm -f -- "$revert_file" "$watcher_file"
+        if [ "$launched" = systemd ]; then
+            systemctl stop --no-block "drfw-revert-$nonce.service" >/dev/null 2>&1
+        fi
+    fi
     fail "nft rejected the ruleset: $apply_err" 3
 fi
 
 # The new rules are live: retire the earlier guard
 if [ -n "$prev_nonce" ]; then
-    tmp="$state_dir/.status-$prev_nonce.tmp"
-    printf 'superseded\n' > "$tmp" && chmod 644 "$tmp" \
-        && mv -f -- "$tmp" "$state_dir/status-$prev_nonce"
+    write_status "$prev_nonce" superseded
     if [ "$prev_launcher" = systemd ]; then
         systemctl stop --no-block "drfw-revert-$prev_nonce.service" >/dev/null 2>&1
     fi
-    rm -f -- "$state_dir/revert-$prev_nonce.nft" "$state_dir/watcher-$prev_nonce.sh"
+    rm -f -- "$state_dir/revert-$prev_nonce.nft" "$state_dir/watcher-$prev_nonce.sh" \
+        "$state_dir/armed-$prev_nonce"
 fi
-rm -f -- "$active_file"
 
 if [ "$timeout" -eq 0 ]; then
+    rm -f -- "$active_file"
     printf 'watcher=none\n'
     exit 0
 fi
 
-rollback() {
-    if out=$("$nft" -f "$revert_file" 2>&1); then
-        rm -f -- "$revert_file" "$watcher_file"
-        fail "could not start the revert guard ($1); the previous rules were restored" 4
-    fi
-    out=$(printf '%s' "$out" | tr '\n' ' ')
-    if printf 'add table inet drfw\ndelete table inet drfw\n' | "$nft" -f - >/dev/null 2>&1; then
-        rm -f -- "$revert_file" "$watcher_file"
-        fail "could not start the revert guard ($1) or restore the previous rules ($out); table inet drfw was removed instead" 4
-    fi
-    fail "could not start the revert guard ($1) and could not restore the previous rules ($out): the new rules are STILL ACTIVE" 5
-}
-
-cat > "$watcher_file" <<'DRFW_WATCHER_EOF' || rollback "cannot write $watcher_file"
-"#,
-    watcher_script!(),
-    r#"DRFW_WATCHER_EOF
-
-if [ "$launcher" = auto ] && [ -d /run/systemd/system ]; then
-    unit="drfw-revert-$nonce"
-    if ! out=$(systemd-run --unit="$unit" --collect --quiet --service-type=exec \
-            --description="drfw: revert firewall rules unless confirmed" \
-            /bin/sh "$watcher_file" "$state_dir" "$timeout" "$nonce" "$confirm_dir" "$nft" 2>&1); then
-        rollback "systemd-run failed: $out"
-    fi
-    launched=systemd
-    watcher="systemd:$unit.service"
-else
-    command -v setsid >/dev/null 2>&1 || rollback "setsid not found"
-    setsid /bin/sh "$watcher_file" "$state_dir" "$timeout" "$nonce" "$confirm_dir" "$nft" \
-        </dev/null >/dev/null 2>&1 9>&- &
-    pid=$!
-    kill -0 "$pid" 2>/dev/null || rollback "setsid failed"
-    launched=setsid
-    watcher="setsid:$pid"
+if ! : > "$armed_file"; then
+    rm -f -- "$active_file"
+    fail "the new rules are active, but the revert guard could not be armed: they revert in $timeout seconds and cannot be confirmed" 5
 fi
-
 printf '%s %s\n' "$nonce" "$launched" > "$active_file.tmp" \
     && mv -f -- "$active_file.tmp" "$active_file"
 printf 'revert_file=%s\nwatcher=%s\n' "$revert_file" "$watcher"
@@ -930,6 +1080,7 @@ impl WatcherLauncher {
 /// * `timeout_secs` - Seconds until the watcher reverts (0 = no guard)
 /// * `nonce` - 32 lowercase hex digits, fresh for every apply
 /// * `confirm_dir` - User directory where confirm/revert tokens are created
+/// * `uid` - The user whose tokens count (owner of `confirm_dir`)
 ///
 /// # Testing
 ///
@@ -944,8 +1095,10 @@ pub fn create_elevated_apply_command(
     timeout_secs: u64,
     nonce: &str,
     confirm_dir: &str,
+    uid: u32,
 ) -> Result<(Command, std::path::PathBuf), ElevationError> {
     let timeout = timeout_secs.to_string();
+    let uid = uid.to_string();
 
     if let Some(nft_path) = test_nft_command() {
         let state_dir = std::env::var_os("DRFW_GUARD_STATE_DIR")
@@ -970,6 +1123,7 @@ pub fn create_elevated_apply_command(
                 confirm_dir,
                 &nft_path,
                 WatcherLauncher::Setsid.as_arg(),
+                &uid,
             ],
         );
         return Ok((cmd, state_dir));
@@ -987,6 +1141,7 @@ pub fn create_elevated_apply_command(
             confirm_dir,
             crate::distro::NFT_COMMAND,
             WatcherLauncher::Auto.as_arg(),
+            &uid,
         ],
     )?;
     Ok((cmd, std::path::PathBuf::from(GUARD_STATE_DIR)))

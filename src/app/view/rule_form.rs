@@ -501,9 +501,11 @@ const CHAINS: [crate::core::firewall::Chain; 2] = [
     crate::core::firewall::Chain::Output,
 ];
 
-/// Helper text under the "Per source address" checkboxes.
-const PER_SOURCE_HELP: &str = "Each client IP (IPv6: each /64) gets its own limit. \
-     Recommended for SSH and other login services.";
+/// Helper text under the "Per source address" checkboxes (Accept rules only:
+/// the form hides them for Drop/Reject, which validation refuses).
+const PER_SOURCE_HELP: &str = "Each client IP (IPv6: each /64) gets its own limit, so one \
+     client using up its budget does not affect the others. Up to 65535 clients are tracked; \
+     a flood from more addresses than that blocks new clients until it stops.";
 
 /// "Per source address" checkbox with its helper text (rate and connection limits).
 fn view_per_source_checkbox(
@@ -725,12 +727,14 @@ fn view_advanced_section<'a>(
                 ]
                 .spacing(8),
             );
-            rate_limit_col = rate_limit_col.push(view_per_source_checkbox(
-                form.rate_limit_per_source,
-                Message::RuleFormRateLimitPerSourceToggled,
-                theme,
-                regular_font,
-            ));
+            if form.action == crate::core::firewall::Action::Accept {
+                rate_limit_col = rate_limit_col.push(view_per_source_checkbox(
+                    form.rate_limit_per_source,
+                    Message::RuleFormRateLimitPerSourceToggled,
+                    theme,
+                    regular_font,
+                ));
+            }
         }
         if let Some(err) = rate_limit_error {
             rate_limit_col =
@@ -754,14 +758,16 @@ fn view_advanced_section<'a>(
                 .padding(8)
                 .font(mono_font)
                 .style(move |_, status| themed_text_input(theme, status)),
-            view_per_source_checkbox(
+        ]
+        .spacing(4);
+        if form.action == crate::core::firewall::Action::Accept {
+            conn_col = conn_col.push(view_per_source_checkbox(
                 form.connection_limit_per_source,
                 Message::RuleFormConnectionLimitPerSourceToggled,
                 theme,
                 regular_font,
-            ),
-        ]
-        .spacing(4);
+            ));
+        }
         if let Some(err) = connection_limit_error {
             conn_col = conn_col.push(text(err).size(12).font(regular_font).color(theme.danger));
         }

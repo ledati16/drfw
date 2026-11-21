@@ -431,7 +431,8 @@ struct RuleConfig {
     output_interface: Option<String>,
     rate_limit: Option<RateLimit>,
     connection_limit: u32,
-    /// Ignored when `connection_limit` is 0 (validation requires a limit)
+    /// Ignored when `connection_limit` is 0 (validation requires a limit) or
+    /// the action is not Accept (per-source limits are Accept-only)
     connection_limit_per_source: bool,
     log_enabled: bool,
     enabled: bool,
@@ -441,6 +442,12 @@ struct RuleConfig {
 
 impl RuleConfig {
     fn into_rule(self) -> Rule {
+        // Per-source limits are only valid on Accept rules
+        let accept = self.action == Action::Accept;
+        let rate_limit = self.rate_limit.map(|rl| RateLimit {
+            per_source: rl.per_source && accept,
+            ..rl
+        });
         let mut rule = Rule {
             id: Uuid::new_v4(),
             label: self.label,
@@ -456,10 +463,11 @@ impl RuleConfig {
             destinations: self.destinations,
             action: self.action,
             reject_type: self.reject_type,
-            rate_limit: self.rate_limit,
+            rate_limit,
             connection_limit: self.connection_limit,
             connection_limit_per_source: self.connection_limit_per_source
-                && self.connection_limit > 0,
+                && self.connection_limit > 0
+                && accept,
             log_enabled: self.log_enabled,
             // Cached fields (populated by rebuild_caches())
             label_lowercase: String::new(),
@@ -1170,12 +1178,13 @@ fn generate_ruleset(
     let mut rule_index = 0;
 
     // Phase 1: Guarantee all variants appear
-    // Generate rules to cover per-source rate and connection limits
+    // Generate rules to cover per-source rate and connection limits (Accept
+    // only: validation refuses them on Drop/Reject)
     for per_source_rate in [true, false] {
         if rule_index >= count {
             break;
         }
-        let action = random_action(rng);
+        let action = Action::Accept;
         let mut rule = generate_coverage_rule(
             rng,
             rule_index + 1,

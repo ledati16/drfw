@@ -40,6 +40,7 @@ const GUI_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 /// Returns [`ExitCode::FAILURE`] if the window or the graphics backend cannot
 /// be created.
 pub fn run_gui() -> ExitCode {
+    crate::elevation::set_context(crate::elevation::ElevationContext::Gui);
     if let Some(mut log_path) = crate::utils::get_state_dir() {
         log_path.push("drfw.log");
         if let Ok(file) = crate::utils::open_private_log(&log_path, GUI_LOG_MAX_BYTES) {

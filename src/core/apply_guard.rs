@@ -2,9 +2,11 @@
 //!
 //! [`apply_guarded`] runs the fixed [`APPLY_SCRIPT`] with a single elevation.
 //! As root, the script saves the current `inet drfw` table as a complete,
-//! atomic revert batch, applies the new ruleset and starts a detached watcher
-//! ([`WATCHER_SCRIPT`]) that restores the saved table when the timeout expires
-//! unless it is told otherwise.
+//! atomic revert batch, starts a detached watcher ([`WATCHER_SCRIPT`]) and
+//! only then applies the new ruleset. The watcher restores the saved table
+//! when the timeout expires unless it is told otherwise. The script ignores
+//! hang-up, interrupt and terminate signals, and because the watcher exists
+//! before the new rules go live, not even `SIGKILL` can leave them unguarded.
 //!
 //! The watcher does not depend on DRFW staying alive: closing the GUI, a GUI
 //! crash, the terminal closing or the SSH session dropping all lead to the
@@ -19,26 +21,41 @@
 //!
 //! # Trust model
 //!
-//! Any process running as the same user can create the confirm token. That is
-//! not an escalation: it can only keep rules that the user just authenticated
-//! to apply. Every apply uses a fresh random 128-bit nonce, so stale tokens
-//! never match a later guard. The watcher never writes to or follows anything
-//! in the user's directory (see [`WATCHER_SCRIPT`]).
+//! Tokens live in a directory that must be owned by the user and closed to
+//! everyone else (`$XDG_RUNTIME_DIR`, else DRFW's state dir; see
+//! [`confirm_dir`]), and the watcher only counts tokens owned by the user's
+//! uid. The nonce is not a secret (other local users can see it in `ps`, in
+//! the unit name and in `/run/drfw/active`); ownership is the check. Any
+//! process running as the same user can create the confirm token. That is not
+//! an escalation: it can only keep rules that the user just authenticated to
+//! apply. Every apply uses a fresh random 128-bit nonce, so stale tokens never
+//! match a later guard. The watcher never writes to or follows anything in
+//! the user's directory (see [`WATCHER_SCRIPT`]).
 //!
 //! [`APPLY_SCRIPT`]: crate::elevation::APPLY_SCRIPT
 //! [`WATCHER_SCRIPT`]: crate::elevation::WATCHER_SCRIPT
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
 use crate::elevation::AuthError;
 
-/// Upper bound for the whole elevated apply, including the time the user
-/// spends in the authentication dialog. The script itself takes well under a
-/// second once authenticated.
+/// Upper bound for the authentication step of an elevated apply: from
+/// spawning the elevation tool until the script reports that it started.
+/// If it runs out, nothing was changed.
 pub const APPLY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Upper bound for the script itself once it has started (as root). It
+/// normally takes well under a second, but may wait up to 60 s for the lock
+/// of a concurrent apply. If this runs out, the state is unknown: the script
+/// is root and cannot be killed by DRFW.
+pub const SCRIPT_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// First line the apply script prints, before it changes anything.
+const STARTED_MARKER: &str = "drfw-apply-started";
 
 /// Longest revert timeout the apply script accepts.
 pub const MAX_GUARD_TIMEOUT_SECS: u64 = 3600;
@@ -51,9 +68,10 @@ pub const OUTCOME_GRACE: Duration = Duration::from_secs(10);
 const OUTCOME_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Exit codes of [`crate::elevation::APPLY_SCRIPT`].
+const EXIT_FAILED: i32 = 1;
 const EXIT_REJECTED: i32 = 3;
-const EXIT_GUARD_FAILED_REVERTED: i32 = 4;
-const EXIT_GUARD_FAILED_RULES_ACTIVE: i32 = 5;
+const EXIT_GUARD_NOT_STARTED: i32 = 4;
+const EXIT_GUARD_NOT_ARMED: i32 = 5;
 
 /// Why a guarded apply failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -66,19 +84,20 @@ pub enum ApplyError {
     #[error("nftables rejected the ruleset; nothing was changed: {0}")]
     Rejected(String),
 
-    /// The rules were applied but the watcher could not be started, so the
-    /// script rolled them back (script exit 4)
-    #[error("The revert guard could not be started, so the change was rolled back: {0}")]
-    GuardFailedRolledBack(String),
+    /// The watcher could not be started, so nothing was applied (script
+    /// exit 4)
+    #[error("The revert guard could not be started; nothing was changed: {0}")]
+    GuardNotStarted(String),
 
-    /// The watcher could not be started and the rollback failed too: the new
-    /// rules are still active (script exit 5)
-    #[error(
-        "The new rules are STILL ACTIVE: the revert guard could not be started and the rollback failed: {0}"
-    )]
-    GuardFailedRulesActive(String),
+    /// The script started (as root) but its outcome is unknown: it was killed
+    /// by a signal, exited with an unexpected status, did not finish in
+    /// time, or applied the rules without being able to arm the guard
+    /// (script exit 5). The new rules may be active.
+    #[error("Firewall state unknown: the new rules MAY BE ACTIVE. {0}")]
+    StateUnknown(String),
 
-    /// Any other failure (script exit 1, I/O errors); nothing was changed
+    /// Any other failure (script exit 1, I/O errors, the elevation tool's own
+    /// errors); nothing was changed
     #[error("Apply failed: {0}")]
     Failed(String),
 }
@@ -86,7 +105,7 @@ pub enum ApplyError {
 impl ApplyError {
     /// True when the new rules may be live despite the error.
     pub fn rules_may_be_active(&self) -> bool {
-        matches!(self, Self::GuardFailedRulesActive(_))
+        matches!(self, Self::StateUnknown(_))
     }
 }
 
@@ -146,6 +165,11 @@ pub struct GuardHandle {
     state_dir: PathBuf,
     timeout: Duration,
     deadline: Instant,
+    /// The applied nftables JSON, recorded by [`record_confirmed`] once confirmed
+    payload: Arc<[u8]>,
+    /// Where to record it: DRFW's state directory when the apply started
+    /// (`None`: do not record)
+    record_dir: Option<PathBuf>,
 }
 
 impl GuardHandle {
@@ -159,6 +183,8 @@ impl GuardHandle {
             state_dir: dir.join("state"),
             timeout,
             deadline: Instant::now() + timeout,
+            payload: Arc::from(&b"{}"[..]),
+            record_dir: None,
         }
     }
 
@@ -168,8 +194,11 @@ impl GuardHandle {
     }
 
     /// When the watcher reverts, measured on the monotonic clock. Taken when
-    /// the apply returned, so it is never earlier than the watcher's own
-    /// deadline: the UI must still wait for [`Self::wait_outcome`].
+    /// the apply returned; the watcher restarts its own countdown when it
+    /// notices that the guard was armed (just before the apply returned, and
+    /// it polls once per second), so its deadline is at most milliseconds
+    /// earlier than this one, and up to a second later. The UI must still
+    /// wait for [`Self::wait_outcome`] for the actual outcome.
     pub fn deadline(&self) -> Instant {
         self.deadline
     }
@@ -212,7 +241,8 @@ impl GuardHandle {
 
     /// Waits until the watcher reports an outcome, at most `max_wait`.
     ///
-    /// Removes this guard's tokens once an outcome is known.
+    /// Removes this guard's tokens once an outcome is known. A confirmed
+    /// ruleset is recorded for [`confirmed_ruleset_matches`].
     ///
     /// # Errors
     ///
@@ -223,6 +253,11 @@ impl GuardHandle {
             if let Some(outcome) = self.read_outcome() {
                 self.remove_tokens();
                 info!("Revert guard {} finished: {outcome:?}", self.nonce);
+                if outcome == GuardOutcome::Confirmed
+                    && let Some(dir) = &self.record_dir
+                {
+                    record_confirmed(dir, &self.payload).await;
+                }
                 return Ok(outcome);
             }
             if Instant::now() >= give_up {
@@ -288,23 +323,83 @@ fn is_script_safe_path(path: &Path) -> bool {
         })
 }
 
+/// Why `dir` cannot hold confirm/revert tokens, or `None` if it can: it
+/// must be a real directory (not a symlink) owned by `uid` with no access for
+/// group or others (mode 0700 or stricter), and its path must pass
+/// [`is_script_safe_path`]. Otherwise another user could plant or remove
+/// tokens.
+fn confirm_dir_problem(dir: &Path, uid: u32) -> Option<String> {
+    if !is_script_safe_path(dir) {
+        return Some(format!(
+            "{} contains characters the apply script refuses",
+            dir.display()
+        ));
+    }
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(e) => return Some(format!("{}: {e}", dir.display())),
+    };
+    if !meta.is_dir() {
+        return Some(format!("{} is not a directory", dir.display()));
+    }
+    cfg_select! {
+        unix => {
+            let owner = std::os::unix::fs::MetadataExt::uid(&meta);
+            let mode = std::os::unix::fs::MetadataExt::mode(&meta);
+            if owner != uid {
+                return Some(format!(
+                    "{} is owned by uid {owner}, not by you (uid {uid})",
+                    dir.display()
+                ));
+            }
+            if mode & 0o077 != 0 {
+                return Some(format!(
+                    "{} is accessible to other users (mode {:o}; needs 0700)",
+                    dir.display(),
+                    mode & 0o777
+                ));
+            }
+        }
+        _ => {
+            let _ = uid;
+        }
+    }
+    None
+}
+
 /// Directory for confirm/revert tokens: `$XDG_RUNTIME_DIR` (per-user tmpfs,
-/// mode 0700), else DRFW's state directory.
-fn confirm_dir() -> Result<PathBuf, ApplyError> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_dir() && is_script_safe_path(dir));
-    if let Some(dir) = runtime {
-        return Ok(dir);
+/// mode 0700), else DRFW's state directory, whichever is owned by `uid` and
+/// closed to everyone else (see [`confirm_dir_problem`]).
+///
+/// # Errors
+///
+/// [`ApplyError::Failed`] (before anything is elevated) if neither qualifies.
+fn confirm_dir(uid: u32) -> Result<PathBuf, ApplyError> {
+    let mut problems = Vec::with_capacity(2);
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        match confirm_dir_problem(&dir, uid) {
+            None => return Ok(dir),
+            Some(problem) => {
+                warn!("Not using XDG_RUNTIME_DIR for the revert guard: {problem}");
+                problems.push(format!("XDG_RUNTIME_DIR: {problem}"));
+            }
+        }
     }
     crate::utils::ensure_dirs().map_err(|e| ApplyError::Failed(e.to_string()))?;
-    crate::utils::get_state_dir()
-        .filter(|dir| is_script_safe_path(dir))
-        .ok_or_else(|| {
-            ApplyError::Failed(
-                "no usable directory for the confirmation token (set XDG_RUNTIME_DIR)".to_string(),
-            )
-        })
+    if let Some(dir) = crate::utils::get_state_dir() {
+        match confirm_dir_problem(&dir, uid) {
+            None => return Ok(dir),
+            Some(problem) => problems.push(format!("state directory: {problem}")),
+        }
+    }
+    Err(ApplyError::Failed(format!(
+        "no safe directory for the confirmation token ({})",
+        if problems.is_empty() {
+            "set XDG_RUNTIME_DIR".to_string()
+        } else {
+            problems.join("; ")
+        }
+    )))
 }
 
 /// A fresh random 128-bit nonce as 32 lowercase hex digits.
@@ -322,7 +417,13 @@ fn new_nonce() -> Result<String, ApplyError> {
 }
 
 /// Maps the apply script's exit status to a result.
-fn classify_apply_exit(code: Option<i32>, stderr: &str) -> Result<(), ApplyError> {
+///
+/// `started`: the script printed its start marker, i.e. authentication
+/// succeeded and the script ran as root. Without it nothing was changed,
+/// whatever the status (the elevation tool failed, or was killed before the
+/// script ran). With it, a status the script never uses (a signal, a shell
+/// error) means the script stopped at an unknown step: the state is unknown.
+fn classify_apply_exit(code: Option<i32>, stderr: &str, started: bool) -> Result<(), ApplyError> {
     if code == Some(0) {
         return Ok(());
     }
@@ -343,11 +444,18 @@ fn classify_apply_exit(code: Option<i32>, stderr: &str) -> Result<(), ApplyError
     } else {
         message
     };
+    if !started {
+        return Err(ApplyError::Failed(message));
+    }
     Err(match code {
+        Some(EXIT_FAILED) => ApplyError::Failed(message),
         Some(EXIT_REJECTED) => ApplyError::Rejected(message),
-        Some(EXIT_GUARD_FAILED_REVERTED) => ApplyError::GuardFailedRolledBack(message),
-        Some(EXIT_GUARD_FAILED_RULES_ACTIVE) => ApplyError::GuardFailedRulesActive(message),
-        _ => ApplyError::Failed(message),
+        Some(EXIT_GUARD_NOT_STARTED) => ApplyError::GuardNotStarted(message),
+        Some(EXIT_GUARD_NOT_ARMED) => ApplyError::StateUnknown(message),
+        _ => ApplyError::StateUnknown(format!(
+            "The apply script was interrupted ({message}). If the rules were applied with \
+             auto-revert, they revert on their own when the countdown ends."
+        )),
     })
 }
 
@@ -400,28 +508,42 @@ pub fn pending_guard(state_dir: &Path) -> std::io::Result<Option<PendingGuard>> 
 /// the handle used to confirm, revert or wait for the outcome. Dropping the
 /// handle does not stop the guard: without a confirmation the rules revert.
 ///
+/// Authentication may take up to [`APPLY_TIMEOUT`]; once the script reports
+/// that it started (as root), it gets another [`SCRIPT_TIMEOUT`].
+///
 /// # Errors
 ///
-/// - [`ApplyError::Auth`]: elevation unavailable, cancelled, refused or timed out
+/// - [`ApplyError::Auth`]: elevation unavailable, cancelled, refused or timed
+///   out before the script started (nothing changed)
 /// - [`ApplyError::Rejected`]: nft rejected the ruleset (nothing changed)
-/// - [`ApplyError::GuardFailedRolledBack`] / [`ApplyError::GuardFailedRulesActive`]:
-///   the watcher could not be started (see their docs)
+/// - [`ApplyError::GuardNotStarted`]: the watcher could not be started
+///   (nothing changed)
+/// - [`ApplyError::StateUnknown`]: the script started but was interrupted,
+///   exited unexpectedly or did not finish in time, or could not arm the
+///   guard: the new rules may be active
 /// - [`ApplyError::Failed`]: anything else; nothing was changed
 pub async fn apply_guarded(
     json: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<Option<GuardHandle>, ApplyError> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let timeout_secs = timeout_secs.min(MAX_GUARD_TIMEOUT_SECS);
-    let payload = serde_json::to_vec(json).map_err(|e| ApplyError::Failed(e.to_string()))?;
+    let payload: Arc<[u8]> = serde_json::to_vec(json)
+        .map_err(|e| ApplyError::Failed(e.to_string()))?
+        .into();
     let nonce = new_nonce()?;
-    let confirm_dir = confirm_dir()?;
+    let uid = nix::unistd::getuid().as_raw();
+    let confirm_dir = confirm_dir(uid)?;
     let confirm_dir_str = confirm_dir.to_string_lossy().into_owned();
 
-    let (mut command, state_dir) =
-        crate::elevation::create_elevated_apply_command(timeout_secs, &nonce, &confirm_dir_str)
-            .map_err(|e| ApplyError::Auth(AuthError::Unavailable(e.to_string())))?;
+    let (mut command, state_dir) = crate::elevation::create_elevated_apply_command(
+        timeout_secs,
+        &nonce,
+        &confirm_dir_str,
+        uid,
+    )
+    .map_err(|e| ApplyError::Auth(AuthError::Unavailable(e.to_string())))?;
 
     info!("Applying ruleset (revert guard: {timeout_secs}s)");
     let mut child = command
@@ -431,28 +553,96 @@ pub async fn apply_guarded(
         .spawn()
         .map_err(|e| ApplyError::Failed(format!("cannot start the apply script: {e}")))?;
 
-    let work = async {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(&payload).await?;
+    // stdin, stdout and stderr are served concurrently: the payload may not
+    // fit into the pipe before nft reads it, and the start marker must be
+    // seen while the script runs.
+    let stdin = child.stdin.take();
+    let stdin_payload = Arc::clone(&payload);
+    let stdin_task = tokio::spawn(async move {
+        if let Some(mut stdin) = stdin {
+            // A script that exits before reading (failed authentication,
+            // rejected arguments) closes the pipe; its exit status says why
+            if let Err(e) = stdin.write_all(&stdin_payload).await {
+                tracing::debug!("apply script stdin: {e}");
+            }
             // Dropping stdin closes the pipe so nft sees EOF
         }
-        child.wait_with_output().await
-    };
-    let output = match tokio::time::timeout(APPLY_TIMEOUT, work).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(ApplyError::Failed(format!("apply script I/O: {e}"))),
-        Err(_) => {
-            return Err(ApplyError::Auth(AuthError::TimedOut(
-                APPLY_TIMEOUT.as_secs(),
-            )));
+    });
+    let (started_tx, mut started_rx) = tokio::sync::oneshot::channel();
+    let stdout = child.stdout.take();
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::with_capacity(256);
+        let mut started_tx = Some(started_tx);
+        if let Some(mut stdout) = stdout {
+            let mut chunk = [0u8; 256];
+            while let Ok(n) = stdout.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if started_tx.is_some() && contains_started_marker(&buf) {
+                    let _ = started_tx.take().map(|tx| tx.send(()));
+                }
+            }
         }
-    };
+        buf
+    });
+    let stderr = child.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_end(&mut buf).await;
+        }
+        buf
+    });
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    classify_apply_exit(output.status.code(), &stderr)?;
+    let status = {
+        let wait = child.wait();
+        tokio::pin!(wait);
+        // Authentication: until the script starts (or the tool gives up)
+        let first = tokio::time::timeout(APPLY_TIMEOUT, async {
+            tokio::select! {
+                status = &mut wait => Some(status),
+                Ok(()) = &mut started_rx => None,
+            }
+        })
+        .await;
+        match first {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                // Authenticated: the script runs as root and cannot be killed
+                // from here, so running out of time leaves the state unknown
+                let Ok(status) = tokio::time::timeout(SCRIPT_TIMEOUT, &mut wait).await else {
+                    stdin_task.abort();
+                    warn!("The apply script did not finish in time");
+                    return Err(ApplyError::StateUnknown(format!(
+                        "The apply script (running as root) did not finish within {} seconds. \
+                         If the rules were applied with auto-revert, they revert on their own \
+                         when the countdown ends.",
+                        SCRIPT_TIMEOUT.as_secs()
+                    )));
+                };
+                status
+            }
+            Err(_) => {
+                stdin_task.abort();
+                return Err(ApplyError::Auth(AuthError::TimedOut(
+                    APPLY_TIMEOUT.as_secs(),
+                )));
+            }
+        }
+    }
+    .map_err(|e| ApplyError::Failed(format!("apply script I/O: {e}")))?;
+
+    let _ = stdin_task.await;
+    let stdout = stdout_task.await.unwrap_or_default();
+    let stderr = stderr_task.await.unwrap_or_default();
+    let started = contains_started_marker(&stdout);
+    let stderr = String::from_utf8_lossy(&stderr);
+    classify_apply_exit(status.code(), &stderr, started)?;
     info!(
         "Apply succeeded: {}",
-        String::from_utf8_lossy(&output.stdout).trim()
+        String::from_utf8_lossy(&stdout).trim()
     );
 
     if timeout_secs == 0 {
@@ -465,7 +655,53 @@ pub async fn apply_guarded(
         state_dir,
         timeout,
         deadline: Instant::now() + timeout,
+        payload,
+        record_dir: crate::utils::get_state_dir(),
     }))
+}
+
+/// True if the apply script's stdout so far contains its start marker line.
+fn contains_started_marker(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .any(|line| line.trim() == STARTED_MARKER)
+}
+
+/// File in DRFW's state directory holding the nftables JSON of the last
+/// ruleset whose revert guard was confirmed.
+const CONFIRMED_RULESET_FILE: &str = "confirmed-ruleset.json";
+
+/// Records `payload` (nftables JSON) as the last confirmed ruleset, in `dir`
+/// (DRFW's state directory). Failures are only logged: the record is
+/// advisory (see [`confirmed_ruleset_matches`]).
+async fn record_confirmed(dir: &Path, payload: &[u8]) {
+    let path = dir.join(CONFIRMED_RULESET_FILE);
+    if let Err(e) = crate::utils::write_atomic_private_async(path, payload.to_vec()).await {
+        warn!("Cannot record the confirmed ruleset: {e}");
+    }
+}
+
+/// True if `json` is exactly the nftables JSON of the last ruleset that was
+/// applied with auto-revert and then confirmed (by the GUI or `drfw apply`).
+///
+/// It tells whether a ruleset has been tested on this machine under the
+/// dead-man switch; it says nothing about what is live in the kernel now.
+/// `false` when nothing was recorded or the record cannot be read.
+pub async fn confirmed_ruleset_matches(json: &serde_json::Value) -> bool {
+    match crate::utils::get_state_dir() {
+        Some(dir) => confirmed_ruleset_matches_in(&dir, json).await,
+        None => false,
+    }
+}
+
+/// [`confirmed_ruleset_matches`] with the record in `dir`.
+async fn confirmed_ruleset_matches_in(dir: &Path, json: &serde_json::Value) -> bool {
+    let Ok(expected) = serde_json::to_vec(json) else {
+        return false;
+    };
+    tokio::fs::read(dir.join(CONFIRMED_RULESET_FILE))
+        .await
+        .is_ok_and(|recorded| recorded == expected)
 }
 
 #[cfg(test)]
@@ -520,49 +756,101 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_classify_apply_exit() {
-        assert_eq!(classify_apply_exit(Some(0), ""), Ok(()));
+        let started = |code, stderr| classify_apply_exit(code, stderr, true);
+        assert_eq!(started(Some(0), ""), Ok(()));
         assert_eq!(
-            classify_apply_exit(Some(126), ""),
+            started(Some(126), ""),
             Err(ApplyError::Auth(AuthError::Cancelled))
         );
         assert_eq!(
             classify_apply_exit(
                 Some(127),
-                "Error executing command as another user: No authentication agent found."
+                "Error executing command as another user: No authentication agent found.",
+                false
             ),
             Err(ApplyError::Auth(AuthError::NoAgent))
         );
         assert!(matches!(
-            classify_apply_exit(Some(127), "Not authorized"),
+            classify_apply_exit(Some(127), "Not authorized", false),
             Err(ApplyError::Auth(AuthError::Failed(_)))
         ));
         assert_eq!(
-            classify_apply_exit(Some(3), "drfw: nft rejected the ruleset: Error: x\n"),
+            started(Some(3), "drfw: nft rejected the ruleset: Error: x\n"),
             Err(ApplyError::Rejected(
                 "nft rejected the ruleset: Error: x".to_string()
             ))
         );
-        assert!(matches!(
-            classify_apply_exit(Some(4), "drfw: could not start"),
-            Err(ApplyError::GuardFailedRolledBack(_))
-        ));
-        let active = classify_apply_exit(Some(5), "drfw: STILL ACTIVE").unwrap_err();
-        assert!(active.rules_may_be_active());
+        let not_started = started(Some(4), "drfw: could not start").unwrap_err();
+        assert!(matches!(not_started, ApplyError::GuardNotStarted(_)));
+        assert!(!not_started.rules_may_be_active());
+        let unarmed = started(Some(5), "drfw: could not be armed").unwrap_err();
+        assert!(matches!(unarmed, ApplyError::StateUnknown(_)));
+        assert!(unarmed.rules_may_be_active());
         // A message containing "nftables" must not be mistaken for anything special
         assert_eq!(
-            classify_apply_exit(Some(1), "drfw: cannot list nftables tables"),
+            started(Some(1), "drfw: cannot list nftables tables"),
             Err(ApplyError::Failed(
                 "cannot list nftables tables".to_string()
             ))
         );
         assert_eq!(
-            classify_apply_exit(Some(1), ""),
+            started(Some(1), ""),
             Err(ApplyError::Failed("exit code 1".to_string()))
         );
-        assert_eq!(
-            classify_apply_exit(None, ""),
-            Err(ApplyError::Failed("terminated by a signal".to_string()))
-        );
+        // Killed or an unexpected status once the script ran: state unknown
+        for code in [None, Some(2), Some(129)] {
+            let error = started(code, "").unwrap_err();
+            assert!(matches!(error, ApplyError::StateUnknown(_)), "{code:?}");
+            assert!(error.rules_may_be_active());
+        }
+        // The script never started (e.g. sudo's wrong password, exit 1; a
+        // killed elevation tool): nothing was changed, whatever the status
+        for code in [None, Some(1), Some(2), Some(5)] {
+            let error = classify_apply_exit(code, "sudo: 3 incorrect password attempts", false)
+                .unwrap_err();
+            assert!(matches!(error, ApplyError::Failed(_)), "{code:?}: {error}");
+            assert!(!error.rules_may_be_active());
+        }
+    }
+
+    #[test]
+    fn test_started_marker() {
+        assert!(contains_started_marker(b"drfw-apply-started\n"));
+        assert!(contains_started_marker(
+            b"drfw-apply-started\r\nwatcher=none\n"
+        ));
+        assert!(!contains_started_marker(b"drfw-apply-star"));
+        assert!(!contains_started_marker(b""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_confirm_dir_must_be_private_and_owned() {
+        use std::os::unix::fs::PermissionsExt;
+        let uid = nix::unistd::getuid().as_raw();
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(confirm_dir_problem(&private, uid), None);
+
+        // Readable or writable by others: refused
+        for mode in [0o755, 0o770, 0o701, 0o777] {
+            std::fs::set_permissions(&private, std::fs::Permissions::from_mode(mode)).unwrap();
+            let problem = confirm_dir_problem(&private, uid).expect("refused");
+            assert!(problem.contains("other users"), "{mode:o}: {problem}");
+        }
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Someone else's directory
+        let problem = confirm_dir_problem(&private, uid.wrapping_add(1)).expect("refused");
+        assert!(problem.contains("owned by"), "{problem}");
+        // A symlink to a good directory is not good enough
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&private, &link).unwrap();
+        assert!(confirm_dir_problem(&link, uid).is_some());
+        // Missing, or a path the script refuses
+        assert!(confirm_dir_problem(&dir.path().join("missing"), uid).is_some());
+        assert!(confirm_dir_problem(Path::new("relative"), uid).is_some());
     }
 
     #[test]
@@ -645,6 +933,42 @@ mod tests {
             Ok(GuardOutcome::Confirmed)
         );
         assert!(!confirm_token.exists());
+    }
+
+    /// A confirmed outcome records the applied JSON; other outcomes do not.
+    #[tokio::test]
+    async fn test_confirmed_ruleset_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("state")).unwrap();
+        let record = dir.path().join("record");
+        std::fs::create_dir_all(&record).unwrap();
+        let json = serde_json::json!({ "nftables": [{ "add": { "table": {} } }] });
+        let mut handle = handle_in(dir.path(), Duration::from_secs(5));
+        handle.payload = serde_json::to_vec(&json).unwrap().into();
+        handle.record_dir = Some(record.clone());
+        let status = dir
+            .path()
+            .join("state/status-0123456789abcdef0123456789abcdef");
+
+        std::fs::write(&status, "reverted\n").unwrap();
+        let _ = handle.wait_outcome(Duration::from_secs(1)).await;
+        assert!(!confirmed_ruleset_matches_in(&record, &json).await);
+
+        std::fs::write(&status, "confirmed\n").unwrap();
+        let _ = handle.wait_outcome(Duration::from_secs(1)).await;
+        assert!(confirmed_ruleset_matches_in(&record, &json).await);
+        assert!(!confirmed_ruleset_matches_in(&record, &serde_json::json!({})).await);
+        cfg_select! {
+            unix => {
+                let mode = std::os::unix::fs::PermissionsExt::mode(
+                    &std::fs::metadata(record.join(CONFIRMED_RULESET_FILE))
+                        .unwrap()
+                        .permissions(),
+                );
+                assert_eq!(mode & 0o777, 0o600);
+            }
+            _ => {}
+        }
     }
 
     #[test]

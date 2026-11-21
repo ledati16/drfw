@@ -453,10 +453,10 @@ pub(crate) fn handle_apply_result(
 fn apply_error_feedback(state: &mut State, error: &ApplyError) -> Task<Message> {
     match error {
         ApplyError::Auth(auth) => return auth_error_feedback(state, auth),
-        ApplyError::GuardFailedRulesActive(_) => {
+        ApplyError::StateUnknown(_) => {
             push_persistent_banner(state, truncate_error_message("", &error.to_string(), 160));
         }
-        ApplyError::GuardFailedRolledBack(_) => state.push_banner(
+        ApplyError::GuardNotStarted(_) => state.push_banner(
             truncate_error_message("", &error.to_string(), BANNER_MAX_LEN),
             BannerSeverity::Warning,
         ),
@@ -1496,13 +1496,13 @@ mod tests {
                 BannerSeverity::Error,
             ),
             (
-                ApplyError::GuardFailedRolledBack("x".to_string()),
-                "rolled back",
+                ApplyError::GuardNotStarted("x".to_string()),
+                "nothing was changed",
                 BannerSeverity::Warning,
             ),
             (
-                ApplyError::GuardFailedRulesActive("x".to_string()),
-                "STILL ACTIVE",
+                ApplyError::StateUnknown("x".to_string()),
+                "MAY BE ACTIVE",
                 BannerSeverity::Error,
             ),
         ];

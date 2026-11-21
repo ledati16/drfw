@@ -16,10 +16,15 @@
 //! - Loading the text twice does not duplicate rules.
 //! - Mixed IPv4/IPv6 rules never widen.
 //! - Server Mode keeps loopback working.
+//! - Behaviour in two network namespaces: per-source limits keep clients
+//!   apart; a user "Drop Any from X" rule blocks X's ping.
+//! - The interface validator's length limit matches nft's.
 //! - The Save to System script, end to end, with the real `nft -c`.
 //! - The revert guard (apply script + detached watcher): timeout after a
 //!   first apply removes the table, an existing table is restored exactly,
-//!   confirm/revert tokens, superseding applies, rejected rulesets.
+//!   confirm/revert tokens (only the applying uid's), superseding applies,
+//!   rejected rulesets, and SIGHUP/SIGINT/SIGTERM/SIGKILL right after the
+//!   new rules went live.
 //!
 //! This file has its own rule helpers: integration tests cannot see the
 //! library's `#[cfg(test)]` helpers.
@@ -293,6 +298,26 @@ fn kitchen_sink_rules() -> Vec<Rule> {
     });
     rules.push(r);
 
+    // Rate AND connection limit: one rule for Accept, two rules (one per
+    // limit) for Drop/Reject
+    for action in [Action::Accept, Action::Drop, Action::Reject] {
+        let mut r = rule(
+            &format!("Rate+ct {action:?}"),
+            Protocol::Tcp,
+            vec![PortEntry::Single(26)],
+        );
+        r.action = action;
+        r.rate_limit = Some(RateLimit {
+            count: 4,
+            unit: TimeUnit::Second,
+            burst: Some(8),
+            per_source: false,
+        });
+        r.connection_limit = 6;
+        r.log_enabled = action == Action::Drop;
+        rules.push(r);
+    }
+
     for action in [Action::Accept, Action::Drop] {
         let mut r = rule(
             &format!("Ct {action:?}"),
@@ -349,8 +374,9 @@ fn per_source_rate(count: u32, unit: TimeUnit, burst: Option<u32>) -> RateLimit 
     }
 }
 
-/// Every shape of per-source limit: both families, pinned families, inverted
-/// (`over`) forms, rate + connection sets on one rule, ICMP, OUTPUT chain.
+/// Every shape of per-source limit (Accept only; validation refuses them on
+/// Drop/Reject): both families, pinned families, rate + connection sets on
+/// one rule, ICMP, OUTPUT chain.
 fn per_source_rules() -> Vec<Rule> {
     let mut rules = Vec::new();
 
@@ -358,19 +384,12 @@ fn per_source_rules() -> Vec<Rule> {
     r.rate_limit = Some(per_source_rate(2, TimeUnit::Minute, Some(2)));
     rules.push(r);
 
-    let mut r = rule("PS drop mixed", Protocol::Tcp, vec![PortEntry::Single(80)]);
-    r.action = Action::Drop;
+    let mut r = rule("PS mixed", Protocol::Tcp, vec![PortEntry::Single(80)]);
     r.sources = nets(&["192.0.2.0/24", "2001:db8::/48"]);
     r.rate_limit = Some(per_source_rate(20, TimeUnit::Second, None));
     rules.push(r);
 
-    let mut r = rule(
-        "PS reset both",
-        Protocol::Tcp,
-        vec![PortEntry::Single(2222)],
-    );
-    r.action = Action::Reject;
-    r.reject_type = RejectType::TcpReset;
+    let mut r = rule("PS both", Protocol::Tcp, vec![PortEntry::Single(2222)]);
     r.rate_limit = Some(per_source_rate(1, TimeUnit::Hour, Some(10)));
     r.connection_limit = 3;
     r.connection_limit_per_source = true;
@@ -384,11 +403,10 @@ fn per_source_rules() -> Vec<Rule> {
     rules.push(r);
 
     let mut r = rule(
-        "PS conn reject",
+        "PS conn tcp+udp",
         Protocol::TcpAndUdp,
         vec![PortEntry::Single(53)],
     );
-    r.action = Action::Reject;
     r.connection_limit = 8;
     r.connection_limit_per_source = true;
     rules.push(r);
@@ -398,7 +416,6 @@ fn per_source_rules() -> Vec<Rule> {
     rules.push(r);
 
     let mut r = rule("PS icmp both", Protocol::IcmpBoth, vec![]);
-    r.action = Action::Drop;
     r.rate_limit = Some(per_source_rate(5, TimeUnit::Day, None));
     rules.push(r);
 
@@ -689,6 +706,125 @@ nft -f revert.nft
     assert!(conn_set.contains("flags dynamic"), "{conn_set}");
 }
 
+/// The interface validator accepts exactly the names nft accepts: at most
+/// 15 characters, a trailing `*` included.
+#[test]
+fn test_interface_length_limit_matches_nft() {
+    if !real_nft_available() {
+        return;
+    }
+    let names = [
+        "eth*".to_string(),
+        "a".repeat(15),
+        "a".repeat(16),
+        format!("{}*", "a".repeat(14)),
+        format!("{}*", "a".repeat(15)),
+    ];
+    for name in names {
+        let dir = work_dir();
+        let mut r = rule("Iface", Protocol::Tcp, vec![PortEntry::Single(22)]);
+        r.interface = Some(name.clone());
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.push(r);
+        write_json(dir.path(), "rules.json", &ruleset);
+        let loaded = run_in_netns(dir.path(), "nft -j -f rules.json")
+            .status
+            .success();
+        assert_eq!(
+            drfw::validators::validate_interface(&name).is_ok(),
+            loaded,
+            "{name:?} ({} chars): validator and nft disagree",
+            name.len()
+        );
+    }
+}
+
+/// Behaviour: a user "Drop Any from <peer>" rule also stops the peer's ICMP
+/// (ping) in the default (non-strict) mode: user rules come before the
+/// "allow icmp" base rules. Without the rule the peer can ping.
+///
+/// Two network namespaces joined by a veth pair; the peer pings from its own
+/// namespace.
+#[test]
+fn test_user_drop_rule_blocks_ping() {
+    if !real_nft_available() {
+        return;
+    }
+    let missing: Vec<&str> = ["ip", "nsenter", "ping"]
+        .into_iter()
+        .filter(|tool| {
+            Command::new("sh")
+                .args(["-c", &format!("command -v {tool}")])
+                .output()
+                .map_or(true, |o| !o.status.success())
+        })
+        .collect();
+    if !missing.is_empty() {
+        assert!(
+            std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
+            "DRFW_REQUIRE_REAL_NFT=1 but the ping test needs {missing:?}"
+        );
+        eprintln!("SKIPPING ping behaviour test: missing {missing:?}");
+        return;
+    }
+
+    let dir = work_dir();
+    write_json(dir.path(), "open.json", &FirewallRuleset::new());
+    let mut drop_peer = FirewallRuleset::new();
+    let mut r = rule("Drop peer", Protocol::Any, vec![]);
+    r.action = Action::Drop;
+    r.sources = nets(&["10.9.0.2", "fd09::2"]);
+    drop_peer.rules.push(r);
+    write_json(dir.path(), "drop.json", &drop_peer);
+
+    let script = r#"
+set -eu
+unshare -n sleep 60 &
+peer=$!
+trap 'kill $peer 2>/dev/null' EXIT
+i=0
+while [ "$(readlink /proc/$peer/ns/net)" = "$(readlink /proc/self/ns/net)" ]; do
+    i=$((i + 1)); [ $i -lt 100 ] || { echo "peer namespace not ready" >&2; exit 1; }
+    sleep 0.05
+done
+ip link set lo up
+ip link add v0 type veth peer name v1 netns "$peer"
+ip addr add 10.9.0.1/24 dev v0
+ip -6 addr add fd09::1/64 dev v0 nodad
+ip link set v0 up
+nsenter -t "$peer" -n sh -c 'ip link set lo up && ip addr add 10.9.0.2/24 dev v1     && ip -6 addr add fd09::2/64 dev v1 nodad && ip link set v1 up'
+ping_from_peer() {
+    if nsenter -t "$peer" -n ping -c1 -W1 "$1" >/dev/null 2>&1; then echo "$2 $1 ok"; else echo "$2 $1 blocked"; fi
+}
+nft -j -f open.json
+ping_from_peer 10.9.0.1 open
+ping_from_peer fd09::1 open
+nft -j -f drop.json
+ping_from_peer 10.9.0.1 drop
+ping_from_peer fd09::1 drop
+"#;
+    let output = Command::new("unshare")
+        .args(["-rn", "sh", "-c", script])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn unshare");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "ping script failed:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            "open 10.9.0.1 ok",
+            "open fd09::1 ok",
+            "drop 10.9.0.1 blocked",
+            "drop fd09::1 blocked",
+        ]
+    );
+}
+
 #[test]
 fn test_server_mode_keeps_loopback_working() {
     if !real_nft_available() {
@@ -855,7 +991,8 @@ const GUARD_HELPERS: &str = r#"
 set -u
 mkdir -p confirm
 guard_apply() {
-    sh -c "$DRFW_APPLY_SCRIPT" drfw-apply "$PWD/state" "$2" "$3" "$PWD/confirm" nft setsid < "$1"
+    sh -c "$DRFW_APPLY_SCRIPT" drfw-apply "$PWD/state" "$2" "$3" "$PWD/confirm" nft setsid \
+        "$(id -u)" < "$1"
 }
 wait_status() {
     i=0
@@ -1036,6 +1173,30 @@ fn test_guard_confirm_token_keeps_new_rules() {
     );
 }
 
+/// Only tokens owned by the applying user count: a confirm token owned by
+/// anyone else is ignored and the rules revert. (The namespace maps a single
+/// uid, so the guard is told that a different uid applied.)
+#[test]
+fn test_guard_ignores_tokens_of_other_users() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    run_guard_session(
+        dir.path(),
+        &format!(
+            r#"sh -c "$DRFW_APPLY_SCRIPT" drfw-apply "$PWD/state" 2 {NONCE_A} "$PWD/confirm" nft \
+                 setsid "$(( $(id -u) + 1 ))" < new.json > /dev/null
+             touch confirm/drfw-confirm-{NONCE_A}
+             wait_status {NONCE_A} > status.out
+             nft list tables > after.out"#
+        ),
+    );
+    assert_eq!(read(dir.path(), "status.out"), "reverted\n");
+    assert!(!read(dir.path(), "after.out").contains("table inet drfw"));
+}
+
 /// A revert token reverts immediately, long before the timeout.
 #[test]
 fn test_guard_revert_token_reverts_immediately() {
@@ -1106,8 +1267,8 @@ fn test_guard_second_apply_supersedes_first() {
     );
 }
 
-/// An invalid ruleset is rejected with exit 3; nothing changes and no
-/// watcher is started.
+/// An invalid ruleset is rejected with exit 3; nothing changes, and the
+/// watcher (started before the apply) exits without reverting.
 #[test]
 fn test_guard_invalid_ruleset_exits_3_without_watcher() {
     if !real_nft_available() {
@@ -1130,6 +1291,7 @@ fn test_guard_invalid_ruleset_exits_3_without_watcher() {
              echo $rc > rc.out
              sleep 2
              ls -A state > state.ls
+             cat state/status-{NONCE_A} > status.out
              nft -j list table inet drfw > after.json"
         ),
     );
@@ -1142,9 +1304,13 @@ fn test_guard_invalid_ruleset_exits_3_without_watcher() {
     assert!(read(dir.path(), "apply.err").contains("nft rejected the ruleset"));
     let state = read(dir.path(), "state.ls");
     assert!(
-        !state.contains("watcher-") && !state.contains("status-") && !state.contains("revert-"),
+        !state.contains("watcher-")
+            && !state.contains("revert-")
+            && !state.contains("armed-")
+            && !state.contains("active"),
         "no guard may be left behind: {state}"
     );
+    assert_eq!(read(dir.path(), "status.out"), "not-applied\n");
     assert_eq!(
         listing(dir.path(), "before.json"),
         listing(dir.path(), "after.json")
@@ -1167,9 +1333,113 @@ fn test_guard_timeout_zero_just_applies() {
              nft list tables > after.out"
         ),
     );
-    assert_eq!(read(dir.path(), "apply.out"), "watcher=none\n");
+    assert_eq!(
+        read(dir.path(), "apply.out"),
+        "drfw-apply-started\nwatcher=none\n"
+    );
     assert!(read(dir.path(), "after.out").contains("table inet drfw"));
     assert!(!read(dir.path(), "state.ls").contains(NONCE_A));
+}
+
+/// An nft wrapper for the signal tests: for the apply itself
+/// (`nft --json -f -`) it applies, creates `applied.flag` and then keeps
+/// running for 3 s, so the test can signal the apply script while the new
+/// rules are already live but the script has not finished.
+const SLOW_APPLY_NFT: &str = r#"#!/bin/sh
+if [ "$1" = --json ] && [ "$2" = -f ] && [ "$3" = - ]; then
+    nft "$@" || exit $?
+    : > applied.flag
+    sleep 3
+    exit 0
+fi
+exec nft "$@"
+"#;
+
+/// Starts `APPLY_SCRIPT` in the background with [`SLOW_APPLY_NFT`] and a 4 s
+/// guard, sends it `signal` as soon as the new rules are live and records
+/// what happens. Returns how long the session took: the revert must come on
+/// time (the wrapper's 3 s, the 4 s guard, polling), not only eventually.
+fn guard_signal_session(dir: &Path, signal: &str) -> std::time::Duration {
+    let start = std::time::Instant::now();
+    std::fs::write(dir.join("nft-slow.sh"), SLOW_APPLY_NFT).expect("write wrapper");
+    set_mode(&dir.join("nft-slow.sh"), 0o755);
+    write_json(dir, "new.json", &kitchen_sink_ruleset());
+    run_guard_session(
+        dir,
+        &format!(
+            r#"sh -c "$DRFW_APPLY_SCRIPT" drfw-apply "$PWD/state" 4 {NONCE_A} "$PWD/confirm" \
+                 "$PWD/nft-slow.sh" setsid "$(id -u)" < new.json > apply.out 2> apply.err &
+             pid=$!
+             i=0
+             while [ ! -e applied.flag ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+             nft list tables > during.out
+             kill -{signal} "$pid"
+             rc=0
+             wait "$pid" || rc=$?
+             echo "$rc" > rc.out
+             wait_status {NONCE_A} > status.out
+             nft list tables > after.out"#
+        ),
+    );
+    start.elapsed()
+}
+
+/// Upper bound for [`guard_signal_session`]: 3 s wrapper + 4 s guard + 1 s
+/// poll, plus generous slack for a loaded machine.
+const SIGNAL_SESSION_MAX: std::time::Duration = std::time::Duration::from_secs(14);
+
+/// The signal window: a SIGHUP (SSH drop), SIGINT (Ctrl-C after the
+/// password) or SIGTERM while the new rules are live must not leave them
+/// without a guard. The script ignores those signals and finishes.
+#[test]
+fn test_guard_sighup_after_apply_still_reverts() {
+    if !real_nft_available() {
+        return;
+    }
+    for signal in ["HUP", "INT", "TERM"] {
+        let dir = work_dir();
+        let took = guard_signal_session(dir.path(), signal);
+        assert!(
+            took < SIGNAL_SESSION_MAX,
+            "SIG{signal}: revert took {took:?}"
+        );
+        assert!(
+            read(dir.path(), "during.out").contains("table inet drfw"),
+            "SIG{signal}: the new rules must have been live when the signal came"
+        );
+        assert_eq!(
+            read(dir.path(), "status.out"),
+            "reverted\n",
+            "SIG{signal}: rc {} stderr: {}",
+            read(dir.path(), "rc.out"),
+            read(dir.path(), "apply.err")
+        );
+        assert_eq!(read(dir.path(), "rc.out"), "0\n", "SIG{signal} is ignored");
+        assert!(
+            !read(dir.path(), "after.out").contains("table inet drfw"),
+            "SIG{signal}: the revert must remove the first apply's table"
+        );
+    }
+}
+
+/// Even SIGKILL (which cannot be ignored) right after the rules went live
+/// leaves a guard: the watcher is started before the ruleset is applied.
+#[test]
+fn test_guard_sigkill_after_apply_still_reverts() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let took = guard_signal_session(dir.path(), "KILL");
+    assert!(took < SIGNAL_SESSION_MAX, "revert took {took:?}");
+    assert!(read(dir.path(), "during.out").contains("table inet drfw"));
+    assert_eq!(
+        read(dir.path(), "status.out"),
+        "reverted\n",
+        "stderr: {}",
+        read(dir.path(), "apply.err")
+    );
+    assert!(!read(dir.path(), "after.out").contains("table inet drfw"));
 }
 
 // ============================================================================

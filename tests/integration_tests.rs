@@ -556,13 +556,21 @@ async fn test_save_config_file_with_mock_nft() {
 /// semantics are covered in `tests/real_nft.rs`.
 #[tokio::test]
 async fn test_guarded_apply_with_mock_nft() {
-    use drfw::core::apply_guard::{GuardOutcome, OUTCOME_GRACE, apply_guarded};
+    use drfw::core::apply_guard::{ApplyError, GuardOutcome, OUTCOME_GRACE, apply_guarded};
     setup_mock_nft();
+    // A confirmed guard records the ruleset in the state directory: never
+    // the user's real one
+    let _dirs = setup_temp_test_dirs();
 
     let dir = tempfile::tempdir().unwrap();
     let runtime_dir = dir.path().join("run");
     let state_dir = dir.path().join("guard");
     std::fs::create_dir(&runtime_dir).unwrap();
+    // The token directory must be private, or DRFW does not use it
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     // SAFETY: only this test reads these variables
     unsafe {
         env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
@@ -582,6 +590,14 @@ async fn test_guarded_apply_with_mock_nft() {
     );
     // Tokens are cleaned up by the user side, never by the watcher
     assert_eq!(std::fs::read_dir(&runtime_dir).unwrap().count(), 0);
+    // The token really went to the runtime dir: a watcher confirmed it there
+    let handle = apply_guarded(&json, 30).await.unwrap().expect("guard");
+    handle.confirm().unwrap();
+    assert_eq!(std::fs::read_dir(&runtime_dir).unwrap().count(), 1);
+    assert_eq!(
+        handle.wait_outcome(OUTCOME_GRACE).await,
+        Ok(GuardOutcome::Confirmed)
+    );
 
     // Not confirmed: the watcher reverts on its own
     let handle = apply_guarded(&json, 1).await.unwrap().expect("guard");
@@ -589,6 +605,33 @@ async fn test_guarded_apply_with_mock_nft() {
         handle.wait_for_timeout_outcome().await,
         Ok(GuardOutcome::Reverted)
     );
+
+    // The script is killed right after the rules went live: DRFW cannot know
+    // the outcome and says so, and the guard (started before the apply)
+    // still reverts on time
+    let reverted_count = || {
+        std::fs::read_dir(&state_dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with("status-")
+                    && std::fs::read_to_string(entry.path()).unwrap_or_default() == "reverted\n"
+            })
+            .count()
+    };
+    let before = reverted_count();
+    std::fs::write(state_dir.join("mock-kill-apply"), "").unwrap();
+    let error = apply_guarded(&json, 1).await.unwrap_err();
+    assert!(
+        matches!(error, ApplyError::StateUnknown(_)),
+        "a killed apply script must not be reported as 'nothing changed': {error}"
+    );
+    assert!(error.rules_may_be_active());
+    let reverted = (0..100).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        reverted_count() == before + 1
+    });
+    assert!(reverted, "the guard of the killed apply must revert");
 }
 
 // ============================================================================
@@ -1070,4 +1113,173 @@ fn test_cli_print_service_unit() {
         .output()
         .expect("run drfw");
     assert!(!stdout_of(&help).contains("print-service-unit"));
+}
+
+// ============================================================================
+// `drfw save`: CLI Save to System (mock nft, fake `systemctl`, temp target)
+// ============================================================================
+
+/// Runs `drfw save <args>` against `root` with the mock nft, the fake
+/// `systemctl` first on `PATH`, stdin closed (not a terminal) and the target
+/// redirected to `<root>/nftables.conf`.
+fn run_drfw_save(
+    root: &std::path::Path,
+    fake_bin: &std::path::Path,
+    args: &[&str],
+) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .arg("save")
+        .args(args)
+        .env("DRFW_TEST_DATA_DIR", root)
+        .env("DRFW_TEST_STATE_DIR", root)
+        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
+        .env("DRFW_TEST_SYSTEM_NFT_PATH", root.join("nftables.conf"))
+        .env("PATH", path_with(fake_bin))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run drfw")
+}
+
+/// A profile `web` under `root` and its ruleset.
+fn save_fixture(root: &std::path::Path) -> FirewallRuleset {
+    let ruleset = create_test_ruleset();
+    write_profile(root, "web", &ruleset);
+    ruleset
+}
+
+#[test]
+fn test_cli_save_refuses_unconfirmed_rules_without_yes() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    save_fixture(root.path());
+
+    let output = run_drfw_save(root.path(), bin.path(), &["web"]);
+    assert_eq!(output.status.code(), Some(7), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("never confirmed"), "{out}");
+    assert!(out.contains("WITHOUT a dead-man switch"), "{out}");
+    assert!(out.contains("drfw apply web"), "{out}");
+    assert!(!root.path().join("nftables.conf").exists());
+    assert_eq!(systemctl_calls(bin.path()), Vec::<String>::new());
+}
+
+#[test]
+fn test_cli_save_with_yes_saves_and_warns_about_boot() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    let ruleset = save_fixture(root.path());
+    std::fs::write(bin.path().join("state-nftables.service"), "disabled\n").unwrap();
+
+    let output = run_drfw_save(root.path(), bin.path(), &["web", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(
+        out.contains("never confirmed"),
+        "the warning is still shown: {out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("nftables.conf")).unwrap(),
+        ruleset.to_nft_text()
+    );
+    // Not asked to enable: warns that the rules will not load at boot
+    assert!(out.contains("will NOT load at boot"), "{out}");
+    assert!(out.contains("--enable-at-boot"), "{out}");
+    assert!(
+        !systemctl_calls(bin.path())
+            .iter()
+            .any(|c| c.starts_with("enable")),
+        "{:?}",
+        systemctl_calls(bin.path())
+    );
+}
+
+#[test]
+fn test_cli_save_enable_at_boot() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    save_fixture(root.path());
+    std::fs::write(bin.path().join("state-nftables.service"), "disabled\n").unwrap();
+
+    let output = run_drfw_save(
+        root.path(),
+        bin.path(),
+        &["web", "--yes", "--enable-at-boot"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    assert!(
+        systemctl_calls(bin.path())
+            .iter()
+            .any(|c| c == "enable -- nftables.service"),
+        "{:?}",
+        systemctl_calls(bin.path())
+    );
+
+    // Enabling fails: saved anyway, distinct exit code
+    std::fs::write(bin.path().join("enable-fails"), "").unwrap();
+    let output = run_drfw_save(
+        root.path(),
+        bin.path(),
+        &["web", "--yes", "--enable-at-boot"],
+    );
+    assert_eq!(output.status.code(), Some(8), "{}", all_output(&output));
+    assert!(all_output(&output).contains("was not enabled"));
+    assert!(root.path().join("nftables.conf.drfw-bak").exists());
+}
+
+/// A ruleset confirmed under the guard (recorded by `GuardHandle::wait_outcome`)
+/// saves without --yes and without the warning.
+#[test]
+fn test_cli_save_confirmed_rules_need_no_yes() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    let ruleset = save_fixture(root.path());
+    std::fs::write(
+        root.path().join("confirmed-ruleset.json"),
+        serde_json::to_vec(&ruleset.to_nftables_json()).unwrap(),
+    )
+    .unwrap();
+
+    let output = run_drfw_save(root.path(), bin.path(), &["web"]);
+    assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
+    let out = all_output(&output);
+    assert!(out.contains("applied and confirmed"), "{out}");
+    assert!(!out.contains("never confirmed"), "{out}");
+    assert!(root.path().join("nftables.conf").exists());
+
+    // Any change to the profile makes it "not confirmed" again
+    let mut changed = ruleset;
+    changed.rules.push(create_test_rule("New", Some(8080)));
+    write_profile(root.path(), "web", &changed);
+    let output = run_drfw_save(root.path(), bin.path(), &["web"]);
+    assert_eq!(output.status.code(), Some(7), "{}", all_output(&output));
+}
+
+#[test]
+fn test_cli_save_refuses_invalid_and_missing_profiles() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = fake_systemctl_dir();
+    let mut ruleset = create_test_ruleset();
+    ruleset.rules.push(create_test_rule("Broken", Some(0)));
+    write_profile(root.path(), "bad", &ruleset);
+
+    for name in ["bad", "missing"] {
+        let output = run_drfw_save(root.path(), bin.path(), &[name, "--yes"]);
+        assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
+        assert!(!root.path().join("nftables.conf").exists());
+    }
+}
+
+/// The exit codes are documented in `--help`.
+#[test]
+fn test_cli_help_lists_exit_codes() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+        .arg("--help")
+        .output()
+        .expect("run drfw");
+    let help = stdout_of(&help);
+    assert!(help.contains("Exit codes:"), "{help}");
+    for code in ["  3  apply", "  6  apply", "  7  save", "  8  save"] {
+        assert!(help.contains(code), "{code:?} missing:\n{help}");
+    }
+    assert!(help.contains("save"), "{help}");
 }

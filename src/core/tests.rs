@@ -60,6 +60,11 @@ mod tests_impl {
         assert_eq!(nft[1]["delete"]["table"]["name"], "drfw");
         assert_eq!(nft[2]["add"]["table"]["name"], "drfw");
     }
+    /// Index of the first user rule in a default ruleset: table setup (3),
+    /// chains (3), loopback, invalid, established, `DHCPv6`, two redirect
+    /// drops. The ICMP allow rules follow the user rules.
+    const FIRST_USER_RULE: usize = 12;
+
     #[test]
     fn test_single_rule_json() {
         let mut ruleset = FirewallRuleset::new();
@@ -75,7 +80,7 @@ mod tests_impl {
         // 16 base + 1 user rule = 17
         assert_eq!(nft.len(), 17);
 
-        let user_rule = &nft[14]["add"]["rule"];
+        let user_rule = &nft[FIRST_USER_RULE]["add"]["rule"];
         assert_eq!(user_rule["chain"], "input");
         assert_eq!(user_rule["table"], "drfw");
         assert_eq!(user_rule["comment"], "Allow SSH");
@@ -118,7 +123,7 @@ mod tests_impl {
         // 16 base + 1 user rule = 17
         assert_eq!(nft.len(), 17);
 
-        let user_rule = &nft[14]["add"]["rule"];
+        let user_rule = &nft[FIRST_USER_RULE]["add"]["rule"];
         let expr = user_rule["expr"].as_array().unwrap();
 
         // l4proto {tcp, udp} + source + th dport + accept. The port must never be
@@ -146,7 +151,7 @@ mod tests_impl {
         ruleset.rules.push(rule);
 
         let json = ruleset.to_nftables_json();
-        let user_rule = &json["nftables"][14]["add"]["rule"];
+        let user_rule = &json["nftables"][FIRST_USER_RULE]["add"]["rule"];
         let json_str = serde_json::to_string(user_rule).unwrap();
         assert!(!json_str.contains("l4proto"));
         assert!(!json_str.contains("dport"));
@@ -161,7 +166,7 @@ mod tests_impl {
             vec![PortEntry::Single(22)],
         ));
         let json = ruleset.to_nftables_json();
-        let expr = json["nftables"][14]["add"]["rule"]["expr"]
+        let expr = json["nftables"][FIRST_USER_RULE]["add"]["rule"]["expr"]
             .as_array()
             .unwrap()
             .clone();
@@ -196,6 +201,89 @@ mod tests_impl {
         assert_eq!(rule_comments[5], "drop icmpv6 redirects");
         assert_eq!(rule_comments[6], "allow icmp");
         assert_eq!(rule_comments[7], "allow icmp v6");
+    }
+
+    /// User rules sit between the redirect drops and the ICMP allow rules,
+    /// in strict and default ICMP mode, so a user Drop rule also stops ICMP.
+    #[test]
+    fn test_user_rules_come_before_icmp_allow_rules() {
+        for strict in [false, true] {
+            let mut ruleset = FirewallRuleset::new();
+            ruleset.advanced_security.strict_icmp = strict;
+            let mut rule = test_rule("Drop peer", Protocol::Any, vec![]);
+            rule.action = Action::Drop;
+            rule.sources = vec!["192.0.2.7".parse().unwrap()];
+            ruleset.rules.push(rule);
+            let json = ruleset.to_nftables_json();
+            let comments: Vec<&str> = json["nftables"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item["add"]["rule"]["comment"].as_str())
+                .collect();
+            let user = comments.iter().position(|c| *c == "Drop peer").unwrap();
+            let redirects = comments
+                .iter()
+                .position(|c| *c == "drop icmpv6 redirects")
+                .unwrap();
+            let first_icmp_allow = comments
+                .iter()
+                .position(|c| c.starts_with("allow") && c.contains("icmp"))
+                .unwrap();
+            assert!(redirects < user && user < first_icmp_allow, "{comments:?}");
+            // The text form keeps the order (and a section heading per part)
+            let text = ruleset.to_nft_text();
+            let pos = |needle: &str| text.find(needle).unwrap();
+            assert!(pos("\"Drop peer\"") < pos("# --- ICMP ---"), "{text}");
+        }
+    }
+
+    /// With an ICMP rate limit, neighbor discovery, router advertisements and
+    /// MLD queries are accepted unlimited, before the rate-limited rule.
+    #[test]
+    fn test_icmp_rate_limit_exempts_neighbor_discovery() {
+        for strict in [false, true] {
+            let mut ruleset = FirewallRuleset::new();
+            ruleset.advanced_security.strict_icmp = strict;
+            ruleset.advanced_security.icmp_rate_limit = 10;
+            let json = ruleset.to_nftables_json();
+            let rules: Vec<&serde_json::Value> = json["nftables"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item["add"].get("rule"))
+                .collect();
+            let nd = rules
+                .iter()
+                .position(|r| r["comment"] == "allow icmpv6 neighbor discovery (not rate limited)")
+                .expect("ND exemption");
+            let nd_text = rules[nd]["expr"].to_string();
+            assert!(!nd_text.contains("\"limit\""), "{nd_text}");
+            for t in [
+                "nd-neighbor-solicit",
+                "nd-neighbor-advert",
+                "nd-router-advert",
+                "mld-listener-query",
+            ] {
+                assert!(nd_text.contains(t), "{t} missing: {nd_text}");
+            }
+            let limited_v6 = rules
+                .iter()
+                .position(|r| {
+                    r["comment"].as_str().is_some_and(|c| c.contains("icmp"))
+                        && r["expr"].to_string().contains("ipv6-icmp")
+                        && r["expr"].to_string().contains("\"limit\"")
+                })
+                .expect("rate-limited icmpv6 rule");
+            assert!(nd < limited_v6);
+        }
+        // Without a rate limit there is nothing to exempt
+        let json = FirewallRuleset::new().to_nftables_json();
+        assert!(
+            !json
+                .to_string()
+                .contains("neighbor discovery (not rate limited)")
+        );
     }
 
     #[test]
@@ -294,9 +382,12 @@ mod tests_impl {
             11,
             "Should have 8 base rules + 3 user rules"
         );
-        assert_eq!(json_comments[8], "SSH Access");
-        assert_eq!(json_comments[9], "Web Server");
-        assert_eq!(json_comments[10], "DNS");
+        // 6 base rules, the user rules, then the 2 ICMP allow rules
+        assert_eq!(json_comments[6], "SSH Access");
+        assert_eq!(json_comments[7], "Web Server");
+        assert_eq!(json_comments[8], "DNS");
+        assert_eq!(json_comments[9], "allow icmp");
+        assert_eq!(json_comments[10], "allow icmp v6");
     }
 
     #[test]
@@ -653,8 +744,13 @@ mod property_tests {
                 }
             }
 
-            // At most one copy per address family
-            prop_assert!(user_rules.len() <= 2);
+            // At most one copy per address family, or two (one per limit)
+            // for a Drop/Reject rule with both a rate and a connection limit
+            let split = rule.action != Action::Accept
+                && rule.rate_limit.is_some()
+                && rule.connection_limit > 0;
+            let max_copies = if split { 4 } else { 2 };
+            prop_assert!(user_rules.len() <= max_copies, "{} copies", user_rules.len());
         }
 
         /// Text output never contains a statement line that is not part of a
@@ -1482,8 +1578,8 @@ mod generation_semantics_tests {
     //! limit inversion). Real-kernel checks live in `tests/real_nft.rs`.
 
     use crate::core::firewall::{
-        Action, Chain, EgressProfile, FirewallRuleset, NftCommand, PortEntry, Protocol, RateLimit,
-        TimeUnit,
+        Action, Chain, CommandOrigin, EgressProfile, FirewallRuleset, NftCommand, PortEntry,
+        Protocol, RateLimit, TimeUnit,
     };
     use crate::core::test_helpers::create_test_rule;
 
@@ -1566,9 +1662,15 @@ mod generation_semantics_tests {
             ruleset.rules.push(rule);
 
             let exprs = user_rule_exprs(&ruleset);
-            let expr = exprs[0].as_array().unwrap();
-            let limit = expr.iter().find_map(|e| e.get("limit")).unwrap();
-            let count = expr.iter().find_map(|e| e.get("ct count")).unwrap();
+            let find = |key: &str| {
+                exprs
+                    .iter()
+                    .flat_map(|e| e.as_array().unwrap())
+                    .find_map(|e| e.get(key))
+                    .unwrap()
+                    .clone()
+            };
+            let (limit, count) = (find("limit"), find("ct count"));
             assert_eq!(limit.get("inv").is_some(), inverted, "{action:?}");
             assert_eq!(count.get("inv").is_some(), inverted, "{action:?}");
             // burst 0 means "no burst"; nft rejects "burst 0 packets"
@@ -1578,6 +1680,66 @@ mod generation_semantics_tests {
             assert_eq!(text.contains("limit rate over 5/minute"), inverted);
             assert_eq!(text.contains("ct count over 3"), inverted);
             assert!(!text.contains("burst 0"));
+        }
+    }
+
+    /// "Over the rate OR over the count" for Drop/Reject: two rules with the
+    /// same matches, one limit each. A single rule would AND them, and since
+    /// `limit` stops evaluation, `ct count` would only see over-rate packets.
+    /// Accept keeps one rule ("under the rate AND under the count").
+    #[test]
+    fn test_inverted_rate_and_connection_limits_are_separate_rules() {
+        for (action, rules) in [(Action::Accept, 1), (Action::Drop, 2), (Action::Reject, 2)] {
+            let mut ruleset = FirewallRuleset::new();
+            let mut rule = create_test_rule("Both", Some(22));
+            rule.action = action;
+            rule.sources = vec!["10.0.0.0/8".parse().unwrap()];
+            rule.rate_limit = Some(RateLimit {
+                count: 5,
+                unit: TimeUnit::Second,
+                burst: Some(10),
+                per_source: false,
+            });
+            rule.connection_limit = 3;
+            rule.log_enabled = true;
+            rule.rebuild_caches();
+            let id = rule.id;
+            ruleset.rules.push(rule);
+
+            let cmds = ruleset.build_commands();
+            let user: Vec<&NftCommand> = cmds
+                .iter()
+                .filter(|c| c.origin == CommandOrigin::UserRule(id))
+                .collect();
+            assert_eq!(user.len(), rules, "{action:?}");
+            let exprs: Vec<&Vec<serde_json::Value>> = user
+                .iter()
+                .map(|c| c.value["add"]["rule"]["expr"].as_array().unwrap())
+                .collect();
+            let has = |e: &[serde_json::Value], key: &str| e.iter().any(|x| x.get(key).is_some());
+            if rules == 1 {
+                assert!(has(exprs[0], "limit") && has(exprs[0], "ct count"));
+                continue;
+            }
+            assert!(has(exprs[0], "limit") && !has(exprs[0], "ct count"));
+            assert!(!has(exprs[1], "limit") && has(exprs[1], "ct count"));
+            // Same matches (protocol, source, port), log and action in both
+            let strip = |e: &[serde_json::Value]| -> Vec<serde_json::Value> {
+                e.iter()
+                    .filter(|x| x.get("limit").is_none() && x.get("ct count").is_none())
+                    .cloned()
+                    .collect()
+            };
+            assert_eq!(strip(exprs[0]), strip(exprs[1]), "{action:?}");
+            assert!(has(exprs[0], "log") && has(exprs[1], "log"));
+
+            let text = ruleset.to_nft_text();
+            assert!(
+                text.contains("limit rate over 5/second burst 10 packets log"),
+                "{text}"
+            );
+            assert!(text.contains("ct count over 3 log"), "{text}");
+            assert!(!text.contains("limit rate over 5/second burst 10 packets ct count"));
         }
     }
 
@@ -1946,26 +2108,23 @@ mod per_source_tests {
     }
 
     #[test]
-    fn test_drop_inverts_inside_the_set_statement_and_ct_count_uses_add() {
+    fn test_rate_and_connection_sets_in_one_rule_and_ct_count_uses_add() {
         let cmds = commands(per_source_rule(
-            Action::Drop,
+            Action::Accept,
             Some(rate(5, TimeUnit::Second, None)),
             3,
         ));
         let rules = user_rules(&cmds);
-        assert_eq!(rules.len(), 2);
+        assert_eq!(rules.len(), 2, "one rule per family");
         let stmts = set_statements(rules[0]);
         assert_eq!(stmts.len(), 2, "rate and connection sets");
         assert_eq!(
             stmts[0]["stmt"],
-            json!([{ "limit": { "rate": 5, "per": "second", "inv": true } }])
+            json!([{ "limit": { "rate": 5, "per": "second" } }])
         );
         assert_eq!(stmts[1]["op"], "add");
         assert_eq!(stmts[1]["set"], "@cl4_0123456789ab");
-        assert_eq!(
-            stmts[1]["stmt"],
-            json!([{ "ct count": { "val": 3, "inv": true } }])
-        );
+        assert_eq!(stmts[1]["stmt"], json!([{ "ct count": { "val": 3 } }]));
 
         let conn_set = sets(&cmds)
             .into_iter()
@@ -2054,7 +2213,7 @@ mod per_source_tests {
     fn test_text_renders_sets_and_set_statements() {
         let mut ruleset = FirewallRuleset::new();
         ruleset.rules.push(per_source_rule(
-            Action::Reject,
+            Action::Accept,
             Some(rate(2, TimeUnit::Minute, Some(2))),
             4,
         ));
@@ -2072,13 +2231,13 @@ mod per_source_tests {
         assert!(
             text.contains(
                 "meta l4proto tcp tcp dport 22 \
-             update @rl4_0123456789ab { ip saddr limit rate over 2/minute burst 2 packets } \
-             add @cl4_0123456789ab { ip saddr ct count over 4 } reject comment \"SSH\""
+             update @rl4_0123456789ab { ip saddr limit rate 2/minute burst 2 packets } \
+             add @cl4_0123456789ab { ip saddr ct count 4 } accept comment \"SSH\""
             ),
             "{text}"
         );
         assert!(text.contains(
-            "update @rl6_0123456789ab { ip6 saddr & ffff:ffff:ffff:ffff:: limit rate over 2/minute burst 2 packets }"
+            "update @rl6_0123456789ab { ip6 saddr & ffff:ffff:ffff:ffff:: limit rate 2/minute burst 2 packets }"
         ), "{text}");
         assert!(!text.contains("drfw-render-error"));
         // The table is replaced, never just flushed

@@ -32,6 +32,10 @@ use super::rule_constraints::{
     ip_compatible_with_protocol, protocol_is_icmp, reject_type_valid_for_protocol,
 };
 
+/// Why a per-source limit is refused on a Drop/Reject rule.
+pub const PER_SOURCE_ACCEPT_ONLY: &str = "Per-source limits only work with the Accept action \
+     (when the tracking table is full, a Drop/Reject rule would let new sources through)";
+
 /// The rule field an issue is about (lets the form show it next to the input).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleField {
@@ -412,6 +416,20 @@ impl Rule {
                 "Set a connection limit to count connections per source address",
             ));
         }
+        // Per-source state lives in a bounded set; once it is full, new
+        // sources are not tracked. For Accept that fails closed, for
+        // Drop/Reject ("drop sources over the limit") it would fail open.
+        if self.action != Action::Accept {
+            if self.rate_limit.is_some_and(|rate| rate.per_source) {
+                issues.push(RuleIssue::new(RuleField::RateLimit, PER_SOURCE_ACCEPT_ONLY));
+            }
+            if self.connection_limit_per_source {
+                issues.push(RuleIssue::new(
+                    RuleField::ConnectionLimit,
+                    PER_SOURCE_ACCEPT_ONLY,
+                ));
+            }
+        }
     }
 
     /// `true` when this rule would be part of the applied ruleset.
@@ -685,6 +703,37 @@ mod tests {
     }
 
     #[test]
+    fn test_per_source_only_with_accept() {
+        let mut rule = base_rule();
+        rule.rate_limit = Some(RateLimit {
+            count: 3,
+            unit: TimeUnit::Minute,
+            burst: None,
+            per_source: true,
+        });
+        rule.connection_limit = 3;
+        rule.connection_limit_per_source = true;
+        assert!(rule.validate().is_ok());
+        for action in [Action::Drop, Action::Reject] {
+            rule.action = action;
+            let issues = rule.validate().unwrap_err();
+            assert_eq!(
+                issues.iter().map(|i| i.field).collect::<Vec<_>>(),
+                vec![RuleField::RateLimit, RuleField::ConnectionLimit],
+                "{action:?}"
+            );
+            assert!(issues.iter().all(|i| i.message == PER_SOURCE_ACCEPT_ONLY));
+        }
+        // Plain (global) limits stay allowed on Drop/Reject
+        rule.rate_limit = rule.rate_limit.map(|r| RateLimit {
+            per_source: false,
+            ..r
+        });
+        rule.connection_limit_per_source = false;
+        assert!(rule.validate().is_ok());
+    }
+
+    #[test]
     fn test_tcp_reset_requires_tcp() {
         let mut rule = base_rule();
         rule.action = Action::Reject;
@@ -920,9 +969,11 @@ mod property_tests {
             }
             rule.action = [Action::Accept, Action::Drop, Action::Reject][action_idx];
             rule.reject_type = reject_types[reject_idx % reject_types.len()];
-            rule.rate_limit = rate.map(|(count, burst)| RateLimit { count, unit: TimeUnit::Minute, burst, per_source: per_source.0 });
+            // Per-source limits only on Accept rules
+            let accept = rule.action == Action::Accept;
+            rule.rate_limit = rate.map(|(count, burst)| RateLimit { count, unit: TimeUnit::Minute, burst, per_source: per_source.0 && accept });
             rule.connection_limit = conn;
-            rule.connection_limit_per_source = per_source.1 && conn > 0;
+            rule.connection_limit_per_source = per_source.1 && conn > 0 && accept;
             rule.rebuild_caches();
             rule
         }
@@ -956,6 +1007,11 @@ mod property_tests {
             let mut rule = rule;
             rule.action = Action::Reject;
             rule.reject_type = RejectType::TcpReset;
+            // Per-source limits are Accept-only; keep this about the reject type
+            if let Some(rate) = rule.rate_limit.as_mut() {
+                rate.per_source = false;
+            }
+            rule.connection_limit_per_source = false;
             prop_assert_eq!(rule.validate().is_ok(), rule.protocol == Protocol::Tcp);
         }
     }

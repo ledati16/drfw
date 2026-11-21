@@ -37,11 +37,10 @@ pub const MAX_RATE_LIMIT_PER_DAY: u32 = 10_000_000;
 /// Maximum log rate per minute (prevents log flooding)
 pub const MAX_LOG_RATE_PER_MINUTE: u32 = 1_000;
 
-/// Maximum interface name length (Linux IFNAMSIZ - 1)
+/// Maximum interface name length (Linux IFNAMSIZ - 1), including a trailing
+/// `*` wildcard: nft stores the match string in IFNAMSIZ (16) bytes with its
+/// terminating NUL, and rejects `iifname` strings of 16 characters, `*` or not.
 pub const MAX_INTERFACE_LENGTH: usize = 15;
-
-/// Maximum interface name length with wildcard suffix
-pub const MAX_INTERFACE_LENGTH_WITH_WILDCARD: usize = 16;
 
 /// Sanitizes a label for safe use in nftables comments.
 ///
@@ -274,7 +273,7 @@ pub fn parse_bulk_ports(
 ///
 /// # Constraints
 ///
-/// - Maximum 15 characters (IFNAMSIZ - 1), or 16 if using wildcard suffix
+/// - Maximum 15 characters (IFNAMSIZ - 1), a wildcard suffix included
 /// - ASCII alphanumeric, dot, dash, underscore only
 /// - Cannot be "." or ".."
 /// - Wildcard `*` allowed only at the end (suffix wildcard)
@@ -306,14 +305,9 @@ pub fn validate_interface(name: &str) -> Result<String, &'static str> {
         return Err("Wildcard requires prefix (e.g., 'eth*')");
     }
 
-    // Max length: 15 for normal, but nftables accepts 16 with wildcard
-    let max_len = if has_wildcard {
-        MAX_INTERFACE_LENGTH_WITH_WILDCARD
-    } else {
-        MAX_INTERFACE_LENGTH
-    };
-    if name.len() > max_len {
-        return Err("Interface name too long (max 15 characters, or 16 with wildcard)");
+    // The `*` counts: nft refuses 16-character strings (see MAX_INTERFACE_LENGTH)
+    if name.len() > MAX_INTERFACE_LENGTH {
+        return Err("Interface name too long (max 15 characters, including a trailing *)");
     }
 
     if base_name == "." || base_name == ".." {
@@ -582,12 +576,13 @@ mod tests {
 
     #[test]
     fn test_validate_interface_wildcard_max_length() {
-        // 15 chars + wildcard = 16 total, should be ok
-        let name = format!("{}*", "a".repeat(15));
+        // 14 chars + wildcard = 15 total: the most nft accepts
+        let name = format!("{}*", "a".repeat(14));
         assert!(validate_interface(&name).is_ok());
 
-        // 16 chars + wildcard = 17 total, too long
-        let long_name = format!("{}*", "a".repeat(16));
+        // 15 chars + wildcard = 16 total: nft rejects it (checked against the
+        // real nft in tests/real_nft.rs)
+        let long_name = format!("{}*", "a".repeat(15));
         assert!(validate_interface(&long_name).is_err());
     }
 
@@ -777,10 +772,10 @@ mod property_tests {
             let with_wildcard = format!("{prefix}*");
             let result = validate_interface(&with_wildcard);
 
-            // With wildcard, max total length is 16
-            if with_wildcard.len() <= 16 && prefix != "." && prefix != ".." {
+            // With wildcard, max total length is still 15 (the `*` counts)
+            if with_wildcard.len() <= 15 && prefix != "." && prefix != ".." {
                 prop_assert!(result.is_ok(), "Should accept valid wildcard: {}", with_wildcard);
-            } else if with_wildcard.len() > 16 {
+            } else if with_wildcard.len() > 15 {
                 prop_assert!(result.is_err(), "Should reject too-long wildcard: {}", with_wildcard);
             }
         }

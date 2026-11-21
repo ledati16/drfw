@@ -43,7 +43,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Action types**: Accept, Drop, or Reject (with type: port-unreachable, host-unreachable, admin-prohibited, tcp-reset)
 - **Rate limiting**: Per-rule rate limits with optional burst (e.g., `5/minute burst 10`)
 - **Connection limiting**: Max simultaneous connections per rule
-- **Per-source limits**: Optionally give every client IP (IPv6: every /64) its own rate or connection budget, so one flooding host cannot lock everyone else out
+- **Per-source limits** (Accept rules only): Optionally give every client IP (IPv6: every /64) its own rate or connection budget, so one client that uses up its budget does not use up everyone else's. Up to 65535 clients are tracked per rule; a flood from more distinct (e.g. spoofed) addresses than that blocks *new* clients until it stops, while known clients keep their budgets. Not offered for Drop/Reject rules: there a full table would let new sources through
 - **Per-rule logging**: Toggle to log matched packets with auto-generated prefix
 - **Chain selection**: Input or Output (Output only in Server Mode)
 - **Output interface**: Filter outbound traffic by interface (Server Mode only)
@@ -68,10 +68,20 @@ DRFW is a **stateful firewall** with sensible defaults that require no configura
 | Allow loopback | Local services always work (`127.0.0.1`) |
 | Drop invalid packets | Malformed connections rejected early |
 | Allow established/related | Return traffic for your connections works automatically |
-| Block ICMP redirects | Prevents classic MITM attacks |
-| Allow ICMP | Ping and network diagnostics work |
 | Allow DHCPv6 replies | IPv6 address configuration keeps working |
+| Block ICMP redirects | Prevents classic MITM attacks |
+| *(your rules)* | In the order you give them |
+| Allow ICMP | Ping and network diagnostics work |
 | Default deny | Everything else is blocked (INPUT chain) |
+
+That is also the order in which they are checked. Your rules come before "Allow ICMP",
+so a Drop or Reject rule (say, "drop everything from 203.0.113.7") also stops that
+host's pings. They come after "Allow established/related", as in any stateful firewall:
+a Drop rule stops **new** connections; connections that are already open (and ICMP
+errors that belong to them) keep working until they close.
+
+A Drop/Reject rule with both a rate limit and a connection limit drops what is over
+either limit (it becomes two rules in the preview, one per limit).
 
 Forwarded (routed) traffic is accepted by default so Docker, libvirt and VPN
 routing keep working; see **Block forwarding** below.
@@ -84,7 +94,7 @@ All disabled by default for maximum compatibility:
 | Setting | Purpose | Warning |
 |---------|---------|---------|
 | **Strict ICMP** | Allow only ping + MTU discovery | Breaks network diagnostics |
-| **ICMP Rate Limiting** | Prevent ping floods | May affect monitoring tools |
+| **ICMP Rate Limiting** | Prevent ping floods (IPv6 neighbor discovery, router advertisements and MLD queries are never limited) | May affect monitoring tools |
 | **Anti-spoofing (RPF)** | Drop packets with spoofed source IPs | **Breaks Docker, VPNs, complex routing** |
 | **Dropped Packet Logging** | Log filtered traffic to syslog | Can fill logs quickly |
 | **Server Mode** | Block all outbound by default | Requires explicit egress rules |
@@ -131,6 +141,8 @@ drfw check <profile>                 # Validate + nft --check without privileges
 drfw apply <profile>                 # Apply with 15s auto-revert safety
 drfw apply <profile> --confirm 30    # Apply with 30s timeout (5-120)
 drfw apply <profile> --no-confirm    # Apply without auto-revert (until reboot)
+drfw save <profile>                  # Save to System: the boot config (one prompt)
+drfw save <profile> --enable-at-boot # ... and enable the boot service if needed
 drfw export <profile> --format nft   # Export as nftables text (default)
 drfw export <profile> --format json  # Export as nftables JSON
 ```
@@ -143,8 +155,33 @@ drfw export <profile> --format json  # Export as nftables JSON
   `/etc/nftables.conf` was written by DRFW, and whether a systemd unit loads it at
   boot ("Boot persistence", from `systemctl is-enabled`). It does **not** read the live
   kernel ruleset (that needs root); run `sudo nft list table inet drfw` for that.
-- `drfw apply` changes the running ruleset only. Use **Save to System** (GUI) to make
-  rules survive a reboot.
+- `drfw apply` changes the running ruleset only. Use `drfw save` (or **Save to System**
+  in the GUI) to make rules survive a reboot.
+- `drfw save` writes the same file as the GUI's Save to System. The saved rules load at
+  the next boot **without** a dead-man switch, so if the profile is not exactly what you
+  last applied *and confirmed* on this machine, it warns and asks (or, without a
+  terminal, refuses unless you pass `--yes`). The safe sequence on a server is
+  `drfw apply web`, confirm, `drfw save web`. It warns when the boot service is not
+  enabled; `--enable-at-boot` enables it in the same prompt.
+- During the `drfw apply` countdown, if another apply replaces the pending one, the
+  countdown stops at once and reports it.
+
+Exit codes (also in `drfw --help`):
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success: applied, confirmed, reverted (on timeout or on request), saved |
+| 1 | Failed, nothing was changed (or `drfw check` found problems) |
+| 2 | Usage error |
+| 3 | `apply`: the previous rules could not be restored, so the drfw table was **removed**: drfw is not filtering anything |
+| 4 | `apply`: the revert **failed**: the new, unconfirmed rules are still active |
+| 5 | `apply`: another apply replaced these rules before they were confirmed |
+| 6 | `apply`: the outcome is **unknown**: the new rules may be active (e.g. the apply was interrupted after authentication) |
+| 7 | `save`: not saved, the rules were never confirmed (use `--yes`) |
+| 8 | `save`: saved, but the boot service could not be enabled |
+
+A timed-out revert exits 0: that is the dead-man switch doing its job. Codes 3 to 6 mean
+"look at the firewall now"; scripts must not treat them like 1.
 - Run `drfw` as your user, not with `sudo`: it asks for elevation itself, and under
   `sudo` it would look for profiles in root's home.
 
@@ -203,14 +240,15 @@ drfw
 3. **Preview**: View syntax-highlighted nftables output in the preview pane
 4. **Apply**: Click **[Apply]** — DRFW verifies, then applies with one elevation prompt
 5. **Confirm**: Click **[Confirm]** within the countdown, or rules auto-revert
-6. **Persist** (optional): **Save to System** writes the rules to `/etc/nftables.conf` for boot
+6. **Persist** (optional): **Save to System** (or `drfw save`) writes the rules to `/etc/nftables.conf` for boot
 
 ## Safety Model
 
 **One prompt per apply.** Apply runs one fixed, elevated script that saves the
 current `inet drfw` table (or notes that there is none) as a revert batch in
-root-owned `/run/drfw`, applies the new ruleset and starts a detached root
-watcher. Nothing else needs a password:
+root-owned `/run/drfw`, starts a detached root watcher and only then applies the new
+ruleset. Nothing else needs a password (DRFW ships no polkit rule that would cache an
+authorization):
 
 | Step | Prompt | What happens |
 |------|--------|--------------|
@@ -224,7 +262,20 @@ systemd unit, or a `setsid` process without systemd) and times out on the
 monotonic clock. If you lock yourself out, the terminal closes, the SSH
 connection drops or DRFW crashes, the previous rules come back on time. In a
 terminal DRFW elevates with `run0` or `sudo`, so `drfw apply` works over SSH;
-`pkexec` is used for the GUI.
+the GUI always uses `pkexec` (a graphical dialog), even when started from a terminal.
+
+**No unguarded window.** The elevated script ignores hang-up, interrupt and terminate
+signals, so an SSH drop or Ctrl-C right after the password cannot stop it halfway, and
+the watcher exists before the new rules go live, so even a killed script leaves them
+guarded. If DRFW cannot tell what happened after you authenticated (the script was
+killed, or took more than 90 seconds), it says the state is **unknown** and that the
+new rules may be active, instead of "nothing was changed"; a guarded apply then still
+reverts when its countdown ends.
+
+**Who can confirm.** Confirm and revert tokens are files in your `$XDG_RUNTIME_DIR`
+(or DRFW's state directory), which must belong to you and be closed to other users
+(mode 0700); the watcher only counts tokens owned by you. The guard's id is not a
+secret (other local users can see it), so ownership is what protects it.
 
 **Fail-safe revert.** If the saved table cannot be restored, the watcher removes the
 `inet drfw` table instead (DRFW then filters nothing) rather than leave a locked-down
@@ -266,6 +317,14 @@ To go back to the original config:
 ```bash
 sudo cp -p /etc/nftables.conf.drfw-orig /etc/nftables.conf
 ```
+
+### From the Command Line
+
+`drfw save <profile>` does the same on a headless machine (one prompt). Because saved
+rules load at boot without a dead-man switch, it warns loudly and asks (or needs
+`--yes` without a terminal) unless the profile is exactly what you last applied and
+confirmed. It warns when the boot service is not enabled; `--enable-at-boot` enables it
+in the same prompt. See the exit codes under [CLI Interface](#cli-interface).
 
 ### Example Rules
 
@@ -371,7 +430,8 @@ leaves a "log cleared" entry as the first line of the new log.
 | App log | `~/.local/state/drfw/drfw.log` (rotated to `drfw.log.1` past 5 MiB) |
 | Audit log | `~/.local/state/drfw/audit.log` (rotated to `audit.log.old` past 1 MiB, at startup) |
 | Revert guard state (root, tmpfs) | `/run/drfw/` (`active`, `status-<id>`, revert batches) |
-| Confirm/revert tokens | `$XDG_RUNTIME_DIR` (else the state directory) |
+| Confirm/revert tokens | `$XDG_RUNTIME_DIR` (else the state directory); must be yours, mode 0700 |
+| Last confirmed ruleset (for `drfw save`) | `~/.local/state/drfw/confirmed-ruleset.json` |
 | Boot config (Save to System) | `/etc/nftables.conf`, plus `.drfw-bak` and `.drfw-orig` |
 
 All files in your home are created with `0o600` permissions, directories with `0o700`. A

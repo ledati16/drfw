@@ -352,39 +352,73 @@ script text. Exit codes are structured, and 126/127 are never used by the script
 callers read those as authentication failures of the elevation tool.
 
 ### Elevation Strategy
-Chosen in `build_elevated_command()`:
+Chosen in `build_elevated_command()`, from the `ElevationContext` the front end sets
+once at startup (`elevation::set_context`: `Gui` in `run_gui()`, `Cli` in `main()`):
 
 1. **Already root:** run directly (no prompt)
-2. **`DRFW_ELEVATION_METHOD`** (`sudo`/`run0`/`pkexec`): forced method, for scripts
-3. **Terminal (stdin is a TTY):** `run0` (systemd v256+, no SUID), else `sudo`
-4. **GUI (no TTY):** `pkexec` (polkit credential caching), else `run0`
+2. **`DRFW_ELEVATION_METHOD`** (`sudo`/`run0`/`pkexec`): forced method (which tool
+   asks; there is no password-less mode)
+3. **GUI:** always `pkexec`, even when started from a terminal (`run0`/`sudo` would
+   prompt invisibly in that terminal); no `pkexec` → `PkexecNotFound`
+4. **CLI (or no context set):** stdin is a TTY → `run0` (systemd v256+, no SUID),
+   else `sudo`; no TTY → `pkexec`
 
-Every elevated child uses `kill_on_drop(true)`. `contrib/50-drfw.rules` caches pkexec
-for `nft` only, never for `/bin/sh` (that would allow arbitrary root commands without
-a prompt).
+Every elevated child uses `kill_on_drop(true)`. DRFW ships **no polkit rule**: every
+elevated operation asks once. Caching `/bin/sh` would allow arbitrary root commands;
+caching `nft` makes root `nft` (a file-read primitive: `nft -c -f <file>` echoes lines
+in errors) available to anything that can drive the DRFW process, only to save a
+prompt in the rare elevated-check fallback. Never suggest sudoers `NOPASSWD` for
+unattended applies: the elevated program is `/bin/sh`, so that is full root.
 
 ### Root-Side Revert Guard (dead-man switch)
 `core/apply_guard.rs` + `APPLY_SCRIPT`/`WATCHER_SCRIPT`. As root, in one elevation:
 
-1. Save the current `inet drfw` table (or the fact that there is none) as an atomic
-   revert batch in root-owned `/run/drfw` (`GUARD_STATE_DIR`). If an earlier guard is
-   still pending, inherit its revert file: a timeout returns to the last *confirmed*
-   state.
-2. Apply the new JSON (`nft --json -f -`); on rejection nothing changed (exit 3).
-3. Supersede the earlier guard, then start a detached watcher (`systemd-run` when
-   systemd is PID 1, else `setsid`). If it can't start, roll back at once (exit 4/5).
+0. `trap '' HUP INT QUIT TERM PIPE` (an SSH drop or Ctrl-C after the password must not
+   stop the script halfway), then print `drfw-apply-started` (DRFW now knows the
+   script runs as root: a later timeout or signal means "state unknown", not
+   "nothing changed"). Take the `flock` on `/run/drfw/lock`.
+1. Save the current `inet drfw` table (stdout of `nft list table` only) or the fact
+   that there is none as an atomic revert batch in root-owned `/run/drfw`
+   (`GUARD_STATE_DIR`). If an earlier guard is still pending, inherit its revert file:
+   a timeout returns to the last *confirmed* state.
+2. Start the detached watcher (`systemd-run` when systemd is PID 1, else `setsid`)
+   **before** anything changes; if it can't start, nothing changed (exit 4).
+3. Apply the new JSON (`nft --json -f -`). On rejection write the new guard's status
+   `not-applied` (its watcher exits without reverting); nothing changed (exit 3).
+4. Supersede the earlier guard, create `armed-<nonce>` (only now does the watcher
+   accept tokens) and record the guard in `active`. If `armed` cannot be created the
+   rules revert at the deadline and cannot be confirmed (exit 5, "state unknown").
 
-The watcher polls once per second on `/proc/uptime` (immune to clock changes). The
-user side confirms or reverts by creating `drfw-confirm-<nonce>` / `drfw-revert-<nonce>`
-token files in its own runtime dir (no privileges); the watcher only lists that dir,
-never follows or writes into it, and writes the outcome to world-readable
-`/run/drfw/status-<nonce>`. `/run/drfw/active` names the pending guard (`drfw status`
-reads it). Revert falls back to deleting the drfw table, never to re-applying drop
-policies. Closing the GUI, a crash, a closed terminal or a dropped SSH session all end
-in the revert.
+Even a `SIGKILL` between 3 and 4 leaves a guard: at the deadline the watcher takes the
+lock (waits for a still-running apply), and reverts if there is no status, armed or not
+(the revert file is the pre-apply state, so restoring it is right either way). DRFW maps
+a signal or an unexpected exit after the start marker, and a script that outlives
+`SCRIPT_TIMEOUT` (90 s, after authentication; root, so `kill_on_drop` can't stop it), to
+`ApplyError::StateUnknown` (`rules_may_be_active()`; persistent warning, exit 6 in the
+CLI). Before the marker every failure means nothing changed.
+
+The watcher polls once per second on `/proc/uptime` (immune to clock changes), and
+checks the deadline **before** touching the user's directory. The user side confirms or
+reverts by creating `drfw-confirm-<nonce>` / `drfw-revert-<nonce>` token files in its
+own runtime dir (no privileges). Trust boundary: the nonce is **not** secret (it is in
+`ps`, the unit name and world-readable `/run/drfw/active`); ownership is the check.
+DRFW only uses a token dir owned by the user with mode 0700 or stricter
+(`XDG_RUNTIME_DIR`, else the state dir, else it refuses before elevating), and the
+watcher only counts tokens owned by that uid (`find -maxdepth 1 -name … -user <uid>`,
+wrapped in `timeout 2`). It only lists that dir, never follows or writes into it, and
+writes the outcome to world-readable `/run/drfw/status-<nonce>`. `/run/drfw/active`
+names the pending guard (`drfw status` reads it). Revert falls back to deleting the drfw
+table, never to re-applying drop policies. Closing the GUI, a crash, a closed terminal
+or a dropped SSH session all end in the revert. A revert whose lock is still held after
+60 s (once armed) goes ahead anyway and logs it (journal, or `logger -t drfw`).
+
+A confirmed outcome (seen by `GuardHandle::wait_outcome`, GUI or CLI) records the applied
+JSON in `<state dir>/confirmed-ruleset.json`; `drfw save` uses it to tell tested rules
+from untested ones (`apply_guard::confirmed_ruleset_matches`).
 
 **Never** move the revert back into the DRFW process or require a second prompt for it:
-that fails exactly when the user is locked out.
+that fails exactly when the user is locked out. **Never** start the watcher after the
+apply again: that reopens the window in which live rules have no guard.
 
 ### Save to System
 `SAVE_CONFIG_SCRIPT` (argv: target = `drfw::SYSTEM_NFT_PATH`, nft = `NFT_COMMAND`,
@@ -397,6 +431,16 @@ it (**never** `start`: that reloads rules mid-session); a failure there is repor
 `enable=failed: ...` on stdout with exit 0, because the file was saved. `systemctl` is
 called by name, through the `PATH` the elevation tool gives root (pkexec, sudo's
 `secure_path`, run0); `APPLY_SCRIPT` already relies on that for `systemctl`/`systemd-run`.
+
+The script ignores `HUP`/`INT`/`QUIT`/`TERM`/`PIPE` like `APPLY_SCRIPT`.
+
+`drfw save <profile> [--enable-at-boot] [--yes]` is the same path for headless
+servers (`validate_for_apply`, unprivileged check, `write_config_file_and_enable`). A
+profile whose JSON is not the last confirmed one (see the guard) prints a loud
+"never confirmed; no dead-man switch at boot" warning and needs `--yes` (no TTY) or a
+y/N answer (exit 7 otherwise). With `--enable-at-boot` a failed enable exits 8; without
+it a disabled boot service is warned about. Tests set `DRFW_TEST_SYSTEM_NFT_PATH`
+(honoured only together with `DRFW_NFT_COMMAND`).
 
 The dialog asks `core::boot::query_boot_status()` (unprivileged) when it opens, shows
 the result and an "Also enable at boot" checkbox (checked when the unit is disabled);
@@ -525,12 +569,12 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/app/verify_errors.rs` | Unit tests for the "Verification Errors" panel model | Row titles, summary/banner wording, "Edit Rule" only for rules that still exist |
 | `src/distro.rs` | Compile-time validators, service unit template | `is_valid_absolute_path()`, `is_valid_service_name()`, `service_unit()` |
 | `src/core/boot.rs` | `systemctl` output mapping | `enablement_from_output()`, `BootStatus` summaries and checkbox rules |
-| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing, CLI `status`/`check`/`print-service-unit` (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
-| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, Save to System script, revert guard end to end |
+| `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts), CLI `status`/`check`/`save`/`print-service-unit` and the `--help` exit codes (runs the real binary), save script incl. enable-at-boot (fake `systemctl`), exports, audit logging |
+| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
 | `tests/verify_errors.rs` | Error attribution against real `nft` in `unshare -rn`, and `drfw check` output (own binary) | A rejected ruleset names the rule that caused each error (also with per-source sets), CLI prints mapped errors without color codes |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
-| `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse |
+| `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse, exit codes distinct and documented |
 | `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup, `CHRONO_TIMESTAMPS`) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
 | `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
@@ -914,13 +958,24 @@ checked with `nft -c` before use. Never parse `nft list` text output.
 4. **Confirm or revert:** token file; the root-side watcher reports the outcome
 
 ### Rule Ordering
-Optimize for common traffic patterns:
-1. Loopback (bypass all checks)
+Input chain, in `build_commands()`:
+1. Optional RPF drop, loopback (bypass all checks)
 2. Invalid packet drops (avoid wasted cycles)
-3. Established/related connections (bulk traffic)
-4. ICMP (diagnostics)
-5. User-defined rules
-6. Default policy
+3. Established/related connections (bulk traffic), `DHCPv6` client replies
+4. ICMP redirect drops
+5. User-defined rules, in profile order
+6. ICMP allow rules (with an ICMP rate limit: neighbor discovery, router
+   advertisements and MLD queries first, unlimited)
+7. Optional drop logging, rate-limited reject, counter, then the default policy
+
+User rules come **before** the ICMP allows so a user Drop/Reject rule ("drop
+everything from X") also stops ICMP. Established/related traffic is accepted before any
+user rule: standard stateful behaviour, a Drop rule stops new connections only (and not
+ICMP errors related to existing ones). Keep this in README ("Default Protection").
+
+A Drop/Reject rule with both a rate and a connection limit becomes **two** rules (same
+matches, one limit each, both tagged `UserRule(id)`): statements AND, and `limit`
+short-circuits, so one rule would count only over-rate connections.
 
 ---
 
@@ -981,7 +1036,12 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - Per-rule logging (with configurable prefix)
 - Advanced: Destination IP, action (accept/drop/reject), rate limiting, connection limiting
 - Per-source limits: a rate or connection limit can apply per source address
-  (IPv6 per /64) through named dynamic sets instead of being shared by all sources
+  (IPv6 per /64) through named dynamic sets instead of being shared by all sources.
+  **Accept rules only** (`validate.rs`, `PER_SOURCE_ACCEPT_ONLY`; the form hides the
+  checkboxes otherwise): a set holds `PER_SOURCE_SET_SIZE` (65535) sources, and once
+  it is full new sources are not tracked. For Accept that fails closed (new clients
+  fall through to the policy, so a flood from more distinct, e.g. spoofed, addresses
+  locks new clients out until it stops); for Drop/Reject it would fail open
 - Advanced security: Server Mode (output policy drop), strict ICMP, RPF
   anti-spoofing, rate-limited logging of dropped packets, block forwarding
   (forward policy drop; off by default so Docker/libvirt/VPNs keep working)
@@ -1133,6 +1193,9 @@ fn handle_message(&mut self) -> Task<Message> {
 - Config: `~/.local/share/drfw/config.json` (0o600)
 - Profiles: `~/.local/share/drfw/profiles/*.json` (0o600; directory 0o700)
 - Revert guard state: `/run/drfw/` (root-owned 0755 tmpfs dir; `active`, `status-*` 0644)
+- Confirm/revert tokens: `$XDG_RUNTIME_DIR` or the state dir, which must be owned by
+  the user and 0700 or stricter; tokens 0600
+- Last confirmed ruleset: `~/.local/state/drfw/confirmed-ruleset.json` (0o600)
 - Boot config: `drfw::SYSTEM_NFT_PATH` (0644) with `.drfw-bak` and `.drfw-orig`; its
   directory is created 0755 if missing
 
@@ -1140,6 +1203,9 @@ fn handle_message(&mut self) -> Task<Message> {
 
 ---
 
-**Last Updated:** 2026-11-20 (chrono → jiff, diagnostics view model, `drfw check`/honest `status`, docs for the revert guard, single generator and Save to System; `distro` compile-time config, boot persistence, enable-at-boot, `print-service-unit`)
+**Last Updated:** 2026-11-20 (audit fixes: signal-safe guard with the watcher started
+before the apply, `StateUnknown`; user rules before ICMP; per-source Accept-only;
+split inverted rate+connection limits; `drfw save`; CLI exit codes; elevation context;
+no polkit rule. Earlier: chrono → jiff, diagnostics view model, `drfw check`/honest `status`, docs for the revert guard, single generator and Save to System; `distro` compile-time config, boot persistence, enable-at-boot, `print-service-unit`)
 **DRFW Version:** 0.9.0
 **Iced Version:** 0.14

@@ -1014,9 +1014,16 @@ impl FirewallRuleset {
     /// Rule ordering (per chain):
     /// 1. Base rules (optional RPF, loopback, invalid drop, established/related,
     ///    `DHCPv6` client replies)
-    /// 2. ICMP redirect drops and ICMP allow rules
+    /// 2. ICMP redirect drops
     /// 3. User rules, in profile order
-    /// 4. End of input chain: optional drop logging, rate-limited reject, counter
+    /// 4. ICMP allow rules (input chain)
+    /// 5. End of input chain: optional drop logging, rate-limited reject, counter
+    ///
+    /// User rules come before the ICMP allow rules so that a Drop/Reject rule
+    /// (e.g. "drop everything from X") also stops ICMP. Traffic of established
+    /// or related connections is accepted before any user rule (standard
+    /// stateful filtering): a Drop rule stops new connections, not ones that
+    /// already exist (and not related ICMP errors).
     ///
     /// # Per-source limits
     ///
@@ -1073,6 +1080,8 @@ impl FirewallRuleset {
         Self::add_base_chains(&mut cmds, advanced);
         Self::add_base_rules(&mut cmds, advanced);
 
+        // ICMP comes after the user rules: a user Drop/Reject rule must also
+        // stop ICMP (see the ordering above)
         cmds.section = SECTION_USER;
         for rule in &self.rules {
             if !rule.enabled {
@@ -1084,6 +1093,9 @@ impl FirewallRuleset {
             }
             Self::add_user_rule(&mut cmds, rule);
         }
+
+        cmds.section = SECTION_ICMP;
+        Self::add_icmp_rules(&mut cmds, advanced);
 
         Self::add_termination_rules(&mut cmds, advanced);
 
@@ -1241,7 +1253,7 @@ impl FirewallRuleset {
         // 3. Established/related - most traffic will match here
         // 4. DHCPv6 client replies (not tracked: the request went to multicast)
         // 5. Block ICMP redirects - prevent MITM attacks
-        // 6. ICMP - needed for network diagnostics (strict mode or general allow)
+        // (The ICMP allow rules follow the user rules; see `build_commands`.)
         cmds.section = SECTION_BASE;
 
         // Optional: Anti-spoofing (RPF) - WARNING: Breaks Docker/VPNs
@@ -1327,9 +1339,6 @@ impl FirewallRuleset {
             ],
             "drop icmpv6 redirects",
         );
-
-        cmds.section = SECTION_ICMP;
-        Self::add_icmp_rules(cmds, advanced);
     }
 
     /// Base rules for the output chain in Server Mode (policy drop).
@@ -1411,6 +1420,31 @@ impl FirewallRuleset {
             expr.push(json!({ "accept": null }));
             expr
         };
+
+        // IPv6 does not work without neighbor discovery, router advertisements
+        // and multicast listener queries; a burst of them (e.g. many neighbors
+        // resolving at once) must never be dropped by the ICMP rate limit.
+        // Without a rate limit the rules below accept them anyway.
+        if advanced.icmp_rate_limit > 0 {
+            cmds.push_base_rule(
+                "input",
+                vec![
+                    Self::meta_match("l4proto", "ipv6-icmp"),
+                    Self::payload_match(
+                        "icmpv6",
+                        "type",
+                        json!({ "set": [
+                            "mld-listener-query",
+                            "nd-router-advert",
+                            "nd-neighbor-solicit",
+                            "nd-neighbor-advert"
+                        ] }),
+                    ),
+                    json!({ "accept": null }),
+                ],
+                "allow icmpv6 neighbor discovery (not rate limited)",
+            );
+        }
 
         if advanced.strict_icmp {
             // IPv4 ICMP - essential types only
@@ -1553,7 +1587,7 @@ impl FirewallRuleset {
     ) {
         use serde_json::json;
 
-        let mut expressions = Vec::with_capacity(10);
+        let mut expressions = Vec::with_capacity(12);
 
         // Protocol matching. Ports only make sense for TCP/UDP: a port list on
         // "Any" means TCP+UDP (never silently drop the ports, that would widen
@@ -1642,7 +1676,7 @@ impl FirewallRuleset {
         // that stays within it.
         let inverted = rule.action != Action::Accept;
 
-        if let Some(rate_limit) = rule.rate_limit {
+        let rate_expr = rule.rate_limit.map(|rate_limit| {
             let mut limit = json!({
                 "rate": rate_limit.count,
                 "per": rate_limit.unit.as_str()
@@ -1655,39 +1689,39 @@ impl FirewallRuleset {
                 limit["inv"] = json!(true);
             }
             let limit = json!({ "limit": limit });
-            expressions.push(if rate_limit.per_source {
+            if rate_limit.per_source {
                 let kind = PerSourceKind::Rate(rate_limit);
                 Self::per_source_statement(cmds, rule, addresses.family, kind, limit)
             } else {
                 limit
-            });
-        }
+            }
+        });
 
-        if rule.connection_limit > 0 {
+        let count_expr = (rule.connection_limit > 0).then(|| {
             let mut count = json!({ "val": rule.connection_limit });
             if inverted {
                 count["inv"] = json!(true);
             }
             let count = json!({ "ct count": count });
-            expressions.push(if rule.connection_limit_per_source {
+            if rule.connection_limit_per_source {
                 let kind = PerSourceKind::Connections;
                 Self::per_source_statement(cmds, rule, addresses.family, kind, count)
             } else {
                 count
-            });
-        }
+            }
+        });
 
         // Per-rule logging (before action, so log happens even if action is accept)
-        if rule.log_enabled {
+        let log_expr = rule.log_enabled.then(|| {
             let prefix = if rule.log_prefix.is_empty() {
                 Rule::sanitize_log_prefix(&rule.label)
             } else {
                 crate::validators::sanitize_nft_quoted(&rule.log_prefix).into_owned()
             };
-            expressions.push(json!({ "log": { "prefix": prefix, "level": "info" } }));
-        }
+            json!({ "log": { "prefix": prefix, "level": "info" } })
+        });
 
-        expressions.push(match rule.action {
+        let action_expr = match rule.action {
             Action::Accept => json!({ "accept": null }),
             Action::Drop => json!({ "drop": null }),
             Action::Reject => match rule.reject_type {
@@ -1703,12 +1737,33 @@ impl FirewallRuleset {
                 }
                 RejectType::TcpReset => json!({ "reject": { "type": "tcp reset" } }),
             },
-        });
+        };
 
-        cmds.push(
-            CommandOrigin::UserRule(rule.id),
-            Self::rule_add(rule.chain.as_ref(), expressions, &rule.label),
-        );
+        // Statements in one rule are ANDed and evaluated left to right. For
+        // Accept that is the intent (under the rate AND under the count). For
+        // Drop/Reject the intent is OR (over the rate OR over the count), and
+        // a combined rule would only count the connections of over-rate
+        // packets (`limit` short-circuits). So an inverted rule with both
+        // limits becomes two rules with the same matches, one per limit.
+        let limit_sets: Vec<Vec<serde_json::Value>> = match (rate_expr, count_expr) {
+            (Some(rate), Some(count)) if inverted => vec![vec![rate], vec![count]],
+            (rate, count) => vec![rate.into_iter().chain(count).collect()],
+        };
+        let last = limit_sets.len() - 1;
+        for (i, limits) in limit_sets.into_iter().enumerate() {
+            let mut expr = if i == last {
+                std::mem::take(&mut expressions)
+            } else {
+                expressions.clone()
+            };
+            expr.extend(limits);
+            expr.extend(log_expr.iter().cloned());
+            expr.push(action_expr.clone());
+            cmds.push(
+                CommandOrigin::UserRule(rule.id),
+                Self::rule_add(rule.chain.as_ref(), expr, &rule.label),
+            );
+        }
     }
 
     /// Creates the dynamic set for one per-source limit of `rule` (one address
@@ -1825,9 +1880,20 @@ const NFT_DEFAULT_LIMIT_BURST: u32 = 5;
 ///
 /// Elements are created from the packet path, so without a cap a flood of
 /// spoofed source addresses could exhaust kernel memory (65535 elements are
-/// in the order of 10 MiB). When the set is full, the rule stops matching
-/// *new* sources until elements expire: they fall through to later rules (for
-/// an Accept rule, usually the drop policy). Known sources are unaffected.
+/// in the order of 10 MiB, per rule and address family). When the set is
+/// full, `update`/`add` fails for *new* sources, so the rule does not match
+/// them until elements expire: they fall through to later rules. Known
+/// sources are unaffected.
+///
+/// That is why per-source limits are only allowed on Accept rules
+/// (`crate::core::validate`): a full set then fails closed (new sources fall
+/// through to the drop policy). On a Drop/Reject rule it would fail open:
+/// new sources would never be counted, so never be over the limit. The price
+/// for Accept is that a flood from more than this many distinct addresses
+/// (spoofed SYNs, a botnet) within the element timeout locks *new* clients
+/// out until it stops. A larger set would only move that threshold, at
+/// proportionally more kernel memory for every per-source rule, so the size
+/// is kept.
 const PER_SOURCE_SET_SIZE: u32 = 65_535;
 /// Rule id hex digits in a per-source set name (`rl4_0123456789ab`): short
 /// enough to keep the preview readable, 48 random bits so that distinct

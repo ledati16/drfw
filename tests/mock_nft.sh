@@ -36,6 +36,18 @@ case "$1" in
             # Apply mode - read stdin and pretend to apply
             input=$(cat)
             echo "$input" > "$MOCK_NFT_DIR/last_apply.json"
+            # Guard tests: the apply script is killed (SIGKILL) right after
+            # the rules went live. Kills the outermost `drfw-apply` shell (a
+            # command substitution may run in a forked copy of it).
+            if [ -n "${DRFW_GUARD_STATE_DIR-}" ] && [ -e "$DRFW_GUARD_STATE_DIR/mock-kill-apply" ]; then
+                rm -f "$DRFW_GUARD_STATE_DIR/mock-kill-apply"
+                pid=$PPID
+                while parent=$(awk '{print $4}' "/proc/$pid/stat") \
+                        && grep -qa drfw-apply "/proc/$parent/cmdline" 2>/dev/null; do
+                    pid=$parent
+                done
+                kill -KILL "$pid"
+            fi
             exit 0
         fi
         ;;
