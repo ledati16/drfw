@@ -634,8 +634,8 @@ pub async fn log_generic_error(enable_event_log: bool, error: String) {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_audit_event_creation() {
+    #[test]
+    fn test_audit_event_creation() {
         let event = AuditEvent::new(
             EventType::ApplyRules,
             true,

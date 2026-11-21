@@ -25,6 +25,19 @@ use std::path::PathBuf;
 
 use directories::ProjectDirs;
 
+/// Safety net of the library's own unit tests: panics there ("a lib unit
+/// test …"), does nothing in every other build (the binaries, integration
+/// tests, doctests). Called where a lib test must never get to: elevation
+/// and the user's real data/state directories.
+#[cfg(test)]
+pub(crate) fn deny_in_lib_tests(what: &str) {
+    panic!("a lib unit test {what}");
+}
+
+/// See the `cfg(test)` version: a no-op outside the lib's unit tests.
+#[cfg(not(test))]
+pub(crate) const fn deny_in_lib_tests(_what: &str) {}
+
 /// Returns the application data directory.
 ///
 /// Normally returns `~/.local/share/drfw/` (XDG Base Directory spec).
@@ -34,11 +47,17 @@ use directories::ProjectDirs;
 /// Set `DRFW_TEST_DATA_DIR` environment variable to override the data directory
 /// for testing. This allows tests to use a temporary directory instead of
 /// the user's real data directory.
+///
+/// # Panics
+///
+/// In the library's own unit tests when `DRFW_TEST_DATA_DIR` is not set: they
+/// must never read or write the user's real data.
 pub fn get_data_dir() -> Option<PathBuf> {
     // Allow tests to override data directory
     if let Ok(test_dir) = std::env::var("DRFW_TEST_DATA_DIR") {
         return Some(PathBuf::from(test_dir));
     }
+    deny_in_lib_tests("used the real data directory; set DRFW_TEST_DATA_DIR");
     ProjectDirs::from("com", "drfw", "drfw").map(|pd| pd.data_dir().to_path_buf())
 }
 
@@ -51,11 +70,17 @@ pub fn get_data_dir() -> Option<PathBuf> {
 /// Set `DRFW_TEST_STATE_DIR` environment variable to override the state directory
 /// for testing. This allows tests to use a temporary directory instead of
 /// the user's real state directory.
+///
+/// # Panics
+///
+/// In the library's own unit tests when `DRFW_TEST_STATE_DIR` is not set:
+/// they must never read or write the user's real state.
 pub fn get_state_dir() -> Option<PathBuf> {
     // Allow tests to override state directory
     if let Ok(test_dir) = std::env::var("DRFW_TEST_STATE_DIR") {
         return Some(PathBuf::from(test_dir));
     }
+    deny_in_lib_tests("used the real state directory; set DRFW_TEST_STATE_DIR");
     ProjectDirs::from("com", "drfw", "drfw")
         .and_then(|pd| pd.state_dir().map(std::path::Path::to_path_buf))
 }

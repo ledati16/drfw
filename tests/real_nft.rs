@@ -26,12 +26,14 @@
 //!   rejected rulesets, and SIGHUP/SIGINT/SIGTERM/SIGKILL right after the
 //!   new rules went live.
 //!
-//! This file has its own rule helpers: integration tests cannot see the
-//! library's `#[cfg(test)]` helpers.
+//! The probe, the `nft` binary (the one the library runs unprivileged, put
+//! first on the scripts' `PATH`) and the rule builder come from
+//! `tests/common/mod.rs`.
+
+mod common;
 
 use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::OnceLock;
 
 use drfw::core::firewall::{
     Action, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol, RateLimit, RejectType,
@@ -40,45 +42,15 @@ use drfw::core::firewall::{
 use ipnetwork::IpNetwork;
 use proptest::prelude::*;
 
+use crate::common::{real_nft_available, rule, unshare};
+
 // ============================================================================
 // Namespace helpers
 // ============================================================================
 
-/// Returns true when real nft tests can run; prints a skip notice otherwise.
-///
-/// Panics instead of skipping when `DRFW_REQUIRE_REAL_NFT=1`.
-fn real_nft_available() -> bool {
-    static AVAILABLE: OnceLock<Result<(), String>> = OnceLock::new();
-    let status = AVAILABLE.get_or_init(|| {
-        let output = Command::new("unshare")
-            .args(["-rn", "nft", "list", "ruleset"])
-            .output()
-            .map_err(|e| format!("cannot run unshare: {e}"))?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "`unshare -rn nft list ruleset` failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-        }
-    });
-    match status {
-        Ok(()) => true,
-        Err(reason) => {
-            assert!(
-                std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
-                "DRFW_REQUIRE_REAL_NFT=1 but real nft is unavailable: {reason}"
-            );
-            eprintln!("SKIPPING real nft test: {reason}");
-            false
-        }
-    }
-}
-
 /// Runs a `/bin/sh` script in a fresh user + network namespace, in `dir`.
 fn run_in_netns(dir: &Path, script: &str) -> Output {
-    Command::new("unshare")
+    unshare()
         .args(["-rn", "/bin/sh", "-c", script])
         .current_dir(dir)
         .output()
@@ -181,21 +153,6 @@ fn work_dir() -> tempfile::TempDir {
 // ============================================================================
 // Rule helpers
 // ============================================================================
-
-fn rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
-    Rule::with_caches(
-        uuid::Uuid::new_v4(),
-        label.to_string(),
-        protocol,
-        ports,
-        Vec::new(),
-        None,
-        Chain::Input,
-        true,
-        jiff::Timestamp::now(),
-        Vec::new(),
-    )
-}
 
 fn nets(addrs: &[&str]) -> Vec<IpNetwork> {
     addrs
@@ -597,21 +554,9 @@ fn test_per_source_rate_limit_keeps_clients_apart() {
     if !real_nft_available() {
         return;
     }
-    let missing: Vec<&str> = ["bash", "ip", "nsenter", "timeout"]
-        .into_iter()
-        .filter(|tool| {
-            Command::new("sh")
-                .args(["-c", &format!("command -v {tool}")])
-                .output()
-                .map_or(true, |o| !o.status.success())
-        })
-        .collect();
+    let missing = common::missing_tools(&["bash", "ip", "nsenter", "timeout"]);
     if !missing.is_empty() {
-        assert!(
-            std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
-            "DRFW_REQUIRE_REAL_NFT=1 but the behaviour test needs {missing:?}"
-        );
-        eprintln!("SKIPPING per-source behaviour test: missing {missing:?}");
+        common::skip("per-source behaviour test", &format!("missing {missing:?}"));
         return;
     }
 
@@ -669,7 +614,7 @@ nft list set inet drfw cl4_fedcba987654 > conn_set.out
 { printf 'add table inet drfw\ndelete table inet drfw\n'; nft list table inet drfw; } > revert.nft
 nft -f revert.nft
 "#;
-    let output = Command::new("unshare")
+    let output = unshare()
         .args(["-rn", "bash", "-c", script])
         .current_dir(dir.path())
         .output()
@@ -750,21 +695,9 @@ fn test_user_drop_rule_blocks_ping() {
     if !real_nft_available() {
         return;
     }
-    let missing: Vec<&str> = ["ip", "nsenter", "ping"]
-        .into_iter()
-        .filter(|tool| {
-            Command::new("sh")
-                .args(["-c", &format!("command -v {tool}")])
-                .output()
-                .map_or(true, |o| !o.status.success())
-        })
-        .collect();
+    let missing = common::missing_tools(&["ip", "nsenter", "ping"]);
     if !missing.is_empty() {
-        assert!(
-            std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
-            "DRFW_REQUIRE_REAL_NFT=1 but the ping test needs {missing:?}"
-        );
-        eprintln!("SKIPPING ping behaviour test: missing {missing:?}");
+        common::skip("ping behaviour test", &format!("missing {missing:?}"));
         return;
     }
 
@@ -803,7 +736,7 @@ nft -j -f drop.json
 ping_from_peer 10.9.0.1 drop
 ping_from_peer fd09::1 drop
 "#;
-    let output = Command::new("unshare")
+    let output = unshare()
         .args(["-rn", "sh", "-c", script])
         .current_dir(dir.path())
         .output()
@@ -862,7 +795,7 @@ fn test_server_mode_keeps_loopback_working() {
 
 #[test]
 fn test_save_config_script_with_real_nft() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -870,19 +803,23 @@ fn test_save_config_script_with_real_nft() {
     let backup = dir.path().join("nftables.conf.drfw-bak");
     let tmp = dir.path().join(".nftables.conf.drfw-tmp");
 
-    // nft wrapper: the save script's `nft -c` runs inside a private namespace
+    // nft wrapper: the save script's `nft -c` runs inside a private namespace,
+    // with the nft the library uses
     let wrapper = dir.path().join("nft-wrapper.sh");
-    std::fs::write(&wrapper, "#!/bin/sh\nexec unshare -rn nft \"$@\"\n").expect("write wrapper");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec unshare -rn {} \"$@\"\n", common::nft()),
+    )
+    .expect("write wrapper");
     set_mode(&wrapper, 0o755);
 
     std::fs::write(&target, "# old config\n").expect("write old config");
     set_mode(&target, 0o600);
 
-    // SAFETY: this is the only test in this binary that touches DRFW_NFT_COMMAND,
-    // and it does so before spawning any task that reads it.
-    unsafe {
-        std::env::set_var("DRFW_NFT_COMMAND", &wrapper);
-    }
+    // The only test in this binary that sets DRFW_NFT_COMMAND (after the
+    // probe above, which refuses it): restored when the guard drops
+    let mut env = common::EnvVarGuard::lock();
+    env.set("DRFW_NFT_COMMAND", &wrapper);
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     let target_str = target.to_str().expect("utf-8 temp path");
 
@@ -944,9 +881,7 @@ fn test_save_config_script_with_real_nft() {
             target_str,
         ))
         .expect("run save script");
-    unsafe {
-        std::env::remove_var("DRFW_NFT_COMMAND");
-    }
+    drop(env);
     assert!(
         output.status.success(),
         "second save failed: {}",
@@ -986,7 +921,12 @@ fn mode_of(path: &Path) -> u32 {
 
 /// Shell helpers available to every guard session:
 /// - `guard_apply FILE TIMEOUT NONCE`: runs `APPLY_SCRIPT` with FILE on stdin
-/// - `wait_status NONCE`: waits (max 10 s) for the watcher's status and prints it
+/// - `wait_status NONCE`: waits (max 30 s, a generous bound for a loaded
+///   machine; it returns as soon as the status exists) for the watcher's
+///   status and prints it
+/// - `wait_watcher_exit APPLY_OUTPUT`: waits (max 30 s) until the `setsid`
+///   watcher named in an apply's output (`watcher=setsid:<pid>`) has exited:
+///   from then on nothing can change the rules any more
 const GUARD_HELPERS: &str = r#"
 set -u
 mkdir -p confirm
@@ -996,13 +936,28 @@ guard_apply() {
 }
 wait_status() {
     i=0
-    while [ ! -e "state/status-$1" ] && [ "$i" -lt 100 ]; do
+    while [ ! -e "state/status-$1" ] && [ "$i" -lt 300 ]; do
         sleep 0.1
         i=$((i + 1))
     done
     cat "state/status-$1"
 }
+wait_watcher_exit() {
+    pid=$(sed -n 's/^watcher=setsid://p' "$1")
+    [ -n "$pid" ] || { echo "no setsid watcher in $1" >&2; return 1; }
+    i=0
+    while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 300 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    ! kill -0 "$pid" 2>/dev/null
+}
 "#;
+
+/// Guard timeout for tests that must observe the new rules while the guard
+/// is still pending: long enough that a loaded machine cannot revert them
+/// before the test looks (the tests wait for the outcome, not for this).
+const PENDING_TIMEOUT_SECS: u32 = 4;
 
 const NONCE_A: &str = "0123456789abcdef0123456789abcdef";
 const NONCE_B: &str = "fedcba9876543210fedcba9876543210";
@@ -1010,7 +965,7 @@ const NONCE_B: &str = "fedcba9876543210fedcba9876543210";
 /// Runs `body` (after [`GUARD_HELPERS`]) in one private namespace session.
 fn run_guard_session(dir: &Path, body: &str) -> Output {
     let script = format!("{GUARD_HELPERS}\n{body}");
-    let output = Command::new("unshare")
+    let output = unshare()
         .args(["-rn", "/bin/sh", "-c", &script])
         .env("DRFW_APPLY_SCRIPT", drfw::elevation::APPLY_SCRIPT)
         .current_dir(dir)
@@ -1066,7 +1021,7 @@ fn kitchen_sink_ruleset() -> FirewallRuleset {
 /// must remove the table, not leave empty drop-policy chains behind.
 #[test]
 fn test_guard_first_apply_timeout_removes_table() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1074,7 +1029,7 @@ fn test_guard_first_apply_timeout_removes_table() {
     let out = run_guard_session(
         dir.path(),
         &format!(
-            "guard_apply new.json 1 {NONCE_A} > apply.out
+            "guard_apply new.json {PENDING_TIMEOUT_SECS} {NONCE_A} > apply.out
              nft list tables > during.out
              wait_status {NONCE_A} > status.out
              nft list tables > after.out"
@@ -1109,7 +1064,7 @@ fn test_guard_first_apply_timeout_removes_table() {
 /// An existing drfw table is restored exactly when the guard times out.
 #[test]
 fn test_guard_timeout_restores_previous_ruleset_exactly() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1120,7 +1075,7 @@ fn test_guard_timeout_restores_previous_ruleset_exactly() {
         &format!(
             "nft -j -f old.json
              nft -j list table inet drfw > before.json
-             guard_apply new.json 1 {NONCE_A} > /dev/null
+             guard_apply new.json {PENDING_TIMEOUT_SECS} {NONCE_A} > /dev/null
              nft -j list table inet drfw > during.json
              wait_status {NONCE_A} > status.out
              nft -j list table inet drfw > after.json"
@@ -1141,7 +1096,7 @@ fn test_guard_timeout_restores_previous_ruleset_exactly() {
 /// A confirm token before the timeout keeps the new rules.
 #[test]
 fn test_guard_confirm_token_keeps_new_rules() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1151,11 +1106,11 @@ fn test_guard_confirm_token_keeps_new_rules() {
         dir.path(),
         &format!(
             "nft -j -f old.json
-             guard_apply new.json 3 {NONCE_A} > /dev/null
+             guard_apply new.json {PENDING_TIMEOUT_SECS} {NONCE_A} > apply.out
              nft -j list table inet drfw > during.json
              touch confirm/drfw-confirm-{NONCE_A}
              wait_status {NONCE_A} > status.out
-             sleep 3
+             wait_watcher_exit apply.out
              nft -j list table inet drfw > after.json"
         ),
     );
@@ -1163,7 +1118,7 @@ fn test_guard_confirm_token_keeps_new_rules() {
     assert_eq!(
         listing(dir.path(), "during.json"),
         listing(dir.path(), "after.json"),
-        "confirmed rules must stay after the timeout would have passed"
+        "confirmed rules must stay: the watcher exited without reverting"
     );
     // The watcher never deletes (or otherwise touches) the user's token
     assert!(
@@ -1178,7 +1133,7 @@ fn test_guard_confirm_token_keeps_new_rules() {
 /// uid, so the guard is told that a different uid applied.)
 #[test]
 fn test_guard_ignores_tokens_of_other_users() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1200,7 +1155,7 @@ fn test_guard_ignores_tokens_of_other_users() {
 /// A revert token reverts immediately, long before the timeout.
 #[test]
 fn test_guard_revert_token_reverts_immediately() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1228,7 +1183,7 @@ fn test_guard_revert_token_reverts_immediately() {
 /// apply comes back.
 #[test]
 fn test_guard_second_apply_supersedes_first() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1242,11 +1197,11 @@ fn test_guard_second_apply_supersedes_first() {
         &format!(
             "nft -j -f base.json
              nft -j list table inet drfw > before.json
-             guard_apply first.json 60 {NONCE_A} > /dev/null
+             guard_apply first.json 60 {NONCE_A} > apply_a.out
              guard_apply second.json 1 {NONCE_B} > /dev/null
              wait_status {NONCE_A} > status_a.out
              wait_status {NONCE_B} > status_b.out
-             sleep 2
+             wait_watcher_exit apply_a.out
              cat state/status-{NONCE_A} > status_a_later.out
              nft -j list table inet drfw > after.json"
         ),
@@ -1256,7 +1211,7 @@ fn test_guard_second_apply_supersedes_first() {
     assert_eq!(
         read(dir.path(), "status_a_later.out"),
         "superseded\n",
-        "the superseded watcher must not act any more"
+        "the superseded watcher exited without acting"
     );
     let before = listing(dir.path(), "before.json");
     let after = listing(dir.path(), "after.json");
@@ -1271,7 +1226,7 @@ fn test_guard_second_apply_supersedes_first() {
 /// watcher (started before the apply) exits without reverting.
 #[test]
 fn test_guard_invalid_ruleset_exits_3_without_watcher() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1289,6 +1244,8 @@ fn test_guard_invalid_ruleset_exits_3_without_watcher() {
              rc=0
              guard_apply bad.json 1 {NONCE_A} > apply.out 2> apply.err || rc=$?
              echo $rc > rc.out
+             # Past the 1 s deadline: a watcher that wrongly reverted would
+             # have done so (it prints no pid to wait for on this path)
              sleep 2
              ls -A state > state.ls
              cat state/status-{NONCE_A} > status.out
@@ -1320,7 +1277,7 @@ fn test_guard_invalid_ruleset_exits_3_without_watcher() {
 /// Unguarded apply (timeout 0) just applies and starts nothing.
 #[test]
 fn test_guard_timeout_zero_just_applies() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();
@@ -1385,48 +1342,64 @@ fn guard_signal_session(dir: &Path, signal: &str) -> std::time::Duration {
 }
 
 /// Upper bound for [`guard_signal_session`]: 3 s wrapper + 4 s guard + 1 s
-/// poll, plus generous slack for a loaded machine.
-const SIGNAL_SESSION_MAX: std::time::Duration = std::time::Duration::from_secs(14);
+/// poll (about 8 s), plus generous slack for a loaded machine. Below the
+/// 30 s that `wait_status` waits, so a late revert fails here, by name.
+const SIGNAL_SESSION_MAX: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The signal window: a SIGHUP (SSH drop), SIGINT (Ctrl-C after the
 /// password) or SIGTERM while the new rules are live must not leave them
 /// without a guard. The script ignores those signals and finishes.
-#[test]
-fn test_guard_sighup_after_apply_still_reverts() {
-    if !real_nft_available() {
+fn check_ignored_signal_still_reverts(signal: &str) {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
-    for signal in ["HUP", "INT", "TERM"] {
-        let dir = work_dir();
-        let took = guard_signal_session(dir.path(), signal);
-        assert!(
-            took < SIGNAL_SESSION_MAX,
-            "SIG{signal}: revert took {took:?}"
-        );
-        assert!(
-            read(dir.path(), "during.out").contains("table inet drfw"),
-            "SIG{signal}: the new rules must have been live when the signal came"
-        );
-        assert_eq!(
-            read(dir.path(), "status.out"),
-            "reverted\n",
-            "SIG{signal}: rc {} stderr: {}",
-            read(dir.path(), "rc.out"),
-            read(dir.path(), "apply.err")
-        );
-        assert_eq!(read(dir.path(), "rc.out"), "0\n", "SIG{signal} is ignored");
-        assert!(
-            !read(dir.path(), "after.out").contains("table inet drfw"),
-            "SIG{signal}: the revert must remove the first apply's table"
-        );
-    }
+    let dir = work_dir();
+    let took = guard_signal_session(dir.path(), signal);
+    assert!(
+        took < SIGNAL_SESSION_MAX,
+        "SIG{signal}: revert took {took:?}"
+    );
+    assert!(
+        read(dir.path(), "during.out").contains("table inet drfw"),
+        "SIG{signal}: the new rules must have been live when the signal came"
+    );
+    assert_eq!(
+        read(dir.path(), "status.out"),
+        "reverted\n",
+        "SIG{signal}: rc {} stderr: {}",
+        read(dir.path(), "rc.out"),
+        read(dir.path(), "apply.err")
+    );
+    assert_eq!(read(dir.path(), "rc.out"), "0\n", "SIG{signal} is ignored");
+    assert!(
+        !read(dir.path(), "after.out").contains("table inet drfw"),
+        "SIG{signal}: the revert must remove the first apply's table"
+    );
+}
+
+/// SIGHUP: the SSH connection dropped.
+#[test]
+fn test_guard_sighup_after_apply_still_reverts() {
+    check_ignored_signal_still_reverts("HUP");
+}
+
+/// SIGINT: Ctrl-C after the password.
+#[test]
+fn test_guard_sigint_after_apply_still_reverts() {
+    check_ignored_signal_still_reverts("INT");
+}
+
+/// SIGTERM: the elevation tool or session was terminated.
+#[test]
+fn test_guard_sigterm_after_apply_still_reverts() {
+    check_ignored_signal_still_reverts("TERM");
 }
 
 /// Even SIGKILL (which cannot be ignored) right after the rules went live
 /// leaves a guard: the watcher is started before the ruleset is applied.
 #[test]
 fn test_guard_sigkill_after_apply_still_reverts() {
-    if !real_nft_available() {
+    if !real_nft_available() || !common::script_paths_usable() {
         return;
     }
     let dir = work_dir();

@@ -113,7 +113,8 @@ pub(crate) fn refresh_audit_log(state: &mut State) -> Task<Message> {
         return Task::none();
     };
     Task::perform(
-        diagnostics::load_if_changed(audit::audit_log_path(), known, today),
+        // The path is resolved when the load runs, not when it is scheduled
+        async move { diagnostics::load_if_changed(audit::audit_log_path(), known, today).await },
         move |load| Message::AuditLogLoaded(generation, load),
     )
 }

@@ -339,16 +339,11 @@ fn create_token(path: &Path) -> Result<(), GuardError> {
     }
 }
 
-/// True if `path` only uses characters the apply script accepts in paths
-/// (absolute, `[A-Za-z0-9/._@+-]`): they are also passed through `systemd-run`.
+/// True if the apply script accepts `path` as a path argument
+/// ([`crate::distro::is_script_path`]: absolute, `[A-Za-z0-9/._@+-]`, no `..`
+/// component): they are also passed through `systemd-run`.
 fn is_script_safe_path(path: &Path) -> bool {
-    let Some(s) = path.to_str() else {
-        return false;
-    };
-    s.starts_with('/')
-        && s.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'@' | b'+' | b'-')
-        })
+    path.to_str().is_some_and(crate::distro::is_script_path)
 }
 
 /// Why `dir` cannot hold confirm/revert tokens, or `None` if it can: it
@@ -904,6 +899,9 @@ mod tests {
         assert!(!is_script_safe_path(Path::new("/home/John Doe")));
         assert!(!is_script_safe_path(Path::new("/tmp/$HOME")));
         assert!(!is_script_safe_path(Path::new("/tmp/%n")));
+        // The script refuses `..` components (but not names with dots)
+        assert!(!is_script_safe_path(Path::new("/run/user/../0")));
+        assert!(is_script_safe_path(Path::new("/run/user/..1000")));
     }
 
     #[tokio::test]

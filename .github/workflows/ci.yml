@@ -67,10 +67,11 @@ jobs:
 
       # Real-nft integration tests run `nft` inside an unprivileged user+net
       # namespace, so they need the nft binary and user namespaces enabled.
-      - name: Install nftables
+      # The mock nft (tests/mock_nft.sh) needs jq.
+      - name: Install nftables and jq
         run: |
           sudo apt-get update
-          sudo apt-get install -y nftables
+          sudo apt-get install -y nftables jq
 
       # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor
       - name: Allow unprivileged user namespaces
@@ -87,6 +88,19 @@ jobs:
           # Fail (instead of skip) if real-nft tests cannot run here
           DRFW_REQUIRE_REAL_NFT: "1"
         run: cargo test --locked
+
+      # The compile-time paths a distribution package sets (src/distro.rs):
+      # tests must not assume the defaults. /usr/local/sbin is not in the
+      # library's own nft search list, so DRFW_NFT_PATH really decides.
+      - name: Run tests (packager config)
+        env:
+          DRFW_SYSTEM_NFT_PATH: /etc/sysconfig/nftables.conf
+          DRFW_SYSTEM_NFT_SERVICE: drfw-test.service
+          DRFW_NFT_PATH: /usr/local/sbin/nft
+          DRFW_REQUIRE_REAL_NFT: "1"
+        run: |
+          sudo ln -sf /usr/sbin/nft /usr/local/sbin/nft
+          cargo test --locked
 
   deny:
     name: cargo-deny
@@ -121,5 +135,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
+      # No nftables install and no DRFW_REQUIRE_REAL_NFT here: the real-nft
+      # tests skip (with a notice); the test job runs them
       - name: Run tests
         run: cargo test --locked

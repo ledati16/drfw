@@ -430,9 +430,19 @@ mod tests {
         assert!(state.timers.is_armed(TimerKind::ConfigSave));
 
         // The armed timer fires before the (moved) deadline: nothing is
-        // saved, and update() re-arms it for the remaining time
-        let _ = state.update(Message::TimerFired(TimerKind::ConfigSave, generation));
+        // saved, and update()'s second step re-arms it for the remaining
+        // time. Both steps run at a time just after the last change (not the
+        // wall clock: a loaded machine could be past the deadline already).
+        let early = state.last_config_change.expect("changed") + Duration::from_millis(100);
+        let _ = crate::app::handlers::handle_timer_fired_at(
+            &mut state,
+            TimerKind::ConfigSave,
+            generation,
+            early,
+        );
         assert!(state.config_dirty, "deadline not reached yet");
+        assert!(!state.timers.is_armed(TimerKind::ConfigSave), "fired");
+        let _ = state.arm_debounce_timers(early);
         assert!(state.timers.is_armed(TimerKind::ConfigSave), "re-armed");
 
         // Once the quiet period is over, the save starts and no timer remains

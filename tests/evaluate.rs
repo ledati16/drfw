@@ -24,10 +24,13 @@
 //!   a connection and an accepted UDP datagram is echoed back. A rejection
 //!   arrives as an error (TCP reset or ICMP), or at least raises the client
 //!   namespace's ICMP "destination unreachable" counter (see `run_client`);
-//!   a drop is silence.
+//!   a drop is silence (twice: a silent probe is sent again, after a fresh
+//!   apply, with more patience before it counts as dropped).
 //! - The ruleset is applied again before every probe: that resets rate and
 //!   connection limits, so the first-packet verdict applies.
 //! - Neighbor entries are static, so no ARP/NDP passes the firewall.
+
+mod common;
 
 use std::fmt::Write as _;
 use std::io::ErrorKind;
@@ -62,9 +65,13 @@ const CLIENT_V4: [&str; 3] = ["10.9.0.2", "10.9.0.3", "10.9.2.5"];
 const CLIENT_V6: [&str; 3] = ["fd09::2", "fd09::3", "fd09::2:5"];
 /// Ports the probes use (overlapping the rule port pool below)
 const PROBE_PORTS: [u16; 5] = [22, 80, 1500, 5353, 9999];
-/// How long a probe waits for an answer before it counts as dropped (unless
+/// How long a probe waits for an answer before it counts as silent (unless
 /// an ICMP error arrived, see `run_client`).
 const DROP_TIMEOUT: Duration = Duration::from_millis(300);
+/// A silent probe is sent once more (after a fresh apply) with this much
+/// patience before it counts as dropped: on a loaded machine an accepted
+/// packet's answer can take longer than [`DROP_TIMEOUT`].
+const SILENT_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
 
 const SERVER_ENV: &str = "DRFW_EVALUATE_SERVER_DIR";
 const CLIENT_ENV: &str = "DRFW_EVALUATE_CLIENT";
@@ -113,41 +120,12 @@ fn outcome_name(action: Action) -> &'static str {
 ///
 /// Panics instead of skipping when `DRFW_REQUIRE_REAL_NFT=1`.
 fn kernel_available() -> bool {
-    static AVAILABLE: OnceLock<Result<(), String>> = OnceLock::new();
-    let status = AVAILABLE.get_or_init(|| {
-        for tool in ["ip", "nsenter"] {
-            let found = Command::new("sh")
-                .args(["-c", &format!("command -v {tool}")])
-                .output()
-                .is_ok_and(|o| o.status.success());
-            if !found {
-                return Err(format!("{tool} is not installed"));
-            }
-        }
-        let output = Command::new("unshare")
-            .args(["-rn", "nft", "list", "ruleset"])
-            .output()
-            .map_err(|e| format!("cannot run unshare: {e}"))?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "`unshare -rn nft list ruleset` failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-        }
-    });
-    match status {
-        Ok(()) => true,
-        Err(reason) => {
-            assert!(
-                std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
-                "DRFW_REQUIRE_REAL_NFT=1 but the kernel evaluator test cannot run: {reason}"
-            );
-            eprintln!("SKIPPING kernel evaluator test: {reason}");
-            false
-        }
+    static MISSING: OnceLock<Vec<&'static str>> = OnceLock::new();
+    if !common::real_nft_available() {
+        return false;
     }
+    let missing = MISSING.get_or_init(|| common::missing_tools(&["ip", "nsenter"]));
+    missing.is_empty() || common::skip("kernel evaluator test", &format!("missing {missing:?}"))
 }
 
 // ============================================================================
@@ -160,6 +138,8 @@ fn helper_command(prefix: &[&str], name: &str, env: (&str, &str)) -> Command {
     let exe = std::env::current_exe().expect("test binary path");
     let mut command = Command::new(prefix[0]);
     command
+        // The helpers run the nft the library uses
+        .env("PATH", common::path_with_nft())
         .args(&prefix[1..])
         .arg(exe)
         .args([name, "--exact", "--nocapture", "--test-threads=1", "-q"])
@@ -256,8 +236,13 @@ fn setup_topology() -> Result<ClientNamespace, String> {
     Ok(client)
 }
 
-/// Sends one probe from the client namespace; returns the outcome name.
-fn probe_from_client(client_pid: u32, probe: &KernelProbe) -> Result<String, String> {
+/// Sends one probe from the client namespace, waiting up to `timeout` for
+/// an answer; returns the outcome name.
+fn probe_from_client(
+    client_pid: u32,
+    probe: &KernelProbe,
+    timeout: Duration,
+) -> Result<String, String> {
     // Bound to the probed address: an accepted datagram's echo must come
     // from it (a wildcard socket would answer from the primary address)
     let bind = SocketAddr::new(probe.destination, probe.port);
@@ -269,7 +254,7 @@ fn probe_from_client(client_pid: u32, probe: &KernelProbe) -> Result<String, Str
     } else {
         let socket = UdpSocket::bind(bind).map_err(|e| format!("bind {bind}: {e}"))?;
         socket
-            .set_read_timeout(Some(DROP_TIMEOUT * 4))
+            .set_read_timeout(Some(timeout * 4))
             .map_err(|e| e.to_string())?;
         udp_echo = Some(std::thread::spawn(move || {
             let mut buf = [0u8; 64];
@@ -280,11 +265,12 @@ fn probe_from_client(client_pid: u32, probe: &KernelProbe) -> Result<String, Str
     }
 
     let spec = format!(
-        "{},{},{},{}",
+        "{},{},{},{},{}",
         if probe.tcp { "tcp" } else { "udp" },
         probe.source,
         probe.destination,
-        probe.port
+        probe.port,
+        timeout.as_millis()
     );
     let pid = client_pid.to_string();
     let output = helper_command(
@@ -319,13 +305,22 @@ fn run_server(dir: &Path) -> Result<Vec<String>, String> {
     .map_err(|e| e.to_string())?;
     let client = setup_topology()?;
     let rules = dir.join("rules.json");
+    let apply = || {
+        run_ok(
+            Command::new(common::nft()).arg("-j").arg("-f").arg(&rules),
+            "nft -j -f",
+        )
+    };
     let mut outcomes = Vec::with_capacity(probes.len());
     for probe in &probes {
-        run_ok(
-            Command::new("nft").arg("-j").arg("-f").arg(&rules),
-            "nft -j -f",
-        )?;
-        outcomes.push(probe_from_client(client.0.id(), probe)?);
+        apply()?;
+        let mut outcome = probe_from_client(client.0.id(), probe, DROP_TIMEOUT)?;
+        if outcome == "dropped" {
+            // Silence: maybe only slow. Again, with limits reset and patience
+            apply()?;
+            outcome = probe_from_client(client.0.id(), probe, SILENT_RETRY_TIMEOUT)?;
+        }
+        outcomes.push(outcome);
     }
     Ok(outcomes)
 }
@@ -379,15 +374,16 @@ fn dest_unreachables(v6: bool) -> Result<u64, String> {
 /// ICMP host-unreachable is a "soft" error for UDP, and an ICMP error that
 /// arrives while `connect()` still holds the socket lock only becomes a soft
 /// error for TCP) the namespace's ICMP destination-unreachable counter went
-/// up. Dropped: nothing within [`DROP_TIMEOUT`].
+/// up. Dropped: nothing within the spec's timeout.
 fn run_client(spec: &str) -> Result<&'static str, String> {
     let parts: Vec<&str> = spec.split(',').collect();
-    let [kind, source, destination, port] = parts.as_slice() else {
+    let [kind, source, destination, port, timeout_ms] = parts.as_slice() else {
         return Err(format!("bad probe spec {spec}"));
     };
     let source: IpAddr = source.parse().map_err(|e| format!("{e}"))?;
     let destination: IpAddr = destination.parse().map_err(|e| format!("{e}"))?;
     let port: u16 = port.parse().map_err(|e| format!("{e}"))?;
+    let timeout = Duration::from_millis(timeout_ms.parse().map_err(|e| format!("{e}"))?);
     let target = SocketAddr::new(destination, port);
     let v6 = destination.is_ipv6();
 
@@ -408,7 +404,7 @@ fn run_client(spec: &str) -> Result<&'static str, String> {
             "ip route replace",
         )?;
         let unreachables_before = dest_unreachables(v6)?;
-        return match TcpStream::connect_timeout(&target, DROP_TIMEOUT) {
+        return match TcpStream::connect_timeout(&target, timeout) {
             Ok(stream) => {
                 let local = stream.local_addr().map_err(|e| e.to_string())?;
                 if local.ip() != source {
@@ -427,7 +423,7 @@ fn run_client(spec: &str) -> Result<&'static str, String> {
         UdpSocket::bind(SocketAddr::new(source, 0)).map_err(|e| format!("bind {source}: {e}"))?;
     socket.connect(target).map_err(|e| e.to_string())?;
     socket
-        .set_read_timeout(Some(DROP_TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
     let unreachables_before = dest_unreachables(v6)?;
     socket.send(b"probe").map_err(|e| e.to_string())?;
@@ -551,20 +547,7 @@ fn nets(list: &[&str]) -> Vec<IpNetwork> {
         .collect()
 }
 
-fn user_rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
-    Rule::with_caches(
-        uuid::Uuid::new_v4(),
-        label.to_string(),
-        protocol,
-        ports,
-        Vec::new(),
-        None,
-        Chain::Input,
-        true,
-        jiff::Timestamp::now(),
-        Vec::new(),
-    )
-}
+use crate::common::rule as user_rule;
 
 const SOURCE_POOL: [&str; 12] = [
     "10.9.0.2/32",

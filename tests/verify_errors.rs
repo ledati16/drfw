@@ -2,8 +2,9 @@
 //!
 //! - Against the real `nft` (in `unshare -rn`, no root): a ruleset nft
 //!   rejects is checked, and every located error must name the rule that
-//!   caused it. These tests skip without `unshare`/`nft` unless
-//!   `DRFW_REQUIRE_REAL_NFT=1` is set, in which case they fail.
+//!   caused it. These tests skip without `unshare`/`nft` (or with
+//!   `DRFW_NFT_COMMAND` set) unless `DRFW_REQUIRE_REAL_NFT=1` is set, in which
+//!   case they fail. They use the `nft` the library runs (`common::nft`).
 //! - The CLI (`drfw check`) with a scripted nft: mapped errors are printed as
 //!   `rule "<label>": <message>` plus the source and caret lines, and piped
 //!   output never contains color escape codes.
@@ -12,58 +13,14 @@
 //! everything nft is known to reject, so the only way to make nft refuse a
 //! ruleset is to hand it one that validation would have stopped.
 
-use std::process::Command;
-use std::sync::OnceLock;
+mod common;
 
-use drfw::core::firewall::{Chain, FirewallRuleset, PortEntry, Protocol, Rule};
+use std::process::Command;
+
+use drfw::core::firewall::{FirewallRuleset, PortEntry, Protocol};
 use drfw::core::verify::{self, ErrorOrigin, VerifyIssue, VerifyResult};
 
-/// Returns true when real nft tests can run; prints a skip notice otherwise.
-///
-/// Panics instead of skipping when `DRFW_REQUIRE_REAL_NFT=1`.
-fn real_nft_available() -> bool {
-    static AVAILABLE: OnceLock<Result<(), String>> = OnceLock::new();
-    let status = AVAILABLE.get_or_init(|| {
-        let output = Command::new("unshare")
-            .args(["-rn", "nft", "list", "ruleset"])
-            .output()
-            .map_err(|e| format!("cannot run unshare: {e}"))?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "`unshare -rn nft list ruleset` failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-        }
-    });
-    match status {
-        Ok(()) => true,
-        Err(reason) => {
-            assert!(
-                std::env::var("DRFW_REQUIRE_REAL_NFT").as_deref() != Ok("1"),
-                "DRFW_REQUIRE_REAL_NFT=1 but real nft is unavailable: {reason}"
-            );
-            eprintln!("SKIPPING real nft test: {reason}");
-            false
-        }
-    }
-}
-
-fn rule(label: &str, protocol: Protocol, ports: Vec<PortEntry>) -> Rule {
-    Rule::with_caches(
-        uuid::Uuid::new_v4(),
-        label.to_string(),
-        protocol,
-        ports,
-        Vec::new(),
-        None,
-        Chain::Input,
-        true,
-        jiff::Timestamp::now(),
-        Vec::new(),
-    )
-}
+use crate::common::{real_nft_available, rule, write_profile};
 
 /// Checks `ruleset` without privileges and maps the errors.
 async fn check_and_locate(ruleset: &FirewallRuleset) -> VerifyResult {
@@ -233,19 +190,6 @@ esac
 echo "Error: unexpected arguments: $*" >&2
 exit 1
 "#;
-
-/// Writes `ruleset` as profile `name` (current on-disk format) under `root`.
-fn write_profile(root: &std::path::Path, name: &str, ruleset: &FirewallRuleset) {
-    let dir = root.join("profiles");
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut json = serde_json::to_value(ruleset).unwrap();
-    json["version"] = serde_json::json!(drfw::core::profiles::PROFILE_FORMAT_VERSION);
-    std::fs::write(
-        dir.join(format!("{name}.json")),
-        serde_json::to_vec_pretty(&json).unwrap(),
-    )
-    .unwrap();
-}
 
 /// Runs `drfw <args>` against `root` with the scripted nft; stdout and
 /// stderr are pipes, not terminals.

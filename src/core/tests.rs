@@ -608,8 +608,15 @@ mod property_tests {
             // Hostile names: quotes, newlines, backslashes must never escape the string
             Just("eth0\" accept\n accept #".to_string()),
             Just("x\\y".to_string()),
+            // Generated: any control character, quotes, backslashes, nft syntax
+            HOSTILE_TEXT.prop_map(|s| s.chars().take(15).collect()),
         ])
     }
+
+    /// Text with control characters (newline, CR, tab, NUL, ESC, DEL), quotes,
+    /// backslashes and nft syntax mixed into printable text: `\PC` alone never
+    /// generates control characters, so injection by newline would go untested.
+    const HOSTILE_TEXT: &str = "(\\PC|[\\x00-\\x1f\\x7f\"\\\\#;{}])*";
 
     fn arb_protocol() -> impl Strategy<Value = Protocol> {
         prop_oneof![
@@ -625,7 +632,7 @@ mod property_tests {
 
     prop_compose! {
         fn arb_rule()(
-            label in "\\PC{0,40}",
+            label in HOSTILE_TEXT.prop_map(|s| s.chars().take(40).collect::<String>()),
             protocol in arb_protocol(),
             ports in prop::collection::vec(arb_port_entry(), 0..4),
             sources in prop::collection::vec(arb_ip(), 0..3),
@@ -644,7 +651,10 @@ mod property_tests {
             rate_limit in proptest::option::of((1u32..1000, 0usize..4, proptest::option::of(0u32..50))),
             connection_limit in prop_oneof![Just(0u32), 1u32..1000],
             log_enabled in any::<bool>(),
-            tags in prop::collection::vec("\\PC{0,24}", 0..3),
+            tags in prop::collection::vec(
+                HOSTILE_TEXT.prop_map(|s| s.chars().take(24).collect::<String>()),
+                0..3,
+            ),
         ) -> Rule {
             use crate::core::firewall::{Chain, RateLimit, TimeUnit};
             let units = [TimeUnit::Second, TimeUnit::Minute, TimeUnit::Hour, TimeUnit::Day];
@@ -684,7 +694,7 @@ mod property_tests {
 
     proptest! {
         #[test]
-        fn test_rule_json_roundtrip_never_panics(rule in arb_rule()) {
+        fn test_rule_json_generation_never_panics(rule in arb_rule()) {
             let mut ruleset = FirewallRuleset::new();
             ruleset.rules.push(rule);
 
@@ -693,6 +703,16 @@ mod property_tests {
             // Should be valid JSON structure
             prop_assert!(json.is_object());
             prop_assert!(json["nftables"].is_array());
+        }
+
+        /// A rule survives the profile format (serde JSON) unchanged once its
+        /// caches are rebuilt, as on every profile load.
+        #[test]
+        fn test_rule_serde_roundtrip(rule in arb_rule()) {
+            let json = serde_json::to_string(&rule).expect("serialize rule");
+            let mut parsed: Rule = serde_json::from_str(&json).expect("parse rule");
+            parsed.rebuild_caches();
+            prop_assert_eq!(&parsed, &rule);
         }
 
         #[test]
@@ -769,30 +789,6 @@ mod property_tests {
         }
 
         #[test]
-        fn test_json_serialization_always_succeeds(rule in arb_rule()) {
-            let mut ruleset = FirewallRuleset::new();
-            ruleset.rules.push(rule);
-
-            let json = ruleset.to_nftables_json();
-            let json_str = serde_json::to_string(&json);
-
-            prop_assert!(json_str.is_ok());
-        }
-
-        #[test]
-        fn test_port_range_ordering_maintained(
-            start in 1u16..=65535,
-            end in 1u16..=65535
-        ) {
-            let range = PortRange {
-                start: start.min(end),
-                end: start.max(end),
-            };
-
-            prop_assert!(range.start <= range.end);
-        }
-
-        #[test]
         fn test_multiple_rules_json_generation(rules in prop::collection::vec(arb_rule(), 0..10)) {
             let mut ruleset = FirewallRuleset::new();
             ruleset.rules = rules;
@@ -800,8 +796,10 @@ mod property_tests {
             let json = ruleset.to_nftables_json();
             let nft_array = json["nftables"].as_array().unwrap();
 
-            // Should have base rules (14) + user rules
-            prop_assert!(nft_array.len() >= 15);
+            // At least the commands of an empty ruleset (table, chains, base
+            // rules); user rules only add to them
+            let base = FirewallRuleset::new().to_nftables_json();
+            prop_assert!(nft_array.len() >= base["nftables"].as_array().unwrap().len());
         }
 
         #[test]
@@ -847,44 +845,13 @@ mod integration_tests {
     //!
     //! **Note on test organization:**
     //! - Verification tests with mock nft are in `tests/integration_tests.rs` (authoritative)
-    //! - Snapshot validation tests are in `nft_json.rs` (authoritative)
     //! - JSON generation tests are here (close to implementation)
     //!
     //! Tests that exercise the verification flow should be in `tests/integration_tests.rs`
     //! to avoid duplication.
 
     use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
-    use crate::core::test_helpers::{create_test_rule, setup_mock_nft};
-    use crate::core::verify;
-
-    #[tokio::test]
-    async fn test_verify_port_range() {
-        setup_mock_nft();
-
-        let mut ruleset = FirewallRuleset::new();
-        let mut rule = create_test_rule("Test Port Range", Some(22));
-        rule.ports = vec![PortEntry::Range {
-            start: 1,
-            end: 65535,
-        }];
-        rule.rebuild_caches();
-        ruleset.rules.push(rule);
-
-        let json = ruleset.to_nftables_json();
-        let result = verify::verify_ruleset(json).await;
-
-        assert!(
-            result.is_ok(),
-            "Port range ruleset should pass verification: {:?}",
-            result.err()
-        );
-        let verify_result = result.unwrap();
-        assert!(
-            verify_result.success,
-            "Port range should be valid: {:?}",
-            verify_result.issues
-        );
-    }
+    use crate::core::test_helpers::create_test_rule;
 
     #[test]
     fn test_json_generation_with_all_protocol_types() {

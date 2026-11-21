@@ -491,6 +491,22 @@ mod tests {
         assert_eq!(sanitize_label("Test™Symbol"), "TestSymbol");
     }
 
+    /// Former proptest failures (seeds from `proptest-regressions/`, which were
+    /// never committed), kept as plain cases so every run replays them.
+    #[test]
+    fn test_proptest_regressions() {
+        // test_validate_interface_char_constraint: non-ASCII digit
+        assert!(validate_interface("0\u{b2}").is_err());
+        // The same seed with `*` (before the strategy excluded it): a
+        // trailing `*` is the wildcard, valid
+        assert_eq!(validate_interface("0*"), Ok("0*".to_string()));
+        // test_sanitize_label_*: multi-byte letters and digits from many scripts
+        let input = "\u{1ff2}\u{c0}\u{17f0}\u{ab30}\u{16b5b}\u{1d4a9}\u{11bc0}\u{a9e0}\u{1946}0\u{1e140}\u{b01}\u{1e030}\u{1e008}\u{11150}a\u{116c0}\u{aaa}\u{16b63}\u{16b50}";
+        let sanitized = sanitize_label(input);
+        assert_eq!(sanitized, "0a");
+        assert!(sanitized.len() <= 64);
+    }
+
     #[test]
     fn test_validate_port_zero() {
         assert!(validate_port(0).is_err());

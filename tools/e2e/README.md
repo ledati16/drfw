@@ -17,7 +17,7 @@ a crash or power cut mid-run can leave changes behind.
 | `run.sh` | The kit. Runs inside the disposable environment, as root |
 | `lib.sh` | Helpers sourced by `run.sh` |
 | `nspawn.sh` | Builds a throwaway systemd-nspawn container on your machine and runs the kit in it |
-| `../../tests/root_e2e.rs` | `#[ignore]`d helper tests: Save to System through the library (the CLI has no save command) |
+| `../../tests/root_e2e.rs` | `#[ignore]`d helper tests: Save to System through the library, the GUI's exact code path (`drfw save` covers the CLI) |
 
 ## Safety rails
 

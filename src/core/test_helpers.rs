@@ -3,14 +3,12 @@
 //! Provides common test helpers to avoid duplication across test suites.
 //! This module is only compiled in test mode.
 
-use std::sync::{Mutex, Once};
+use std::sync::Once;
 
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use crate::core::firewall::{
-    Action, Chain, FirewallRuleset, PortEntry, Protocol, RejectType, Rule,
-};
+use crate::core::firewall::{Chain, FirewallRuleset, PortEntry, Protocol, Rule};
 
 /// Timestamps exactly as earlier, chrono-based DRFW builds wrote them (and as
 /// hand-edited files may contain them), with their Unix time in nanoseconds.
@@ -39,31 +37,6 @@ pub const CHRONO_TIMESTAMPS: &[(&str, i128)] = &[
     ("2026-11-20T17:39:15-05:00", 1_795_214_355_000_000_000),
 ];
 
-/// Mutex for tests that need exclusive access to environment variables.
-///
-/// Use this when your test needs to:
-/// 1. Temporarily change env vars to different values
-/// 2. Restore env vars after the test
-/// 3. Test behavior when env vars are absent
-///
-/// For tests that just need mock nft, use `setup_mock_nft()` instead -
-/// it's simpler and doesn't require holding a guard.
-///
-/// # Example
-///
-/// ```ignore
-/// let _guard = ENV_VAR_MUTEX.lock().unwrap();
-/// unsafe {
-///     std::env::remove_var("DRFW_NFT_COMMAND");
-///     std::env::set_var("DRFW_ELEVATION_METHOD", "sudo");
-/// }
-/// // ... test with custom env state ...
-/// unsafe {
-///     std::env::remove_var("DRFW_ELEVATION_METHOD");
-/// }
-/// ```
-pub static ENV_VAR_MUTEX: Mutex<()> = Mutex::new(());
-
 /// One-time initialization flag for mock nft setup
 static MOCK_NFT_INIT: Once = Once::new();
 
@@ -72,14 +45,14 @@ static MOCK_NFT_INIT: Once = Once::new();
 /// Sets `DRFW_NFT_COMMAND` to the mock script path (`tests/mock_nft.sh`),
 /// which causes all nft operations to use the mock instead of real nftables.
 ///
-/// This is the preferred way to set up testing:
 /// - Thread-safe and can be called multiple times (initialization happens once)
 /// - No guard to hold, so no `await_holding_lock` issues in async tests
-/// - Simple one-liner at the start of your test
-/// - Tests never touch real nftables or require elevation
 ///
-/// For tests that need to temporarily change env vars or test different
-/// elevation methods, use `ENV_VAR_MUTEX` directly instead.
+/// This is the only change any lib test makes to the process environment,
+/// and the variable is never removed again, so a test can never see it unset
+/// once it has called this. (Elevation is tested through pure functions; an
+/// accidental elevation or use of the real data/state directories panics in
+/// lib tests.)
 ///
 /// # Example
 ///
@@ -94,8 +67,8 @@ static MOCK_NFT_INIT: Once = Once::new();
 pub fn setup_mock_nft() {
     MOCK_NFT_INIT.call_once(|| {
         let mock_path = format!("{}/tests/mock_nft.sh", env!("CARGO_MANIFEST_DIR"));
-        // SAFETY: This is only called once due to Once, and only in test code.
-        // Test binaries typically run before any concurrent test threads start.
+        // SAFETY: set once, never removed; no lib test changes the
+        // environment otherwise
         unsafe {
             std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
         }
@@ -119,46 +92,13 @@ pub fn create_test_ruleset() -> FirewallRuleset {
 /// * `label` - The rule label/comment
 /// * `port` - Optional port number (None for no port filtering)
 pub fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
-    let mut rule = Rule {
-        id: Uuid::new_v4(),
-        label: label.to_string(),
-        protocol: Protocol::Tcp,
-        ports: port.map_or_default(|p| vec![PortEntry::Single(p)]),
-        sources: vec![],
-        destinations: vec![],
-        interface: None,
-        output_interface: None,
-        chain: Chain::Input,
-        enabled: true,
-        tags: Vec::new(),
-        created_at: Timestamp::now(),
-        action: Action::Accept,
-        reject_type: RejectType::Default,
-        rate_limit: None,
-        connection_limit: 0,
-        connection_limit_per_source: false,
-        log_enabled: false,
-        // Cached fields - will be populated by rebuild_caches()
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        output_interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        sources_display: String::new(),
-        destinations_display: String::new(),
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-        log_prefix: String::new(),
-        tags_truncated: Vec::new(),
-        badge_display: String::new(),
-    };
-    rule.rebuild_caches();
-    rule
+    create_full_test_rule(label, Protocol::Tcp, port, None, None)
 }
 
 /// Creates a test rule with all fields populated for comprehensive testing.
+///
+/// Built on [`Rule::with_caches`] (caches rebuilt), so a new `Rule` field
+/// only has to be added there.
 ///
 /// # Arguments
 ///
@@ -167,6 +107,10 @@ pub fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
 /// * `port` - Optional port number
 /// * `source` - Optional source IP/CIDR as string
 /// * `interface` - Optional interface name
+///
+/// # Panics
+///
+/// If `source` is not a valid IP/CIDR (a typo must not silently drop it).
 pub fn create_full_test_rule(
     label: &str,
     protocol: Protocol,
@@ -174,56 +118,16 @@ pub fn create_full_test_rule(
     source: Option<&str>,
     interface: Option<&str>,
 ) -> Rule {
-    let mut rule = Rule {
-        id: Uuid::new_v4(),
-        label: label.to_string(),
+    Rule::with_caches(
+        Uuid::new_v4(),
+        label.to_string(),
         protocol,
-        ports: port.map_or_default(|p| vec![PortEntry::Single(p)]),
-        sources: source
-            .and_then(|s| s.parse().ok())
-            .map_or_default(|ip| vec![ip]),
-        destinations: vec![],
-        interface: interface.map(String::from),
-        output_interface: None,
-        chain: Chain::Input,
-        enabled: true,
-        tags: Vec::new(),
-        created_at: Timestamp::now(),
-        action: Action::Accept,
-        reject_type: RejectType::Default,
-        rate_limit: None,
-        connection_limit: 0,
-        connection_limit_per_source: false,
-        log_enabled: false,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        output_interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        sources_display: String::new(),
-        destinations_display: String::new(),
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-        log_prefix: String::new(),
-        tags_truncated: Vec::new(),
-        badge_display: String::new(),
-    };
-    rule.rebuild_caches();
-    rule
-}
-
-/// Checks if nft is available in the system PATH.
-///
-/// Returns `true` if `nft --version` succeeds, `false` otherwise.
-/// This is a synchronous check suitable for test setup.
-pub fn is_nft_installed() -> bool {
-    std::process::Command::new("nft")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        port.map_or_default(|p| vec![PortEntry::Single(p)]),
+        source.map_or_default(|s| vec![s.parse().expect("valid test source")]),
+        interface.map(String::from),
+        Chain::Input,
+        true,
+        Timestamp::now(),
+        Vec::new(),
+    )
 }

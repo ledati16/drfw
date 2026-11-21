@@ -4,9 +4,12 @@
 //! error handling, CLI operations, and verification with mock nft.
 //!
 //! **Test Organization:**
-//! - Verification tests with mock nft are here (authoritative)
+//! - Verification plumbing with mock nft is here; real verification is in
+//!   `tests/verify_errors.rs` and `tests/real_nft.rs`
 //! - Guarded apply plumbing (tokens, watcher, status) with mock nft is here;
 //!   real-kernel revert behavior is in `tests/real_nft.rs`
+//! - Argument validation of the root scripts (`APPLY_SCRIPT`,
+//!   `SAVE_CONFIG_SCRIPT`), run unelevated
 //! - CLI command integration tests are here
 //! - Profile operations are here
 //! - JSON generation tests are in `src/core/tests.rs` (close to implementation)
@@ -19,54 +22,45 @@
 //! ```
 //!
 //! The mock script (`tests/mock_nft.sh`) simulates nft behavior for testing.
-//!
-//! # Note on Helper Functions
-//!
-//! This file has its own copies of helper functions (`create_test_rule`, etc.)
-//! because integration tests are compiled as a separate crate and cannot access
-//! `#[cfg(test)]` modules from the library. The library's `test_helpers` module
-//! is for unit tests within the library crate only.
+//! Rule builders and other helpers shared with the other test crates are in
+//! `tests/common/mod.rs`.
+
+mod common;
 
 use std::env;
-use std::path::PathBuf;
 use std::sync::Once;
 
-use drfw::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
+use drfw::core::firewall::{FirewallRuleset, PortEntry, Protocol};
 use drfw::core::verify;
-use uuid::Uuid;
+
+use crate::common::{
+    EnvVarGuard, create_full_test_rule, create_test_rule, create_test_ruleset, mock_nft_path,
+    script_paths_usable, write_profile,
+};
 
 /// One-time initialization flag for mock nft setup
 static MOCK_NFT_INIT: Once = Once::new();
 
-/// Get the path to the mock nft script
-fn get_mock_nft_path() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests");
-    path.push("mock_nft.sh");
-    path
-}
-
 /// Set up environment to use mock nft
 ///
 /// Sets `DRFW_NFT_COMMAND` to the mock script path. This is called once
-/// and applies to all subsequent nft operations in the test suite.
+/// and applies to all subsequent nft operations in the test suite; it is
+/// never removed.
 fn setup_mock_nft() {
     MOCK_NFT_INIT.call_once(|| {
-        let mock_path = get_mock_nft_path();
+        // SAFETY: set once, never removed
         unsafe {
-            env::set_var("DRFW_NFT_COMMAND", mock_path.to_str().unwrap());
+            env::set_var("DRFW_NFT_COMMAND", mock_nft_path());
         }
     });
 }
 
-/// Serializes the tests that point the data/state dirs (process-wide
-/// environment variables) at their own temp dir.
-static TEST_DIRS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// A temp data/state directory, exclusively in use until dropped.
+/// A temp data/state directory, exclusively in use until dropped. The
+/// environment it changed (and whatever a test changes through
+/// [`TestDirs::env`]) is restored when it is dropped.
 struct TestDirs {
+    env: EnvVarGuard,
     dir: tempfile::TempDir,
-    _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl TestDirs {
@@ -81,117 +75,16 @@ impl TestDirs {
 /// The directory is removed when the returned value is dropped; until then
 /// no other test can redirect the directories.
 fn setup_temp_test_dirs() -> TestDirs {
-    let lock = TEST_DIRS_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut env = EnvVarGuard::lock();
     let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    unsafe {
-        env::set_var("DRFW_TEST_DATA_DIR", temp_dir.path());
-        env::set_var("DRFW_TEST_STATE_DIR", temp_dir.path());
-    }
-    TestDirs {
-        dir: temp_dir,
-        _lock: lock,
-    }
+    env.set("DRFW_TEST_DATA_DIR", temp_dir.path());
+    env.set("DRFW_TEST_STATE_DIR", temp_dir.path());
+    TestDirs { env, dir: temp_dir }
 }
 
-/// Create a basic test ruleset with one SSH rule
-fn create_test_ruleset() -> FirewallRuleset {
-    let mut ruleset = FirewallRuleset::new();
-    ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
-    ruleset
-}
-
-/// Create a test rule with label and optional port
-fn create_test_rule(label: &str, port: Option<u16>) -> Rule {
-    let mut rule = Rule {
-        id: Uuid::new_v4(),
-        label: label.to_string(),
-        protocol: Protocol::Tcp,
-        ports: port.map_or_default(|p| vec![PortEntry::Single(p)]),
-        sources: vec![],
-        destinations: vec![],
-        interface: None,
-        output_interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: jiff::Timestamp::now(),
-        action: Action::Accept,
-        reject_type: RejectType::Default,
-        rate_limit: None,
-        connection_limit: 0,
-        connection_limit_per_source: false,
-        log_enabled: false,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        output_interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        sources_display: String::new(),
-        destinations_display: String::new(),
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-        log_prefix: String::new(),
-        tags_truncated: Vec::new(),
-        badge_display: String::new(),
-    };
-    rule.rebuild_caches();
-    rule
-}
-
-/// Create a test rule with full configuration options
-fn create_full_test_rule(
-    label: &str,
-    protocol: Protocol,
-    port: Option<u16>,
-    source: Option<&str>,
-    interface: Option<&str>,
-) -> Rule {
-    let mut rule = Rule {
-        id: Uuid::new_v4(),
-        label: label.to_string(),
-        protocol,
-        ports: port.map_or_default(|p| vec![PortEntry::Single(p)]),
-        sources: source
-            .and_then(|s| s.parse().ok())
-            .map_or_default(|ip| vec![ip]),
-        destinations: vec![],
-        interface: interface.map(String::from),
-        output_interface: None,
-        chain: drfw::core::firewall::Chain::Input,
-        enabled: true,
-        tags: vec![],
-        created_at: jiff::Timestamp::now(),
-        action: Action::Accept,
-        reject_type: RejectType::Default,
-        rate_limit: None,
-        connection_limit: 0,
-        connection_limit_per_source: false,
-        log_enabled: false,
-        // Cached fields
-        label_lowercase: String::new(),
-        interface_lowercase: None,
-        output_interface_lowercase: None,
-        tags_lowercase: Vec::new(),
-        protocol_lowercase: "",
-        port_display: String::new(),
-        sources_display: String::new(),
-        destinations_display: String::new(),
-        rate_limit_display: None,
-        action_display: String::new(),
-        interface_display: String::new(),
-        log_prefix: String::new(),
-        tags_truncated: Vec::new(),
-        badge_display: String::new(),
-    };
-    rule.rebuild_caches();
-    rule
-}
-
+/// Plumbing only: `verify_ruleset` runs `DRFW_NFT_COMMAND` (the mock) without
+/// elevation and maps its exit status. Real verification is in
+/// `tests/verify_errors.rs` and `tests/real_nft.rs`.
 #[tokio::test]
 async fn test_verify_with_mock() {
     setup_mock_nft();
@@ -212,46 +105,63 @@ async fn test_verify_with_mock() {
         "Mock verification should succeed: {:?}",
         verify_result.issues
     );
+
+    // A refusal (the mock wants a non-empty command list) is a failed
+    // verification, not an error
+    let refused = verify::verify_ruleset(serde_json::json!({ "nftables": [] }))
+        .await
+        .expect("the check runs");
+    assert!(!refused.success);
+    assert_eq!(refused.issues.len(), 1, "{:?}", refused.issues);
 }
 
-#[tokio::test]
-async fn test_empty_ruleset_verification() {
-    setup_mock_nft();
-
-    let ruleset = FirewallRuleset::new();
-    let json = ruleset.to_nftables_json();
-    let result = verify::verify_ruleset(json).await;
-
-    assert!(
-        result.is_ok(),
-        "verify_ruleset should succeed with mock: {:?}",
-        result.err()
-    );
-
-    let verify_result = result.unwrap();
-    assert!(
-        verify_result.success,
-        "Empty ruleset verification should succeed: {:?}",
-        verify_result.issues
-    );
+/// Runs the mock nft with `args` and `stdin`; returns its exit code.
+fn run_mock(args: &[&str], stdin: &str) -> Option<i32> {
+    use std::io::Write;
+    let mut child = std::process::Command::new(mock_nft_path())
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("run the mock nft");
+    let mut input = child.stdin.take().expect("stdin");
+    // The mock may exit without reading everything
+    let _ = input.write_all(stdin.as_bytes());
+    drop(input);
+    child.wait().expect("wait for the mock nft").code()
 }
 
-#[tokio::test]
-async fn test_multiple_rules_verification() {
-    setup_mock_nft();
-
-    let mut ruleset = FirewallRuleset::new();
-
-    // Add multiple rules
-    for i in 0..5 {
-        ruleset
-            .rules
-            .push(create_test_rule(&format!("Test Rule {i}"), Some(8000 + i)));
+/// The mock accepts only what DRFW really sends: an `nftables` command list
+/// of add/delete/flush objects for JSON, revert batches for `-f`.
+#[test]
+fn test_mock_nft_rejects_malformed_input() {
+    let ruleset = create_test_ruleset().to_nftables_json().to_string();
+    for args in [
+        &["--json", "--check", "-f", "-"][..],
+        &["--json", "-f", "-"],
+    ] {
+        assert_eq!(run_mock(args, &ruleset), Some(0), "{args:?}");
+        for bad in [
+            "not json",
+            "{}",
+            r#"{"nftables": []}"#,
+            r#"{"nftables": {}}"#,
+            r#"{"nftables": [{"list": {"ruleset": null}}]}"#,
+            r#"{"nftables": ["add"]}"#,
+        ] {
+            assert_eq!(run_mock(args, bad), Some(1), "{args:?} accepted {bad}");
+        }
     }
-
-    let json = ruleset.to_nftables_json();
-    let result = verify::verify_ruleset(json).await;
-    assert!(result.is_ok(), "Multi-rule verification should succeed");
+    let revert = "add table inet drfw\ndelete table inet drfw\n";
+    assert_eq!(run_mock(&["-f", "-"], revert), Some(0));
+    assert_eq!(run_mock(&["-f", "-"], "flush ruleset\n"), Some(1));
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("revert.nft");
+    std::fs::write(&file, format!("{revert}table inet drfw {{\n}}\n")).unwrap();
+    assert_eq!(run_mock(&["-f", file.to_str().unwrap()], ""), Some(0));
+    std::fs::write(&file, "flush ruleset\n").unwrap();
+    assert_eq!(run_mock(&["-f", file.to_str().unwrap()], ""), Some(1));
 }
 
 #[test]
@@ -267,17 +177,31 @@ fn test_json_generation_deterministic() {
     assert_eq!(str1, str2, "JSON generation should be deterministic");
 }
 
+/// The audit helpers write one JSON line per event to the state dir's
+/// `audit.log`, and nothing when the event log is off.
 #[tokio::test]
-async fn test_audit_logging_doesnt_panic() {
-    // Test that audit logging functions don't panic
-    // Pass enable_event_log=false to avoid writing to real user's audit log
+async fn test_audit_logging_writes_events() {
+    let dirs = setup_temp_test_dirs();
 
-    drfw::audit::log_apply(false, 5, 3, true, None).await;
-    drfw::audit::log_apply(false, 5, 3, false, Some("Test error".to_string())).await;
-    drfw::audit::log_revert(false, true, None).await;
-    drfw::audit::log_revert(false, false, Some("Revert failed".to_string())).await;
+    drfw::audit::log_apply(true, 5, 3, true, None).await;
+    drfw::audit::log_apply(true, 5, 3, false, Some("Test error".to_string())).await;
+    drfw::audit::log_revert(true, true, None).await;
+    drfw::audit::log_revert(false, false, Some("not logged".to_string())).await;
 
-    // If we reach here without panicking, test passes
+    let log = std::fs::read_to_string(dirs.path().join("audit.log")).expect("audit.log");
+    let events: Vec<serde_json::Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON event per line"))
+        .collect();
+    assert_eq!(events.len(), 3, "{log}");
+    assert_eq!(events[0]["event_type"], "apply_rules");
+    assert_eq!(events[0]["success"], true);
+    assert_eq!(events[0]["details"]["rule_count"], 5);
+    assert_eq!(events[0]["details"]["enabled_count"], 3);
+    assert_eq!(events[1]["success"], false);
+    assert_eq!(events[1]["error"], "Test error");
+    assert_eq!(events[2]["event_type"], "revert_rules");
+    assert!(!log.contains("not logged"));
 }
 
 // NOTE: test_all_protocol_types_generate_valid_json removed - see src/core/tests.rs
@@ -323,20 +247,21 @@ fn test_complex_rule_configurations() {
         Some("wlan0"),
     ));
 
-    let json = ruleset.to_nftables_json();
-    assert!(
-        json["nftables"].as_array().is_some_and(|a| !a.is_empty()),
-        "Complex configurations should produce an nftables command list"
-    );
-
-    // Verify JSON is valid
-    let json_str = serde_json::to_string(&json);
-    assert!(json_str.is_ok());
+    // Every filter of every rule reaches the generated rules
+    let text = ruleset.to_nft_text();
+    for expected in [
+        "ip saddr 10.0.0.0/8 tcp dport 22",
+        "iifname \"eth0\" tcp dport 80",
+        "tcp dport 8000-8999",
+        "iifname \"wlan0\" ip saddr 8.8.8.8 udp dport 53",
+    ] {
+        assert!(text.contains(expected), "{expected:?} missing:\n{text}");
+    }
 }
 
 #[test]
 fn test_mock_nft_script_exists() {
-    let mock_path = get_mock_nft_path();
+    let mock_path = mock_nft_path();
     assert!(
         mock_path.exists(),
         "Mock nft script should exist at {mock_path:?}"
@@ -382,95 +307,47 @@ async fn test_cli_list_profiles() {
     );
 }
 
+/// `drfw export` prints exactly the text Save to System writes, or exactly
+/// the JSON Apply sends.
 #[test]
-fn test_cli_export_nft_format() {
-    // Test the export functionality used by `drfw export --format nft`
+fn test_cli_export_formats() {
+    let root = tempfile::tempdir().unwrap();
     let ruleset = create_test_ruleset();
-    let nft_text = ruleset.to_nft_text();
+    write_profile(root.path(), "web", &ruleset);
 
-    // Verify nft format output structure
-    assert!(
-        nft_text.contains("table inet drfw"),
-        "Should have table declaration"
-    );
-    assert!(nft_text.contains("chain input"), "Should have input chain");
-    assert!(
-        nft_text.contains("policy drop"),
-        "Should have default policy"
-    );
-    assert!(nft_text.contains("Test SSH"), "Should include rule comment");
-    assert!(
-        nft_text.contains("tcp dport 22"),
-        "Should include port rule"
-    );
-}
+    let output = run_drfw(root.path(), &["export", "web"]);
+    assert!(output.status.success(), "{}", all_output(&output));
+    assert_eq!(stdout_of(&output), format!("{}\n", ruleset.to_nft_text()));
 
-#[test]
-fn test_cli_export_json_format() {
-    // Test the export functionality used by `drfw export --format json`
-    let ruleset = create_test_ruleset();
-    let json = ruleset.to_nftables_json();
+    let output = run_drfw(root.path(), &["export", "web", "--format", "json"]);
+    assert!(output.status.success(), "{}", all_output(&output));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(json, ruleset.to_nftables_json());
 
-    // Verify JSON format structure
-    assert!(json["nftables"].is_array(), "Should have nftables array");
-
-    let json_str = serde_json::to_string_pretty(&json).unwrap();
-    assert!(
-        json_str.contains("\"table\""),
-        "Should have table declaration"
-    );
-    assert!(
-        json_str.contains("\"chain\""),
-        "Should have chain declaration"
-    );
-    assert!(
-        json_str.contains("\"rule\""),
-        "Should have rule declaration"
-    );
+    let output = run_drfw(root.path(), &["export", "missing"]);
+    assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
 }
 
 // NOTE: test_cli_verify_before_apply removed - exact duplicate of test_verify_with_mock
 
-#[test]
-fn test_cli_profile_load_and_rebuild_caches() {
-    // Test that profile loading rebuilds caches (important for CLI performance)
-    // We'll create a ruleset, serialize it to JSON, then deserialize and check caches
+/// Loading a profile from disk rebuilds the caches (they are not stored).
+#[tokio::test]
+async fn test_cli_profile_load_and_rebuild_caches() {
+    let dirs = setup_temp_test_dirs();
+    let ruleset = create_test_ruleset();
+    write_profile(dirs.path(), "cached", &ruleset);
+    let on_disk = std::fs::read_to_string(dirs.path().join("profiles/cached.json")).unwrap();
+    assert!(!on_disk.contains("label_lowercase"), "caches are not saved");
 
-    let mut ruleset = create_test_ruleset();
-
-    // Clear caches to simulate fresh load from disk
-    for rule in &mut ruleset.rules {
-        rule.label_lowercase = String::new();
-        rule.port_display = String::new();
-        rule.protocol_lowercase = "";
-    }
-
-    // Serialize to JSON (simulating save to disk)
-    let json = serde_json::to_string(&ruleset).unwrap();
-
-    // Deserialize and rebuild caches (simulating load from disk)
-    let mut loaded: FirewallRuleset = serde_json::from_str(&json).unwrap();
-    for rule in &mut loaded.rules {
-        rule.rebuild_caches();
-    }
-
-    // Verify caches are rebuilt
+    let loaded = drfw::core::profiles::load_profile("cached")
+        .await
+        .expect("load profile");
     assert_eq!(loaded.rules.len(), 1);
     let rule = &loaded.rules[0];
-
-    // These should be populated by rebuild_caches()
-    assert!(
-        !rule.label_lowercase.is_empty(),
-        "Label cache should be rebuilt"
-    );
-    assert!(
-        !rule.port_display.is_empty(),
-        "Port display cache should be rebuilt"
-    );
-    assert_eq!(
-        rule.protocol_lowercase, "tcp",
-        "Protocol cache should be rebuilt"
-    );
+    assert_eq!(rule, &ruleset.rules[0], "caches rebuilt as on creation");
+    assert_eq!(rule.label_lowercase, "test ssh");
+    assert_eq!(rule.port_display, "22");
+    assert_eq!(rule.protocol_lowercase, "tcp");
 }
 
 #[tokio::test]
@@ -525,6 +402,9 @@ async fn test_cli_profile_not_found() {
 #[tokio::test]
 async fn test_save_config_file_with_mock_nft() {
     use std::os::unix::fs::PermissionsExt;
+    if !script_paths_usable() {
+        return;
+    }
     setup_mock_nft();
 
     let dir = tempfile::tempdir().unwrap();
@@ -581,10 +461,13 @@ async fn test_save_config_file_with_mock_nft() {
 async fn test_guarded_apply_with_mock_nft() {
     use drfw::core::apply_guard::{ApplyError, GuardOutcome, OUTCOME_GRACE, apply_guarded};
     use drfw::core::confirmed::{ConfirmedRecord, RecordKind};
+    if !script_paths_usable() {
+        return;
+    }
     setup_mock_nft();
     // A confirmed guard records the ruleset in the state directory: never
     // the user's real one
-    let dirs = setup_temp_test_dirs();
+    let mut dirs = setup_temp_test_dirs();
 
     let dir = tempfile::tempdir().unwrap();
     let runtime_dir = dir.path().join("run");
@@ -595,11 +478,9 @@ async fn test_guarded_apply_with_mock_nft() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    // SAFETY: only this test reads these variables
-    unsafe {
-        env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
-        env::set_var("DRFW_GUARD_STATE_DIR", &state_dir);
-    }
+    // Restored when `dirs` is dropped
+    dirs.env.set("XDG_RUNTIME_DIR", &runtime_dir);
+    dirs.env.set("DRFW_GUARD_STATE_DIR", &state_dir);
     let ruleset = create_test_ruleset();
     let json = ruleset.to_nftables_json();
     let record = || ConfirmedRecord::load_from_blocking(dirs.path());
@@ -679,10 +560,14 @@ async fn test_guarded_apply_with_mock_nft() {
         "a killed apply script must not be reported as 'nothing changed': {error}"
     );
     assert!(error.rules_may_be_active());
-    let reverted = (0..100).any(|_| {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        reverted_count() == before + 1
-    });
+    let mut reverted = false;
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if reverted_count() == before + 1 {
+            reverted = true;
+            break;
+        }
+    }
     assert!(reverted, "the guard of the killed apply must revert");
 }
 
@@ -693,35 +578,43 @@ async fn test_guarded_apply_with_mock_nft() {
 // These run the real `drfw` binary. Each child gets its own environment
 // (data/state dirs, mock nft), so they never race with the env-var users above.
 
-/// Writes `ruleset` as profile `name` (current on-disk format) under `root`.
-fn write_profile(root: &std::path::Path, name: &str, ruleset: &FirewallRuleset) {
-    let dir = root.join("profiles");
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut json = serde_json::to_value(ruleset).unwrap();
-    json["version"] = serde_json::json!(drfw::core::profiles::PROFILE_FORMAT_VERSION);
-    std::fs::write(
-        dir.join(format!("{name}.json")),
-        serde_json::to_vec_pretty(&json).unwrap(),
-    )
-    .unwrap();
+/// The `drfw` binary against `root` with `nft` as `DRFW_NFT_COMMAND`, in a
+/// hermetic environment: nothing of the runner's leaks in (its SSH session,
+/// `DRFW_*` variables, `DISPLAY`, …), `HOME` is `root`, `PATH` has a fake
+/// `systemctl` first (so the real systemd is never asked) and `/proc` is a
+/// missing fixture dir (no SSH sessions). Only `TMPDIR` is kept, so nothing
+/// is written outside it. Callers add or override variables.
+fn drfw_command(root: &std::path::Path, nft: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let fake_bin = root.join("fake-bin");
+    if !fake_bin.join("systemctl").exists() {
+        install_fake_systemctl(&fake_bin);
+    }
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_drfw"));
+    command
+        .env_clear()
+        .env("PATH", path_with(&fake_bin))
+        .env("HOME", root)
+        .env("DRFW_TEST_DATA_DIR", root)
+        .env("DRFW_TEST_STATE_DIR", root)
+        .env("DRFW_NFT_COMMAND", nft)
+        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"));
+    if let Some(tmp) = env::var_os("TMPDIR") {
+        command.env("TMPDIR", tmp);
+    }
+    command
 }
 
 /// Runs the `drfw` binary against `root` with `nft` as `DRFW_NFT_COMMAND`.
 fn run_drfw_with_nft(root: &std::path::Path, nft: &str, args: &[&str]) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+    drfw_command(root, nft)
         .args(args)
-        .env("DRFW_TEST_DATA_DIR", root)
-        .env("DRFW_TEST_STATE_DIR", root)
-        .env("DRFW_NFT_COMMAND", nft)
-        .env_remove("SSH_CONNECTION")
-        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .output()
         .expect("run drfw")
 }
 
 /// Runs the `drfw` binary against `root` with the mock nft.
 fn run_drfw(root: &std::path::Path, args: &[&str]) -> std::process::Output {
-    run_drfw_with_nft(root, get_mock_nft_path().to_str().unwrap(), args)
+    run_drfw_with_nft(root, mock_nft_path().to_str().unwrap(), args)
 }
 
 fn stdout_of(output: &std::process::Output) -> String {
@@ -888,13 +781,19 @@ esac
 exit 1
 "#;
 
-/// Creates a directory holding only the fake `systemctl`.
-fn fake_systemctl_dir() -> tempfile::TempDir {
+/// Writes the fake `systemctl` into `dir` (created if missing).
+fn install_fake_systemctl(dir: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("systemctl");
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("systemctl");
     std::fs::write(&path, FAKE_SYSTEMCTL).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Creates a directory holding only the fake `systemctl`.
+fn fake_systemctl_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    install_fake_systemctl(dir.path());
     dir
 }
 
@@ -943,6 +842,9 @@ async fn run_save_script(
 #[tokio::test]
 async fn test_save_script_enables_the_service_after_saving() {
     use drfw::core::system_config::{EnableOutcome, enable_outcome_from_output};
+    if !script_paths_usable() {
+        return;
+    }
 
     let bin = fake_systemctl_dir();
     let dir = tempfile::tempdir().unwrap();
@@ -981,6 +883,9 @@ async fn test_save_script_enables_the_service_after_saving() {
 
 #[tokio::test]
 async fn test_save_script_skips_systemctl_without_a_service_or_a_save() {
+    if !script_paths_usable() {
+        return;
+    }
     let bin = fake_systemctl_dir();
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("nftables.conf");
@@ -1008,15 +913,119 @@ async fn test_save_script_skips_systemctl_without_a_service_or_a_save() {
     assert_eq!(systemctl_calls(bin.path()), Vec::<String>::new());
 }
 
-#[tokio::test]
-async fn test_save_script_rejects_bad_arguments_before_writing() {
-    let bin = fake_systemctl_dir();
-    let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("nftables.conf");
-    let target_str = target.to_str().unwrap();
-    let text = create_test_ruleset().to_nft_text();
+// ============================================================================
+// Argument validation of the root scripts (run unelevated, nothing elevated)
+// ============================================================================
 
-    for service in [
+/// Runs `script` as `/bin/sh -c <script> <name> <args…>` in `dir` with
+/// `stdin`, `PATH` = `path`.
+fn run_root_script(
+    script: &str,
+    name: &str,
+    args: &[&str],
+    dir: &std::path::Path,
+    path: &str,
+    stdin: &str,
+) -> std::process::Output {
+    use std::io::Write;
+    let mut child = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .arg(name)
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run /bin/sh");
+    let mut input = child.stdin.take().expect("stdin");
+    // The script exits without reading stdin when it rejects its arguments
+    if let Err(e) = input.write_all(stdin.as_bytes()) {
+        assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+    }
+    drop(input);
+    child.wait_with_output().expect("wait for /bin/sh")
+}
+
+/// Everything under `dir` (relative paths, sorted).
+fn tree(dir: &std::path::Path) -> Vec<String> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            out.push(path.strip_prefix(root).unwrap().display().to_string());
+            if entry.file_type().unwrap().is_dir() {
+                walk(root, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// Asserts that the script refused its arguments: exit 1, `message` on
+/// stderr, nothing created or changed under `dir`, no `systemctl` call.
+fn assert_refused(
+    output: &std::process::Output,
+    message: &str,
+    case: &str,
+    dir: &std::path::Path,
+    before: &[String],
+) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{case}: {stderr}");
+    assert!(
+        stderr.contains(message),
+        "{case}: expected {message:?}: {stderr}"
+    );
+    assert_eq!(tree(dir), before, "{case}: something was created");
+}
+
+/// `SAVE_CONFIG_SCRIPT` refuses every bad target, nft command and service
+/// before touching anything (the target's directory would be created first
+/// otherwise).
+#[test]
+fn test_save_script_rejects_bad_arguments_before_writing() {
+    if !script_paths_usable() {
+        return;
+    }
+    let bin = fake_systemctl_dir();
+    let path = path_with(bin.path());
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().to_str().unwrap();
+    let target = format!("{d}/sub/nftables.conf");
+    let mock = mock_nft_path();
+    let mock = mock.to_str().unwrap();
+    let text = create_test_ruleset().to_nft_text();
+    let before = tree(dir.path());
+
+    let mut cases: Vec<([String; 3], &str)> = Vec::new();
+    for bad in [
+        "relative/nftables.conf".to_string(),
+        String::new(),
+        format!("{d}/sub/../nftables.conf"),
+        format!("{d}/../nftables.conf"),
+        format!("{d}/sub/a b.conf"),
+        format!("{d}/sub/x$y.conf"),
+        format!("{d}/sub/x;id"),
+        format!("{d}/sub/x\nnftables.conf"),
+    ] {
+        cases.push(([bad, mock.into(), String::new()], "invalid target path"));
+    }
+    for bad in [
+        "relative/nft".to_string(),
+        String::new(),
+        "nft;id".into(),
+        "/usr/bin/n ft".into(),
+        format!("{d}/../nft"),
+        "/usr/sbin/nft$x".into(),
+    ] {
+        cases.push(([target.clone(), bad, String::new()], "invalid nft command"));
+    }
+    for bad in [
         "-nftables.service",
         ".nftables.service",
         "nftables",
@@ -1025,33 +1034,190 @@ async fn test_save_script_rejects_bad_arguments_before_writing() {
         "nft tables.service",
         "nft$x.service",
         "nftables.socket",
+        "../nftables.service",
     ] {
-        let output = run_save_script(&text, target_str, Some(service), bin.path()).await;
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(output.status.code(), Some(1), "{service}: {stderr}");
-        assert!(
-            stderr.contains("invalid service name"),
-            "{service}: {stderr}"
-        );
+        cases.push((
+            [target.clone(), mock.into(), bad.into()],
+            "invalid service name",
+        ));
     }
-    let output = run_save_script(&text, "relative/nftables.conf", None, bin.path()).await;
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid target path"));
 
-    assert!(!target.exists(), "nothing may be written");
+    for (args, message) in &cases {
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = run_root_script(
+            drfw::elevation::SAVE_CONFIG_SCRIPT,
+            "drfw-save-config",
+            &argv,
+            dir.path(),
+            &path,
+            &text,
+        );
+        assert_refused(&output, message, &format!("{argv:?}"), dir.path(), &before);
+    }
     assert_eq!(systemctl_calls(bin.path()), Vec::<String>::new());
+
+    // The valid arguments of the cases above do work
+    let output = run_root_script(
+        drfw::elevation::SAVE_CONFIG_SCRIPT,
+        "drfw-save-config",
+        &[&target, mock, ""],
+        dir.path(),
+        &path,
+        &text,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), text);
+}
+
+/// Valid `APPLY_SCRIPT` arguments under `dir` (state dir `<dir>/state`),
+/// nft = the mock.
+fn valid_apply_args(dir: &str) -> [String; 7] {
+    let uid = nix::unistd::getuid().as_raw();
+    [
+        format!("{dir}/state"),
+        "1".into(),
+        "0123456789abcdef0123456789abcdef".into(),
+        format!("{dir}/confirm"),
+        mock_nft_path().to_str().unwrap().into(),
+        "setsid".into(),
+        uid.to_string(),
+    ]
+}
+
+/// `APPLY_SCRIPT` refuses every bad argument (exit 1, its message) before it
+/// creates anything: no state dir, no lock, no guard.
+#[test]
+fn test_apply_script_rejects_bad_arguments_before_anything() {
+    if !script_paths_usable() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().to_str().unwrap();
+    let json = create_test_ruleset().to_nftables_json().to_string();
+    let path = env::var("PATH").unwrap_or_default();
+    let before = tree(dir.path());
+
+    #[rustfmt::skip]
+    let bad: &[(usize, &str, &str)] = &[
+        (0, "relative/state", "invalid state directory"),
+        (0, "", "invalid state directory"),
+        (0, "{d}/a b", "invalid state directory"),
+        (0, "{d}/x/../state", "invalid state directory"),
+        (0, "{d}/$x", "invalid state directory"),
+        (1, "", "invalid timeout"),
+        (1, "1a", "invalid timeout"),
+        (1, "-1", "invalid timeout"),
+        (1, " 1", "invalid timeout"),
+        (1, "3601", "timeout too long"),
+        (1, "12345", "timeout too long"),
+        (1, "00001", "timeout too long"),
+        (2, "0123456789abcdef0123456789abcde", "invalid nonce"),
+        (2, "0123456789abcdef0123456789abcdef0", "invalid nonce"),
+        (2, "0123456789ABCDEF0123456789ABCDEF", "invalid nonce"),
+        (2, "g123456789abcdef0123456789abcdef", "invalid nonce"),
+        (2, "", "invalid nonce"),
+        (3, "confirm", "invalid confirmation directory"),
+        (3, "{d}/../confirm", "invalid confirmation directory"),
+        (3, "{d}/c f", "invalid confirmation directory"),
+        (4, "relative/nft", "invalid nft command"),
+        (4, "nft;id", "invalid nft command"),
+        (4, "/usr/bin/n ft", "invalid nft command"),
+        (4, "{d}/../nft", "invalid nft command"),
+        (4, "", "invalid nft command"),
+        (5, "systemd", "invalid watcher launcher"),
+        (5, "", "invalid watcher launcher"),
+        (6, "", "invalid uid"),
+        (6, "1a", "invalid uid"),
+        (6, "-1", "invalid uid"),
+        (6, "12345678901", "invalid uid"),
+    ];
+    for &(index, value, message) in bad {
+        let mut owned = valid_apply_args(d);
+        owned[index] = value.replace("{d}", d);
+        let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let output = run_root_script(
+            drfw::elevation::APPLY_SCRIPT,
+            "drfw-apply",
+            &argv,
+            dir.path(),
+            &path,
+            &json,
+        );
+        assert_refused(&output, message, &format!("{argv:?}"), dir.path(), &before);
+    }
+}
+
+/// `APPLY_SCRIPT` refuses a state dir that is not a real directory owned by
+/// the caller and closed to others, before taking its lock or writing in it.
+#[test]
+fn test_apply_script_rejects_unsafe_state_dirs() {
+    use std::os::unix::fs::PermissionsExt;
+    if !script_paths_usable() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().to_str().unwrap();
+    let json = create_test_ruleset().to_nftables_json().to_string();
+    let path = env::var("PATH").unwrap_or_default();
+    let refuse = |state: &str, message: &str| {
+        let before = tree(dir.path());
+        let mut owned = valid_apply_args(d);
+        owned[0] = state.to_string();
+        let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let output = run_root_script(
+            drfw::elevation::APPLY_SCRIPT,
+            "drfw-apply",
+            &argv,
+            dir.path(),
+            &path,
+            &json,
+        );
+        assert_refused(&output, message, state, dir.path(), &before);
+    };
+    let owned_only = "must be a directory owned by";
+
+    let shared = dir.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    for mode in [0o775, 0o757, 0o777] {
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(mode)).unwrap();
+        refuse(shared.to_str().unwrap(), owned_only);
+    }
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    refuse(link.to_str().unwrap(), owned_only);
+    let file = dir.path().join("file");
+    std::fs::write(&file, "").unwrap();
+    refuse(file.to_str().unwrap(), "cannot create");
+    // Owned by someone else (root): refused before anything is written there
+    // (as root, `/` would be accepted, so not as root)
+    if !nix::unistd::getuid().is_root() {
+        let before = tree(dir.path());
+        let mut owned = valid_apply_args(d);
+        owned[0] = "/".into();
+        let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let output = run_root_script(
+            drfw::elevation::APPLY_SCRIPT,
+            "drfw-apply",
+            &argv,
+            dir.path(),
+            &path,
+            &json,
+        );
+        assert_refused(&output, owned_only, "/", dir.path(), &before);
+    }
 }
 
 /// Runs `drfw status` with `path` as `PATH`.
 fn run_drfw_status_with_path(root: &std::path::Path, path: &str) -> String {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+    let output = drfw_command(root, mock_nft_path())
         .arg("status")
-        .env("DRFW_TEST_DATA_DIR", root)
-        .env("DRFW_TEST_STATE_DIR", root)
-        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
         .env("PATH", path)
-        .env_remove("SSH_CONNECTION")
-        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .output()
         .expect("run drfw");
     assert!(output.status.success(), "{}", all_output(&output));
@@ -1193,16 +1359,11 @@ fn run_drfw_save_with(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+    drfw_command(root, mock_nft_path())
         .arg("save")
         .args(args)
-        .env("DRFW_TEST_DATA_DIR", root)
-        .env("DRFW_TEST_STATE_DIR", root)
-        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
         .env("DRFW_TEST_SYSTEM_NFT_PATH", root.join("nftables.conf"))
         .env("PATH", path_with(fake_bin))
-        .env_remove("SSH_CONNECTION")
-        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .envs(env.iter().copied())
         .stdin(std::process::Stdio::null())
         .output()
@@ -1218,6 +1379,9 @@ fn save_fixture(root: &std::path::Path) -> FirewallRuleset {
 
 #[test]
 fn test_cli_save_refuses_unconfirmed_rules_without_yes() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     save_fixture(root.path());
@@ -1237,10 +1401,18 @@ fn test_cli_save_refuses_unconfirmed_rules_without_yes() {
 
 #[test]
 fn test_cli_save_with_yes_saves_and_warns_about_boot() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     let ruleset = save_fixture(root.path());
-    std::fs::write(bin.path().join("state-nftables.service"), "disabled\n").unwrap();
+    std::fs::write(
+        bin.path()
+            .join(format!("state-{}", drfw::SYSTEM_NFT_SERVICE)),
+        "disabled\n",
+    )
+    .unwrap();
 
     let output = run_drfw_save(root.path(), bin.path(), &["web", "--yes"]);
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
@@ -1267,10 +1439,18 @@ fn test_cli_save_with_yes_saves_and_warns_about_boot() {
 
 #[test]
 fn test_cli_save_enable_at_boot() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     save_fixture(root.path());
-    std::fs::write(bin.path().join("state-nftables.service"), "disabled\n").unwrap();
+    std::fs::write(
+        bin.path()
+            .join(format!("state-{}", drfw::SYSTEM_NFT_SERVICE)),
+        "disabled\n",
+    )
+    .unwrap();
 
     let output = run_drfw_save(
         root.path(),
@@ -1281,7 +1461,7 @@ fn test_cli_save_enable_at_boot() {
     assert!(
         systemctl_calls(bin.path())
             .iter()
-            .any(|c| c == "enable -- nftables.service"),
+            .any(|c| *c == format!("enable -- {}", drfw::SYSTEM_NFT_SERVICE)),
         "{:?}",
         systemctl_calls(bin.path())
     );
@@ -1303,6 +1483,9 @@ fn test_cli_save_enable_at_boot() {
 /// format), saves without --yes and without the warning.
 #[test]
 fn test_cli_save_confirmed_rules_need_no_yes() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     let ruleset = save_fixture(root.path());
@@ -1344,16 +1527,11 @@ fn run_drfw_apply_with(
     let runtime = root.join("run");
     std::fs::create_dir_all(&runtime).unwrap();
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+    drfw_command(root, mock_nft_path())
         .arg("apply")
         .args(args)
-        .env("DRFW_TEST_DATA_DIR", root)
-        .env("DRFW_TEST_STATE_DIR", root)
-        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
         .env("DRFW_GUARD_STATE_DIR", root.join("guard"))
         .env("XDG_RUNTIME_DIR", &runtime)
-        .env_remove("SSH_CONNECTION")
-        .env("DRFW_TEST_PROC_DIR", root.join("no-proc"))
         .envs(env.iter().copied())
         .stdin(std::process::Stdio::null())
         .output()
@@ -1377,6 +1555,9 @@ fn web_profile_with(root: &std::path::Path, count: u16) -> FirewallRuleset {
 /// and says how they were kept.
 #[test]
 fn test_cli_unguarded_apply_is_recorded_for_save() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     let ruleset = web_profile_with(root.path(), 2);
@@ -1402,6 +1583,9 @@ fn test_cli_unguarded_apply_is_recorded_for_save() {
 /// terminal (exit 9, nothing applied); small changes pass.
 #[test]
 fn test_cli_apply_retention_guard() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let original = web_profile_with(root.path(), 5);
     let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
@@ -1453,6 +1637,9 @@ fn test_cli_apply_retention_guard() {
 /// `drfw save` shows the retention warning too; --yes covers it.
 #[test]
 fn test_cli_save_retention_guard() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     let mut ruleset = web_profile_with(root.path(), 4);
@@ -1487,6 +1674,9 @@ const SSH_SESSION: (&str, &str) = ("SSH_CONNECTION", "10.0.0.5 50000 10.0.0.1 22
 /// applied; --yes goes ahead; a rule for SSH needs no confirmation.
 #[test]
 fn test_cli_apply_lockout_check() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let ruleset = web_profile_with(root.path(), 2);
     let output = run_drfw_apply_with(root.path(), &["web", "--no-confirm"], &[SSH_SESSION]);
@@ -1536,6 +1726,9 @@ fn test_cli_apply_lockout_check() {
 /// no question, no exit 9, applied; `drfw save` is the same.
 #[test]
 fn test_cli_limited_ssh_is_a_note() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let mut ruleset = FirewallRuleset::new();
     let mut ssh = create_test_rule("SSH", Some(22));
@@ -1583,6 +1776,9 @@ fn test_cli_limited_ssh_is_a_note() {
 /// `DRFW_TEST_PROC_DIR`, never from the machine.
 #[test]
 fn test_cli_interface_bound_ssh_uses_the_session_interface() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let mut ruleset = FirewallRuleset::new();
     let mut ssh = create_test_rule("SSH on eth0", Some(22));
@@ -1640,6 +1836,9 @@ fn test_cli_interface_bound_ssh_uses_the_session_interface() {
 /// `drfw save` runs the same check (the saved rules load at the next boot).
 #[test]
 fn test_cli_save_lockout_check() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     web_profile_with(root.path(), 1);
@@ -1666,12 +1865,8 @@ fn run_drfw_in_proc(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_drfw"))
+    drfw_command(root, mock_nft_path())
         .args(args)
-        .env("DRFW_TEST_DATA_DIR", root)
-        .env("DRFW_TEST_STATE_DIR", root)
-        .env("DRFW_NFT_COMMAND", get_mock_nft_path())
-        .env_remove("SSH_CONNECTION")
         .env("DRFW_TEST_PROC_DIR", proc)
         .envs(env.iter().copied())
         .output()
@@ -1865,6 +2060,9 @@ fn test_cli_status_ssh_line() {
 
 #[test]
 fn test_cli_save_refuses_invalid_and_missing_profiles() {
+    if !script_paths_usable() {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let bin = fake_systemctl_dir();
     let mut ruleset = create_test_ruleset();

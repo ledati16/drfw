@@ -1,10 +1,26 @@
 #!/bin/bash
 # Mock nft command for testing
-# This script simulates nftables behavior for CI/testing without requiring root privileges
+# This script simulates nftables behavior for CI/testing without requiring root privileges.
+# It only accepts input shaped like what DRFW sends (it does not check nft
+# semantics: real verification is tested against the real nft in
+# tests/verify_errors.rs and tests/real_nft.rs). Needs jq.
 
-# Store last input for inspection (useful for debugging tests)
-MOCK_NFT_DIR="${TMPDIR:-/tmp}/drfw_mock_nft_$$"
-mkdir -p "$MOCK_NFT_DIR"
+# True if stdin is an nftables JSON command list as DRFW generates it: a
+# non-empty `nftables` array of objects with a single add/delete/flush key.
+is_drfw_json() {
+    jq -e '
+        (.nftables | type == "array" and length > 0)
+        and all(.nftables[];
+            type == "object" and length == 1
+            and (keys[0] | IN("add", "delete", "flush")))
+    ' > /dev/null 2>&1
+}
+
+# True if stdin is a revert batch (APPLY_SCRIPT's revert file, or the
+# watcher's last resort): it starts by adding and deleting the drfw table.
+is_revert_batch() {
+    [ "$(head -n 2)" = "$(printf 'add table inet drfw\ndelete table inet drfw')" ]
+}
 
 # Handle different nft commands
 case "$1" in
@@ -15,27 +31,18 @@ case "$1" in
 
     --json)
         if [ "$2" = "--check" ] && [ "$3" = "-f" ] && [ "$4" = "-" ]; then
-            # Verification mode - read stdin and validate JSON structure
-            input=$(cat)
-            echo "$input" > "$MOCK_NFT_DIR/last_check.json"
-
-            # Basic JSON validation using jq
-            if echo "$input" | jq . > /dev/null 2>&1; then
-                # Check for required nftables structure
-                if echo "$input" | jq -e '.nftables' > /dev/null 2>&1; then
-                    exit 0
-                else
-                    echo "Error: Invalid nftables JSON structure" >&2
-                    exit 1
-                fi
-            else
-                echo "Error: Invalid JSON" >&2
+            # Verification mode
+            if is_drfw_json; then
+                exit 0
+            fi
+            echo "Error: Invalid nftables JSON (mock)" >&2
+            exit 1
+        elif [ "$2" = "-f" ] && [ "$3" = "-" ]; then
+            # Apply mode - validate and pretend to apply
+            if ! is_drfw_json; then
+                echo "Error: Invalid nftables JSON (mock)" >&2
                 exit 1
             fi
-        elif [ "$2" = "-f" ] && [ "$3" = "-" ]; then
-            # Apply mode - read stdin and pretend to apply
-            input=$(cat)
-            echo "$input" > "$MOCK_NFT_DIR/last_apply.json"
             # Guard tests: the apply script is killed (SIGKILL) right after
             # the rules went live. Kills the outermost `drfw-apply` shell (a
             # command substitution may run in a forked copy of it).
@@ -65,12 +72,16 @@ case "$1" in
     -f)
         # Revert batch from the guard's watcher: `nft -f FILE` or `nft -f -`
         if [ "$2" = "-" ]; then
-            cat > "$MOCK_NFT_DIR/last_revert.nft"
-            exit 0
+            if is_revert_batch; then
+                exit 0
+            fi
         elif [ -r "$2" ]; then
-            cp "$2" "$MOCK_NFT_DIR/last_revert.nft"
-            exit 0
+            if is_revert_batch < "$2"; then
+                exit 0
+            fi
         fi
+        echo "Error: not a drfw revert batch (mock)" >&2
+        exit 1
         ;;
 
     -c|--check)

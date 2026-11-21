@@ -61,6 +61,23 @@ pub const SYSTEM_NFT_SERVICE: &str = match non_empty(option_env!("DRFW_SYSTEM_NF
 /// exact binary root runs.
 pub const NFT_PATH: Option<&str> = non_empty(option_env!("DRFW_NFT_PATH"));
 
+/// Where DRFW looks for `nft` when it runs it itself, without privileges
+/// (the `unshare -rn nft` check), and [`NFT_PATH`] is unset: `nft` usually
+/// lives in sbin, which is not on every user's `PATH` (Debian).
+pub const NFT_SEARCH_PATHS: [&str; 3] = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"];
+
+/// The `nft` DRFW runs itself without privileges: [`NFT_PATH`] if set, else
+/// the first of [`NFT_SEARCH_PATHS`] that exists, else plain `nft` (looked
+/// up in `PATH`). The real-nft tests probe and use the same binary.
+pub fn unprivileged_nft() -> &'static str {
+    NFT_PATH.unwrap_or_else(|| {
+        NFT_SEARCH_PATHS
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+            .unwrap_or("nft")
+    })
+}
+
 /// What elevated commands run as `nft`: [`NFT_PATH`], else plain `nft`.
 pub const NFT_COMMAND: &str = match NFT_PATH {
     Some(path) => path,
@@ -86,6 +103,27 @@ pub const SERVICE_TEMPLATE: &str = include_str!("../contrib/drfw.service.in");
 /// (their `safe_path`: `[A-Za-z0-9/._@+-]`).
 pub const fn is_safe_path_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'@' | b'+' | b'-')
+}
+
+/// True if the root scripts accept `path` as a path argument (their
+/// `safe_path`): it starts with `/`, uses only [`is_safe_path_byte`]
+/// characters and has no `..` component.
+///
+/// Looser than [`is_valid_absolute_path`], which implies it: empty and `.`
+/// components and a trailing `/` pass, since runtime directories (such as
+/// `$XDG_RUNTIME_DIR`) may be spelled that way.
+///
+/// ```
+/// use drfw::distro::is_script_path;
+///
+/// assert!(is_script_path("/run/user/1000/"));
+/// assert!(!is_script_path("/run/user/../0"));
+/// assert!(!is_script_path("/home/John Doe"));
+/// ```
+pub fn is_script_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path.bytes().all(is_safe_path_byte)
+        && !path.split('/').any(|component| component == "..")
 }
 
 /// True if `path` is an absolute file path the root scripts accept: starts

@@ -52,12 +52,21 @@ pub(crate) fn handle_timer_fired(
     kind: crate::app::TimerKind,
     generation: u64,
 ) -> Task<Message> {
+    handle_timer_fired_at(state, kind, generation, std::time::Instant::now())
+}
+
+/// [`handle_timer_fired`] at time `now` (tests pass their own clock).
+pub(crate) fn handle_timer_fired_at(
+    state: &mut State,
+    kind: crate::app::TimerKind,
+    generation: u64,
+    now: std::time::Instant,
+) -> Task<Message> {
     use crate::app::TimerKind;
 
     if !state.timers.get_mut(kind).fire(generation) {
         return Task::none();
     }
-    let now = std::time::Instant::now();
     match kind {
         TimerKind::ConfigSave => run_config_save_if_due(state, now),
         TimerKind::ProfileSave => run_profile_save_if_due(state, now),

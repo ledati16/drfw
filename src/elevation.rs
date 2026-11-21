@@ -43,7 +43,8 @@
 //!
 //! - `DRFW_NFT_COMMAND`: Path to nft binary or mock script. When set, uses this path
 //!   directly without elevation. Used for testing with mock nft.
-//!   Example: `DRFW_NFT_COMMAND=tests/mock_nft.sh cargo test`
+//!   The lib tests set it themselves (`setup_mock_nft()`); the real-nft
+//!   integration tests need it unset.
 //!
 //! - `DRFW_ELEVATION_METHOD`: Force a specific elevation method (`sudo`, `run0`, or `pkexec`),
 //!   e.g. `sudo` where `run0` is installed but not usable. It changes only which tool asks
@@ -210,96 +211,142 @@ fn binary_exists(name: &str) -> bool {
         .is_some()
 }
 
-/// Internal helper to build an elevated command for a specific program.
+/// How a program that needs root is started.
 ///
-/// This is not exposed publicly - callers must use the specific functions
-/// (`create_elevated_nft_command`, `create_elevated_save_config_command`,
-/// `create_elevated_apply_command`) to ensure only approved binaries can be
-/// elevated. The child is killed when its handle is dropped (e.g. on timeout).
-fn build_elevated_command(program: &str, args: &[&str]) -> Result<Command, ElevationError> {
-    let mut cmd = build_elevated_command_inner(program, args)?;
-    cmd.kill_on_drop(true);
-    Ok(cmd)
+/// Private on purpose: only the `create_elevated_*` functions build elevated
+/// commands, so only approved programs (`nft`, `/bin/sh` with a fixed script)
+/// are ever elevated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Elevation {
+    /// Already root: run the program itself (no prompt)
+    Direct,
+    /// `run0 <program>` (systemd v256+, no SUID)
+    Run0,
+    /// `sudo <program>`
+    Sudo,
+    /// `pkexec --disable-internal-agent <program>` (graphical polkit dialog)
+    Pkexec,
 }
 
-/// Builds an unelevated command (test mode or already root), killed on drop.
-fn unelevated_command(program: &str, args: &[&str]) -> Command {
-    let mut cmd = Command::new(program);
-    cmd.args(args).kill_on_drop(true);
-    cmd
+impl Elevation {
+    /// The elevation tool's binary (`None` for [`Self::Direct`]).
+    const fn tool(self) -> Option<&'static str> {
+        match self {
+            Self::Direct => None,
+            Self::Run0 => Some("run0"),
+            Self::Sudo => Some("sudo"),
+            Self::Pkexec => Some("pkexec"),
+        }
+    }
+
+    /// Builds the command that runs `program args…` this way. The child is
+    /// killed when its handle is dropped (e.g. on timeout), so an abandoned
+    /// call leaves no authentication dialog behind.
+    fn command(self, program: &str, args: &[&str]) -> Command {
+        let mut cmd = match self.tool() {
+            None => Command::new(program),
+            Some(tool) => {
+                let mut cmd = Command::new(tool);
+                if self == Self::Pkexec {
+                    cmd.arg("--disable-internal-agent");
+                }
+                cmd.arg(program);
+                cmd
+            }
+        };
+        cmd.args(args).kill_on_drop(true);
+        cmd
+    }
 }
 
-fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command, ElevationError> {
+/// Everything the choice of [`Elevation`] depends on (see the module docs);
+/// [`current_elevation`] reads them from the process.
+struct ElevationInputs<'a> {
+    /// Running as root: nothing to elevate
+    is_root: bool,
+    /// `DRFW_ELEVATION_METHOD`, if set
+    method: Option<&'a str>,
+    /// The declared front end
+    context: ElevationContext,
+    /// stdin is a terminal (only the CLI asks on one)
+    stdin_is_tty: bool,
+    /// Whether an elevation tool is installed (looked up in `PATH`)
+    available: &'a dyn Fn(&str) -> bool,
+}
+
+/// Chooses how to elevate: root needs nothing; `DRFW_ELEVATION_METHOD`
+/// (case-insensitive, empty = unset) overrides the front end's choice; the
+/// CLI on a terminal uses `run0`, else `sudo`; the GUI, or no terminal,
+/// `pkexec`. Pure, so every combination is tested.
+///
+/// # Errors
+///
+/// - [`ElevationError::InvalidMethod`]: the method is not `sudo`, `run0` or `pkexec`
+/// - [`ElevationError::MethodNotAvailable`]: the requested tool (or, on a
+///   terminal, both `run0` and `sudo`) is not installed
+/// - [`ElevationError::PkexecNotFound`]: `pkexec` is needed but not installed
+fn select_elevation(inputs: &ElevationInputs<'_>) -> Result<Elevation, ElevationError> {
+    if inputs.is_root {
+        return Ok(Elevation::Direct);
+    }
+
+    if let Some(method) = inputs
+        .method
+        .map(str::to_lowercase)
+        .filter(|m| !m.is_empty())
+    {
+        let elevation = match method.as_str() {
+            "sudo" => Elevation::Sudo,
+            "run0" => Elevation::Run0,
+            "pkexec" => Elevation::Pkexec,
+            _ => return Err(ElevationError::InvalidMethod(method)),
+        };
+        if !(inputs.available)(&method) {
+            return Err(ElevationError::MethodNotAvailable(method));
+        }
+        return Ok(elevation);
+    }
+
+    // The GUI always uses pkexec: even when it was started from a terminal,
+    // run0/sudo would prompt in that terminal, which nobody is looking at.
+    // The CLI uses run0/sudo on a TTY (works over SSH).
+    if inputs.context == ElevationContext::Cli && inputs.stdin_is_tty {
+        if (inputs.available)("run0") {
+            return Ok(Elevation::Run0);
+        }
+        if (inputs.available)("sudo") {
+            return Ok(Elevation::Sudo);
+        }
+        return Err(ElevationError::MethodNotAvailable("run0 or sudo".into()));
+    }
+    if (inputs.available)("pkexec") {
+        return Ok(Elevation::Pkexec);
+    }
+    Err(ElevationError::PkexecNotFound)
+}
+
+/// [`select_elevation`] for this process (uid, `DRFW_ELEVATION_METHOD`,
+/// context, stdin, `PATH`).
+///
+/// # Panics
+///
+/// In the library's own unit tests, always: they must never elevate (nor run
+/// anything as root). Tests use `DRFW_NFT_COMMAND` (`setup_mock_nft()`) or the
+/// pure functions.
+fn current_elevation() -> Result<Elevation, ElevationError> {
     use std::os::fd::AsFd;
 
-    // 1. Direct Root Execution (No prompt needed)
-    let is_root = nix::unistd::getuid().is_root();
-    if is_root {
-        return Ok(unelevated_command(program, args));
-    }
-
-    // 2. Explicit elevation method override
-    if let Ok(method) = std::env::var("DRFW_ELEVATION_METHOD") {
-        let method = method.to_lowercase();
-        if !method.is_empty() {
-            return match method.as_str() {
-                "sudo" => {
-                    if !binary_exists("sudo") {
-                        return Err(ElevationError::MethodNotAvailable("sudo".into()));
-                    }
-                    let mut cmd = Command::new("sudo");
-                    cmd.arg(program).args(args);
-                    Ok(cmd)
-                }
-                "run0" => {
-                    if !binary_exists("run0") {
-                        return Err(ElevationError::MethodNotAvailable("run0".into()));
-                    }
-                    let mut cmd = Command::new("run0");
-                    cmd.arg(program).args(args);
-                    Ok(cmd)
-                }
-                "pkexec" => {
-                    if !binary_exists("pkexec") {
-                        return Err(ElevationError::MethodNotAvailable("pkexec".into()));
-                    }
-                    let mut cmd = Command::new("pkexec");
-                    cmd.args(["--disable-internal-agent", program]).args(args);
-                    Ok(cmd)
-                }
-                _ => Err(ElevationError::InvalidMethod(method)),
-            };
-        }
-    }
-
-    // 3. From the front end. The GUI always uses pkexec: even when it was
-    // started from a terminal, run0/sudo would prompt in that terminal, which
-    // nobody is looking at. The CLI uses run0/sudo on a TTY (works over SSH).
-    let is_atty = context() == ElevationContext::Cli
-        && nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false);
-
-    if is_atty {
-        // CLI environment: prefer run0 (modern, no SUID), fallback to sudo
-        if binary_exists("run0") {
-            let mut cmd = Command::new("run0");
-            cmd.arg(program).args(args);
-            return Ok(cmd);
-        }
-        if !binary_exists("sudo") {
-            return Err(ElevationError::MethodNotAvailable("run0 or sudo".into()));
-        }
-        let mut cmd = Command::new("sudo");
-        cmd.arg(program).args(args);
-        Ok(cmd)
-    } else {
-        // GUI, or no terminal to ask on: pkexec only
-        if binary_exists("pkexec") {
-            let mut cmd = Command::new("pkexec");
-            cmd.args(["--disable-internal-agent", program]).args(args);
-            return Ok(cmd);
-        }
-        Err(ElevationError::PkexecNotFound)
-    }
+    crate::utils::deny_in_lib_tests(
+        "tried to elevate; use setup_mock_nft() or the pure command builders",
+    );
+    let method = std::env::var("DRFW_ELEVATION_METHOD").ok();
+    select_elevation(&ElevationInputs {
+        is_root: nix::unistd::getuid().is_root(),
+        method: method.as_deref(),
+        context: context(),
+        stdin_is_tty: nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false),
+        available: &binary_exists,
+    })
 }
 
 /// Creates an elevated `nft` command with the specified arguments
@@ -359,12 +406,22 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
 /// Set `DRFW_NFT_COMMAND` to a mock script path (e.g., `tests/mock_nft.sh`) to use
 /// a mock nft for testing without requiring root privileges.
 pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
-    // Check for explicit nft command override (for testing with mock)
-    if let Some(nft_path) = test_nft_command() {
-        return Ok(unelevated_command(&nft_path, args));
-    }
+    nft_command(test_nft_command().as_deref(), args, current_elevation)
+}
 
-    build_elevated_command(crate::distro::NFT_COMMAND, args)
+/// [`create_elevated_nft_command`] with the `DRFW_NFT_COMMAND` override and
+/// the elevation choice passed in; `elevation` is only asked without an
+/// override.
+fn nft_command(
+    test_nft: Option<&str>,
+    args: &[&str],
+    elevation: impl FnOnce() -> Result<Elevation, ElevationError>,
+) -> Result<Command, ElevationError> {
+    // Explicit nft command override (tests, with the mock): no elevation
+    if let Some(nft_path) = test_nft {
+        return Ok(Elevation::Direct.command(nft_path, args));
+    }
+    Ok(elevation()?.command(crate::distro::NFT_COMMAND, args))
 }
 
 /// Returns `DRFW_NFT_COMMAND` when set and non-empty (test mode: no elevation).
@@ -375,12 +432,13 @@ pub fn test_nft_command() -> Option<String> {
 }
 
 /// Shell function shared by [`SAVE_CONFIG_SCRIPT`] and [`APPLY_SCRIPT`]: true if
-/// `$1` is an absolute path of `[A-Za-z0-9/._@+-]` characters. The same
-/// allowlist as [`crate::distro::is_safe_path_byte`], which checks the
-/// compile-time paths.
+/// `$1` is an absolute path of `[A-Za-z0-9/._@+-]` characters without a `..`
+/// component: exactly [`crate::distro::is_script_path`] (a differential test
+/// keeps the two in step). The compile-time paths pass the stricter
+/// [`crate::distro::is_valid_absolute_path`].
 macro_rules! safe_path_fn {
     () => {
-        r#"safe_path() {
+        r"safe_path() {
     case $1 in
         /*) ;;
         *) return 1 ;;
@@ -388,11 +446,19 @@ macro_rules! safe_path_fn {
     case $1 in
         *[!A-Za-z0-9/._@+-]*) return 1 ;;
     esac
+    case /$1/ in
+        */../*) return 1 ;;
+    esac
     return 0
 }
-"#
+"
     };
 }
+
+/// [`safe_path_fn`]'s text, for the differential test against the Rust
+/// predicate.
+#[cfg(test)]
+const SAFE_PATH_FN: &str = safe_path_fn!();
 
 /// Fixed shell script run (elevated) by Save to System.
 ///
@@ -403,7 +469,7 @@ macro_rules! safe_path_fn {
 /// compile-time constants ([`crate::SYSTEM_NFT_PATH`],
 /// [`crate::SYSTEM_NFT_SERVICE`]) in the GUI and are only ever passed as argv.
 /// All three are checked against allowlists first (paths: absolute,
-/// `[A-Za-z0-9/._@+-]`; service: `[A-Za-z0-9:_.@-]+.service`, not starting
+/// `[A-Za-z0-9/._@+-]`, no `..` component; service: `[A-Za-z0-9:_.@-]+.service`, not starting
 /// with `-` or `.`).
 ///
 /// Steps:
@@ -552,32 +618,39 @@ pub fn create_elevated_save_config_command(
     target: &str,
     enable_service: Option<&str>,
 ) -> Result<Command, ElevationError> {
-    let service = enable_service.unwrap_or_default();
-    if let Some(nft_path) = test_nft_command() {
-        return Ok(unelevated_command(
-            SHELL_PATH,
-            &[
-                "-c",
-                SAVE_CONFIG_SCRIPT,
-                SAVE_CONFIG_SCRIPT_NAME,
-                target,
-                &nft_path,
-                service,
-            ],
-        ));
-    }
+    save_config_command(
+        test_nft_command().as_deref(),
+        target,
+        enable_service,
+        current_elevation,
+    )
+}
 
-    build_elevated_command(
+/// [`create_elevated_save_config_command`] with the `DRFW_NFT_COMMAND`
+/// override and the elevation choice passed in; `elevation` is only asked
+/// without an override.
+fn save_config_command(
+    test_nft: Option<&str>,
+    target: &str,
+    enable_service: Option<&str>,
+    elevation: impl FnOnce() -> Result<Elevation, ElevationError>,
+) -> Result<Command, ElevationError> {
+    let service = enable_service.unwrap_or_default();
+    let (elevation, nft) = match test_nft {
+        Some(nft) => (Elevation::Direct, nft),
+        None => (elevation()?, crate::distro::NFT_COMMAND),
+    };
+    Ok(elevation.command(
         SHELL_PATH,
         &[
             "-c",
             SAVE_CONFIG_SCRIPT,
             SAVE_CONFIG_SCRIPT_NAME,
             target,
-            crate::distro::NFT_COMMAND,
+            nft,
             service,
         ],
-    )
+    ))
 }
 
 // ============================================================================
@@ -832,8 +905,8 @@ const _: () = assert!(
 /// `setsid`; tests force `setsid`), `$7` uid of the user who may confirm.
 /// The nftables JSON arrives on stdin. No argument is ever interpolated into
 /// script text, and every argument is validated against an allowlist first
-/// (paths: absolute, `[A-Za-z0-9/._@+-]`; they also travel through
-/// `systemd-run`, which would expand `$`).
+/// (paths: absolute, `[A-Za-z0-9/._@+-]`, no `..` component; they also
+/// travel through `systemd-run`, which would expand `$`).
 ///
 /// The script ignores `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGPIPE`
 /// (an SSH drop, Ctrl-C after the password or a killed elevation tool must not
@@ -1111,7 +1184,7 @@ pub fn create_elevated_apply_command(
                 ))
             })?;
         let state_str = state_dir.to_string_lossy().into_owned();
-        let cmd = unelevated_command(
+        let cmd = Elevation::Direct.command(
             SHELL_PATH,
             &[
                 "-c",
@@ -1129,7 +1202,7 @@ pub fn create_elevated_apply_command(
         return Ok((cmd, state_dir));
     }
 
-    let cmd = build_elevated_command(
+    let cmd = current_elevation()?.command(
         SHELL_PATH,
         &[
             "-c",
@@ -1143,19 +1216,138 @@ pub fn create_elevated_apply_command(
             WatcherLauncher::Auto.as_arg(),
             &uid,
         ],
-    )?;
+    );
     Ok((cmd, std::path::PathBuf::from(GUARD_STATE_DIR)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::test_helpers::ENV_VAR_MUTEX;
+    //! No test here changes the process environment: the elevation choice and
+    //! the commands are built by pure functions with their inputs passed in.
 
-    /// Get absolute path to `mock_nft.sh` for testing
-    fn get_mock_nft_path() -> String {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        format!("{manifest_dir}/tests/mock_nft.sh")
+    use super::*;
+
+    const MOCK_NFT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/mock_nft.sh");
+
+    /// Runs the root scripts' shell `safe_path` on every path (one `/bin/sh`
+    /// for all of them), with `LC_ALL` set to `locale` if given; true for each
+    /// path it accepts.
+    fn shell_safe_path(paths: &[String], locale: Option<&str>) -> Vec<bool> {
+        let script = format!(
+            "{SAFE_PATH_FN}for p; do if safe_path \"$p\"; then printf 1; else printf 0; fi; done"
+        );
+        let mut cmd = std::process::Command::new(SHELL_PATH);
+        cmd.arg("-c").arg(&script).arg("drfw-safe-path").args(paths);
+        if let Some(locale) = locale {
+            cmd.env("LC_ALL", locale);
+        }
+        let output = cmd.output().expect("run /bin/sh");
+        assert!(output.status.success(), "{output:?}");
+        let verdicts: Vec<bool> = output.stdout.iter().map(|b| *b == b'1').collect();
+        assert_eq!(verdicts.len(), paths.len(), "{output:?}");
+        verdicts
+    }
+
+    /// The shell `safe_path` accepts exactly what `distro::is_script_path`
+    /// accepts (in the inherited, the C and a UTF-8 locale), every
+    /// compile-time-valid path, and only allowlisted bytes.
+    fn check_safe_path_agrees(paths: &[String]) -> Result<(), String> {
+        use crate::distro::{is_safe_path_byte, is_script_path, is_valid_absolute_path};
+        for locale in [None, Some("C"), Some("C.UTF-8")] {
+            for (path, shell) in paths.iter().zip(shell_safe_path(paths, locale)) {
+                let context = format!("{path:?} (LC_ALL={locale:?}): shell says {shell}");
+                if shell != is_script_path(path) {
+                    return Err(format!("{context}, is_script_path disagrees"));
+                }
+                if is_valid_absolute_path(path) && !shell {
+                    return Err(format!("{context}, but it is a valid compile-time path"));
+                }
+                if shell && !path.bytes().all(is_safe_path_byte) {
+                    return Err(format!("{context}, but it has unsafe bytes"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_shell_safe_path_corpus() {
+        let corpus = [
+            "",
+            "/",
+            "//",
+            "/.",
+            "/..",
+            "/../",
+            "/a/..",
+            "/a/../b",
+            "/../a",
+            "/a/..b",
+            "/a/b..",
+            "/a/.../b",
+            "/..a",
+            "/a/./b",
+            "/a/",
+            "/a//b",
+            "/etc/nftables.conf",
+            "/run/user/1000",
+            "/usr/sbin/nft",
+            "/a-b_c@d+e.f",
+            "relative",
+            "./x",
+            "../x",
+            "-/x",
+            "/a b",
+            "/a\tb",
+            "/a\nb",
+            "/a$b",
+            "/a*",
+            "/a?",
+            "/[a]",
+            "/a!",
+            "/a\\b",
+            "/a'b",
+            "/a\"b",
+            "/a`b",
+            "/a;b",
+            "/~",
+            "/caf\u{e9}",
+            "/a\u{2215}b",
+            "/%n",
+        ]
+        .map(String::from);
+        check_safe_path_agrees(&corpus).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    fn arb_path() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        let piece = prop_oneof![
+            6 => proptest::sample::select(&["/", ".", "..", "a", "Z9", "_", "@", "+", "-", "x.y"][..])
+                .prop_map(str::to_string),
+            2 => proptest::sample::select(
+                &[" ", "$", "*", "?", "[", "]", "!", "\n", "\t", "\\", "'", "\"", "`", ";", "~",
+                  "\u{e9}", "\u{2215}", "%", "=", ",", "\u{7f}"][..]
+            )
+            .prop_map(str::to_string),
+            // argv cannot hold NUL
+            1 => any::<char>().prop_filter("no NUL", |c| *c != '\0').prop_map(String::from),
+        ];
+        (any::<bool>(), proptest::collection::vec(piece, 0..8)).prop_map(|(absolute, parts)| {
+            let path = parts.concat();
+            if absolute { format!("/{path}") } else { path }
+        })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// Differential: shell `safe_path` vs the Rust predicates.
+        #[test]
+        fn prop_shell_safe_path_matches_rust(paths in proptest::collection::vec(arb_path(), 32)) {
+            if let Err(e) = check_safe_path_agrees(&paths) {
+                proptest::prop_assert!(false, "{}", e);
+            }
+        }
     }
 
     #[test]
@@ -1166,117 +1358,198 @@ mod tests {
         assert!(!binary_exists("drfw_nonexistent_binary_xyz"));
     }
 
+    /// Runs [`select_elevation`] with the tools in `installed` available.
+    fn select(
+        is_root: bool,
+        method: Option<&str>,
+        context: ElevationContext,
+        stdin_is_tty: bool,
+        installed: &[&str],
+    ) -> Result<Elevation, ElevationError> {
+        select_elevation(&ElevationInputs {
+            is_root,
+            method,
+            context,
+            stdin_is_tty,
+            available: &|tool| installed.contains(&tool),
+        })
+    }
+
+    /// What a selection result is, for comparing (`ElevationError` holds an
+    /// `io::Error` and has no `PartialEq`).
+    fn outcome(result: Result<Elevation, ElevationError>) -> String {
+        match result {
+            Ok(elevation) => format!("{elevation:?}"),
+            Err(ElevationError::InvalidMethod(m)) => format!("invalid {m}"),
+            Err(ElevationError::MethodNotAvailable(m)) => format!("unavailable {m}"),
+            Err(ElevationError::PkexecNotFound) => "no pkexec".to_string(),
+            Err(e) => format!("other {e}"),
+        }
+    }
+
     #[test]
-    fn test_create_nft_command_with_mock() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Use DRFW_NFT_COMMAND to specify mock nft
-        let mock_path = get_mock_nft_path();
-        unsafe {
-            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
+    fn test_select_elevation_table() {
+        use ElevationContext::{Cli, Gui};
+        const ALL: &[&str] = &["run0", "sudo", "pkexec"];
+        /// root, `DRFW_ELEVATION_METHOD`, context, TTY, installed tools, outcome
+        type Case<'a> = (
+            bool,
+            Option<&'a str>,
+            ElevationContext,
+            bool,
+            &'a [&'a str],
+            &'a str,
+        );
+        #[rustfmt::skip]
+        let cases: &[Case<'_>] = &[
+            // Root never elevates, whatever the method (even an invalid one)
+            (true, None, Cli, true, ALL, "Direct"),
+            (true, None, Gui, false, &[], "Direct"),
+            (true, Some("invalid_method"), Cli, true, ALL, "Direct"),
+            // DRFW_ELEVATION_METHOD overrides the context, case-insensitively
+            (false, Some("sudo"), Gui, false, ALL, "Sudo"),
+            (false, Some("SUDO"), Cli, true, ALL, "Sudo"),
+            (false, Some("Run0"), Gui, false, ALL, "Run0"),
+            (false, Some("pkexec"), Cli, true, ALL, "Pkexec"),
+            (false, Some("sudo"), Cli, true, &["run0", "pkexec"], "unavailable sudo"),
+            (false, Some("RUN0"), Cli, true, &["sudo"], "unavailable run0"),
+            (false, Some("pkexec"), Gui, false, &["sudo"], "unavailable pkexec"),
+            (false, Some("Invalid_Method"), Cli, true, ALL, "invalid invalid_method"),
+            (false, Some("doas"), Cli, true, ALL, "invalid doas"),
+            // An empty method counts as unset
+            (false, Some(""), Cli, true, ALL, "Run0"),
+            // CLI on a terminal: run0, else sudo
+            (false, None, Cli, true, ALL, "Run0"),
+            (false, None, Cli, true, &["sudo", "pkexec"], "Sudo"),
+            (false, None, Cli, true, &["pkexec"], "unavailable run0 or sudo"),
+            // CLI without a terminal: pkexec only
+            (false, None, Cli, false, ALL, "Pkexec"),
+            (false, None, Cli, false, &["run0", "sudo"], "no pkexec"),
+            // GUI: pkexec, even when started from a terminal
+            (false, None, Gui, true, ALL, "Pkexec"),
+            (false, None, Gui, false, ALL, "Pkexec"),
+            (false, None, Gui, true, &["run0", "sudo"], "no pkexec"),
+        ];
+        for &(is_root, method, context, tty, installed, expected) in cases {
+            assert_eq!(
+                outcome(select(is_root, method, context, tty, installed)),
+                expected,
+                "root={is_root} method={method:?} {context:?} tty={tty} installed={installed:?}"
+            );
         }
+    }
 
-        let cmd = create_elevated_nft_command(&["list", "ruleset"]);
-        assert!(cmd.is_ok(), "Should create command with mock nft");
+    /// Program and arguments of a built command.
+    fn argv(cmd: &Command) -> (String, Vec<String>) {
+        let std_cmd = cmd.as_std();
+        (
+            std_cmd.get_program().to_string_lossy().into_owned(),
+            std_cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect(),
+        )
+    }
 
-        // Clean up
-        unsafe {
-            std::env::remove_var("DRFW_NFT_COMMAND");
+    #[test]
+    fn test_elevation_commands() {
+        let args = ["list", "ruleset"];
+        let built = |elevation: Elevation| argv(&elevation.command("nft", &args));
+        assert_eq!(
+            built(Elevation::Direct),
+            ("nft".into(), vec!["list".into(), "ruleset".into()])
+        );
+        for (elevation, tool) in [(Elevation::Run0, "run0"), (Elevation::Sudo, "sudo")] {
+            assert_eq!(
+                built(elevation),
+                (
+                    tool.into(),
+                    vec!["nft".into(), "list".into(), "ruleset".into()]
+                )
+            );
         }
+        assert_eq!(
+            built(Elevation::Pkexec),
+            (
+                "pkexec".into(),
+                vec![
+                    "--disable-internal-agent".into(),
+                    "nft".into(),
+                    "list".into(),
+                    "ruleset".into()
+                ]
+            )
+        );
+    }
+
+    /// `DRFW_NFT_COMMAND` runs that command directly: the elevation choice is
+    /// never even made (an invalid `DRFW_ELEVATION_METHOD` cannot matter).
+    #[test]
+    fn test_nft_command_override_skips_elevation() {
+        let cmd = nft_command(Some(MOCK_NFT), &["list", "ruleset"], || {
+            panic!("the override must not elevate")
+        })
+        .expect("override");
+        assert_eq!(
+            argv(&cmd),
+            (MOCK_NFT.into(), vec!["list".into(), "ruleset".into()])
+        );
+
+        let cmd = nft_command(None, &["-c"], || Ok(Elevation::Sudo)).expect("elevated");
+        assert_eq!(
+            argv(&cmd),
+            (
+                "sudo".into(),
+                vec![crate::distro::NFT_COMMAND.into(), "-c".into()]
+            )
+        );
+        let error = nft_command(None, &["-c"], || {
+            Err(ElevationError::InvalidMethod("x".into()))
+        });
+        assert!(matches!(error, Err(ElevationError::InvalidMethod(_))));
     }
 
     #[test]
     fn test_save_config_command_with_mock_skips_elevation() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        let mock_path = get_mock_nft_path();
-        unsafe {
-            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
-        }
-        let cmd = create_elevated_save_config_command(
+        let cmd = save_config_command(
+            Some(MOCK_NFT),
             "/nonexistent/nftables.conf",
             Some("nftables.service"),
-        );
-        unsafe {
-            std::env::remove_var("DRFW_NFT_COMMAND");
-        }
-
-        let cmd = cmd.expect("mock mode never needs elevation");
-        let std_cmd = cmd.as_std();
-        assert_eq!(std_cmd.get_program(), SHELL_PATH);
-        let args: Vec<_> = std_cmd.get_args().collect();
+            || panic!("mock mode never needs elevation"),
+        )
+        .expect("mock mode");
+        let (program, args) = argv(&cmd);
+        assert_eq!(program, SHELL_PATH);
         // Fixed script, then $0, target and nft command as separate argv entries
-        assert_eq!(args[1], SAVE_CONFIG_SCRIPT);
-        assert_eq!(args[3], "/nonexistent/nftables.conf");
-        assert_eq!(args[4], mock_path.as_str());
-        assert_eq!(args[5], "nftables.service");
-    }
+        assert_eq!(
+            args,
+            [
+                "-c",
+                SAVE_CONFIG_SCRIPT,
+                SAVE_CONFIG_SCRIPT_NAME,
+                "/nonexistent/nftables.conf",
+                MOCK_NFT,
+                "nftables.service"
+            ]
+        );
 
-    #[test]
-    fn test_invalid_elevation_method() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Clear custom command and set invalid method
-        unsafe {
-            std::env::remove_var("DRFW_NFT_COMMAND");
-            std::env::set_var("DRFW_ELEVATION_METHOD", "invalid_method");
-        }
-
-        let result = create_elevated_nft_command(&["list", "ruleset"]);
-
-        // Clean up
-        unsafe {
-            std::env::remove_var("DRFW_ELEVATION_METHOD");
-        }
-
-        assert!(matches!(result, Err(ElevationError::InvalidMethod(_))));
-    }
-
-    #[test]
-    fn test_elevation_method_case_insensitive() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Clear custom command and test case insensitivity with SUDO (uppercase)
-        unsafe {
-            std::env::remove_var("DRFW_NFT_COMMAND");
-            std::env::set_var("DRFW_ELEVATION_METHOD", "SUDO");
-        }
-
-        let result = create_elevated_nft_command(&["list", "ruleset"]);
-
-        // Clean up
-        unsafe {
-            std::env::remove_var("DRFW_ELEVATION_METHOD");
-        }
-
-        // Should succeed (sudo exists) or fail with MethodNotAvailable (sudo doesn't exist)
-        // but NOT InvalidMethod - that would mean case sensitivity is broken
-        assert!(!matches!(result, Err(ElevationError::InvalidMethod(_))));
-    }
-
-    #[test]
-    fn test_drfw_nft_command_takes_precedence() {
-        let _guard = ENV_VAR_MUTEX.lock().unwrap();
-
-        // Even with elevation method set, DRFW_NFT_COMMAND should take precedence
-        let mock_path = get_mock_nft_path();
-        unsafe {
-            std::env::set_var("DRFW_NFT_COMMAND", &mock_path);
-            std::env::set_var("DRFW_ELEVATION_METHOD", "invalid_method");
-        }
-
-        let result = create_elevated_nft_command(&["list", "ruleset"]);
-
-        // Clean up
-        unsafe {
-            std::env::remove_var("DRFW_NFT_COMMAND");
-            std::env::remove_var("DRFW_ELEVATION_METHOD");
-        }
-
-        // Should succeed because DRFW_NFT_COMMAND bypasses elevation entirely
-        assert!(
-            result.is_ok(),
-            "DRFW_NFT_COMMAND should take precedence over DRFW_ELEVATION_METHOD"
+        // Elevated: the script through the tool, with the build's nft
+        let cmd = save_config_command(None, "/etc/x.conf", None, || Ok(Elevation::Pkexec))
+            .expect("elevated");
+        let (program, args) = argv(&cmd);
+        assert_eq!(program, "pkexec");
+        assert_eq!(
+            args,
+            [
+                "--disable-internal-agent",
+                SHELL_PATH,
+                "-c",
+                SAVE_CONFIG_SCRIPT,
+                SAVE_CONFIG_SCRIPT_NAME,
+                "/etc/x.conf",
+                crate::distro::NFT_COMMAND,
+                ""
+            ]
         );
     }
 }
