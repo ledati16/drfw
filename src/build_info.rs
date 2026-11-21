@@ -40,10 +40,10 @@ const fn or_unknown(value: &'static str) -> &'static str {
 }
 
 /// Version with the git commit, marked when built from a dirty tree:
-/// `"0.9.0 (a3f8c21)"` or `"0.9.0 (a3f8c21*)"`; `"0.9.0"` without git.
+/// `"1.0.0 (a3f8c21)"` or `"1.0.0 (a3f8c21*)"`; `"1.0.0"` without git.
 pub const VERSION: &str = shadow_rs::formatcp!("{}{}", build::PKG_VERSION, COMMIT_SUFFIX);
 
-/// Short version for `drfw -V`: `"0.9.0 (a3f8c21)"`, `"0.9.0"` without git.
+/// Short version for `drfw -V`: `"1.0.0 (a3f8c21)"`, `"1.0.0"` without git.
 pub const SHORT_VERSION: &str =
     shadow_rs::formatcp!("{}{}", build::PKG_VERSION, SHORT_COMMIT_SUFFIX);
 

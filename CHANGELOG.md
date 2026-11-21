@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 — 2026-11-21
 
 Everything since 0.9.0. Most of DRFW was reworked: how rules are applied and reverted,
 what the generated ruleset contains, and what the GUI and CLI tell you about it. Read
@@ -324,7 +324,7 @@ upgrading.
   exit with 101).
 - `drfw save` says how the ruleset was kept: "applied and kept (confirmed)" or
   "applied and kept (without auto-revert)".
-- Without git metadata (a release tarball) the version is plain "0.9.0", and
+- Without git metadata (a release tarball) the version is plain "1.0.0", and
   `drfw --version` reports commit and branch as "unknown".
 - Colour is used only on a terminal; piped output has no escape codes.
 - `DRFW_ELEVATION_METHOD` (`sudo`, `run0`, `pkexec`) chooses the elevation tool; see

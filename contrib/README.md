@@ -103,7 +103,7 @@ from `--help`, needs no privileges and creates no files. The unit is ordered
 
 The version shown by `drfw -V` and the GUI includes the git commit only when building
 from a checkout (as `PKGBUILD` does). A build from a release tarball or other source
-without `.git` reports plain `0.9.0`, with commit and branch `unknown` in
+without `.git` reports plain `1.0.0`, with commit and branch `unknown` in
 `drfw --version`.
 
 ## Compile-Time Configuration

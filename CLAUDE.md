@@ -547,7 +547,7 @@ CLI facts the docs promise (keep them true): `--confirm` outside 5–120 is a cl
 error (exit 2), and the GUI clamps a hand-edited `auto_revert_timeout_secs` into the
 same range; keys typed before the countdown starts (e.g. during the password prompt)
 are discarded; output into a closed pipe (`drfw … | head`) ends quietly instead of
-panicking (exit 101 before); without git metadata the version is plain "0.9.0" and
+panicking (exit 101 before); without git metadata the version is plain "1.0.0" and
 `--version` reports commit and branch "unknown" (`build_info`).
 
 Unit tests therefore run exactly once: in the lib test target, except the CLI
