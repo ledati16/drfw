@@ -78,9 +78,10 @@ pub(crate) fn profile_name_error(
 }
 
 /// Clears all per-profile editing state (undo history, open form, pending
-/// delete, drag state, pending warning). Rule ids and undo entries of the
-/// previous profile must never act on the new one.
+/// delete, drag state, pending warning, verification errors). Rule ids and
+/// undo entries of the previous profile must never act on the new one.
 fn reset_editing_state(state: &mut State) {
+    super::clear_verify_errors(state);
     state.command_history = crate::command::CommandHistory::default();
     state.rule_form = None;
     state.rule_form_helper = None;
@@ -521,6 +522,8 @@ pub(crate) fn handle_profile_renamed(
             if state.active_profile_name == old {
                 state.active_profile_name.clone_from(&new);
                 state.profile_generation += 1;
+                // The errors were found under the old name; start clean
+                super::clear_verify_errors(state);
                 if let Some(issue) = &mut state.unreadable_profile {
                     issue.name.clone_from(&new);
                 }
@@ -738,6 +741,100 @@ mod tests {
         let _ = perform_profile_switch(state, name.to_string());
         let request = state.switch_request;
         let _ = handle_profile_switched(state, request, name.to_string(), result);
+    }
+
+    /// Opens the "Verification Errors" panel with an error on the first rule.
+    fn show_verify_errors(state: &mut State) {
+        use crate::core::verify::{ErrorOrigin, VerifyIssue, VerifyResult};
+
+        let rule = &state.ruleset.rules[0];
+        let result = VerifyResult::failure(vec![VerifyIssue {
+            origin: Some(ErrorOrigin::UserRule {
+                id: rule.id,
+                label: rule.label.clone(),
+            }),
+            message: "Service out of range".into(),
+            source_line: None,
+            caret: None,
+        }]);
+        state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(
+            &result,
+            &state.ruleset,
+        ));
+        state.show_verify_errors = true;
+    }
+
+    fn verify_errors_cleared(state: &State) -> bool {
+        state.verify_errors.is_none() && !state.show_verify_errors
+    }
+
+    /// The panel's "Edit Rule" buttons name rules of the active profile, so
+    /// every change of profile drops it.
+    #[test]
+    fn test_profile_changes_clear_verify_errors() {
+        // Switch
+        let mut state = dirty_state();
+        show_verify_errors(&mut state);
+        switch_done(&mut state, "other", Ok(FirewallRuleset::default()));
+        assert!(verify_errors_cleared(&state));
+
+        // Create (from the current rules too: it is another profile)
+        let mut state = dirty_state();
+        show_verify_errors(&mut state);
+        let rules = state.ruleset.clone();
+        let _ = handle_profile_created(
+            &mut state,
+            "copy".into(),
+            rules,
+            Ok(vec!["copy".into(), "test".into()]),
+        );
+        assert!(verify_errors_cleared(&state));
+
+        // A failed create changes nothing
+        let mut state = dirty_state();
+        show_verify_errors(&mut state);
+        let _ = handle_profile_created(
+            &mut state,
+            "dup".into(),
+            FirewallRuleset::default(),
+            Err("A profile named 'dup' already exists".into()),
+        );
+        assert!(state.show_verify_errors);
+
+        // Start fresh
+        let mut state = dirty_state();
+        show_verify_errors(&mut state);
+        state.unreadable_profile = Some(UnreadableProfile {
+            name: "test".into(),
+            reason: "damaged".into(),
+            backup: None,
+        });
+        handle_start_fresh_profile(&mut state);
+        assert!(verify_errors_cleared(&state));
+
+        // Rename: only a successful rename of the active profile
+        let mut state = dirty_state();
+        show_verify_errors(&mut state);
+        let _ = handle_profile_renamed(
+            &mut state,
+            "test".into(),
+            "renamed".into(),
+            Err("A profile named 'renamed' already exists".into()),
+        );
+        let _ = handle_profile_renamed(
+            &mut state,
+            "other".into(),
+            "other2".into(),
+            Ok(vec!["other2".into(), "test".into()]),
+        );
+        assert!(state.show_verify_errors, "another profile was renamed");
+        let _ = handle_profile_renamed(
+            &mut state,
+            "test".into(),
+            "renamed".into(),
+            Ok(vec!["other2".into(), "renamed".into()]),
+        );
+        assert!(verify_errors_cleared(&state));
     }
 
     #[test]

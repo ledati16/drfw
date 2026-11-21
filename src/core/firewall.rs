@@ -1066,9 +1066,9 @@ impl FirewallRuleset {
         // `delete` cannot fail. Unlike `flush table`, this also removes sets
         // (per-source limit state, sets of deleted rules).
         let table = json!({ "table": { "family": NFT_FAMILY, "name": NFT_TABLE } });
-        cmds.push(json!({ "add": table.clone() }));
-        cmds.push(json!({ "delete": table.clone() }));
-        cmds.push(json!({ "add": table }));
+        cmds.push(CommandOrigin::Setup, json!({ "add": table.clone() }));
+        cmds.push(CommandOrigin::Setup, json!({ "delete": table.clone() }));
+        cmds.push(CommandOrigin::Setup, json!({ "add": table }));
 
         Self::add_base_chains(&mut cmds, advanced);
         Self::add_base_rules(&mut cmds, advanced);
@@ -1212,19 +1212,22 @@ impl FirewallRuleset {
         ];
 
         for (name, policy) in chains {
-            cmds.push(json!({
-                "add": {
-                    "chain": {
-                        "family": NFT_FAMILY,
-                        "table": NFT_TABLE,
-                        "name": name,
-                        "type": "filter",
-                        "hook": name,
-                        "prio": CHAIN_PRIORITY,
-                        "policy": policy
+            cmds.push(
+                CommandOrigin::Chain(name),
+                json!({
+                    "add": {
+                        "chain": {
+                            "family": NFT_FAMILY,
+                            "table": NFT_TABLE,
+                            "name": name,
+                            "type": "filter",
+                            "hook": name,
+                            "prio": CHAIN_PRIORITY,
+                            "policy": policy
+                        }
                     }
-                }
-            }));
+                }),
+            );
         }
     }
 
@@ -1243,7 +1246,7 @@ impl FirewallRuleset {
 
         // Optional: Anti-spoofing (RPF) - WARNING: Breaks Docker/VPNs
         if advanced.enable_rpf {
-            cmds.push(Self::rule_add(
+            cmds.push_base_rule(
                 "input",
                 vec![
                     Self::match_eq(
@@ -1253,27 +1256,27 @@ impl FirewallRuleset {
                     json!({ "drop": null }),
                 ],
                 "drop packets with spoofed source addresses (RPF)",
-            ));
+            );
         }
 
-        cmds.push(Self::rule_add(
+        cmds.push_base_rule(
             "input",
             vec![Self::meta_match("iifname", "lo"), json!({ "accept": null })],
             "allow from loopback",
-        ));
-        cmds.push(Self::rule_add(
+        );
+        cmds.push_base_rule(
             "input",
             vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
             "early drop of invalid connections",
-        ));
-        cmds.push(Self::rule_add(
+        );
+        cmds.push_base_rule(
             "input",
             vec![Self::ct_established(), json!({ "accept": null })],
             "allow tracked connections",
-        ));
+        );
         // DHCPv6 replies come from the server's link-local address to ours; the
         // request went to a multicast group so conntrack cannot associate them.
-        cmds.push(Self::rule_add(
+        cmds.push_base_rule(
             "input",
             vec![
                 Self::payload_match(
@@ -1286,19 +1289,19 @@ impl FirewallRuleset {
                 json!({ "accept": null }),
             ],
             "allow dhcpv6 client replies",
-        ));
+        );
 
         if advanced.block_forwarding {
-            cmds.push(Self::rule_add(
+            cmds.push_base_rule(
                 "forward",
                 vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
                 "drop invalid forwarded connections",
-            ));
-            cmds.push(Self::rule_add(
+            );
+            cmds.push_base_rule(
                 "forward",
                 vec![Self::ct_established(), json!({ "accept": null })],
                 "allow tracked forwarded connections",
-            ));
+            );
         }
 
         if advanced.egress_profile == EgressProfile::Server {
@@ -1306,7 +1309,7 @@ impl FirewallRuleset {
         }
 
         cmds.section = SECTION_SECURITY;
-        cmds.push(Self::rule_add(
+        cmds.push_base_rule(
             "input",
             vec![
                 Self::meta_match("l4proto", "icmp"),
@@ -1314,8 +1317,8 @@ impl FirewallRuleset {
                 json!({ "drop": null }),
             ],
             "drop icmp redirects",
-        ));
-        cmds.push(Self::rule_add(
+        );
+        cmds.push_base_rule(
             "input",
             vec![
                 Self::meta_match("l4proto", "ipv6-icmp"),
@@ -1323,7 +1326,7 @@ impl FirewallRuleset {
                 json!({ "drop": null }),
             ],
             "drop icmpv6 redirects",
-        ));
+        );
 
         cmds.section = SECTION_ICMP;
         Self::add_icmp_rules(cmds, advanced);
@@ -1337,24 +1340,24 @@ impl FirewallRuleset {
     fn add_server_output_base_rules(cmds: &mut CommandList) {
         use serde_json::json;
 
-        cmds.push(Self::rule_add(
+        cmds.push_base_rule(
             "output",
             vec![Self::meta_match("oifname", "lo"), json!({ "accept": null })],
             "allow to loopback",
-        ));
-        cmds.push(Self::rule_add(
+        );
+        cmds.push_base_rule(
             "output",
             vec![Self::ct_match("state", "invalid"), json!({ "drop": null })],
             "early drop of invalid outbound connections",
-        ));
-        cmds.push(Self::rule_add(
+        );
+        cmds.push_base_rule(
             "output",
             vec![Self::ct_established(), json!({ "accept": null })],
             "allow outbound tracked connections",
-        ));
+        );
         // Neighbor discovery and MLD are not connection-tracked (untracked), so the
         // established rule above does not cover them; IPv6 breaks without them.
-        cmds.push(Self::rule_add(
+        cmds.push_base_rule(
             "output",
             vec![
                 Self::meta_match("l4proto", "ipv6-icmp"),
@@ -1372,7 +1375,7 @@ impl FirewallRuleset {
                 json!({ "accept": null }),
             ],
             "allow outbound ipv6 neighbor discovery",
-        ));
+        );
 
         // DHCP client traffic. Lease renewals go out from ordinary UDP sockets
         // (unlike the initial raw-socket DISCOVER), so with an output drop policy a
@@ -1381,7 +1384,7 @@ impl FirewallRuleset {
             ("allow outbound dhcp client requests", 68, 67),
             ("allow outbound dhcpv6 client requests", 546, 547),
         ] {
-            cmds.push(Self::rule_add(
+            cmds.push_base_rule(
                 "output",
                 vec![
                     Self::payload_match("udp", "sport", sport),
@@ -1389,7 +1392,7 @@ impl FirewallRuleset {
                     json!({ "accept": null }),
                 ],
                 comment,
-            ));
+            );
         }
     }
 
@@ -1422,11 +1425,11 @@ impl FirewallRuleset {
                     "parameter-problem"        // Type 12: header errors
                 ] }),
             );
-            cmds.push(Self::rule_add(
+            cmds.push_base_rule(
                 "input",
                 build_icmp_rule("icmp", Some(ipv4_types)),
                 "allow essential icmp (strict mode)",
-            ));
+            );
 
             // IPv6 ICMP - essential types only (more types required for IPv6 to function)
             let ipv6_types = Self::payload_match(
@@ -1445,23 +1448,15 @@ impl FirewallRuleset {
                     "nd-neighbor-advert"       // Type 136 (CRITICAL for IPv6)
                 ] }),
             );
-            cmds.push(Self::rule_add(
+            cmds.push_base_rule(
                 "input",
                 build_icmp_rule("ipv6-icmp", Some(ipv6_types)),
                 "allow essential icmpv6 (strict mode)",
-            ));
+            );
         } else {
             // Default mode: Allow all ICMP (except redirects which are already blocked)
-            cmds.push(Self::rule_add(
-                "input",
-                build_icmp_rule("icmp", None),
-                "allow icmp",
-            ));
-            cmds.push(Self::rule_add(
-                "input",
-                build_icmp_rule("ipv6-icmp", None),
-                "allow icmp v6",
-            ));
+            cmds.push_base_rule("input", build_icmp_rule("icmp", None), "allow icmp");
+            cmds.push_base_rule("input", build_icmp_rule("ipv6-icmp", None), "allow icmp v6");
         }
     }
 
@@ -1710,11 +1705,10 @@ impl FirewallRuleset {
             },
         });
 
-        cmds.push(Self::rule_add(
-            rule.chain.as_ref(),
-            expressions,
-            &rule.label,
-        ));
+        cmds.push(
+            CommandOrigin::UserRule(rule.id),
+            Self::rule_add(rule.chain.as_ref(), expressions, &rule.label),
+        );
     }
 
     /// Creates the dynamic set for one per-source limit of `rule` (one address
@@ -1760,7 +1754,11 @@ impl FirewallRuleset {
             // forget the count of long-lived connections).
             PerSourceKind::Connections => set["flags"] = json!(["dynamic"]),
         }
-        cmds.push(json!({ "add": { "set": set } }));
+        // The set is part of the rule: an error in it is the rule's error
+        cmds.push(
+            CommandOrigin::UserRule(rule.id),
+            json!({ "add": { "set": set } }),
+        );
 
         let saddr = json!({ "payload": { "protocol": family, "field": "saddr" } });
         let elem = if is_v6 {
@@ -1785,34 +1783,38 @@ impl FirewallRuleset {
         // Optional: Log dropped packets before rejection
         if advanced.log_dropped {
             let prefix = crate::validators::sanitize_nft_quoted(&advanced.log_prefix);
-            cmds.push(Self::rule_add(
+            cmds.push_base_rule(
                 "input",
                 vec![
                     Self::rate_limit(advanced.log_rate_per_minute, "minute"),
                     json!({ "log": { "prefix": prefix, "level": "info" } }),
                 ],
                 "log dropped packets (rate limited)",
-            ));
+            );
         }
 
+        // These two have no comment in the ruleset; the origin names them for
+        // error messages.
         // Rate-limited reject (prevents port scanning)
-        cmds.push(Self::rule_add(
-            "input",
-            vec![
-                Self::meta_match("pkttype", "host"),
-                Self::rate_limit(5, "second"),
-                json!({ "counter": null }),
-                json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } }),
-            ],
-            "",
-        ));
+        cmds.push(
+            CommandOrigin::BaseRule("rate-limited reject"),
+            Self::rule_add(
+                "input",
+                vec![
+                    Self::meta_match("pkttype", "host"),
+                    Self::rate_limit(5, "second"),
+                    json!({ "counter": null }),
+                    json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } }),
+                ],
+                "",
+            ),
+        );
 
         // Final counter (catches all remaining drops from chain policy)
-        cmds.push(Self::rule_add(
-            "input",
-            vec![json!({ "counter": null })],
-            "",
-        ));
+        cmds.push(
+            CommandOrigin::BaseRule("final counter"),
+            Self::rule_add("input", vec![json!({ "counter": null })], ""),
+        );
     }
 }
 
@@ -1911,13 +1913,36 @@ const SECTION_ICMP: &str = "ICMP";
 const SECTION_USER: &str = "User rules";
 const SECTION_END: &str = "End of chain";
 
-/// One nftables JSON command plus the preview section it belongs to.
+/// What produced a generated command.
 ///
-/// The section is presentation-only: the JSON output ignores it, and the text
-/// renderer prints it as a `# --- … ---` heading when it changes within a chain.
+/// Recorded where each command is pushed, so errors nft reports for a line of
+/// the text form can be traced back to the rule (or chain, or setup) that
+/// caused them (see `crate::core::nft_errors`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommandOrigin {
+    /// Table setup (`add`/`delete`/`add table`)
+    Setup,
+    /// A base chain declaration, by chain name
+    Chain(&'static str),
+    /// A rule DRFW adds itself (base, security, ICMP, server output and
+    /// end-of-chain rules), by name: its comment, or a description for the
+    /// rules that have none
+    BaseRule(&'static str),
+    /// A command generated for a user rule: each of its family copies and the
+    /// dynamic sets of its per-source limits
+    UserRule(Uuid),
+}
+
+/// One nftables JSON command plus the preview section it belongs to and what
+/// produced it.
+///
+/// `section` and `origin` are metadata: the JSON output contains only
+/// `value`. The text renderer prints the section as a `# --- … ---` heading
+/// when it changes within a chain, and records the origin of each line.
 #[derive(Debug, Clone)]
 pub(crate) struct NftCommand {
     pub section: &'static str,
+    pub origin: CommandOrigin,
     pub value: serde_json::Value,
 }
 
@@ -1953,11 +1978,22 @@ impl CommandList {
         name
     }
 
-    fn push(&mut self, value: serde_json::Value) {
+    fn push(&mut self, origin: CommandOrigin, value: serde_json::Value) {
         self.commands.push(NftCommand {
             section: self.section,
+            origin,
             value,
         });
+    }
+
+    /// Pushes an `add rule` command for a rule DRFW adds itself, named by
+    /// its (non-empty) comment.
+    fn push_base_rule(&mut self, chain: &str, expr: Vec<serde_json::Value>, comment: &'static str) {
+        debug_assert!(!comment.is_empty(), "base rules are named by their comment");
+        self.push(
+            CommandOrigin::BaseRule(comment),
+            FirewallRuleset::rule_add(chain, expr, comment),
+        );
     }
 }
 

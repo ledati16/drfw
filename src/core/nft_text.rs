@@ -44,7 +44,7 @@ use std::fmt::Write;
 
 use serde_json::Value;
 
-use crate::core::firewall::NftCommand;
+use crate::core::firewall::{CommandOrigin, NftCommand};
 
 /// Indentation for chain blocks inside the table block.
 /// Start of the second line of every generated file, followed by the DRFW
@@ -86,9 +86,9 @@ const NFT_DEFAULT_LIMIT_BURST: u64 = 5;
 struct ChainBlock {
     name: String,
     declaration: Option<String>,
-    /// Statement lines, each with the index of the `add rule` command that
+    /// Statement lines, each with the origin of the `add rule` command that
     /// produced it (`None` for blank lines and section comments)
-    lines: Vec<(String, Option<usize>)>,
+    lines: Vec<(String, Option<CommandOrigin>)>,
     last_section: Option<&'static str>,
 }
 
@@ -100,8 +100,8 @@ pub(crate) enum LineSource {
     /// A chain block's own lines (opening, declaration, section comments,
     /// closing brace); the index into [`RenderedText::chains`]
     Chain(usize),
-    /// A rule: the index of its `add rule` command in the rendered list
-    Rule(usize),
+    /// A rule or set declaration: the origin of the command that produced it
+    Command(CommandOrigin),
 }
 
 /// The rendered `nft -f` text plus, for every line, what produced it.
@@ -145,20 +145,13 @@ pub(crate) fn render(commands: &[NftCommand]) -> String {
 pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
     let mut preamble: Vec<String> = Vec::new();
     let mut table: Option<(String, String)> = None;
-    // Set blocks with the index of the command that declared them
-    let mut sets: Vec<(String, usize)> = Vec::new();
+    // Set blocks with the origin of the command that declared them
+    let mut sets: Vec<(String, CommandOrigin)> = Vec::new();
     let mut chains: Vec<ChainBlock> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
-    for (index, command) in commands.iter().enumerate() {
-        if let Err(e) = apply_command(
-            command,
-            index,
-            &mut preamble,
-            &mut table,
-            &mut sets,
-            &mut chains,
-        ) {
+    for command in commands {
+        if let Err(e) = apply_command(command, &mut preamble, &mut table, &mut sets, &mut chains) {
             tracing::error!("nft text renderer: {e}");
             errors.push(e);
         }
@@ -203,10 +196,10 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
 
     doc.line(LineSource::Header, format_args!(""));
     doc.line(LineSource::Header, format_args!("table {family} {name} {{"));
-    // A set belongs to the rule whose command created it (see `apply_command`)
-    for (set, index) in &sets {
+    // A set belongs to the rule whose command created it
+    for (set, origin) in &sets {
         for line in set.lines() {
-            doc.line(LineSource::Rule(*index), format_args!("{line}"));
+            doc.line(LineSource::Command(*origin), format_args!("{line}"));
         }
     }
     for (i, chain) in chains.iter().enumerate() {
@@ -219,7 +212,7 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
             doc.line(own, format_args!("{RULE_INDENT}{decl}"));
         }
         for (line, command) in &chain.lines {
-            let source = command.map_or(own, LineSource::Rule);
+            let source = command.map_or(own, LineSource::Command);
             if line.is_empty() {
                 doc.line(source, format_args!(""));
             } else {
@@ -239,10 +232,9 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
 /// Applies one command to the document being assembled.
 fn apply_command(
     command: &NftCommand,
-    index: usize,
     preamble: &mut Vec<String>,
     table: &mut Option<(String, String)>,
-    sets: &mut Vec<(String, usize)>,
+    sets: &mut Vec<(String, CommandOrigin)>,
     chains: &mut Vec<ChainBlock>,
 ) -> Result<(), String> {
     let (verb, body) = single_entry(&command.value).ok_or("malformed command")?;
@@ -262,7 +254,7 @@ fn apply_command(
             Ok(())
         }
         ("add", "set") => {
-            sets.push((render_set_declaration(spec)?, index));
+            sets.push((render_set_declaration(spec)?, command.origin));
             Ok(())
         }
         ("flush" | "delete", "table") => {
@@ -304,15 +296,15 @@ fn apply_command(
                 block.last_section = Some(command.section);
             }
             match line {
-                Ok(line) => block.lines.push((line, Some(index))),
+                Ok(line) => block.lines.push((line, Some(command.origin))),
                 Err(e) => {
                     block.lines.push((
                         format!("# DRFW internal error: {}", single_line(&e)),
-                        Some(index),
+                        Some(command.origin),
                     ));
                     block
                         .lines
-                        .push((RENDER_ERROR_STATEMENT.to_string(), Some(index)));
+                        .push((RENDER_ERROR_STATEMENT.to_string(), Some(command.origin)));
                     return Err(e);
                 }
             }
@@ -704,6 +696,7 @@ mod tests {
     fn cmd(value: Value) -> NftCommand {
         NftCommand {
             section: "Test",
+            origin: CommandOrigin::Setup,
             value,
         }
     }

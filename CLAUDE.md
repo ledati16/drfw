@@ -487,14 +487,17 @@ tests in `src/main.rs`, which run in the bin test target.
 
 | File | Purpose | Authoritative For |
 |------|---------|-------------------|
-| `src/core/tests.rs` | Unit tests for JSON generation, property tests, JSON format details | JSON output structure, rule ordering, protocol handling, IP format compliance |
-| `src/core/verify.rs` | Unit tests for error parsing functions | `parse_nft_errors()`, `VerifyResult` constructors |
+| `src/core/tests.rs` | Unit tests for JSON generation, property tests, JSON format details | JSON output structure, rule ordering, protocol handling, IP format compliance, per-source set shape, command origins (every command of a user rule carries its id) |
+| `src/core/verify.rs` | Unit tests for the verify plumbing | Exit-code verdicts, `VerifyResult` constructors/summary, `locate_errors()` fallback to unmapped errors |
+| `src/core/nft_errors.rs` | Unit tests for nft error parsing and attribution | Parsing real nft stderr (located, multi-line, kernel, JSON), excerpts, text line → rule/base rule/chain/header mapping |
 | `src/core/nft_text.rs` | Unit tests for the text renderer | Header/idempotent preamble, statement rendering, render errors |
 | `src/core/apply_guard.rs` | Unit tests for the guard's user side | Outcome parsing, exit-code mapping, tokens, `pending_guard()` |
 | `src/audit.rs` | Unit tests for the audit log | Event (de)serialization, chrono-era timestamps, rotation, clearing |
 | `src/app/diagnostics.rs` | Unit tests for the event log view model | Row precompute (local time/date), filter + search cache, in-flight/generation reload logic |
+| `src/app/verify_errors.rs` | Unit tests for the "Verification Errors" panel model | Row titles, summary/banner wording, "Edit Rule" only for rules that still exist |
 | `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | **Verification flow** (valid/empty/multi-rule), guarded-apply plumbing, CLI `status`/`check` (runs the real binary), exports, audit logging |
-| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, Server-mode loopback, Save to System script, revert guard end to end |
+| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server-mode loopback, Save to System script, revert guard end to end |
+| `tests/verify_errors.rs` | Error attribution against real `nft` in `unshare -rn`, and `drfw check` output (own binary) | A rejected ruleset names the rule that caused each error (also with per-source sets), CLI prints mapped errors without color codes |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
 | `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse |
@@ -504,7 +507,7 @@ tests in `src/main.rs`, which run in the bin test target.
 
 **Key principle:** Each test concept should exist in exactly ONE location. The "authoritative" location is closest to the implementation being tested.
 
-**Verification tests belong in `tests/integration_tests.rs`**, not in `src/core/tests.rs`. The verification flow exercises the mock nft script, making it an integration test. JSON generation tests (which don't invoke nft) belong in `src/core/tests.rs`.
+**Verification tests belong in `tests/integration_tests.rs`**, not in `src/core/tests.rs`. The verification flow exercises the mock nft script, making it an integration test. JSON generation tests (which don't invoke nft) belong in `src/core/tests.rs`. Tests of how real nft errors map back to rules belong in `tests/verify_errors.rs`.
 
 ### Test Helper Modules
 
@@ -941,9 +944,23 @@ pub async fn log_apply(enable_event_log: bool, rule_count: usize, ...) {
 - Rule ordering (drag-and-drop)
 - Per-rule logging (with configurable prefix)
 - Advanced: Destination IP, action (accept/drop/reject), rate limiting, connection limiting
+- Per-source limits: a rate or connection limit can apply per source address
+  (IPv6 per /64) through named dynamic sets instead of being shared by all sources
+- Advanced security: Server Mode (output policy drop), strict ICMP, RPF
+  anti-spoofing, rate-limited logging of dropped packets, block forwarding
+  (forward policy drop; off by default so Docker/libvirt/VPNs keep working)
+- Validation before apply (`core::validate`): one validator for the rule form,
+  the sidebar and the apply / Save to System paths; profiles may contain invalid
+  rules, but applying is refused while an applied rule is invalid
+- Readable nft errors: when nft rejects a ruleset, each error names the rule
+  (user or base rule, by its comment), chain or header that caused it, with the
+  offending line and caret; the GUI's "Verification Errors" panel opens the rule
+- Root-side revert guard (`core::apply_guard`): one elevation applies the rules
+  and starts a detached root watcher that restores the previous table unless
+  the user confirms in time, even if DRFW or the session dies
 
 ### Not Implemented (Intentional)
-- **ICMP type filtering:** 99% of users don't understand 20+ ICMP types; ICMPv6 filtering is dangerous
+- **Per-rule ICMP type filtering:** 99% of users don't understand 20+ ICMP types; ICMPv6 filtering is dangerous (the global strict ICMP mode allows a fixed set of essential types)
 - **Source port matching:** <1% use case
 - **TCP flags matching:** Too advanced for target audience
 - **MAC filtering:** LAN-only, easily spoofed

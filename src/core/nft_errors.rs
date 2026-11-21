@@ -14,7 +14,7 @@
 //! [`FirewallRuleset::to_nft_text`] renders exactly the commands that are
 //! verified as JSON, so when a check fails, `verify::locate_errors` checks the
 //! text form too and [`AnnotatedText`] traces each error line back to what
-//! produced it: a user rule, a built-in rule, a chain declaration or the
+//! produced it: a user rule, a base rule, a chain declaration or the
 //! header (see `nft_text::render_with_map`).
 //!
 //! [`FirewallRuleset::to_nft_text`]: crate::core::firewall::FirewallRuleset::to_nft_text
@@ -23,7 +23,7 @@ use std::fmt;
 
 use uuid::Uuid;
 
-use crate::core::firewall::{FirewallRuleset, NftCommand};
+use crate::core::firewall::{CommandOrigin, FirewallRuleset};
 use crate::core::nft_text::{LineSource, RenderedText};
 
 /// Longest source excerpt shown, in characters; longer lines are cut around
@@ -39,8 +39,8 @@ const ELLIPSIS: char = '…';
 pub enum ErrorOrigin {
     /// A rule of the profile
     UserRule { id: Uuid, label: String },
-    /// A rule DRFW adds itself (loopback, ICMP, end-of-chain reject, ...):
-    /// its comment, or the section it belongs to when it has none
+    /// A rule DRFW adds itself (loopback, ICMP, end-of-chain reject, ...),
+    /// by its comment (or a description for the few without one)
     BaseRule { description: String },
     /// A chain block or its `type filter hook …` declaration
     Chain { name: String },
@@ -53,7 +53,7 @@ impl fmt::Display for ErrorOrigin {
         match self {
             Self::UserRule { label, .. } if label.is_empty() => f.write_str("unnamed rule"),
             Self::UserRule { label, .. } => write!(f, "rule \"{label}\""),
-            Self::BaseRule { description } => write!(f, "built-in rule \"{description}\""),
+            Self::BaseRule { description } => write!(f, "base rule \"{description}\""),
             Self::Chain { name } => write!(f, "chain \"{name}\""),
             Self::Header => f.write_str("ruleset header"),
         }
@@ -288,25 +288,14 @@ pub(crate) fn unlocated_issues(stderr: &str) -> Vec<VerifyIssue> {
 /// A ruleset's `nft -f` text plus what produced each of its lines.
 pub(crate) struct AnnotatedText<'a> {
     ruleset: &'a FirewallRuleset,
-    commands: Vec<NftCommand>,
     rendered: RenderedText,
-    /// Per command: index of the user rule that produced it. `None` if the
-    /// commands could not be attributed (see [`user_rule_owners`]).
-    owners: Option<Vec<Option<usize>>>,
 }
 
 impl<'a> AnnotatedText<'a> {
     /// Renders `ruleset` (the same text as `to_nft_text()`) with its line map.
     pub fn new(ruleset: &'a FirewallRuleset) -> Self {
-        let commands = ruleset.build_commands();
-        let rendered = crate::core::nft_text::render_with_map(&commands);
-        let owners = user_rule_owners(ruleset, &commands);
-        Self {
-            ruleset,
-            commands,
-            rendered,
-            owners,
-        }
+        let rendered = crate::core::nft_text::render_with_map(&ruleset.build_commands());
+        Self { ruleset, rendered }
     }
 
     /// The rendered text.
@@ -317,25 +306,23 @@ impl<'a> AnnotatedText<'a> {
     /// What produced 1-based line `line` of the text.
     pub fn origin(&self, line: usize) -> Option<ErrorOrigin> {
         match *self.rendered.lines.get(line.checked_sub(1)?)? {
-            LineSource::Header => Some(ErrorOrigin::Header),
+            LineSource::Header | LineSource::Command(CommandOrigin::Setup) => {
+                Some(ErrorOrigin::Header)
+            }
             LineSource::Chain(i) => Some(ErrorOrigin::Chain {
                 name: self.rendered.chains.get(i)?.clone(),
             }),
-            LineSource::Rule(command) => {
-                if let Some(rule) = self.owners.as_ref()?.get(command).copied().flatten() {
-                    let rule = self.ruleset.rules.get(rule)?;
-                    return Some(ErrorOrigin::UserRule {
-                        id: rule.id,
-                        label: rule.label.clone(),
-                    });
-                }
-                let command = self.commands.get(command)?;
-                let description = command.value["add"]["rule"]["comment"]
-                    .as_str()
-                    .filter(|c| !c.is_empty())
-                    .unwrap_or(command.section);
-                Some(ErrorOrigin::BaseRule {
-                    description: description.to_string(),
+            LineSource::Command(CommandOrigin::Chain(name)) => Some(ErrorOrigin::Chain {
+                name: name.to_string(),
+            }),
+            LineSource::Command(CommandOrigin::BaseRule(name)) => Some(ErrorOrigin::BaseRule {
+                description: name.to_string(),
+            }),
+            LineSource::Command(CommandOrigin::UserRule(id)) => {
+                let rule = self.ruleset.rules.iter().find(|r| r.id == id)?;
+                Some(ErrorOrigin::UserRule {
+                    id,
+                    label: rule.label.clone(),
                 })
             }
         }
@@ -351,67 +338,6 @@ impl<'a> AnnotatedText<'a> {
             })
             .collect()
     }
-}
-
-/// Attributes the generated commands to the user rules that produced them.
-///
-/// The command list does not record which rule produced a command, so this
-/// derives it: user rules only add commands, between the built-in rules
-/// before them and the end-of-chain rules after them, in profile order. The
-/// commands of the ruleset without any user rule are the shared prefix and
-/// suffix; building the ruleset with each single rule gives that rule's
-/// commands, which must then appear, in order, in between. Any mismatch
-/// (which would mean generation changed shape) returns `None` rather than a
-/// wrong attribution. Only runs when a check failed.
-fn user_rule_owners(
-    ruleset: &FirewallRuleset,
-    commands: &[NftCommand],
-) -> Option<Vec<Option<usize>>> {
-    let mut single = FirewallRuleset::new();
-    single
-        .advanced_security
-        .clone_from(&ruleset.advanced_security);
-    let base = single.build_commands();
-    let user_len = commands.len().checked_sub(base.len())?;
-    let start = commands
-        .iter()
-        .zip(&base)
-        .take_while(|(a, b)| a.value == b.value)
-        .count()
-        .min(base.len());
-    let same = |a: &[NftCommand], b: &[NftCommand]| {
-        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.value == y.value)
-    };
-    if !same(&commands[start + user_len..], &base[start..]) {
-        tracing::warn!("cannot attribute nft commands to rules: unexpected base commands");
-        return None;
-    }
-
-    let mut owners = vec![None; commands.len()];
-    let mut offset = start;
-    for (index, rule) in ruleset.rules.iter().enumerate() {
-        single.rules.clear();
-        single.rules.push(rule.clone());
-        let own = single.build_commands();
-        let count = own.len().checked_sub(base.len())?;
-        if count == 0 {
-            continue;
-        }
-        let (Some(expected), Some(actual)) = (
-            own.get(start..start + count),
-            commands.get(offset..offset + count),
-        ) else {
-            tracing::warn!("cannot attribute nft commands to rules: count mismatch");
-            return None;
-        };
-        if !same(expected, actual) {
-            tracing::warn!("cannot attribute nft commands to rules: content mismatch");
-            return None;
-        }
-        owners[offset..offset + count].fill(Some(index));
-        offset += count;
-    }
-    (offset == start + user_len).then_some(owners)
 }
 
 #[cfg(test)]
@@ -622,7 +548,6 @@ expected any of: ., ==, !=, <, >, >=, <=, <<, >>, &, ^, !, @, vmap, map, reset
             ruleset.advanced_security.egress_profile = egress;
             ruleset.advanced_security.log_dropped = egress == EgressProfile::Server;
             let annotated = AnnotatedText::new(&ruleset);
-            assert!(annotated.owners.is_some(), "attribution succeeded");
             let mut lines_per_rule = std::collections::HashMap::new();
             for (n, line) in annotated.text().lines().enumerate() {
                 let origin = annotated.origin(n + 1);
@@ -684,10 +609,20 @@ expected any of: ., ==, !=, <, >, >=, <=, <<, >>, &, ^, !, @, vmap, map, reset
                 name: "input".to_string()
             })
         );
-        assert!(matches!(
-            annotated.origin(line_of("iifname \"lo\"")),
-            Some(ErrorOrigin::BaseRule { .. })
-        ));
+        let tracked = annotated
+            .origin(line_of("comment \"allow tracked connections\""))
+            .expect("base rule line");
+        assert_eq!(
+            tracked.to_string(),
+            "base rule \"allow tracked connections\""
+        );
+        // End-of-chain rules have no comment; their origin names them
+        assert_eq!(
+            annotated.origin(line_of("reject with icmpx type admin-prohibited")),
+            Some(ErrorOrigin::BaseRule {
+                description: "rate-limited reject".to_string()
+            })
+        );
         assert_eq!(annotated.origin(0), None);
         assert_eq!(annotated.origin(100_000), None);
     }

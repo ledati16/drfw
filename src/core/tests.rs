@@ -2115,3 +2115,156 @@ mod per_source_tests {
         assert_eq!(rule.badge_display, "TCP: 22");
     }
 }
+
+#[cfg(test)]
+mod command_origin_tests {
+    //! Every generated command records what produced it (`CommandOrigin`);
+    //! error attribution relies on it.
+
+    use std::collections::HashMap;
+
+    use uuid::Uuid;
+
+    use crate::core::firewall::{
+        Chain, CommandOrigin, EgressProfile, FirewallRuleset, Protocol, RateLimit, TimeUnit,
+    };
+    use crate::core::test_helpers::create_test_rule;
+
+    fn varied_ruleset() -> FirewallRuleset {
+        let mut ruleset = FirewallRuleset::new();
+        let mut dual = create_test_rule("dual stack", Some(443));
+        dual.sources = vec!["10.0.0.0/8".parse().unwrap(), "fd00::/8".parse().unwrap()];
+        // Per-source limits without addresses: one copy and two sets per family
+        let mut per_source = create_test_rule("per source", Some(22));
+        per_source.rate_limit = Some(RateLimit {
+            count: 3,
+            unit: TimeUnit::Minute,
+            burst: None,
+            per_source: true,
+        });
+        per_source.connection_limit = 4;
+        per_source.connection_limit_per_source = true;
+        let mut icmp = create_test_rule("icmp per source", None);
+        icmp.protocol = Protocol::Icmp;
+        icmp.rate_limit = per_source.rate_limit;
+        let mut output = create_test_rule("output", Some(53));
+        output.chain = Chain::Output;
+        let mut disabled = create_test_rule("disabled", Some(25));
+        disabled.enabled = false;
+        ruleset.rules = vec![
+            create_test_rule("ssh", Some(22)),
+            dual,
+            per_source,
+            icmp,
+            output,
+            disabled,
+        ];
+        for rule in &mut ruleset.rules {
+            rule.rebuild_caches();
+        }
+        ruleset.advanced_security.egress_profile = EgressProfile::Server;
+        ruleset.advanced_security.log_dropped = true;
+        ruleset.advanced_security.enable_rpf = true;
+        ruleset.advanced_security.block_forwarding = true;
+        ruleset
+    }
+
+    /// The JSON values of `ruleset`'s commands whose origin is `rule_id`.
+    fn commands_of(ruleset: &FirewallRuleset, rule_id: Uuid) -> Vec<serde_json::Value> {
+        ruleset
+            .build_commands()
+            .into_iter()
+            .filter(|c| c.origin == CommandOrigin::UserRule(rule_id))
+            .map(|c| c.value)
+            .collect()
+    }
+
+    #[test]
+    fn test_user_rule_commands_carry_the_rule_id() {
+        let ruleset = varied_ruleset();
+        let commands = ruleset.build_commands();
+        let mut base = ruleset.clone();
+        base.rules.clear();
+        let base_commands = base.build_commands();
+
+        // Without the user rules' commands, exactly the base ruleset remains
+        let non_user: Vec<_> = commands
+            .iter()
+            .filter(|c| !matches!(c.origin, CommandOrigin::UserRule(_)))
+            .map(|c| (c.origin, &c.value))
+            .collect();
+        let expected: Vec<_> = base_commands.iter().map(|c| (c.origin, &c.value)).collect();
+        assert_eq!(non_user, expected);
+
+        let mut per_rule: HashMap<Uuid, usize> = HashMap::new();
+        for command in &commands {
+            let CommandOrigin::UserRule(id) = command.origin else {
+                assert!(
+                    command.value["add"].get("set").is_none(),
+                    "set without a rule: {}",
+                    command.value
+                );
+                continue;
+            };
+            let rule = ruleset.rules.iter().find(|r| r.id == id).expect("known id");
+            assert!(rule.enabled);
+            let add = &command.value["add"];
+            if let Some(set) = add.get("set") {
+                let mut buf = Uuid::encode_buffer();
+                let hex = id.simple().encode_lower(&mut buf);
+                let name = set["name"].as_str().unwrap();
+                assert!(name.contains(&hex[..12]), "{name} is not {}'s", rule.label);
+            } else {
+                assert_eq!(add["rule"]["comment"], rule.label.as_str());
+            }
+            *per_rule.entry(id).or_default() += 1;
+        }
+
+        // Each rule's commands are the ones it produces on its own
+        for rule in ruleset.rules.iter().filter(|r| r.enabled) {
+            let mut single = base.clone();
+            single.rules.push(rule.clone());
+            assert_eq!(
+                commands_of(&ruleset, rule.id),
+                commands_of(&single, rule.id),
+                "{}",
+                rule.label
+            );
+        }
+        let counts = |label: &str| {
+            let id = ruleset.rules.iter().find(|r| r.label == label).unwrap().id;
+            per_rule.get(&id).copied().unwrap_or(0)
+        };
+        assert_eq!(counts("ssh"), 1);
+        assert_eq!(counts("dual stack"), 2);
+        // Two family copies, each with a rate set and a connection set
+        assert_eq!(counts("per source"), 6);
+        // ICMP (v4 only): one copy with its rate set
+        assert_eq!(counts("icmp per source"), 2);
+        assert_eq!(counts("output"), 1);
+        assert_eq!(counts("disabled"), 0);
+    }
+
+    #[test]
+    fn test_base_commands_are_named() {
+        let ruleset = varied_ruleset();
+        for command in ruleset.build_commands() {
+            let add = &command.value["add"];
+            match command.origin {
+                CommandOrigin::Setup => {
+                    let verb = command.value.as_object().and_then(|o| o.keys().next());
+                    let table = &command.value[verb.map_or("", String::as_str)]["table"];
+                    assert_eq!(table["name"], "drfw", "{}", command.value);
+                }
+                CommandOrigin::Chain(name) => assert_eq!(add["chain"]["name"], name),
+                CommandOrigin::BaseRule(name) => {
+                    assert_ne!(name, "");
+                    if let Some(comment) = add["rule"]["comment"].as_str() {
+                        assert_eq!(comment, name);
+                    }
+                }
+                CommandOrigin::UserRule(_) => {}
+            }
+        }
+    }
+}

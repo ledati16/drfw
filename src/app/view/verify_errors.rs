@@ -32,7 +32,7 @@ fn error_row<'a>(
     ]
     .spacing(8)
     .align_y(Alignment::Center);
-    if let Some(id) = row_data.rule_id {
+    if let Some(id) = row_data.edit_rule_id() {
         header = header.push(
             button(text("Edit Rule").size(13).font(regular_font))
                 .on_press(Message::EditRuleClicked(id))

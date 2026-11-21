@@ -899,7 +899,47 @@ mod tests {
             &crate::core::verify::VerifyResult::failure(vec![
                 crate::core::verify::VerifyIssue::unlocated("bad"),
             ]),
+            &crate::core::firewall::FirewallRuleset::new(),
         )
+    }
+
+    /// Deleting the rule an error points at hides its "Edit Rule"; undoing
+    /// the delete brings it back.
+    #[test]
+    fn test_verify_errors_follow_rule_deletion() {
+        use crate::core::verify::{ErrorOrigin, VerifyIssue};
+
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(crate::core::test_helpers::create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        let id = state.ruleset.rules[0].id;
+        let result = crate::core::verify::VerifyResult::failure(vec![VerifyIssue {
+            origin: Some(ErrorOrigin::UserRule {
+                id,
+                label: "Web".into(),
+            }),
+            message: "Service out of range".into(),
+            source_line: None,
+            caret: None,
+        }]);
+        state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(
+            &result,
+            &state.ruleset,
+        ));
+        let edit_target =
+            |state: &State| state.verify_errors.as_ref().expect("panel").rows[0].edit_rule_id();
+        assert_eq!(edit_target(&state), Some(id));
+
+        let _ = state.update(Message::DeleteRule(id));
+        assert_eq!(state.ruleset.rules.len(), 0);
+        assert_eq!(edit_target(&state), None, "the rule is gone");
+
+        let _ = state.update(Message::Undo);
+        assert_eq!(state.ruleset.rules.len(), 1);
+        assert_eq!(edit_target(&state), Some(id));
     }
 
     #[test]

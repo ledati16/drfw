@@ -5,6 +5,7 @@
 
 use uuid::Uuid;
 
+use crate::core::firewall::FirewallRuleset;
 use crate::core::verify::VerifyResult;
 
 /// The errors of the last failed verification, ready to display.
@@ -18,10 +19,13 @@ pub struct VerifyErrorsPanel {
 /// One nft error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyErrorRow {
-    /// What the error points at: `rule "ssh"`, `built-in rule "…"`, `nft`
+    /// What the error points at: `rule "ssh"`, `base rule "…"`, `nft`
     pub title: String,
-    /// The user rule to open when the row is clicked
+    /// The user rule the error points at
     pub rule_id: Option<Uuid>,
+    /// `rule_id` still exists in the ruleset (kept up to date by
+    /// [`VerifyErrorsPanel::sync_with`]); only then can it be edited
+    rule_exists: bool,
     pub message: String,
     /// Offending line of the generated ruleset and its caret line
     pub source_line: Option<String>,
@@ -29,8 +33,8 @@ pub struct VerifyErrorRow {
 }
 
 impl VerifyErrorsPanel {
-    /// Prepares the panel for a failed verification.
-    pub fn new(result: &VerifyResult) -> Self {
+    /// Prepares the panel for a failed verification of `ruleset`.
+    pub fn new(result: &VerifyResult, ruleset: &FirewallRuleset) -> Self {
         let rows = result
             .issues
             .iter()
@@ -40,15 +44,37 @@ impl VerifyErrorsPanel {
                     .as_ref()
                     .map_or_else(|| "nft".to_string(), ToString::to_string),
                 rule_id: issue.rule_id(),
+                rule_exists: false,
                 message: issue.message.clone(),
                 source_line: issue.source_line.clone(),
                 caret: issue.caret.clone(),
             })
             .collect();
-        Self {
+        let mut panel = Self {
             summary: format!("{}.", rejected_phrase(result)),
             rows,
+        };
+        panel.sync_with(ruleset);
+        panel
+    }
+
+    /// Re-checks which rules the rows point at still exist, after the
+    /// ruleset changed (a rule deleted since the check offers no "Edit Rule";
+    /// undoing the delete brings it back).
+    pub fn sync_with(&mut self, ruleset: &FirewallRuleset) {
+        for row in &mut self.rows {
+            row.rule_exists = row
+                .rule_id
+                .is_some_and(|id| ruleset.rules.iter().any(|r| r.id == id));
         }
+    }
+}
+
+impl VerifyErrorRow {
+    /// The rule "Edit Rule" opens: the rule the error points at, if it still
+    /// exists.
+    pub fn edit_rule_id(&self) -> Option<Uuid> {
+        self.rule_id.filter(|_| self.rule_exists)
     }
 }
 
@@ -86,12 +112,26 @@ mod tests {
             },
             VerifyIssue::unlocated("something else"),
         ]);
-        let panel = VerifyErrorsPanel::new(&result);
+        let mut ruleset = FirewallRuleset::new();
+        let mut rule = crate::core::test_helpers::create_test_rule("ssh", Some(22));
+        rule.id = id;
+        ruleset.rules.push(rule);
+        let mut panel = VerifyErrorsPanel::new(&result, &ruleset);
         assert_eq!(panel.summary, "nft rejected 1 rule.");
         assert_eq!(panel.rows[0].title, "rule \"ssh\"");
         assert_eq!(panel.rows[0].rule_id, Some(id));
+        assert_eq!(panel.rows[0].edit_rule_id(), Some(id));
         assert_eq!(panel.rows[1].title, "nft");
-        assert_eq!(panel.rows[1].rule_id, None);
+        assert_eq!(panel.rows[1].edit_rule_id(), None);
+
+        // The rule is deleted: no "Edit Rule"; restored: offered again
+        let rule = ruleset.rules.pop().unwrap();
+        panel.sync_with(&ruleset);
+        assert_eq!(panel.rows[0].rule_id, Some(id));
+        assert_eq!(panel.rows[0].edit_rule_id(), None);
+        ruleset.rules.push(rule);
+        panel.sync_with(&ruleset);
+        assert_eq!(panel.rows[0].edit_rule_id(), Some(id));
         assert_eq!(banner_message(&result), "nft rejected 1 rule, see details");
         let raw = VerifyResult::failure(vec![VerifyIssue::unlocated("x")]);
         assert_eq!(

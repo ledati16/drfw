@@ -163,7 +163,10 @@ fn verify_rejected_feedback(state: &mut State, result: &VerifyResult) -> Task<Me
         crate::app::verify_errors::banner_message(result),
         BannerSeverity::Error,
     );
-    state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(result));
+    state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(
+        result,
+        &state.ruleset,
+    ));
     state.show_verify_errors = true;
     audit_task(audit::log_verify(
         state.enable_event_log,
@@ -173,8 +176,9 @@ fn verify_rejected_feedback(state: &mut State, result: &VerifyResult) -> Task<Me
     ))
 }
 
-/// A verification passed: earlier errors no longer apply.
-fn clear_verify_errors(state: &mut State) {
+/// Closes and drops the "Verification Errors" panel: a verification passed,
+/// or the profile changed (its rows would name rules of another profile).
+pub(crate) fn clear_verify_errors(state: &mut State) {
     state.verify_errors = None;
     state.show_verify_errors = false;
 }

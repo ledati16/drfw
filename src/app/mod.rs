@@ -967,6 +967,11 @@ impl State {
 
         let nft_text = self.ruleset.to_nft_text();
 
+        // "Edit Rule" only for rules that still exist
+        if let Some(panel) = &mut self.verify_errors {
+            panel.sync_with(&self.ruleset);
+        }
+
         self.cached_nft_tokens = syntax_cache::tokenize_nft(&nft_text);
 
         // The old side comes from the cache (it changes only on apply/revert)
