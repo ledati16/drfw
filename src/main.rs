@@ -886,7 +886,14 @@ async fn save_profile(
         Err(e) => eprintln!("Note: could not check the ruleset without privileges ({e})."),
     }
 
-    if core::apply_guard::confirmed_ruleset_matches(&json).await {
+    let confirmed = core::apply_guard::confirmed_ruleset_matches(&json).await;
+    // The CLI always saves the profile itself; it is "tested" when it is exactly
+    // what a confirmed guard applied on this machine
+    let details = audit::SaveDetails {
+        last_confirmed: false,
+        untested: !confirmed,
+    };
+    if confirmed {
         print_status(
             "✓",
             Color::Green,
@@ -934,15 +941,29 @@ async fn save_profile(
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             let error = save_error(&output);
-            audit::log_save_to_system(enable_event_log, false, &target, Some(error.clone())).await;
+            audit::log_save_to_system(
+                enable_event_log,
+                false,
+                &target,
+                details,
+                Some(error.clone()),
+            )
+            .await;
             return Err(format!("Save failed; {target} was not changed: {error}").into());
         }
         Err(e) => {
-            audit::log_save_to_system(enable_event_log, false, &target, Some(e.to_string())).await;
+            audit::log_save_to_system(
+                enable_event_log,
+                false,
+                &target,
+                details,
+                Some(e.to_string()),
+            )
+            .await;
             return Err(format!("Save failed: {e}").into());
         }
     };
-    audit::log_save_to_system(enable_event_log, true, &target, None).await;
+    audit::log_save_to_system(enable_event_log, true, &target, details, None).await;
     match backup_path_from_output(&output) {
         Some(backup) => print_status(
             "✓",
