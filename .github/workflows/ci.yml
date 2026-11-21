@@ -7,10 +7,6 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
-  schedule:
-    # Weekly (Monday 06:00 UTC): surface new RustSec advisories and toolchain
-    # lints even when nothing in the repo changed.
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
