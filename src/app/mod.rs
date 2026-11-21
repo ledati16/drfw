@@ -5,6 +5,7 @@ mod handlers;
 mod helpers;
 pub mod syntax_cache;
 pub mod ui_components;
+mod verify_errors;
 mod view;
 
 // Re-export form types
@@ -153,6 +154,11 @@ pub struct State {
     pub enable_event_log: bool,
     pub reduced_colors: bool,
     pub show_diagnostics: bool,
+    /// Errors of the last failed verification (Apply or Save to System),
+    /// prepared in `update()`; cleared by the next successful verification.
+    pub verify_errors: Option<verify_errors::VerifyErrorsPanel>,
+    /// The "Verification Errors" panel is open (needs `verify_errors`)
+    pub show_verify_errors: bool,
     pub diagnostics_filter: DiagnosticsFilter,
     pub show_export_modal: bool,
     pub show_shortcuts_help: bool,
@@ -525,6 +531,8 @@ pub enum Message {
     ServerModeToggled(bool),
     ConfirmServerMode,
     ToggleDiagnostics(bool),
+    /// Open/close the "Verification Errors" panel
+    ToggleVerifyErrors(bool),
     DiagnosticsFilterChanged(DiagnosticsFilter),
     DiagnosticsSearchChanged(String),
     /// A diagnostics log load finished (generation, result)
@@ -728,6 +736,8 @@ impl State {
             enable_event_log,
             reduced_colors,
             show_diagnostics: false,
+            verify_errors: None,
+            show_verify_errors: false,
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
             show_shortcuts_help: false,
@@ -843,6 +853,8 @@ impl State {
             enable_event_log: false,
             reduced_colors: false,
             show_diagnostics: false,
+            verify_errors: None,
+            show_verify_errors: false,
             diagnostics_filter: DiagnosticsFilter::default(),
             show_export_modal: false,
             show_shortcuts_help: false,
@@ -1466,6 +1478,7 @@ impl State {
             Message::ToggleDiagnostics(show) => {
                 return handlers::handle_toggle_diagnostics(self, show);
             }
+            Message::ToggleVerifyErrors(show) => handlers::handle_toggle_verify_errors(self, show),
             Message::DiagnosticsFilterChanged(filter) => {
                 handlers::handle_diagnostics_filter_changed(self, filter);
             }

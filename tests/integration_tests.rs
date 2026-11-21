@@ -185,7 +185,7 @@ async fn test_verify_with_mock() {
     assert!(
         verify_result.success,
         "Mock verification should succeed: {:?}",
-        verify_result.errors
+        verify_result.issues
     );
 }
 
@@ -207,7 +207,7 @@ async fn test_empty_ruleset_verification() {
     assert!(
         verify_result.success,
         "Empty ruleset verification should succeed: {:?}",
-        verify_result.errors
+        verify_result.issues
     );
 }
 

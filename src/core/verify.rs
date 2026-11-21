@@ -7,11 +7,19 @@
 //! (e.g. kernel modules cannot be autoloaded from a user namespace, or
 //! unprivileged user namespaces are disabled), so it falls back to the elevated
 //! check, whose verdict is authoritative.
+//!
+//! nft's errors for JSON input carry no location. When a check fails,
+//! [`locate_errors`] checks the same ruleset in its text form (unprivileged,
+//! diagnostics only) and maps each error to the rule that caused it (see
+//! [`crate::core::nft_errors`]).
 
 use std::time::Duration;
 
 use tracing::{info, warn};
 
+use crate::core::firewall::FirewallRuleset;
+use crate::core::nft_errors::{AnnotatedText, unlocated_issues};
+pub use crate::core::nft_errors::{ErrorOrigin, VerifyIssue};
 use crate::elevation::AuthError;
 
 /// Timeout for the unprivileged check (no prompt involved; nft is near-instant).
@@ -24,11 +32,17 @@ const ELEVATED_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 /// Arguments for a check-only run of nft reading JSON from stdin.
 const CHECK_ARGS: [&str; 4] = ["--json", "--check", "-f", "-"];
 
+/// Arguments for a check-only run of nft reading the text form from stdin
+/// (only used to locate errors, see [`locate_errors`]).
+const TEXT_CHECK_ARGS: [&str; 3] = ["-c", "-f", "-"];
+
 /// Result of a ruleset verification operation
 #[derive(Debug, Clone)]
 pub struct VerifyResult {
     pub success: bool,
-    pub errors: Vec<String>,
+    /// nft's errors when `success` is false (may be empty if nft printed
+    /// nothing). Mapped to rules only after [`locate_errors`].
+    pub issues: Vec<VerifyIssue>,
 }
 
 impl VerifyResult {
@@ -36,16 +50,37 @@ impl VerifyResult {
     pub fn success() -> Self {
         Self {
             success: true,
-            errors: Vec::new(),
+            issues: Vec::new(),
         }
     }
 
     /// Creates a failed verification result with errors
-    pub fn failure(errors: Vec<String>) -> Self {
+    pub fn failure(issues: Vec<VerifyIssue>) -> Self {
         Self {
             success: false,
-            errors,
+            issues,
         }
+    }
+
+    /// Number of distinct rules (user or built-in), chains or header parts
+    /// the issues point at; 0 when none could be located.
+    pub fn rejected_count(&self) -> usize {
+        let mut seen: Vec<&ErrorOrigin> = Vec::new();
+        for origin in self.issues.iter().filter_map(|i| i.origin.as_ref()) {
+            if !seen.contains(&origin) {
+                seen.push(origin);
+            }
+        }
+        seen.len()
+    }
+
+    /// All issues on one line, `; `-separated (audit log).
+    pub fn summary(&self) -> String {
+        self.issues
+            .iter()
+            .map(|issue| issue.to_string().replace('\n', " "))
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 }
 
@@ -112,7 +147,7 @@ fn check_verdict(
         return Err(VerifyError::Auth(auth));
     }
     warn!("Ruleset verification failed: {stderr}");
-    Ok(VerifyResult::failure(parse_nft_errors(&stderr)))
+    Ok(VerifyResult::failure(unlocated_issues(&stderr)))
 }
 
 /// Outcome of the check in a private namespace.
@@ -127,15 +162,16 @@ enum UnprivilegedCheck {
     Unavailable(String),
 }
 
-/// Runs `unshare -rn nft --json --check -f -`: no privileges, no prompt.
-async fn unprivileged_check(payload: &[u8]) -> UnprivilegedCheck {
+/// Runs `unshare -rn nft <args>` with `payload` on stdin: no privileges, no
+/// prompt.
+async fn unprivileged_check(args: &[&str], payload: &[u8]) -> UnprivilegedCheck {
     // nft usually lives in sbin, which is not on every user's PATH (Debian)
     let nft = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
         .into_iter()
         .find(|path| std::path::Path::new(path).is_file())
         .unwrap_or("nft");
     let mut command = tokio::process::Command::new("unshare");
-    command.arg("-rn").arg(nft).args(CHECK_ARGS);
+    command.arg("-rn").arg(nft).args(args);
     match run_check(command, payload, UNPRIVILEGED_CHECK_TIMEOUT).await {
         Ok(Some(output)) if output.status.success() => UnprivilegedCheck::Passed,
         Ok(Some(output)) => {
@@ -157,7 +193,7 @@ async fn unprivileged_check(payload: &[u8]) -> UnprivilegedCheck {
 /// Returns `true` only if nft accepted the ruleset there; every other outcome
 /// is inconclusive.
 async fn unprivileged_check_passes(payload: &[u8]) -> bool {
-    match unprivileged_check(payload).await {
+    match unprivileged_check(&CHECK_ARGS, payload).await {
         UnprivilegedCheck::Passed => true,
         UnprivilegedCheck::Refused(stderr) => {
             info!("Unprivileged check inconclusive, falling back to elevated check: {stderr}");
@@ -198,9 +234,9 @@ pub async fn verify_ruleset_unprivileged(
         return check_verdict(&output, false);
     }
 
-    match unprivileged_check(&payload).await {
+    match unprivileged_check(&CHECK_ARGS, &payload).await {
         UnprivilegedCheck::Passed => Ok(VerifyResult::success()),
-        UnprivilegedCheck::Refused(stderr) => Ok(VerifyResult::failure(parse_nft_errors(&stderr))),
+        UnprivilegedCheck::Refused(stderr) => Ok(VerifyResult::failure(unlocated_issues(&stderr))),
         UnprivilegedCheck::Unavailable(reason) => Err(VerifyError::Failed(format!(
             "the unprivileged check (unshare -rn nft) is not available: {reason}"
         ))),
@@ -243,88 +279,63 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
     check_verdict(&output, elevated)
 }
 
-/// Parses nft error output into user-friendly messages
+/// Maps a failed check's errors to the rules that caused them.
 ///
-/// Attempts to extract meaningful error information from nft's
-/// stderr output, falling back to raw output if parsing fails.
-fn parse_nft_errors(stderr: &str) -> Vec<String> {
-    // Try to parse JSON error format first
-    if let Ok(json_err) = serde_json::from_str::<serde_json::Value>(stderr)
-        && let Some(errors) = json_err.get("errors").and_then(|e| e.as_array())
-    {
-        return errors
-            .iter()
-            .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
-            .map(String::from)
-            .collect();
+/// nft's errors for JSON input have no location, so this checks `ruleset`'s
+/// text form (the same commands, see [`FirewallRuleset::to_nft_text`]) with
+/// `unshare -rn nft -c -f -`: no privileges, never a prompt. Each located
+/// error is traced back to its rule, chain or the header.
+///
+/// `result` is returned unchanged when it succeeded, or when the text check
+/// cannot help: it is unavailable (no `unshare`, user namespaces disabled),
+/// it passes (the JSON failure is then not reproducible as text), or none of
+/// its errors could be located. With `DRFW_NFT_COMMAND` set (tests), that
+/// command runs the text check.
+pub async fn locate_errors(ruleset: &FirewallRuleset, result: VerifyResult) -> VerifyResult {
+    if result.success {
+        return result;
     }
+    let annotated = AnnotatedText::new(ruleset);
+    let payload = annotated.text().as_bytes();
 
-    // Fall back to line-by-line parsing
-    stderr
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            // Clean up common nft error prefixes
-            line.trim()
-                .trim_start_matches("Error: ")
-                .trim_start_matches("nft: ")
-                .to_string()
-        })
-        .collect()
+    let check = if let Some(nft) = crate::elevation::test_nft_command() {
+        let mut command = tokio::process::Command::new(nft);
+        command.args(TEXT_CHECK_ARGS);
+        match run_check(command, payload, UNPRIVILEGED_CHECK_TIMEOUT).await {
+            Ok(Some(output)) if output.status.success() => UnprivilegedCheck::Passed,
+            Ok(Some(output)) => {
+                UnprivilegedCheck::Refused(String::from_utf8_lossy(&output.stderr).into_owned())
+            }
+            Ok(None) => UnprivilegedCheck::Unavailable("timed out".to_string()),
+            Err(e) => UnprivilegedCheck::Unavailable(e.to_string()),
+        }
+    } else {
+        unprivileged_check(&TEXT_CHECK_ARGS, payload).await
+    };
+
+    let stderr = match check {
+        UnprivilegedCheck::Refused(stderr) => stderr,
+        UnprivilegedCheck::Passed => {
+            info!("Text form passes nft -c; showing the JSON check's errors unmapped");
+            return result;
+        }
+        UnprivilegedCheck::Unavailable(reason) => {
+            info!("Cannot locate nft errors ({reason}); showing them unmapped");
+            return result;
+        }
+    };
+    let issues = annotated.issues(&stderr);
+    if issues.iter().any(|issue| issue.origin.is_some()) {
+        VerifyResult::failure(issues)
+    } else {
+        info!("nft -c gave no usable locations; showing the JSON check's errors unmapped");
+        result
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_nft_errors_plain_text() {
-        let stderr = "Error: syntax error, unexpected $end\nError: invalid expression\n";
-        let errors = parse_nft_errors(stderr);
-
-        assert_eq!(errors.len(), 2);
-        assert_eq!(errors[0], "syntax error, unexpected $end");
-        assert_eq!(errors[1], "invalid expression");
-    }
-
-    #[test]
-    fn test_parse_nft_errors_empty() {
-        let stderr = "";
-        let errors = parse_nft_errors(stderr);
-
-        assert_eq!(errors, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_parse_nft_errors_with_nft_prefix() {
-        let stderr = "nft: syntax error\n";
-        let errors = parse_nft_errors(stderr);
-
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0], "syntax error");
-    }
-
-    #[test]
-    fn test_parse_nft_errors_permission_denied() {
-        // Test that permission errors are correctly parsed
-        let stderr = "Error: Operation not permitted\n";
-        let errors = parse_nft_errors(stderr);
-
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("Operation not permitted"));
-    }
-
-    #[test]
-    fn test_parse_nft_errors_permission_denied_verbose() {
-        // Test multi-line permission error output
-        let stderr =
-            "nft: Operation not permitted\nError: Could not process rule: Permission denied\n";
-        let errors = parse_nft_errors(stderr);
-
-        assert_eq!(errors.len(), 2);
-        assert!(errors[0].contains("Operation not permitted"));
-        assert!(errors[1].contains("Permission denied"));
-    }
 
     #[cfg(unix)]
     fn output(code: i32, stderr: &str) -> std::process::Output {
@@ -351,7 +362,7 @@ mod tests {
         // nft's own failure (exit 1) is an invalid ruleset, not an error
         let invalid = check_verdict(&output(1, "Error: syntax error\n"), true).unwrap();
         assert!(!invalid.success);
-        assert_eq!(invalid.errors, vec!["syntax error".to_string()]);
+        assert_eq!(invalid.issues, vec![VerifyIssue::unlocated("syntax error")]);
         // Unelevated (test mode): 126/127 are nft's own statuses
         assert!(!check_verdict(&output(126, "x"), false).unwrap().success);
     }
@@ -360,15 +371,49 @@ mod tests {
     fn test_verify_result_success() {
         let result = VerifyResult::success();
         assert!(result.success);
-        assert_eq!(result.errors, Vec::<String>::new());
+        assert_eq!(result.issues, Vec::new());
+        assert_eq!(result.rejected_count(), 0);
     }
 
     #[test]
-    fn test_verify_result_failure() {
-        let errors = vec!["error 1".to_string(), "error 2".to_string()];
-        let result = VerifyResult::failure(errors.clone());
-
+    fn test_verify_result_failure_counts_and_summary() {
+        let rule = |label: &str, id| {
+            Some(ErrorOrigin::UserRule {
+                id,
+                label: label.to_string(),
+            })
+        };
+        let ssh = uuid::Uuid::new_v4();
+        let issue = |origin, message: &str| VerifyIssue {
+            origin,
+            message: message.to_string(),
+            source_line: None,
+            caret: None,
+        };
+        let result = VerifyResult::failure(vec![
+            issue(rule("ssh", ssh), "first"),
+            issue(rule("ssh", ssh), "second\nline"),
+            issue(rule("web", uuid::Uuid::new_v4()), "third"),
+            VerifyIssue::unlocated("loose"),
+        ]);
         assert!(!result.success);
-        assert_eq!(result.errors, errors);
+        assert_eq!(result.rejected_count(), 2);
+        assert_eq!(
+            result.summary(),
+            "rule \"ssh\": first; rule \"ssh\": second line; rule \"web\": third; loose"
+        );
+    }
+
+    /// The mock nft cannot check text: the JSON errors are kept unmapped.
+    #[tokio::test]
+    async fn test_locate_errors_falls_back_to_raw_errors() {
+        crate::core::test_helpers::setup_mock_nft();
+        let ruleset = crate::core::test_helpers::create_test_ruleset();
+        let failed = VerifyResult::failure(vec![VerifyIssue::unlocated("raw")]);
+        let located = locate_errors(&ruleset, failed).await;
+        assert!(!located.success);
+        assert_eq!(located.issues, vec![VerifyIssue::unlocated("raw")]);
+        let ok = locate_errors(&ruleset, VerifyResult::success()).await;
+        assert!(ok.success);
     }
 }

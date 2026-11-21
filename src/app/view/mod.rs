@@ -20,6 +20,7 @@ mod settings;
 mod shortcuts;
 mod sidebar;
 mod syntax;
+mod verify_errors;
 mod workspace;
 
 // Shared imports used by main view function
@@ -132,7 +133,20 @@ pub fn view(state: &State) -> Element<'_, Message> {
                 ))
                 .style(move |_| modal_backdrop(theme)),
             ),
-            _ => None,
+            // Below the rule form (opened from it) and the apply flow
+            _ => state
+                .verify_errors
+                .as_ref()
+                .filter(|_| state.show_verify_errors)
+                .map(|panel| {
+                    center(verify_errors::view_verify_errors_modal(
+                        panel,
+                        theme,
+                        state.font_regular,
+                        state.font_mono,
+                    ))
+                    .style(move |_| modal_backdrop(theme))
+                }),
         }
     };
 

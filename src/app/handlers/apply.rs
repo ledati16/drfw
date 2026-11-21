@@ -146,6 +146,39 @@ fn verify_error_feedback(state: &mut State, error: &VerifyError) -> Task<Message
     Task::batch([audit, feedback])
 }
 
+/// Verifies `ruleset` (JSON check, see `verify::verify_ruleset`) and, if nft
+/// rejects it, maps the errors to the rules that caused them.
+async fn verify_and_locate(
+    ruleset: FirewallRuleset,
+    json: serde_json::Value,
+) -> Result<VerifyResult, VerifyError> {
+    let result = crate::core::verify::verify_ruleset(json).await?;
+    Ok(crate::core::verify::locate_errors(&ruleset, result).await)
+}
+
+/// Banner, "Verification Errors" panel and audit entry for a ruleset nft
+/// rejected.
+fn verify_rejected_feedback(state: &mut State, result: &VerifyResult) -> Task<Message> {
+    state.push_banner(
+        crate::app::verify_errors::banner_message(result),
+        BannerSeverity::Error,
+    );
+    state.verify_errors = Some(crate::app::verify_errors::VerifyErrorsPanel::new(result));
+    state.show_verify_errors = true;
+    audit_task(audit::log_verify(
+        state.enable_event_log,
+        false,
+        result.issues.len(),
+        Some(result.summary()),
+    ))
+}
+
+/// A verification passed: earlier errors no longer apply.
+fn clear_verify_errors(state: &mut State) {
+    state.verify_errors = None;
+    state.show_verify_errors = false;
+}
+
 /// True while the apply flow (or Save to System) owns the ruleset.
 pub(crate) fn edits_locked(state: &State) -> bool {
     state.is_busy() || state.status == AppStatus::AwaitingApply
@@ -223,18 +256,17 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
 
     let verified = state.ruleset.clone();
     let json = verified.to_nftables_json();
-    let payload = json.clone();
+    let task = Task::perform(
+        verify_and_locate(verified.clone(), json.clone()),
+        Message::VerifyCompleted,
+    );
     state.apply_session = Some(ApplySession {
         verified,
         json,
         previous_applied: None,
     });
     state.status = AppStatus::Verifying;
-
-    Task::perform(
-        crate::core::verify::verify_ruleset(payload),
-        Message::VerifyCompleted,
-    )
+    task
 }
 
 /// Handles verification completion
@@ -249,28 +281,13 @@ pub(crate) fn handle_verify_completed(
     match result {
         Ok(verify_result) if verify_result.success => {
             state.status = AppStatus::AwaitingApply;
+            clear_verify_errors(state);
             audit_task(audit::log_verify(enable_event_log, true, 0, None))
         }
         Ok(verify_result) => {
             state.status = AppStatus::Idle;
             state.apply_session = None;
-            let error_summary = if verify_result.errors.is_empty() {
-                "Ruleset verification failed".to_string()
-            } else {
-                format!(
-                    "Ruleset verification failed: {} errors",
-                    verify_result.errors.len()
-                )
-            };
-            state.push_banner(&error_summary, BannerSeverity::Error);
-            let error_count = verify_result.errors.len();
-            let error = Some(verify_result.errors.join("; "));
-            audit_task(audit::log_verify(
-                enable_event_log,
-                false,
-                error_count,
-                error,
-            ))
+            verify_rejected_feedback(state, &verify_result)
         }
         Err(e) => {
             state.status = AppStatus::Idle;
@@ -573,7 +590,7 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
     let nft_json = state.ruleset.to_nftables_json();
 
     Task::perform(
-        crate::core::verify::verify_ruleset(nft_json),
+        verify_and_locate(state.ruleset.clone(), nft_json),
         Message::SaveToSystemVerifyResult,
     )
 }
@@ -590,27 +607,12 @@ pub(crate) fn handle_save_to_system_verify_result(
         Ok(verify_result) if verify_result.success => {
             // Verification passed - show confirmation modal
             state.status = AppStatus::AwaitingSaveToSystem;
+            clear_verify_errors(state);
             Task::none()
         }
         Ok(verify_result) => {
-            // Verification failed
             state.status = AppStatus::Idle;
-            let error_summary = if verify_result.errors.is_empty() {
-                "Verification failed".to_string()
-            } else {
-                verify_result.errors.join("; ")
-            };
-            let msg = truncate_error_message("Cannot save - invalid config: ", &error_summary, 80);
-            state.push_banner(&msg, BannerSeverity::Error);
-            let enable_event_log = state.enable_event_log;
-            let error_count = verify_result.errors.len();
-            let error = Some(error_summary);
-            audit_task(audit::log_verify(
-                enable_event_log,
-                false,
-                error_count,
-                error,
-            ))
+            verify_rejected_feedback(state, &verify_result)
         }
         Err(e) => {
             // Verification could not run (authentication, nft missing, ...)
@@ -877,6 +879,54 @@ mod tests {
         state.status = AppStatus::Idle;
         assert!(!edits_locked(&state));
         assert!(!is_ruleset_edit(&Message::ConfirmClicked));
+    }
+
+    #[test]
+    fn test_rejected_ruleset_opens_the_errors_panel() {
+        use crate::core::verify::{ErrorOrigin, VerifyIssue};
+
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Web", Some(80)));
+        state.mark_profile_dirty();
+        let id = state.ruleset.rules[0].id;
+        let rejected = || {
+            VerifyResult::failure(vec![VerifyIssue {
+                origin: Some(ErrorOrigin::UserRule {
+                    id,
+                    label: "Web".into(),
+                }),
+                message: "Service out of range".into(),
+                source_line: None,
+                caret: None,
+            }])
+        };
+
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(rejected()));
+        assert_eq!(state.status, AppStatus::Idle);
+        assert!(state.apply_session.is_none());
+        let (message, severity) = last_banner(&state);
+        assert_eq!(message, "nft rejected 1 rule, see details");
+        assert_eq!(severity, BannerSeverity::Error);
+        assert!(state.show_verify_errors);
+        let panel = state.verify_errors.as_ref().expect("panel");
+        assert_eq!(panel.rows[0].rule_id, Some(id));
+
+        // Clicking the row opens the rule on top of the panel
+        let _ = state.update(Message::EditRuleClicked(id));
+        assert!(state.rule_form.is_some());
+        let _ = state.update(Message::CancelRuleForm);
+        assert!(state.show_verify_errors, "the panel stays open");
+        let _ = state.update(Message::ToggleVerifyErrors(false));
+
+        // Save to System reports the same way; a later success clears it
+        let _ = handle_save_to_system_clicked(&mut state);
+        let _ = handle_save_to_system_verify_result(&mut state, Ok(rejected()));
+        assert!(state.show_verify_errors);
+        let _ = state.update(Message::ToggleVerifyErrors(false));
+        let _ = handle_save_to_system_clicked(&mut state);
+        let _ = handle_save_to_system_verify_result(&mut state, Ok(VerifyResult::success()));
+        assert!(state.verify_errors.is_none());
     }
 
     #[test]

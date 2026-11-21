@@ -783,7 +783,7 @@ mod integration_tests {
         assert!(
             verify_result.success,
             "Port range should be valid: {:?}",
-            verify_result.errors
+            verify_result.issues
         );
     }
 

@@ -6,8 +6,8 @@ use iced::widget::{Id, button, checkbox, column, container, row, scrollable, tex
 use iced::{Alignment, Border, Element, Length, Shadow};
 
 use crate::app::ui_components::{
-    active_tab_button, dirty_button, inactive_tab_button, popup_container, primary_button,
-    secondary_button, themed_checkbox, themed_scrollable,
+    active_tab_button, danger_button, dirty_button, inactive_tab_button, popup_container,
+    primary_button, secondary_button, themed_checkbox, themed_scrollable,
 };
 use crate::app::{AppStatus, Message, State, WorkspaceTab};
 
@@ -18,23 +18,40 @@ pub fn view_workspace<'a>(
     let theme = &state.theme;
 
     // Header: Tab Strip (Left) and Global Tools (Right)
-    let nav_row = row![
+    let mut nav_row = row![
         // Tab buttons - simple rounded buttons like Export/Diagnostics
         view_tab_button("Ruleset", WorkspaceTab::Nftables, state.active_tab, theme),
         view_tab_button("Settings", WorkspaceTab::Settings, state.active_tab, theme),
         container(row![]).width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    // Reopens the errors of the last failed verification
+    if state.verify_errors.is_some() {
+        nav_row = nav_row.push(
+            button(
+                text("Verification Errors")
+                    .size(13)
+                    .font(state.font_regular),
+            )
+            .on_press(Message::ToggleVerifyErrors(true))
+            .padding([8, 16])
+            .style(move |_, status| danger_button(theme, status)),
+        );
+    }
+    let nav_row = nav_row.extend([
         // Global Utility Tools
         button(text("Export").size(13).font(state.font_regular))
             .on_press(Message::ToggleExportModal(true))
             .padding([8, 16])
-            .style(move |_, status| secondary_button(theme, status)),
+            .style(move |_, status| secondary_button(theme, status))
+            .into(),
         button(text("Diagnostics").size(13).font(state.font_regular))
             .on_press(Message::ToggleDiagnostics(true))
             .padding([8, 16])
-            .style(move |_, status| secondary_button(theme, status)),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
+            .style(move |_, status| secondary_button(theme, status))
+            .into(),
+    ]);
 
     // Title and description row with optional diff checkbox
     let mut title_row = row![

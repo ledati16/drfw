@@ -84,8 +84,46 @@ const NFT_DEFAULT_LIMIT_BURST: u64 = 5;
 struct ChainBlock {
     name: String,
     declaration: Option<String>,
-    lines: Vec<String>,
+    /// Statement lines, each with the index of the `add rule` command that
+    /// produced it (`None` for blank lines and section comments)
+    lines: Vec<(String, Option<usize>)>,
     last_section: Option<&'static str>,
+}
+
+/// What produced one line of the rendered text (see [`render_with_map`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineSource {
+    /// File header, table setup, table block braces, blank lines between chains
+    Header,
+    /// A chain block's own lines (opening, declaration, section comments,
+    /// closing brace); the index into [`RenderedText::chains`]
+    Chain(usize),
+    /// A rule: the index of its `add rule` command in the rendered list
+    Rule(usize),
+}
+
+/// The rendered `nft -f` text plus, for every line, what produced it.
+#[derive(Debug, Clone)]
+pub(crate) struct RenderedText {
+    pub text: String,
+    /// One entry per line of `text` (line `n` of the file is `lines[n - 1]`)
+    pub lines: Vec<LineSource>,
+    /// Chain names, in the order their blocks appear
+    pub chains: Vec<String>,
+}
+
+/// Appends lines to the text while recording their [`LineSource`].
+struct Document {
+    text: String,
+    lines: Vec<LineSource>,
+}
+
+impl Document {
+    fn line(&mut self, source: LineSource, args: std::fmt::Arguments<'_>) {
+        let _ = self.text.write_fmt(args);
+        self.text.push('\n');
+        self.lines.push(source);
+    }
 }
 
 /// Renders an annotated command list (see `FirewallRuleset::build_commands`)
@@ -94,65 +132,97 @@ struct ChainBlock {
 /// Never fails: commands or expressions outside the supported subset are
 /// logged and rendered as an invalid statement (see module docs).
 pub(crate) fn render(commands: &[NftCommand]) -> String {
+    render_with_map(commands).text
+}
+
+/// [`render`], plus what produced each line of the text.
+///
+/// Used to map the `<line>:<column>` locations in nft's error messages back
+/// to the rule (or chain, or header) they belong to. The text is exactly
+/// [`render`]'s.
+pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
     let mut preamble: Vec<String> = Vec::new();
     let mut table: Option<(String, String)> = None;
     let mut chains: Vec<ChainBlock> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
-    for command in commands {
-        if let Err(e) = apply_command(command, &mut preamble, &mut table, &mut chains) {
+    for (index, command) in commands.iter().enumerate() {
+        if let Err(e) = apply_command(command, index, &mut preamble, &mut table, &mut chains) {
             tracing::error!("nft text renderer: {e}");
             errors.push(e);
         }
     }
 
-    let mut out =
-        String::with_capacity(512 + chains.iter().map(|c| c.lines.len() * 96).sum::<usize>());
-    out.push_str("#!/usr/sbin/nft -f\n");
-    let _ = writeln!(
-        out,
-        "{GENERATED_HEADER} {} -- do not edit by hand; changes are overwritten.",
-        env!("CARGO_PKG_VERSION")
+    let line_count = 8 + preamble.len() + chains.iter().map(|c| c.lines.len() + 4).sum::<usize>();
+    let mut doc = Document {
+        text: String::with_capacity(512 + chains.iter().map(|c| c.lines.len() * 96).sum::<usize>()),
+        lines: Vec::with_capacity(line_count),
+    };
+    doc.line(LineSource::Header, format_args!("#!/usr/sbin/nft -f"));
+    doc.line(
+        LineSource::Header,
+        format_args!(
+            "{GENERATED_HEADER} {} -- do not edit by hand; changes are overwritten.",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
-    out.push_str("# Loading this file replaces the whole \"inet drfw\" table.\n");
+    doc.line(
+        LineSource::Header,
+        format_args!("# Loading this file replaces the whole \"inet drfw\" table."),
+    );
     for e in &errors {
-        let _ = writeln!(out, "# DRFW internal error: {}", single_line(e));
-        let _ = writeln!(out, "{RENDER_ERROR_STATEMENT}");
+        doc.line(
+            LineSource::Header,
+            format_args!("# DRFW internal error: {}", single_line(e)),
+        );
+        doc.line(LineSource::Header, format_args!("{RENDER_ERROR_STATEMENT}"));
     }
     for line in &preamble {
-        out.push_str(line);
-        out.push('\n');
+        doc.line(LineSource::Header, format_args!("{line}"));
     }
 
+    let names = chains.iter().map(|c| c.name.clone()).collect();
     let Some((family, name)) = table else {
-        return out;
+        return RenderedText {
+            text: doc.text,
+            lines: doc.lines,
+            chains: names,
+        };
     };
 
-    let _ = writeln!(out, "\ntable {family} {name} {{");
+    doc.line(LineSource::Header, format_args!(""));
+    doc.line(LineSource::Header, format_args!("table {family} {name} {{"));
     for (i, chain) in chains.iter().enumerate() {
+        let own = LineSource::Chain(i);
         if i > 0 {
-            out.push('\n');
+            doc.line(LineSource::Header, format_args!(""));
         }
-        let _ = writeln!(out, "{CHAIN_INDENT}chain {} {{", chain.name);
+        doc.line(own, format_args!("{CHAIN_INDENT}chain {} {{", chain.name));
         if let Some(decl) = &chain.declaration {
-            let _ = writeln!(out, "{RULE_INDENT}{decl}");
+            doc.line(own, format_args!("{RULE_INDENT}{decl}"));
         }
-        for line in &chain.lines {
+        for (line, command) in &chain.lines {
+            let source = command.map_or(own, LineSource::Rule);
             if line.is_empty() {
-                out.push('\n');
+                doc.line(source, format_args!(""));
             } else {
-                let _ = writeln!(out, "{RULE_INDENT}{line}");
+                doc.line(source, format_args!("{RULE_INDENT}{line}"));
             }
         }
-        let _ = writeln!(out, "{CHAIN_INDENT}}}");
+        doc.line(own, format_args!("{CHAIN_INDENT}}}"));
     }
-    out.push_str("}\n");
-    out
+    doc.line(LineSource::Header, format_args!("}}"));
+    RenderedText {
+        text: doc.text,
+        lines: doc.lines,
+        chains: names,
+    }
 }
 
 /// Applies one command to the document being assembled.
 fn apply_command(
     command: &NftCommand,
+    index: usize,
     preamble: &mut Vec<String>,
     table: &mut Option<(String, String)>,
     chains: &mut Vec<ChainBlock>,
@@ -200,17 +270,22 @@ fn apply_command(
             let line = render_rule(spec);
             let block = chain_block(chains, chain);
             if block.last_section != Some(command.section) {
-                block.lines.push(String::new());
-                block.lines.push(format!("# --- {} ---", command.section));
+                block.lines.push((String::new(), None));
+                block
+                    .lines
+                    .push((format!("# --- {} ---", command.section), None));
                 block.last_section = Some(command.section);
             }
             match line {
-                Ok(line) => block.lines.push(line),
+                Ok(line) => block.lines.push((line, Some(index))),
                 Err(e) => {
+                    block.lines.push((
+                        format!("# DRFW internal error: {}", single_line(&e)),
+                        Some(index),
+                    ));
                     block
                         .lines
-                        .push(format!("# DRFW internal error: {}", single_line(&e)));
-                    block.lines.push(RENDER_ERROR_STATEMENT.to_string());
+                        .push((RENDER_ERROR_STATEMENT.to_string(), Some(index)));
                     return Err(e);
                 }
             }

@@ -55,14 +55,83 @@
 //! `core::apply_guard`): if the terminal closes or the SSH connection drops
 //! during the countdown, the rules still revert on time.
 
-use std::io::stdout;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use crossterm::ExecutableCommand;
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use drfw::build_info::{LONG_VERSION, SHORT_VERSION};
+use drfw::core::verify::VerifyIssue;
 use drfw::{audit, config, core, elevation};
+
+/// An output stream of the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Stream {
+    /// Whether to color this stream: only when it is a terminal, so piped or
+    /// redirected output never contains escape codes.
+    fn colored(self) -> bool {
+        match self {
+            Self::Stdout => std::io::stdout().is_terminal(),
+            Self::Stderr => std::io::stderr().is_terminal(),
+        }
+    }
+}
+
+/// `text` in `color` when `enabled`, otherwise `text` unchanged.
+fn paint(text: &str, color: Color, enabled: bool) -> String {
+    if enabled {
+        format!("{}{text}{}", SetForegroundColor(color), ResetColor)
+    } else {
+        text.to_string()
+    }
+}
+
+/// Indentation of nft's errors under the "rejected" line.
+const ISSUE_INDENT: &str = "  ";
+/// Indentation of an error's message continuation, source and caret lines.
+const ISSUE_DETAIL_INDENT: &str = "      ";
+
+/// Formats nft's errors for the terminal: `rule "<label>": <message>`, then
+/// the offending line of the generated ruleset with nft's caret under it.
+fn issue_lines(issues: &[VerifyIssue], color: bool) -> Vec<String> {
+    if issues.is_empty() {
+        return vec![format!("{ISSUE_INDENT}(nft gave no details)")];
+    }
+    let mut lines = Vec::with_capacity(issues.len() * 3);
+    for issue in issues {
+        let mut message = issue.message.lines();
+        let first = message.next().unwrap_or_default();
+        lines.push(match &issue.origin {
+            Some(origin) => format!(
+                "{ISSUE_INDENT}{}: {}",
+                paint(&origin.to_string(), Color::Yellow, color),
+                paint(first, Color::Red, color)
+            ),
+            None => format!("{ISSUE_INDENT}{}", paint(first, Color::Red, color)),
+        });
+        lines.extend(message.map(|l| format!("{ISSUE_DETAIL_INDENT}{l}")));
+        if let (Some(source), Some(caret)) = (&issue.source_line, &issue.caret) {
+            lines.push(format!("{ISSUE_DETAIL_INDENT}{source}"));
+            lines.push(format!(
+                "{ISSUE_DETAIL_INDENT}{}",
+                paint(caret, Color::Red, color)
+            ));
+        }
+    }
+    lines
+}
+
+/// Prints nft's errors to stderr (see [`issue_lines`]).
+fn print_issues(issues: &[VerifyIssue]) {
+    for line in issue_lines(issues, Stream::Stderr.colored()) {
+        eprintln!("{line}");
+    }
+}
 
 /// What ended the countdown
 #[derive(Debug, PartialEq, Eq)]
@@ -137,6 +206,7 @@ fn run_countdown(deadline: std::time::Instant) -> CountdownEnd {
         return CountdownEnd::NoTerminal(e.to_string());
     }
 
+    let color = Stream::Stdout.colored();
     let mut shown = None;
     let end = loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -146,11 +216,10 @@ fn run_countdown(deadline: std::time::Instant) -> CountdownEnd {
         }
         if shown != Some(secs) {
             shown = Some(secs);
-            print!("\rAuto-revert in ");
-            let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-            print!("{secs:3}s");
-            let _ = stdout().execute(ResetColor);
-            print!("  [c/Enter=confirm, r/Esc/Ctrl-C=revert now]   ");
+            print!(
+                "\rAuto-revert in {}  [c/Enter=confirm, r/Esc/Ctrl-C=revert now]   ",
+                paint(&format!("{secs:3}s"), Color::Yellow, color)
+            );
             std::io::stdout().flush().ok();
         }
 
@@ -178,12 +247,9 @@ fn countdown_display_secs(remaining: std::time::Duration) -> u64 {
     remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
 }
 
-/// Prints a colored status mark followed by a message.
+/// Prints a status mark (colored on a terminal) followed by a message.
 fn print_status(mark: &str, color: Color, message: &str) {
-    let _ = stdout().execute(SetForegroundColor(color));
-    print!("{mark}");
-    let _ = stdout().execute(ResetColor);
-    println!(" {message}");
+    println!("{} {message}", paint(mark, color, Stream::Stdout.colored()));
 }
 
 /// Waits for the guard's verdict after `end`, prints it and writes the audit log.
@@ -395,16 +461,13 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
             // Verify first
             println!("Verifying profile '{name}'...");
             let verify_result = core::verify::verify_ruleset(nft_json.clone()).await?;
+            let verify_result = core::verify::locate_errors(&ruleset, verify_result).await;
             if !verify_result.success {
-                let _ = stdout().execute(SetForegroundColor(Color::Red));
-                eprint!("✗");
-                let _ = stdout().execute(ResetColor);
-                eprintln!(" Verification failed:");
-                for error in &verify_result.errors {
-                    let _ = stdout().execute(SetForegroundColor(Color::Red));
-                    eprintln!("  {error}");
-                    let _ = stdout().execute(ResetColor);
-                }
+                eprintln!(
+                    "{} nft rejected the generated ruleset:",
+                    paint("✗", Color::Red, Stream::Stderr.colored())
+                );
+                print_issues(&verify_result.issues);
                 return Err("Verification failed".into());
             }
 
@@ -582,11 +645,10 @@ async fn check_profile(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let result = core::verify::verify_ruleset_unprivileged(&ruleset.to_nftables_json()).await?;
+    let result = core::verify::locate_errors(&ruleset, result).await;
     if !result.success {
         print_status("✗", Color::Red, "nft rejected the generated ruleset:");
-        for error in &result.errors {
-            eprintln!("  {error}");
-        }
+        print_issues(&result.issues);
         return Err("nft check failed".into());
     }
     print_status(
@@ -675,6 +737,63 @@ mod tests {
         assert_eq!(countdown_display_secs(Duration::from_millis(999)), 1);
         assert_eq!(countdown_display_secs(Duration::from_millis(1)), 1);
         assert_eq!(countdown_display_secs(Duration::ZERO), 0);
+    }
+
+    fn located_issue() -> VerifyIssue {
+        VerifyIssue {
+            origin: Some(core::verify::ErrorOrigin::UserRule {
+                id: uuid::Uuid::new_v4(),
+                label: "web".into(),
+            }),
+            message: "syntax error\nexpected any of: accept".into(),
+            source_line: Some("tcp dport 80 acept comment \"web\"".into()),
+            caret: Some("             ^^^^^".into()),
+        }
+    }
+
+    #[test]
+    fn test_issue_lines_plain() {
+        let lines = issue_lines(&[located_issue(), VerifyIssue::unlocated("raw")], false);
+        assert_eq!(
+            lines,
+            [
+                "  rule \"web\": syntax error",
+                "      expected any of: accept",
+                "      tcp dport 80 acept comment \"web\"",
+                "                   ^^^^^",
+                "  raw",
+            ]
+        );
+        assert_eq!(issue_lines(&[], false), ["  (nft gave no details)"]);
+    }
+
+    /// Color only reaches the output when the stream is a terminal; the
+    /// plain form is exactly the text.
+    #[test]
+    fn test_color_gating() {
+        assert_eq!(paint("✗", Color::Red, false), "✗");
+        let plain = issue_lines(&[located_issue()], false);
+        assert!(plain.iter().all(|l| !l.contains('\x1b')), "{plain:?}");
+        let colored = issue_lines(&[located_issue()], true);
+        // Same text once escapes are stripped (crossterm honors NO_COLOR)
+        let strip = |s: &str| {
+            let mut out = String::new();
+            let mut chars = s.chars();
+            while let Some(c) = chars.next() {
+                if c == '\x1b' {
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        };
+        let stripped: Vec<String> = colored.iter().map(|l| strip(l)).collect();
+        assert_eq!(stripped, plain);
     }
 
     #[test]

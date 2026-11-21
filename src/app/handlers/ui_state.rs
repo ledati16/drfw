@@ -31,6 +31,12 @@ pub(crate) fn handle_toggle_shortcuts_help(state: &mut State, show: bool) {
     state.show_shortcuts_help = show;
 }
 
+/// Opens or closes the "Verification Errors" panel (only while there are
+/// errors to show).
+pub(crate) fn handle_toggle_verify_errors(state: &mut State, show: bool) {
+    state.show_verify_errors = show && state.verify_errors.is_some();
+}
+
 /// Handles toggling diagnostics view
 pub(crate) fn handle_toggle_diagnostics(state: &mut State, show: bool) -> Task<Message> {
     state.show_diagnostics = show;
@@ -409,6 +415,9 @@ pub(crate) enum TopLayer {
     /// "Commit Changes?", "Applying" and the auto-revert countdown
     ApplyFlow,
     SaveToSystem,
+    /// "Verification Errors" panel. Below the rule form, so a rule opened
+    /// from the panel is edited on top of it and Escape returns to the list.
+    VerifyErrors,
     /// No modal: the sidebar and workspace
     Base,
 }
@@ -448,6 +457,7 @@ pub(crate) fn top_layer(state: &State) -> TopLayer {
             | AppStatus::Applying
             | AppStatus::PendingConfirmation { .. } => TopLayer::ApplyFlow,
             AppStatus::AwaitingSaveToSystem => TopLayer::SaveToSystem,
+            _ if state.show_verify_errors => TopLayer::VerifyErrors,
             _ => TopLayer::Base,
         }
     }
@@ -487,6 +497,7 @@ fn escape_message(state: &State) -> Option<Message> {
             (state.status == AppStatus::AwaitingApply).then_some(Message::CancelApply)
         }
         TopLayer::SaveToSystem => Some(Message::SaveToSystemCancelled),
+        TopLayer::VerifyErrors => Some(Message::ToggleVerifyErrors(false)),
         TopLayer::Base => state.deleting_id.is_some().then_some(Message::CancelDelete),
     }
 }
@@ -832,6 +843,8 @@ mod tests {
         let mut state = create_test_state();
         state.rule_search = "ssh".into();
         state.rule_search_lowercase = "ssh".into();
+        state.verify_errors = Some(verify_errors_panel());
+        handle_toggle_verify_errors(&mut state, true);
         open_helper(&mut state);
         state.show_diagnostics = true;
         state.show_export_modal = true;
@@ -851,6 +864,7 @@ mod tests {
             "ToggleDiagnostics(false)",
             "CloseHelper",
             "CancelRuleForm",
+            "ToggleVerifyErrors(false)",
         ];
         for want in expected {
             let got = press(&mut state, &named(Named::Escape), Status::Ignored)
@@ -866,7 +880,8 @@ mod tests {
                 "ToggleExportModal(false)" => Message::ToggleExportModal(false),
                 "ToggleDiagnostics(false)" => Message::ToggleDiagnostics(false),
                 "CloseHelper" => Message::CloseHelper,
-                _ => Message::CancelRuleForm,
+                "CancelRuleForm" => Message::CancelRuleForm,
+                _ => Message::ToggleVerifyErrors(false),
             };
             let _ = state.update(message);
         }
@@ -877,6 +892,31 @@ mod tests {
             None
         );
         assert_eq!(state.rule_search, "");
+    }
+
+    fn verify_errors_panel() -> crate::app::verify_errors::VerifyErrorsPanel {
+        crate::app::verify_errors::VerifyErrorsPanel::new(
+            &crate::core::verify::VerifyResult::failure(vec![
+                crate::core::verify::VerifyIssue::unlocated("bad"),
+            ]),
+        )
+    }
+
+    #[test]
+    fn test_verify_errors_panel_needs_errors() {
+        let mut state = create_test_state();
+        handle_toggle_verify_errors(&mut state, true);
+        assert!(!state.show_verify_errors, "nothing to show");
+        state.verify_errors = Some(verify_errors_panel());
+        handle_toggle_verify_errors(&mut state, true);
+        assert_eq!(top_layer(&state), TopLayer::VerifyErrors);
+        // A rule opened from the panel is edited on top of it
+        state.rule_form = Some(RuleForm::default());
+        assert_eq!(top_layer(&state), TopLayer::RuleForm);
+        state.rule_form = None;
+        // The apply flow is never hidden behind it
+        state.status = AppStatus::AwaitingApply;
+        assert_eq!(top_layer(&state), TopLayer::ApplyFlow);
     }
 
     #[test]

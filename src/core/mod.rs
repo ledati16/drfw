@@ -6,6 +6,7 @@
 //! - [`firewall`]: Data structures for representing firewall rules and rulesets
 //! - [`apply_guard`]: Applying rules with a root-side auto-revert guard
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
+//! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
 //! - [`verify`]: Ruleset validation and syntax checking
 //! - [`error`]: Error types for firewall operations
@@ -16,6 +17,7 @@
 pub mod apply_guard;
 pub mod error;
 pub mod firewall;
+pub mod nft_errors;
 pub mod nft_text;
 pub mod profiles;
 pub mod rule_constraints;
