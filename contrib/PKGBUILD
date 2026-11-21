@@ -23,9 +23,14 @@ pkgver() {
     printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
+# Toolchain: do NOT export RUSTUP_TOOLCHAIN here. rust-toolchain.toml pins
+# the exact Rust release (rust-version in Cargo.toml matches), and overriding
+# it with "stable" fails whenever the installed stable is older than the pin.
+# With rustup, the pinned toolchain is used (and installed if missing); with
+# Arch's `rust` package, it must be at least the pinned version.
+
 prepare() {
     cd "${pkgname%-git}"
-    export RUSTUP_TOOLCHAIN=stable
     cargo fetch --locked --target "$(rustc --print host-tuple)"
 }
 
@@ -41,7 +46,6 @@ _drfw_env() {
 
 build() {
     cd "${pkgname%-git}"
-    export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     _drfw_env
     cargo build --frozen --release
@@ -49,7 +53,6 @@ build() {
 
 check() {
     cd "${pkgname%-git}"
-    export RUSTUP_TOOLCHAIN=stable
     # Debug build on purpose: overflow checks and debug_assert!() are active.
     # Runs as the build user, no root needed. Most tests use the mock nft
     # (tests/mock_nft.sh, set up by the tests themselves). tests/real_nft.rs
