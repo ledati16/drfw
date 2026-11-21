@@ -258,8 +258,13 @@ fn test_icmp_redirect_of_a_live_flow_is_dropped() {
     let default = FirewallRuleset::new();
     let mut strict = FirewallRuleset::new();
     strict.advanced_security.strict_icmp = true;
+    // The redirect sysctls are set explicitly: a new namespace's defaults
+    // differ between kernels (some inherit the host's `accept_redirects=0`).
     let script = r#"
 P sh -c 'echo 1 > /proc/sys/net/ipv4/ip_forward'
+P sh -c 'for i in all v1; do echo 1 > /proc/sys/net/ipv4/conf/$i/send_redirects; done'
+sh -c 'for i in all v0; do echo 1 > /proc/sys/net/ipv4/conf/$i/accept_redirects; echo 0 > /proc/sys/net/ipv4/conf/$i/secure_redirects; echo 1 > /proc/sys/net/ipv4/conf/$i/shared_media; done'
+echo "sysctl host $(cat /proc/sys/net/ipv4/conf/{all,v0}/{accept,secure}_redirects | tr '\n' ' ')peer $(P cat /proc/sys/net/ipv4/conf/{all,v1}/send_redirects | tr '\n' ' ')"
 P ip link add d0 type dummy
 P ip link set d0 mtu 1280 up
 P ip route add 198.51.100.20/32 dev d0
@@ -289,7 +294,8 @@ exec 3>&-
     assert_eq!(
         text(&lines, "none"),
         "via 10.9.0.66",
-        "control: without a firewall the host follows the redirect"
+        "control: without a firewall the host follows the redirect ({})",
+        text(&lines, "sysctl")
     );
     assert_eq!(text(&lines, "drfw"), "via 10.9.0.2", "redirect dropped");
     assert_eq!(text(&lines, "strict"), "via 10.9.0.2");
