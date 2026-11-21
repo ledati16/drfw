@@ -179,7 +179,9 @@ pub(crate) fn is_ruleset_edit(message: &Message) -> bool {
             | Message::SaveProfileAs(_)
             | Message::ConfirmProfileSwitch
             | Message::DiscardProfileSwitch
-            | Message::ProfileSwitchAfterSave(_)
+            | Message::CreateEmptyProfile
+            | Message::ProfileCreated(..)
+            | Message::StartFreshProfile
             | Message::ConfirmDeleteProfile
     )
 }
@@ -194,9 +196,30 @@ pub(crate) fn handle_edit_while_locked(state: &mut State) {
     }
 }
 
+/// Refuses to apply or save a ruleset with invalid enabled rules.
+///
+/// Invalid rules are kept in the profile (no data loss) but must never reach
+/// nft: they would either fail with a cryptic error or do something other than
+/// what the rule card shows. Returns `false` (after showing why) if blocked.
+fn ruleset_ready_to_apply(state: &mut State) -> bool {
+    match state.ruleset.validate_for_apply() {
+        Ok(()) => true,
+        Err(report) => {
+            let summary = report
+                .blocking_summary()
+                .unwrap_or_else(|| "Cannot apply: the ruleset has invalid rules.".to_string());
+            state.push_banner(summary, BannerSeverity::Error);
+            false
+        }
+    }
+}
+
 /// Handles apply button click: snapshots the ruleset and verifies it
 pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
     if state.is_busy() {
+        return Task::none();
+    }
+    if !ruleset_ready_to_apply(state) {
         return Task::none();
     }
 
@@ -538,6 +561,9 @@ pub(crate) fn handle_guard_finished(
 /// Handles Save to System button click - starts verification
 pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> {
     if state.is_busy() {
+        return Task::none();
+    }
+    if !ruleset_ready_to_apply(state) {
         return Task::none();
     }
 

@@ -396,6 +396,13 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 }
                 Err(e) => return Err(e.into()),
             };
+            // Invalid enabled rules must never reach nft (see core::validate)
+            if let Err(report) = ruleset.validate_for_apply() {
+                eprintln!("Profile '{name}' has rules that cannot be applied:");
+                eprintln!("{report}");
+                eprintln!("Fix them in the GUI (they are marked INVALID) and try again.");
+                return Err("Validation failed".into());
+            }
             let nft_json = ruleset.to_nftables_json();
             let rule_count = ruleset.rules.len();
             let enabled_count = ruleset.rules.iter().filter(|r| r.enabled).count();

@@ -353,35 +353,6 @@ where
     }
 }
 
-/// Returns the lowercase hexadecimal SHA-256 digest of `data`.
-///
-/// Produces the same 64-character lowercase hex string that `sha2` 0.10's
-/// `format!("{:x}", hasher.finalize())` did, so existing snapshot checksums
-/// remain valid.
-///
-/// # Example
-///
-/// ```
-/// use drfw::utils::sha256_hex;
-///
-/// assert_eq!(
-///     sha256_hex(b"abc"),
-///     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-/// );
-/// ```
-pub fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write;
-
-    let digest = Sha256::digest(data);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in &digest {
-        // Writing to a `String` cannot fail
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
-}
-
 /// Truncates `s` to at most `max_bytes` bytes without splitting a UTF-8 character.
 ///
 /// Slicing a `&str` at an arbitrary byte index panics when the index falls inside
@@ -409,18 +380,6 @@ pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sha256_hex_known_vectors() {
-        assert_eq!(
-            sha256_hex(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(
-            sha256_hex(b"abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-    }
 
     #[cfg(unix)]
     fn mode(path: &std::path::Path) -> u32 {
