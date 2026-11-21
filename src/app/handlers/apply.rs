@@ -12,6 +12,7 @@
 //! snapshot is verified and applied, and ruleset edits are refused until the
 //! apply flow is over, so nothing unverified can slip in.
 
+use super::audit_task;
 use crate::app::{AppStatus, BannerSeverity, Message, State};
 use crate::audit;
 use crate::core::apply_guard::{ApplyError, GuardError, GuardHandle, GuardOutcome};
@@ -92,11 +93,6 @@ fn push_persistent_banner(state: &mut State, message: String) {
     if let Some(banner) = state.banners.back_mut() {
         banner.duration_secs = PERSISTENT_BANNER_SECS;
     }
-}
-
-/// Wraps an audit future as a task that marks the audit cache dirty.
-fn audit_task(future: impl std::future::Future<Output = ()> + Send + 'static) -> Task<Message> {
-    Task::perform(future, |()| Message::AuditLogWritten)
 }
 
 /// The revert timeout to use, or 0 when auto-revert is disabled.
@@ -282,6 +278,15 @@ pub(crate) fn handle_verify_completed(
     }
 }
 
+/// Handles "Cancel" in the "Commit Changes?" dialog: nothing is applied and
+/// the edits stay as they are (the verified snapshot is dropped).
+pub(crate) fn handle_cancel_apply(state: &mut State) {
+    if state.status == AppStatus::AwaitingApply {
+        state.status = AppStatus::Idle;
+        state.apply_session = None;
+    }
+}
+
 /// Handles proceeding to apply after successful verification
 pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
     if state.status != AppStatus::AwaitingApply {
@@ -341,16 +346,15 @@ pub(crate) fn handle_apply_result(
             state.status = AppStatus::Idle;
             if error.rules_may_be_active() {
                 // Unknown whether the old or new rules are live
-                state.last_applied_ruleset = None;
-                state.update_cached_text();
+                state.set_last_applied(None);
             }
             state.apply_session = None;
             return apply_error_feedback(state, &error);
         }
     };
 
-    state.last_applied_ruleset = Some(session.verified.clone());
-    state.update_cached_text();
+    let verified = session.verified.clone();
+    state.set_last_applied(Some(verified));
 
     let Some(guard) = guard else {
         state.status = AppStatus::Idle;
@@ -511,8 +515,7 @@ pub(crate) fn handle_guard_finished(
             ))
         }
         Ok(GuardOutcome::Reverted) => {
-            state.last_applied_ruleset = previous_applied;
-            state.update_cached_text();
+            state.set_last_applied(previous_applied);
             state.push_banner(
                 "Firewall rules reverted to the previous state",
                 BannerSeverity::Info,
@@ -521,8 +524,7 @@ pub(crate) fn handle_guard_finished(
         }
         Ok(GuardOutcome::Removed(err)) => {
             // Neither the old nor the new drfw rules are loaded now
-            state.last_applied_ruleset = None;
-            state.update_cached_text();
+            state.set_last_applied(None);
             push_persistent_banner(
                 state,
                 "Previous rules could not be restored; the drfw table was removed, so drfw is not filtering anything".to_string(),
@@ -541,8 +543,7 @@ pub(crate) fn handle_guard_finished(
             audit_task(audit::log_revert(enable_event_log, false, Some(err)))
         }
         Ok(GuardOutcome::Superseded) => {
-            state.last_applied_ruleset = None;
-            state.update_cached_text();
+            state.set_last_applied(None);
             state.push_banner(
                 "Another apply replaced these rules before they were confirmed",
                 BannerSeverity::Warning,
@@ -550,8 +551,7 @@ pub(crate) fn handle_guard_finished(
             Task::none()
         }
         Err(e) => {
-            state.last_applied_ruleset = None;
-            state.update_cached_text();
+            state.set_last_applied(None);
             push_persistent_banner(state, e.to_string());
             audit_task(audit::log_generic_error(enable_event_log, e.to_string()))
         }
@@ -603,12 +603,12 @@ pub(crate) fn handle_save_to_system_verify_result(
             let enable_event_log = state.enable_event_log;
             let error_count = verify_result.errors.len();
             let error = Some(error_summary);
-            Task::perform(
-                async move {
-                    audit::log_verify(enable_event_log, false, error_count, error).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            audit_task(audit::log_verify(
+                enable_event_log,
+                false,
+                error_count,
+                error,
+            ))
         }
         Err(e) => {
             // Verification could not run (authentication, nft missing, ...)
@@ -676,22 +676,16 @@ pub(crate) fn handle_save_to_system_result(
                 None => format!("Configuration saved to {}", drfw::SYSTEM_NFT_PATH),
             };
             state.push_banner(message, BannerSeverity::Success);
-            Task::perform(
-                async move {
-                    audit::log_save_to_system(enable_event_log, true, &target_path, None).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            audit_task(async move {
+                audit::log_save_to_system(enable_event_log, true, &target_path, None).await;
+            })
         }
         Err(e) => {
             let msg = truncate_error_message("Save failed: ", &e, 80);
             state.push_banner(&msg, BannerSeverity::Error);
-            Task::perform(
-                async move {
-                    audit::log_save_to_system(enable_event_log, false, &target_path, Some(e)).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            audit_task(async move {
+                audit::log_save_to_system(enable_event_log, false, &target_path, Some(e)).await;
+            })
         }
     }
 }
@@ -836,8 +830,9 @@ mod tests {
         let mut state = create_test_state();
         let mut previous = FirewallRuleset::new();
         previous.rules.push(create_test_rule("Previous", Some(22)));
-        state.last_applied_ruleset = Some(previous);
+        state.set_last_applied(Some(previous));
         state.ruleset.rules.push(create_test_rule("New", Some(80)));
+        state.mark_profile_dirty();
         let _ = handle_apply_clicked(&mut state);
         let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
         assert_eq!(state.status, AppStatus::AwaitingApply);
@@ -859,6 +854,7 @@ mod tests {
     fn test_ruleset_edits_are_refused_while_busy() {
         let mut state = create_test_state();
         state.ruleset.rules.push(create_test_rule("Keep", Some(22)));
+        state.mark_profile_dirty();
         let id = state.ruleset.rules[0].id;
         let _ = handle_apply_clicked(&mut state);
 
@@ -1037,6 +1033,44 @@ mod tests {
                 assert_eq!(applied_labels(&state), vec!["Previous".to_string()]);
             }
         }
+    }
+
+    #[test]
+    fn test_cancel_apply_keeps_edits_and_drops_snapshot() {
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Edit", Some(22)));
+        state.mark_profile_dirty();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert_eq!(state.status, AppStatus::AwaitingApply);
+        let _ = state.update(Message::CancelApply);
+        assert_eq!(state.status, AppStatus::Idle);
+        assert!(state.apply_session.is_none());
+        assert_eq!(state.ruleset.rules.len(), 1, "edits are kept");
+        assert!(state.is_dirty(), "still not applied");
+        // Ignored outside the dialog
+        state.status = AppStatus::Applying;
+        let _ = state.update(Message::CancelApply);
+        assert_eq!(state.status, AppStatus::Applying);
+    }
+
+    #[test]
+    fn test_dirty_cache_follows_apply_and_revert() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_applying();
+        assert!(state.is_dirty());
+        let guard = GuardHandle::new_for_testing(dir.path(), Duration::from_secs(15));
+        let _ = handle_apply_result(&mut state, Ok(Some(guard)));
+        assert!(!state.is_dirty(), "applied ruleset matches the edits");
+        state.status = AppStatus::Reverting;
+        let _ = handle_guard_finished(&mut state, Ok(GuardOutcome::Reverted));
+        assert!(state.is_dirty(), "reverted to the previous rules");
+        // Diff old side follows the applied ruleset
+        let old = state
+            .cached_applied_text
+            .as_ref()
+            .expect("applied text cached");
+        assert!(old.text.contains("Previous"));
     }
 
     #[test]

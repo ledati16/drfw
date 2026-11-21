@@ -155,6 +155,26 @@ impl AppTheme {
         color_luminance(&self.bg_base) > 0.5
     }
 
+    /// Builds iced's base theme from this theme's colors.
+    ///
+    /// iced uses it for everything not styled through `ui_components`:
+    /// unstyled widgets, the text input caret and selection, `button::text`,
+    /// and the window background. Without it those keep iced's Dark colors
+    /// even in light themes.
+    pub fn to_iced_theme(&self) -> iced::Theme {
+        iced::Theme::custom(
+            self.name,
+            iced::theme::Palette {
+                background: self.bg_base,
+                text: self.fg_primary,
+                primary: self.accent,
+                success: self.success,
+                warning: self.warning,
+                danger: self.danger,
+            },
+        )
+    }
+
     /// Returns a copy of this theme with reduced syntax highlighting colors.
     ///
     /// Collapses the 6 syntax colors down to just 2 levels (primary and muted),

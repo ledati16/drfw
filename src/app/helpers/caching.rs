@@ -61,7 +61,6 @@ mod tests {
     fn create_test_line(indent: usize, text_len: usize) -> HighlightedLine {
         HighlightedLine {
             line_number: 1,
-            formatted_line_number_json: "  1 ".to_string(),
             formatted_line_number_nft: "   1".to_string(),
             indent,
             tokens: vec![Token {

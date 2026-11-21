@@ -20,10 +20,34 @@ use iced::Task;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Refreshes the interface suggestions of the rule form's combo boxes.
+///
+/// Interfaces come and go (VPNs, containers, USB adapters), so the list is
+/// rebuilt each time the form opens; listing interfaces is a cheap syscall.
+fn refresh_interface_suggestions(state: &mut State) {
+    let suggestions = crate::utils::build_interface_suggestions();
+    state.output_interface_combo = iced::widget::combo_box::State::new(suggestions.clone());
+    state.interface_combo = iced::widget::combo_box::State::new(suggestions);
+}
+
+/// Opens the rule form (closing any helper left from an earlier form).
+fn open_rule_form(state: &mut State, form: RuleForm, errors: Option<crate::app::FormErrors>) {
+    refresh_interface_suggestions(state);
+    state.rule_form = Some(form);
+    state.rule_form_helper = None;
+    state.form_errors = errors;
+}
+
+/// Closes the rule form, its helper modal and its errors.
+fn close_rule_form(state: &mut State) {
+    state.rule_form = None;
+    state.rule_form_helper = None;
+    state.form_errors = None;
+}
+
 /// Handles opening the "Add New Rule" form
 pub(crate) fn handle_add_rule_clicked(state: &mut State) {
-    state.rule_form = Some(RuleForm::default());
-    state.form_errors = None;
+    open_rule_form(state, RuleForm::default(), None);
 }
 
 /// Handles opening the "Edit Rule" form
@@ -31,19 +55,14 @@ pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
     if let Some(rule) = state.ruleset.rules.iter().find(|r| r.id == id) {
         let form = RuleForm::from_rule(rule);
         // Show why a loaded rule is invalid right away
-        state.form_errors = form.validate();
-        state.rule_form = Some(form);
+        let errors = form.validate();
+        open_rule_form(state, form, errors);
     }
 }
 
 /// Handles canceling rule form (Add or Edit)
 pub(crate) fn handle_cancel_rule_form(state: &mut State) {
-    state.rule_form = None;
-    state.rule_form_helper = None;
-    state.form_errors = None;
-    if state.status == crate::app::AppStatus::AwaitingApply {
-        state.status = crate::app::AppStatus::Idle;
-    }
+    close_rule_form(state);
 }
 
 /// Handles saving new or edited rule
@@ -112,7 +131,7 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
                      This indicates a UI state desync bug.",
                     rule.id
                 );
-                state.form_errors = None;
+                close_rule_form(state);
                 return Task::none();
             };
 
@@ -132,20 +151,17 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
         }
 
         state.mark_profile_dirty();
-        state.form_errors = None;
+        close_rule_form(state);
 
         // Log rule change with proper completion tracking
-        return Task::perform(
-            async move {
-                let port_str = if ports.is_empty() { None } else { Some(ports) };
-                if is_edit {
-                    audit::log_rule_modified(enable_event_log, &label, &protocol, port_str).await;
-                } else {
-                    audit::log_rule_created(enable_event_log, &label, &protocol, port_str).await;
-                }
-            },
-            |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
-        );
+        return super::audit_task(async move {
+            let port_str = if ports.is_empty() { None } else { Some(ports) };
+            if is_edit {
+                audit::log_rule_modified(enable_event_log, &label, &protocol, port_str).await;
+            } else {
+                audit::log_rule_created(enable_event_log, &label, &protocol, port_str).await;
+            }
+        });
     }
 
     Task::none()
@@ -171,12 +187,9 @@ pub(crate) fn handle_toggle_rule(state: &mut State, id: Uuid) -> Task<Message> {
     state.mark_profile_dirty();
 
     // Audit log with proper completion tracking
-    Task::perform(
-        async move {
-            audit::log_rule_toggled(enable_event_log, &label, !was_enabled).await;
-        },
-        |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
-    )
+    super::audit_task(async move {
+        audit::log_rule_toggled(enable_event_log, &label, !was_enabled).await;
+    })
 }
 
 /// Handles deleting a rule
@@ -213,12 +226,9 @@ pub(crate) fn handle_delete_rule(state: &mut State, id: Uuid) -> Task<Message> {
     state.mark_profile_dirty();
 
     // Audit log with proper completion tracking
-    Task::perform(
-        async move {
-            audit::log_rule_deleted(enable_event_log, &rule_clone.label).await;
-        },
-        |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
-    )
+    super::audit_task(async move {
+        audit::log_rule_deleted(enable_event_log, &rule_clone.label).await;
+    })
 }
 
 /// Handles drag-and-drop reordering of rules
@@ -266,12 +276,9 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
         let direction = if new_index > old_index { "down" } else { "up" };
         let enable_event_log = state.enable_event_log;
 
-        Task::perform(
-            async move {
-                audit::log_rules_reordered(enable_event_log, &rule_label, direction).await;
-            },
-            |()| Message::AuditLogWritten, // ← Fixed: was Message::Noop in old plan
-        )
+        super::audit_task(async move {
+            audit::log_rules_reordered(enable_event_log, &rule_label, direction).await;
+        })
     } else {
         Task::none()
     }
@@ -284,15 +291,25 @@ pub(crate) fn handle_rule_dropped(state: &mut State, dropped_id: Uuid) -> Task<M
 // They use the safe pattern from CLAUDE.md Section 13 to catch UI state bugs.
 // ============================================================================
 
-pub(crate) fn handle_rule_form_label_changed(state: &mut State, value: String) {
+/// Runs `edit` on the open rule form.
+///
+/// Field messages only come from the form's widgets, so a missing form means
+/// a UI state bug: it is logged (safe pattern from CLAUDE.md Section 13), not
+/// a panic.
+fn with_form(state: &mut State, message: &str, edit: impl FnOnce(&mut RuleForm)) {
     let Some(form) = &mut state.rule_form else {
         tracing::error!(
-            "RuleFormLabelChanged sent without active form. \
-             This indicates a UI state management bug."
+            "{message} sent without active form. This indicates a UI state management bug."
         );
         return;
     };
-    form.label = value;
+    edit(form);
+}
+
+pub(crate) fn handle_rule_form_label_changed(state: &mut State, value: String) {
+    with_form(state, "RuleFormLabelChanged", |form| {
+        form.label = value;
+    });
 }
 
 pub(crate) fn handle_rule_form_protocol_changed(state: &mut State, protocol: Protocol) {
@@ -324,97 +341,57 @@ pub(crate) fn handle_rule_form_protocol_changed(state: &mut State, protocol: Pro
 }
 
 pub(crate) fn handle_rule_form_interface_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormInterfaceChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.interface = value;
+    with_form(state, "RuleFormInterfaceChanged", |form| {
+        form.interface = value;
+    });
 }
 
 pub(crate) fn handle_rule_form_chain_changed(state: &mut State, chain: Chain) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormChainChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.chain = chain;
+    with_form(state, "RuleFormChainChanged", |form| {
+        form.chain = chain;
+    });
 }
 
 pub(crate) fn handle_rule_form_toggle_advanced(state: &mut State, show: bool) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormToggleAdvanced sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.show_advanced = show;
+    with_form(state, "RuleFormToggleAdvanced", |form| {
+        form.show_advanced = show;
+    });
 }
 
 pub(crate) fn handle_rule_form_action_changed(
     state: &mut State,
     action: crate::core::firewall::Action,
 ) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormActionChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.action = action;
+    with_form(state, "RuleFormActionChanged", |form| {
+        form.action = action;
+    });
 }
 
 pub(crate) fn handle_rule_form_toggle_rate_limit(state: &mut State, enabled: bool) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormToggleRateLimit sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.rate_limit_enabled = enabled;
+    with_form(state, "RuleFormToggleRateLimit", |form| {
+        form.rate_limit_enabled = enabled;
+    });
 }
 
 pub(crate) fn handle_rule_form_rate_limit_count_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormRateLimitCountChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.rate_limit_count = value;
+    with_form(state, "RuleFormRateLimitCountChanged", |form| {
+        form.rate_limit_count = value;
+    });
 }
 
 pub(crate) fn handle_rule_form_rate_limit_unit_changed(
     state: &mut State,
     unit: crate::core::firewall::TimeUnit,
 ) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormRateLimitUnitChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.rate_limit_unit = unit;
+    with_form(state, "RuleFormRateLimitUnitChanged", |form| {
+        form.rate_limit_unit = unit;
+    });
 }
 
 pub(crate) fn handle_rule_form_connection_limit_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormConnectionLimitChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.connection_limit = value;
+    with_form(state, "RuleFormConnectionLimitChanged", |form| {
+        form.connection_limit = value;
+    });
 }
 
 // ============================================================================
@@ -651,47 +628,27 @@ pub(crate) fn handle_helper_remove_value(state: &mut State, index: usize) {
 // ============================================================================
 
 pub(crate) fn handle_rule_form_output_interface_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormOutputInterfaceChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.output_interface = value;
+    with_form(state, "RuleFormOutputInterfaceChanged", |form| {
+        form.output_interface = value;
+    });
 }
 
 pub(crate) fn handle_rule_form_reject_type_changed(state: &mut State, reject_type: RejectType) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormRejectTypeChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.reject_type = reject_type;
+    with_form(state, "RuleFormRejectTypeChanged", |form| {
+        form.reject_type = reject_type;
+    });
 }
 
 pub(crate) fn handle_rule_form_rate_limit_burst_changed(state: &mut State, value: String) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormRateLimitBurstChanged sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.rate_limit_burst = value;
+    with_form(state, "RuleFormRateLimitBurstChanged", |form| {
+        form.rate_limit_burst = value;
+    });
 }
 
 pub(crate) fn handle_rule_form_log_enabled_toggled(state: &mut State, enabled: bool) {
-    let Some(form) = &mut state.rule_form else {
-        tracing::error!(
-            "RuleFormLogEnabledToggled sent without active form. \
-             This indicates a UI state management bug."
-        );
-        return;
-    };
-    form.log_enabled = enabled;
+    with_form(state, "RuleFormLogEnabledToggled", |form| {
+        form.log_enabled = enabled;
+    });
 }
 
 // ============================================================================
@@ -771,6 +728,34 @@ mod tests {
         // Saving is refused until fixed
         let _ = handle_save_rule_form(&mut state);
         assert!(state.rule_form.is_some());
+    }
+
+    #[test]
+    fn test_saving_or_closing_the_form_clears_its_helper() {
+        let helper = || crate::app::RuleFormHelper {
+            helper_type: Some(HelperType::Tags),
+            input: "web".into(),
+            error: None,
+        };
+        let mut state = create_test_state();
+        handle_add_rule_clicked(&mut state);
+        state.rule_form_helper = Some(helper());
+        let _ = handle_save_rule_form(&mut state);
+        assert!(state.rule_form.is_none(), "saved");
+        assert!(
+            state.rule_form_helper.is_none(),
+            "helper closed with the form"
+        );
+
+        handle_add_rule_clicked(&mut state);
+        state.rule_form_helper = Some(helper());
+        handle_cancel_rule_form(&mut state);
+        assert!(state.rule_form_helper.is_none());
+
+        // A stale helper never reappears on the next form
+        state.rule_form_helper = Some(helper());
+        handle_add_rule_clicked(&mut state);
+        assert!(state.rule_form_helper.is_none());
     }
 
     #[test]

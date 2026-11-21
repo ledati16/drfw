@@ -1,3 +1,4 @@
+mod debounce;
 mod forms;
 mod handlers;
 mod helpers;
@@ -14,6 +15,7 @@ use helpers::{
 };
 
 use crate::core::firewall::{FirewallRuleset, Protocol};
+pub use debounce::TimerKind;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
@@ -63,6 +65,9 @@ pub struct State {
     pub progress_animation: Animation<f32>,
     pub form_errors: Option<FormErrors>,
     pub cached_nft_tokens: Vec<syntax_cache::HighlightedLine>,
+    /// Text and tokens of `last_applied_ruleset` (the old side of the diff);
+    /// refreshed only when the applied ruleset changes, not on every edit.
+    pub cached_applied_text: Option<syntax_cache::TokenizedText>,
     pub cached_diff_tokens: Option<Vec<(syntax_cache::DiffType, syntax_cache::HighlightedLine)>>,
     pub cached_nft_width_px: f32,
     pub cached_diff_width_px: f32,
@@ -73,6 +78,15 @@ pub struct State {
     /// Avoids format!() allocation every frame in sidebar tag cloud
     pub cached_all_tags_truncated: Vec<String>,
     pub cached_filtered_rule_indices: Vec<usize>,
+    /// Protocol/port badge per rule (parallel to `ruleset.rules`), with the
+    /// chain arrow in Server Mode. Avoids `format!()` in the sidebar every frame.
+    pub cached_rule_badges: Vec<String>,
+    /// `is_dirty()`: the ruleset differs from what DRFW last applied.
+    /// Refreshed with the other caches whenever the ruleset or the applied
+    /// ruleset changes, never computed in `view()`.
+    cached_is_dirty: bool,
+    /// `is_profile_dirty()`: the ruleset differs from the profile on disk.
+    cached_is_profile_dirty: bool,
     /// Cached "{filtered}/{total}" display string for sidebar header
     /// Avoids format!() allocation every frame
     pub filter_count_display: String,
@@ -94,6 +108,9 @@ pub struct State {
     pub command_history: crate::command::CommandHistory,
     pub current_theme: crate::theme::ThemeChoice,
     pub theme: crate::theme::AppTheme,
+    /// iced's base theme built from `theme` (unstyled widgets, text input
+    /// caret/selection, `button::text`); rebuilt only when `theme` changes.
+    iced_theme: iced::Theme,
     pub filter_tag: Option<Arc<String>>,
     pub dragged_rule_id: Option<uuid::Uuid>,
     pub hovered_drop_target_id: Option<uuid::Uuid>,
@@ -104,7 +121,10 @@ pub struct State {
     pub mono_font_choice: crate::fonts::MonoFontChoice,
     pub font_regular: iced::Font,
     pub font_mono: iced::Font,
+    /// System fonts; empty until the async enumeration at startup finished.
     pub available_fonts: &'static [crate::fonts::FontChoice],
+    /// The system font enumeration finished (`available_fonts` is final).
+    pub fonts_loaded: bool,
     // Config save debouncing
     pub config_dirty: bool,
     pub last_config_change: Option<std::time::Instant>,
@@ -113,6 +133,8 @@ pub struct State {
     pub last_profile_change: Option<std::time::Instant>,
     // Slider logging debouncing (description, last_change_time)
     pub pending_slider_log: Option<(String, std::time::Instant)>,
+    /// One-shot timers driving the debounced saves and slider logging
+    timers: debounce::Timers,
     // Profile management
     pub active_profile_name: String,
     pub available_profiles: Vec<String>,
@@ -167,6 +189,43 @@ pub struct FontPickerState {
     pub target: FontPickerTarget,
     pub search: String,
     pub search_lowercase: String,
+    /// Indices into `State::available_fonts` matching the target and search,
+    /// best match first. Recomputed on search change, never in `view()`.
+    pub filtered: Vec<usize>,
+    /// "N fonts match" / "N fonts available" / "Loading fonts…"
+    pub count_display: String,
+    /// "Showing X of N fonts…" when the list is truncated
+    pub overflow_display: Option<String>,
+}
+
+/// Most fonts the picker lists at once (search to find others); keeps the
+/// modal's layout fast with hundreds of system fonts.
+pub const FONT_PICKER_DISPLAY_LIMIT: usize = 30;
+
+impl FontPickerState {
+    /// Recomputes the filtered list and its display strings.
+    pub fn refilter(&mut self, fonts: &[crate::fonts::FontChoice], loaded: bool) {
+        let is_mono_picker = self.target == FontPickerTarget::Mono;
+        let candidates = fonts
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !is_mono_picker || f.is_monospace());
+        self.filtered = fuzzy_filter_fonts(candidates, &self.search_lowercase)
+            .into_iter()
+            .map(|(index, _score)| index)
+            .collect();
+        let count = self.filtered.len();
+        self.count_display = if !loaded {
+            "Loading fonts…".to_string()
+        } else if count < fonts.len() {
+            format!("{count} fonts match")
+        } else {
+            format!("{count} fonts available")
+        };
+        self.overflow_display = (count > FONT_PICKER_DISPLAY_LIMIT).then(|| {
+            format!("Showing {FONT_PICKER_DISPLAY_LIMIT} of {count} fonts — search to find more")
+        });
+    }
 }
 
 #[derive(
@@ -195,6 +254,40 @@ pub struct ThemePickerState {
     pub original_theme: crate::theme::ThemeChoice,
     /// Pre-computed theme conversions to avoid repeated `to_theme()` calls
     pub cached_themes: Vec<(crate::theme::ThemeChoice, crate::theme::AppTheme)>,
+    /// Indices into `cached_themes` matching the filter and search, best
+    /// match first. Recomputed on search/filter change, never in `view()`.
+    pub filtered: Vec<usize>,
+    /// "N themes match" / "N themes available"
+    pub count_display: String,
+}
+
+impl ThemePickerState {
+    /// Recomputes the filtered list and its count string.
+    pub fn refilter(&mut self) {
+        let filter = self.filter;
+        let candidates = self
+            .cached_themes
+            .iter()
+            .filter(move |(_, theme)| match filter {
+                ThemeFilter::All => true,
+                ThemeFilter::Light => theme.is_light(),
+                ThemeFilter::Dark => !theme.is_light(),
+            })
+            .map(|(choice, _)| *choice);
+        let matches = fuzzy_filter_themes(candidates, &self.search_lowercase);
+        self.filtered = matches
+            .into_iter()
+            .filter_map(|(choice, _score)| {
+                self.cached_themes.iter().position(|(c, _)| *c == choice)
+            })
+            .collect();
+        let count = self.filtered.len();
+        self.count_display = if count < self.cached_themes.len() {
+            format!("{count} themes match")
+        } else {
+            format!("{count} themes available")
+        };
+    }
 }
 
 #[derive(
@@ -334,6 +427,8 @@ pub enum Message {
     ApplyClicked,
     VerifyCompleted(Result<crate::core::verify::VerifyResult, crate::core::verify::VerifyError>),
     ProceedToApply,
+    /// Close the "Commit Changes?" dialog without applying (edits are kept)
+    CancelApply,
     ApplyResult(
         Result<Option<crate::core::apply_guard::GuardHandle>, crate::core::apply_guard::ApplyError>,
     ),
@@ -354,7 +449,9 @@ pub enum Message {
     SaveToSystemCancelled,
     /// Ok carries the backup path of the previous file, if there was one
     SaveToSystemResult(Result<Option<String>, String>),
-    EventOccurred(iced::Event),
+    /// A keyboard event, with whether a widget (e.g. a focused text input)
+    /// already handled it
+    EventOccurred(iced::Event, iced::event::Status),
     ToggleDiff(bool),
     ToggleZebraStriping(bool),
     ToggleAutoRevert(bool),
@@ -371,7 +468,6 @@ pub enum Message {
     CancelWarning,
     ToggleDroppedLogging(bool),
     LogRateChanged(u32),
-    CheckSliderLog,
     /// Process pending hover target (debounced drag-and-drop)
     CheckHoverPending,
     LogPrefixChanged(String),
@@ -398,12 +494,13 @@ pub enum Message {
     ThemePreview(crate::theme::ThemeChoice),
     ApplyTheme,
     CancelThemePicker,
-    ThemePreviewButtonClick,
     RegularFontChanged(crate::fonts::RegularFontChoice),
     MonoFontChanged(crate::fonts::MonoFontChoice),
     OpenFontPicker(FontPickerTarget),
     FontPickerSearchChanged(String),
     CloseFontPicker,
+    /// The system font enumeration (started at launch) finished
+    FontsLoaded(&'static [crate::fonts::FontChoice]),
     FilterByTag(Option<Arc<String>>),
     RuleDragStart(uuid::Uuid),
     RuleDropped(uuid::Uuid),
@@ -460,10 +557,8 @@ pub enum Message {
     PruneBanners,
     /// Dismiss a specific banner (click to dismiss)
     DismissBanner(usize),
-    /// Check if config should be saved (debounced)
-    CheckConfigSave,
-    /// Check if profile should be saved (debounced)
-    CheckProfileSave,
+    /// A one-shot debounce timer fired: (kind, timer generation)
+    TimerFired(TimerKind, u64),
     /// A profile save finished
     ProfileSaved(Box<ProfileSaveOutcome>),
     /// A config save finished
@@ -472,7 +567,8 @@ pub enum Message {
     CloseRequested(iced::window::Id),
     /// Pending saves were flushed (or timed out): exit
     CloseFlushed,
-    /// No-op message for async operations that don't need a result
+    /// No-op message for async operations that don't need a result, and for
+    /// the theme picker's sample buttons (enabled so they show real styling)
     Noop,
     /// Copy a preview line to clipboard (right-click on line)
     CopyPreviewLine(usize),
@@ -502,8 +598,10 @@ impl State {
         let reduced_colors = config.reduced_colors;
         let active_profile_name = config.active_profile;
 
-        regular_font_choice.resolve(false);
-        mono_font_choice.resolve(true);
+        // The system font list loads in the background (see `load_fonts_task`);
+        // until then the configured fonts are used by family name.
+        regular_font_choice.set_provisional_handle();
+        mono_font_choice.set_provisional_handle();
 
         // Startup guarantee: Ensure at least one profile exists
         // Handles first run, manual deletion, or filesystem corruption
@@ -527,15 +625,10 @@ impl State {
         let available_profiles = crate::core::profiles::list_profiles_blocking()
             .unwrap_or_else(|_| vec![crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()]);
 
-        let base_theme = current_theme.to_theme();
-        let theme = if reduced_colors {
-            base_theme.with_reduced_colors()
-        } else {
-            base_theme
-        };
+        let theme = build_theme(current_theme, reduced_colors);
+        let iced_theme = theme.to_iced_theme();
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
-        let available_fonts = crate::fonts::all_options();
 
         let mut state = Self {
             // Unknown until DRFW applies something: the kernel may hold anything
@@ -548,16 +641,14 @@ impl State {
             active_tab: WorkspaceTab::Nftables,
             rule_form: None,
             rule_form_helper: None,
-            interface_combo: iced::widget::combo_box::State::new(
-                crate::utils::build_interface_suggestions(),
-            ),
-            output_interface_combo: iced::widget::combo_box::State::new(
-                crate::utils::build_interface_suggestions(),
-            ),
+            // Filled when the rule form opens (interfaces can come and go)
+            interface_combo: iced::widget::combo_box::State::new(Vec::new()),
+            output_interface_combo: iced::widget::combo_box::State::new(Vec::new()),
             countdown_remaining: 15,
             progress_animation: Animation::new(1.0),
             form_errors: None,
             cached_nft_tokens: Vec::new(),
+            cached_applied_text: None,
             cached_diff_tokens: None,
             cached_nft_width_px: 800.0,
             cached_diff_width_px: 800.0,
@@ -566,6 +657,9 @@ impl State {
             cached_all_tags: Vec::new(),
             cached_all_tags_truncated: Vec::new(),
             cached_filtered_rule_indices: Vec::new(),
+            cached_rule_badges: Vec::new(),
+            cached_is_dirty: false,
+            cached_is_profile_dirty: false,
             filter_count_display: String::new(),
             deleting_id: None,
             pending_warning: None,
@@ -585,6 +679,7 @@ impl State {
             command_history: crate::command::CommandHistory::default(),
             current_theme,
             theme,
+            iced_theme,
             filter_tag: None,
             dragged_rule_id: None,
             hovered_drop_target_id: None,
@@ -593,12 +688,14 @@ impl State {
             mono_font_choice,
             font_regular,
             font_mono,
-            available_fonts,
+            available_fonts: &[],
+            fonts_loaded: false,
             config_dirty: false,
             last_config_change: None,
             profile_dirty: false,
             last_profile_change: None,
             pending_slider_log: None,
+            timers: debounce::Timers::default(),
             active_profile_name,
             available_profiles,
             pending_profile_switch: None,
@@ -626,7 +723,7 @@ impl State {
             state.push_banner(problem, BannerSeverity::Error);
         }
 
-        (state, Task::none())
+        (state, load_fonts_task())
     }
 
     /// Creates a State instance for testing without filesystem access.
@@ -645,11 +742,11 @@ impl State {
         let ruleset = FirewallRuleset::default();
         let current_theme = crate::theme::ThemeChoice::default();
         let theme = current_theme.to_theme();
+        let iced_theme = theme.to_iced_theme();
         let regular_font_choice = crate::fonts::RegularFontChoice::default();
         let mono_font_choice = crate::fonts::MonoFontChoice::default();
         let font_regular = regular_font_choice.to_font();
         let font_mono = mono_font_choice.to_font();
-        let available_fonts = crate::fonts::all_options();
 
         let mut state = Self {
             last_applied_ruleset: Some(ruleset.clone()),
@@ -667,6 +764,7 @@ impl State {
             progress_animation: Animation::new(1.0),
             form_errors: None,
             cached_nft_tokens: Vec::new(),
+            cached_applied_text: None,
             cached_diff_tokens: None,
             cached_nft_width_px: 800.0,
             cached_diff_width_px: 800.0,
@@ -675,6 +773,9 @@ impl State {
             cached_all_tags: Vec::new(),
             cached_all_tags_truncated: Vec::new(),
             cached_filtered_rule_indices: Vec::new(),
+            cached_rule_badges: Vec::new(),
+            cached_is_dirty: false,
+            cached_is_profile_dirty: false,
             filter_count_display: String::new(),
             deleting_id: None,
             pending_warning: None,
@@ -694,6 +795,7 @@ impl State {
             command_history: crate::command::CommandHistory::default(),
             current_theme,
             theme,
+            iced_theme,
             filter_tag: None,
             dragged_rule_id: None,
             hovered_drop_target_id: None,
@@ -702,12 +804,14 @@ impl State {
             mono_font_choice,
             font_regular,
             font_mono,
-            available_fonts,
+            available_fonts: &[],
+            fonts_loaded: false,
             config_dirty: false,
             last_config_change: None,
             profile_dirty: false,
             last_profile_change: None,
             pending_slider_log: None,
+            timers: debounce::Timers::default(),
             active_profile_name: "test".to_string(),
             available_profiles: vec!["test".to_string()],
             pending_profile_switch: None,
@@ -724,6 +828,7 @@ impl State {
             closing: false,
         };
 
+        state.refresh_applied_text_cache();
         state.update_cached_text();
         state
     }
@@ -784,6 +889,9 @@ impl State {
         self.banners.retain(|banner| !banner.is_expired());
     }
 
+    /// Recomputes every cache derived from the ruleset (preview tokens, diff,
+    /// tags, filters, badges, validation, dirty flags). Called on every
+    /// ruleset change, never in `view()`.
     fn update_cached_text(&mut self) {
         use std::collections::BTreeSet;
 
@@ -791,12 +899,16 @@ impl State {
 
         self.cached_nft_tokens = syntax_cache::tokenize_nft(&nft_text);
 
-        self.cached_diff_tokens = if let Some(ref last) = self.last_applied_ruleset {
-            let old_text = last.to_nft_text();
-            syntax_cache::compute_and_tokenize_diff(&old_text, &nft_text)
-        } else {
-            None
-        };
+        // The old side comes from the cache (it changes only on apply/revert)
+        self.cached_diff_tokens = self.cached_applied_text.as_ref().and_then(|old| {
+            syntax_cache::compute_and_tokenize_diff(
+                old,
+                &syntax_cache::TokenizedTextRef {
+                    text: &nft_text,
+                    lines: &self.cached_nft_tokens,
+                },
+            )
+        });
 
         self.cached_nft_width_px = calculate_max_content_width(&self.cached_nft_tokens);
         self.cached_diff_width_px = if let Some(ref diff_tokens) = self.cached_diff_tokens {
@@ -842,7 +954,59 @@ impl State {
         }
 
         self.update_validation_cache();
+        self.update_rule_badges();
         self.update_filter_cache();
+        self.refresh_dirty_flags();
+    }
+
+    /// Re-tokenizes the old side of the diff. Must run whenever
+    /// `last_applied_ruleset` changes (see [`Self::set_last_applied`]).
+    fn refresh_applied_text_cache(&mut self) {
+        self.cached_applied_text = self
+            .last_applied_ruleset
+            .as_ref()
+            .map(|last| syntax_cache::TokenizedText::new(last.to_nft_text()));
+    }
+
+    /// Records what is now applied in the kernel (`None` = unknown) and
+    /// refreshes the diff and the dirty state.
+    pub(crate) fn set_last_applied(&mut self, applied: Option<FirewallRuleset>) {
+        self.last_applied_ruleset = applied;
+        self.refresh_applied_text_cache();
+        self.update_cached_text();
+    }
+
+    /// Records what the active profile file now contains and refreshes
+    /// `is_profile_dirty()`.
+    pub(crate) fn set_cached_disk_profile(&mut self, on_disk: FirewallRuleset) {
+        self.cached_disk_profile = Some(on_disk);
+        self.refresh_dirty_flags();
+    }
+
+    /// Recomputes the cached `is_dirty()` / `is_profile_dirty()` flags.
+    fn refresh_dirty_flags(&mut self) {
+        self.cached_is_dirty = self.compute_is_dirty();
+        self.cached_is_profile_dirty = self.compute_is_profile_dirty();
+    }
+
+    /// Sidebar protocol/port badge per rule; the chain arrow (↓/↑) is shown
+    /// only in Server Mode, where the chain matters.
+    fn update_rule_badges(&mut self) {
+        let server_mode = self.ruleset.advanced_security.egress_profile
+            == crate::core::firewall::EgressProfile::Server;
+        self.cached_rule_badges.clear();
+        self.cached_rule_badges
+            .extend(self.ruleset.rules.iter().map(|rule| {
+                if server_mode {
+                    let arrow = match rule.chain {
+                        crate::core::firewall::Chain::Input => '↓',
+                        crate::core::firewall::Chain::Output => '↑',
+                    };
+                    format!("{arrow}{}", rule.badge_display)
+                } else {
+                    rule.badge_display.clone()
+                }
+            }));
     }
 
     /// Recomputes which rules are invalid (and why) for the sidebar flags and
@@ -874,14 +1038,9 @@ impl State {
                 .rules
                 .iter()
                 .enumerate()
+                // Output rules stay listed in Desktop mode (shown as inactive)
+                // so they can still be seen, edited and deleted.
                 .filter(|(_, r)| {
-                    if self.ruleset.advanced_security.egress_profile
-                        == crate::core::firewall::EgressProfile::Desktop
-                        && r.chain == crate::core::firewall::Chain::Output
-                    {
-                        return false;
-                    }
-
                     if let Some(ref filter_tag) = self.filter_tag
                         && !r.tags.contains(filter_tag)
                     {
@@ -913,6 +1072,15 @@ impl State {
         );
     }
 
+    /// `true` if `rule` is listed but not applied in the current mode:
+    /// Output-chain rules only take effect in Server Mode (the generator skips
+    /// them in Desktop mode). The sidebar shows such rules dimmed with a badge.
+    pub(crate) fn rule_is_inactive(&self, rule: &crate::core::firewall::Rule) -> bool {
+        self.ruleset.advanced_security.egress_profile
+            == crate::core::firewall::EgressProfile::Desktop
+            && rule.chain == crate::core::firewall::Chain::Output
+    }
+
     pub(crate) fn clear_drag_state(&mut self) {
         self.dragged_rule_id = None;
         self.hovered_drop_target_id = None;
@@ -934,18 +1102,117 @@ impl State {
         self.pending_slider_log = Some((description, std::time::Instant::now()));
     }
 
+    /// The ruleset differs from what DRFW last applied (or that is unknown).
+    /// Cached; safe to call from `view()`.
     pub fn is_dirty(&self) -> bool {
+        self.cached_is_dirty
+    }
+
+    /// The ruleset differs from the profile file on disk.
+    /// Cached; safe to call from `view()`.
+    pub fn is_profile_dirty(&self) -> bool {
+        self.cached_is_profile_dirty
+    }
+
+    fn compute_is_dirty(&self) -> bool {
         self.last_applied_ruleset.as_ref().is_none_or(|last| {
             last.rules != self.ruleset.rules
                 || last.advanced_security != self.ruleset.advanced_security
         })
     }
 
-    pub fn is_profile_dirty(&self) -> bool {
+    fn compute_is_profile_dirty(&self) -> bool {
         self.cached_disk_profile.as_ref().is_some_and(|disk| {
             disk.rules != self.ruleset.rules
                 || disk.advanced_security != self.ruleset.advanced_security
         })
+    }
+
+    /// Debug builds: the cached dirty flags and badges must match a fresh
+    /// computation after every message (catches a mutation path that forgot to
+    /// refresh). A mismatch is a bug: tests panic, while a debug GUI logs it and
+    /// repairs the caches instead of crashing (the GUI never panics, see
+    /// CLAUDE.md). Release builds skip the check entirely.
+    fn debug_assert_caches(&mut self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let stale = [
+            ("is_dirty", self.cached_is_dirty != self.compute_is_dirty()),
+            (
+                "is_profile_dirty",
+                self.cached_is_profile_dirty != self.compute_is_profile_dirty(),
+            ),
+            (
+                "rule_badges",
+                self.cached_rule_badges.len() != self.ruleset.rules.len(),
+            ),
+        ];
+        let Some((name, _)) = stale.iter().find(|(_, is_stale)| *is_stale) else {
+            return;
+        };
+        let msg = format!(
+            "stale {name} cache: a ruleset/applied-state change skipped update_cached_text()"
+        );
+        report_stale_cache(&msg);
+        self.update_cached_text();
+        self.cached_is_dirty = self.compute_is_dirty();
+        self.cached_is_profile_dirty = self.compute_is_profile_dirty();
+    }
+
+    /// Switches to `choice` (keeping the reduced-colors setting) and rebuilds
+    /// the iced base theme.
+    pub(crate) fn set_theme(&mut self, choice: crate::theme::ThemeChoice) {
+        self.current_theme = choice;
+        self.refresh_theme();
+    }
+
+    /// Rebuilds `theme` and the iced base theme from the current choice and
+    /// the reduced-colors setting.
+    pub(crate) fn refresh_theme(&mut self) {
+        self.theme = build_theme(self.current_theme, self.reduced_colors);
+        self.iced_theme = self.theme.to_iced_theme();
+    }
+
+    /// The iced base theme matching the current `AppTheme`, for
+    /// `iced::application(..).theme(State::iced_theme)`. Cheap (an `Arc` clone).
+    // TODO(merge): main.rs must pass this to `.theme(app::State::iced_theme)`
+    // (main.rs is owned by another change); remove this allow when it does.
+    #[allow(dead_code)]
+    pub fn iced_theme(&self) -> iced::Theme {
+        self.iced_theme.clone()
+    }
+
+    /// Arms the one-shot timer of every kind of debounced work that is
+    /// pending (see `debounce`). Called after every message.
+    fn arm_debounce_timers(&mut self, now: std::time::Instant) -> Task<Message> {
+        if self.closing {
+            return Task::none();
+        }
+        let deadlines = [
+            (
+                TimerKind::ConfigSave,
+                handlers::config_save_deadline(self, now),
+            ),
+            (
+                TimerKind::ProfileSave,
+                handlers::profile_save_deadline(self, now),
+            ),
+            (TimerKind::SliderLog, handlers::slider_log_deadline(self)),
+        ];
+        let mut tasks = Vec::new();
+        for (kind, deadline) in deadlines {
+            if let Some(deadline) = deadline
+                && let Some(generation) = self.timers.get_mut(kind).arm()
+            {
+                tasks.push(debounce::timer_task(
+                    kind,
+                    generation,
+                    debounce::remaining(deadline, now),
+                ));
+            }
+        }
+        Task::batch(tasks)
     }
 
     /// Returns true if any operation is in progress that should block new operations
@@ -991,7 +1258,16 @@ impl State {
         )
     }
 
+    /// Handles one message, then arms the debounce timers for any work it
+    /// left pending.
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.dispatch(message);
+        let timers = self.arm_debounce_timers(std::time::Instant::now());
+        self.debug_assert_caches();
+        Task::batch([task, timers])
+    }
+
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         // An unreadable profile is open read-only: refuse edits (and applying
         // its placeholder empty ruleset) instead of silently losing them.
         if self.unreadable_profile.is_some() && handlers::edits_profile(&message) {
@@ -1054,6 +1330,7 @@ impl State {
                 return handlers::handle_verify_completed(self, result);
             }
             Message::ProceedToApply => return handlers::handle_proceed_to_apply(self),
+            Message::CancelApply => handlers::handle_cancel_apply(self),
             Message::ApplyResult(result) => return handlers::handle_apply_result(self, result),
             Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),
             Message::RevertClicked => return handlers::handle_revert_clicked(self),
@@ -1085,7 +1362,9 @@ impl State {
 
             // UI state domain
             Message::TabChanged(tab) => handlers::handle_tab_changed(self, tab),
-            Message::EventOccurred(event) => return handlers::handle_event(self, event),
+            Message::EventOccurred(event, status) => {
+                return handlers::handle_event(self, &event, status);
+            }
 
             // Settings domain
             Message::ToggleDiff(enabled) => return handlers::handle_toggle_diff(self, enabled),
@@ -1123,7 +1402,6 @@ impl State {
                 return handlers::handle_toggle_dropped_logging(self, enabled);
             }
             Message::LogRateChanged(rate) => handlers::handle_log_rate_changed(self, rate),
-            Message::CheckSliderLog => return handlers::handle_check_slider_log(self),
             Message::CheckHoverPending => handlers::handle_check_hover_pending(self),
             Message::LogPrefixChanged(prefix) => {
                 return handlers::handle_log_prefix_changed(self, &prefix);
@@ -1159,7 +1437,6 @@ impl State {
             Message::ThemePreview(choice) => handlers::handle_theme_preview(self, choice),
             Message::ApplyTheme => return handlers::handle_apply_theme(self),
             Message::CancelThemePicker => handlers::handle_cancel_theme_picker(self),
-            Message::ThemePreviewButtonClick => handlers::handle_theme_preview_button_click(self),
             Message::RegularFontChanged(choice) => {
                 return handlers::handle_regular_font_changed(self, &choice);
             }
@@ -1174,6 +1451,7 @@ impl State {
                 handlers::handle_font_picker_search_changed(self, search);
             }
             Message::CloseFontPicker => handlers::handle_close_font_picker(self),
+            Message::FontsLoaded(fonts) => handlers::handle_fonts_loaded(self, fonts),
             Message::FilterByTag(tag) => handlers::handle_filter_by_tag(self, tag),
             Message::RuleDragStart(id) => handlers::handle_rule_drag_start(self, id),
             Message::RuleDropped(target_id) => {
@@ -1244,8 +1522,9 @@ impl State {
             Message::CancelProfileSwitch => handlers::handle_cancel_profile_switch(self),
             Message::PruneBanners => handlers::handle_prune_banners(self),
             Message::DismissBanner(index) => handlers::handle_dismiss_banner(self, index),
-            Message::CheckConfigSave => return handlers::handle_check_config_save(self),
-            Message::CheckProfileSave => return handlers::handle_check_profile_save(self),
+            Message::TimerFired(kind, generation) => {
+                return handlers::handle_timer_fired(self, kind, generation);
+            }
             Message::ProfileSaved(outcome) => {
                 return handlers::handle_profile_saved(self, *outcome);
             }
@@ -1267,11 +1546,7 @@ impl State {
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
         iced::Subscription::batch(vec![
-            iced::event::listen_with(|event, _status, _id| match event {
-                iced::Event::Keyboard(_) => Some(event),
-                _ => None,
-            })
-            .map(Message::EventOccurred),
+            iced::event::listen_with(handlers::keyboard_event_message),
             // Window close: flush pending saves first (exit_on_close_request is off)
             iced::window::close_requests().map(Message::CloseRequested),
             match self.status {
@@ -1281,30 +1556,15 @@ impl State {
                 }
                 _ => iced::Subscription::none(),
             },
-            // Prune expired banners every second
-            if self.banners.is_empty() {
-                iced::Subscription::none()
-            } else {
+            // Prune expired banners every second (persistent banners never
+            // expire, so they alone don't keep this tick running)
+            if self.banners.iter().any(|b| b.duration_secs != u64::MAX) {
                 iced::time::every(Duration::from_secs(1)).map(|_| Message::PruneBanners)
-            },
-            // Config auto-save subscription
-            if self.config_dirty {
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckConfigSave)
             } else {
                 iced::Subscription::none()
             },
-            // Profile auto-save subscription
-            if self.profile_dirty {
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckProfileSave)
-            } else {
-                iced::Subscription::none()
-            },
-            // Slider logging debounce subscription
-            if self.pending_slider_log.is_some() {
-                iced::time::every(Duration::from_millis(100)).map(|_| Message::CheckSliderLog)
-            } else {
-                iced::Subscription::none()
-            },
+            // Debounced saves and slider logging use one-shot timer Tasks
+            // (see `debounce`), not polling subscriptions.
             // Drag-and-drop hover debounce subscription
             // Runs at 60 FPS when there's a pending hover to process
             if self.hover_pending.is_some() {
@@ -1320,4 +1580,43 @@ impl State {
             },
         ])
     }
+}
+
+/// Builds the app theme for `choice`, with reduced syntax colors if enabled.
+fn build_theme(choice: crate::theme::ThemeChoice, reduced_colors: bool) -> crate::theme::AppTheme {
+    let theme = choice.to_theme();
+    if reduced_colors {
+        theme.with_reduced_colors()
+    } else {
+        theme
+    }
+}
+
+/// Enumerates the system fonts off the UI thread (parsing every font file
+/// can take a noticeable time); the font pickers show "Loading" until done.
+fn load_fonts_task() -> Task<Message> {
+    Task::perform(
+        async {
+            tokio::task::spawn_blocking(crate::fonts::all_options)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::error!("Font enumeration failed: {e}");
+                    &[]
+                })
+        },
+        Message::FontsLoaded,
+    )
+}
+
+/// A stale GUI cache is a bug: fail loudly in tests.
+#[cfg(test)]
+fn report_stale_cache(msg: &str) {
+    panic!("{msg}");
+}
+
+/// A stale GUI cache is a bug, but the GUI never panics: log it (the caller
+/// repairs the caches).
+#[cfg(not(test))]
+fn report_stale_cache(msg: &str) {
+    tracing::error!("{msg}; repairing caches");
 }

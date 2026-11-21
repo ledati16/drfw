@@ -157,7 +157,7 @@ pub fn view_workspace<'a>(
                 .padding([10, 16])
                 .style(move |_, status| secondary_button(theme, status)),
             container(
-                text("Redo (Ctrl+Shift+Z)")
+                text("Redo (Ctrl+Y or Ctrl+Shift+Z)")
                     .size(12)
                     .font(state.font_regular)
                     .color(theme.fg_primary)

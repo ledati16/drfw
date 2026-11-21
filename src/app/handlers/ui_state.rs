@@ -7,6 +7,7 @@
 //! - Font picker
 //! - Undo/redo
 //! - Banner management
+//! - Keyboard shortcuts and the Escape layer order
 
 use crate::app::{
     BannerSeverity, DiagnosticsFilter, FontPickerTarget, Message, State, ThemeFilter, WorkspaceTab,
@@ -48,42 +49,32 @@ pub(crate) fn handle_diagnostics_filter_changed(state: &mut State, filter: Diagn
 
 /// Handles undo
 pub(crate) fn handle_undo(state: &mut State) -> Task<Message> {
-    if let Some(description) = state.command_history.undo(&mut state.ruleset) {
-        // Clear drag state (undo may add/remove rules, invalidating drag references)
-        state.clear_drag_state();
-
-        state.mark_profile_dirty();
-        tracing::info!("Undid: {}", description);
-        let enable_event_log = state.enable_event_log;
-        let desc = description.clone();
-        return Task::perform(
-            async move {
-                crate::audit::log_undone(enable_event_log, &desc).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    }
-    Task::none()
+    let Some(description) = state.command_history.undo(&mut state.ruleset) else {
+        return Task::none();
+    };
+    // Clear drag state (undo may add/remove rules, invalidating drag references)
+    state.clear_drag_state();
+    state.mark_profile_dirty();
+    tracing::info!("Undid: {description}");
+    let enable_event_log = state.enable_event_log;
+    super::audit_task(async move {
+        crate::audit::log_undone(enable_event_log, &description).await;
+    })
 }
 
 /// Handles redo
 pub(crate) fn handle_redo(state: &mut State) -> Task<Message> {
-    if let Some(description) = state.command_history.redo(&mut state.ruleset) {
-        // Clear drag state (redo may add/remove rules, invalidating drag references)
-        state.clear_drag_state();
-
-        state.mark_profile_dirty();
-        tracing::info!("Redid: {}", description);
-        let enable_event_log = state.enable_event_log;
-        let desc = description.clone();
-        return Task::perform(
-            async move {
-                crate::audit::log_redone(enable_event_log, &desc).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    }
-    Task::none()
+    let Some(description) = state.command_history.redo(&mut state.ruleset) else {
+        return Task::none();
+    };
+    // Clear drag state (redo may add/remove rules, invalidating drag references)
+    state.clear_drag_state();
+    state.mark_profile_dirty();
+    tracing::info!("Redid: {description}");
+    let enable_event_log = state.enable_event_log;
+    super::audit_task(async move {
+        crate::audit::log_redone(enable_event_log, &description).await;
+    })
 }
 
 /// Handles opening theme picker
@@ -93,13 +84,17 @@ pub(crate) fn handle_open_theme_picker(state: &mut State) {
         .map(|choice| (choice, choice.to_theme()))
         .collect();
 
-    state.theme_picker = Some(crate::app::ThemePickerState {
+    let mut picker = crate::app::ThemePickerState {
         search: String::new(),
         search_lowercase: String::new(),
         filter: ThemeFilter::All,
         original_theme: state.current_theme,
         cached_themes,
-    });
+        filtered: Vec::new(),
+        count_display: String::new(),
+    };
+    picker.refilter();
+    state.theme_picker = Some(picker);
 }
 
 /// Handles theme picker search change
@@ -107,6 +102,7 @@ pub(crate) fn handle_theme_picker_search_changed(state: &mut State, search: Stri
     if let Some(picker) = &mut state.theme_picker {
         picker.search_lowercase = search.to_lowercase();
         picker.search = search;
+        picker.refilter();
     }
 }
 
@@ -114,60 +110,44 @@ pub(crate) fn handle_theme_picker_search_changed(state: &mut State, search: Stri
 pub(crate) fn handle_theme_picker_filter_changed(state: &mut State, filter: ThemeFilter) {
     if let Some(picker) = &mut state.theme_picker {
         picker.filter = filter;
+        picker.refilter();
     }
 }
 
 /// Handles theme preview
 pub(crate) fn handle_theme_preview(state: &mut State, choice: crate::theme::ThemeChoice) {
-    state.current_theme = choice;
-    let base_theme = choice.to_theme();
-    state.theme = if state.reduced_colors {
-        base_theme.with_reduced_colors()
-    } else {
-        base_theme
-    };
-}
-
-/// Handles theme preview button click (cycles preview)
-pub(crate) fn handle_theme_preview_button_click(_state: &mut State) {
-    // No-op placeholder for UI action
+    state.set_theme(choice);
 }
 
 /// Handles applying theme
 pub(crate) fn handle_apply_theme(state: &mut State) -> Task<Message> {
     state.theme_picker = None;
     state.mark_config_dirty();
-    let enable_event_log = state.enable_event_log;
-    let desc = format!("Theme changed to {}", state.current_theme.name());
-    Task::perform(
-        async move {
-            crate::audit::log_settings_saved(enable_event_log, &desc).await;
-        },
-        |()| Message::AuditLogWritten,
+    super::log_setting_change(
+        state,
+        format!("Theme changed to {}", state.current_theme.name()),
     )
 }
 
 /// Handles canceling theme picker
 pub(crate) fn handle_cancel_theme_picker(state: &mut State) {
-    if let Some(picker) = &state.theme_picker {
-        state.current_theme = picker.original_theme;
-        let base_theme = picker.original_theme.to_theme();
-        state.theme = if state.reduced_colors {
-            base_theme.with_reduced_colors()
-        } else {
-            base_theme
-        };
+    if let Some(picker) = state.theme_picker.take() {
+        state.set_theme(picker.original_theme);
     }
-    state.theme_picker = None;
 }
 
 /// Handles opening font picker
 pub(crate) fn handle_open_font_picker(state: &mut State, target: FontPickerTarget) {
-    state.font_picker = Some(crate::app::FontPickerState {
+    let mut picker = crate::app::FontPickerState {
         target,
         search: String::new(),
         search_lowercase: String::new(),
-    });
+        filtered: Vec::new(),
+        count_display: String::new(),
+        overflow_display: None,
+    };
+    picker.refilter(state.available_fonts, state.fonts_loaded);
+    state.font_picker = Some(picker);
 }
 
 /// Handles font picker search change
@@ -175,6 +155,26 @@ pub(crate) fn handle_font_picker_search_changed(state: &mut State, search: Strin
     if let Some(picker) = &mut state.font_picker {
         picker.search_lowercase = search.to_lowercase();
         picker.search = search;
+        picker.refilter(state.available_fonts, state.fonts_loaded);
+    }
+}
+
+/// Handles the end of the startup font enumeration: the configured fonts
+/// are checked against the installed ones (falling back to the defaults if
+/// gone) and an open font picker is filled.
+pub(crate) fn handle_fonts_loaded(state: &mut State, fonts: &'static [crate::fonts::FontChoice]) {
+    state.available_fonts = fonts;
+    state.fonts_loaded = true;
+    // An empty list means the enumeration failed: keep the configured fonts
+    // (used by name) rather than resetting them to the defaults
+    if !fonts.is_empty() {
+        state.regular_font_choice.resolve(fonts, false);
+        state.mono_font_choice.resolve(fonts, true);
+        state.font_regular = state.regular_font_choice.to_font();
+        state.font_mono = state.mono_font_choice.to_font();
+    }
+    if let Some(picker) = &mut state.font_picker {
+        picker.refilter(fonts, true);
     }
 }
 
@@ -241,43 +241,33 @@ pub(crate) fn handle_copy_preview_line(state: &mut State, line_number: usize) ->
     iced::clipboard::write(text)
 }
 
-/// System-generated comments that don't correspond to user rule labels
-const SYSTEM_COMMENTS: &[&str] = &[
-    "allow from loopback",
-    "early drop of invalid connections",
-    "allow tracked connections",
-    "drop icmp redirects",
-    "drop icmpv6 redirects",
-    "drop packets with spoofed source addresses (RPF)",
-    "allow essential icmp (strict mode)",
-    "allow essential icmp (strict mode, rate limited)",
-    "allow essential icmpv6 (strict mode)",
-    "allow essential icmpv6 (strict mode, rate limited)",
-    "allow icmp",
-    "allow icmp (rate limited)",
-    "allow icmp v6",
-    "allow icmp v6 (rate limited)",
-    "log dropped packets (rate limited)",
-];
-
-/// Extracts user label from a line containing `comment "LABEL"` pattern.
-/// Returns None if no comment found or if it's a system comment.
-fn extract_user_label_from_line(line_text: &str) -> Option<String> {
-    // Find `comment "` marker
+/// Extracts the comment text from a line containing a `comment "..."` pattern.
+/// Returns `None` if there is no (non-empty) comment.
+fn extract_comment_from_line(line_text: &str) -> Option<&str> {
     let marker = "comment \"";
     let start = line_text.find(marker)? + marker.len();
     let rest = &line_text[start..];
-
-    // Find closing quote
     let end = rest.find('"')?;
-    let label = &rest[..end];
+    let comment = &rest[..end];
+    (!comment.is_empty()).then_some(comment)
+}
 
-    // Check if it's empty or a system comment
-    if label.is_empty() || SYSTEM_COMMENTS.contains(&label) {
-        return None;
-    }
-
-    Some(label.to_string())
+/// Finds the label of the user rule whose generated comment is `comment`.
+///
+/// User rules get `sanitize_nft_quoted(label)` as their comment (see
+/// `FirewallRuleset::rule_add`); system rules (loopback, ICMP, ...) have
+/// comments no user rule produces, so they yield `None` without keeping a
+/// separate list of system comment strings in sync with the generator.
+fn user_label_for_comment<'a>(
+    rules: &'a [crate::core::firewall::Rule],
+    comment: &str,
+) -> Option<&'a str> {
+    rules
+        .iter()
+        .find(|r| {
+            !r.label.is_empty() && crate::validators::sanitize_nft_quoted(&r.label) == comment
+        })
+        .map(|r| r.label.as_str())
 }
 
 /// Handles clicking on a preview line to filter sidebar by rule label (left-click)
@@ -314,16 +304,18 @@ pub(crate) fn handle_click_preview_line(state: &mut State, line_number: usize) {
         text.push_str(&token.text);
     }
 
-    // Extract label from comment
-    let Some(label) = extract_user_label_from_line(&text) else {
-        // No user label found - could be system rule, header, or rule without label
-        // Silently ignore - user can use other methods to find the rule
+    // No user rule for this line (system rule, header, unlabeled rule):
+    // silently ignore - the user can use other methods to find the rule
+    let Some(label) = extract_comment_from_line(&text)
+        .and_then(|comment| user_label_for_comment(&state.ruleset.rules, comment))
+    else {
         return;
     };
 
-    // Set the search filter to the extracted label
-    label.clone_into(&mut state.rule_search);
+    // Set the search filter to the rule's label
+    let label = label.to_string();
     state.rule_search_lowercase = label.to_lowercase();
+    state.rule_search = label;
     state.update_filter_cache();
 }
 
@@ -399,6 +391,8 @@ pub(crate) fn handle_close_requested(state: &mut State, _id: iced::window::Id) -
         return Task::none();
     }
     state.closing = true;
+    // Pending saves are flushed below; armed timers must not start more
+    state.timers.cancel_all();
 
     // Re-save while a save is in flight too: the profile save lock orders it
     // after the running one, so the newest snapshot always lands last.
@@ -436,86 +430,208 @@ pub(crate) fn handle_close_requested(state: &mut State, _id: iced::window::Id) -
     )
 }
 
-/// Handles keyboard events (shortcuts)
-pub(crate) fn handle_event(state: &mut State, event: iced::Event) -> Task<Message> {
+/// The top-most open layer of the UI, following the stacking order of
+/// `view::view` (first variant = drawn on top).
+///
+/// Escape closes exactly this layer, and shortcuts that act on the rules
+/// behind it only fire when nothing is open ([`TopLayer::Base`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TopLayer {
+    ShortcutsHelp,
+    /// "Unsaved changes" dialog before a profile switch (drawn above, and
+    /// hiding, the profile manager)
+    ProfileSwitchConfirm,
+    ProfileManager,
+    ThemePicker,
+    FontPicker,
+    ExportModal,
+    Diagnostics,
+    /// Port/address/tag helper on top of the rule form
+    HelperModal,
+    /// Confirmation for enabling a risky setting
+    Warning,
+    RuleForm,
+    /// "Commit Changes?", "Applying" and the auto-revert countdown
+    ApplyFlow,
+    SaveToSystem,
+    /// No modal: the sidebar and workspace
+    Base,
+}
+
+/// Returns the top-most open layer (see [`TopLayer`]).
+pub(crate) fn top_layer(state: &State) -> TopLayer {
     use crate::app::AppStatus;
 
-    if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event {
-        match key.as_ref() {
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter)
-                if state.rule_form.is_some() =>
-            {
-                return Task::done(Message::SaveRuleForm);
-            }
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
-                if state.rule_form.is_some() {
-                    return Task::done(Message::CancelRuleForm);
-                }
-                if state.deleting_id.is_some() {
-                    return Task::done(Message::CancelDelete);
-                }
-                if state.show_shortcuts_help {
-                    return Task::done(Message::ToggleShortcutsHelp(false));
-                }
-                if state.show_diagnostics {
-                    return Task::done(Message::ToggleDiagnostics(false));
-                }
-                if state.show_export_modal {
-                    return Task::done(Message::ToggleExportModal(false));
-                }
-                if state.font_picker.is_some() {
-                    return Task::done(Message::CloseFontPicker);
-                }
-                if state.theme_picker.is_some() {
-                    return Task::done(Message::CancelThemePicker);
-                }
-                if state.profile_manager.is_some() {
-                    return Task::done(Message::CloseProfileManager);
-                }
-                if !state.rule_search.is_empty() {
-                    state.rule_search.clear();
-                    state.rule_search_lowercase.clear();
-                    state.update_filter_cache();
-                }
-            }
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::F1) => {
-                return Task::done(Message::ToggleShortcutsHelp(true));
-            }
-            iced::keyboard::Key::Character("n") if modifiers.command() || modifiers.control() => {
-                if !matches!(state.status, AppStatus::PendingConfirmation { .. }) {
-                    return Task::done(Message::AddRuleClicked);
-                }
-            }
-            iced::keyboard::Key::Character("s") if modifiers.command() || modifiers.control() => {
-                return Task::done(Message::ApplyClicked);
-            }
-            iced::keyboard::Key::Character("e") if modifiers.command() || modifiers.control() => {
-                return Task::done(Message::ToggleExportModal(true));
-            }
-            iced::keyboard::Key::Character("z")
-                if (modifiers.command() || modifiers.control()) && !modifiers.shift() =>
-            {
-                if state.command_history.can_undo() {
-                    return Task::done(Message::Undo);
-                }
-            }
-            iced::keyboard::Key::Character("z")
-                if (modifiers.command() || modifiers.control()) && modifiers.shift() =>
-            {
-                if state.command_history.can_redo() {
-                    return Task::done(Message::Redo);
-                }
-            }
-            iced::keyboard::Key::Character("y")
-                if (modifiers.command() || modifiers.control())
-                    && state.command_history.can_redo() =>
-            {
-                return Task::done(Message::Redo);
-            }
-            _ => {}
+    if state.show_shortcuts_help {
+        TopLayer::ShortcutsHelp
+    } else if state.pending_profile_switch.is_some() {
+        TopLayer::ProfileSwitchConfirm
+    } else if state.profile_manager.is_some() {
+        TopLayer::ProfileManager
+    } else if state.theme_picker.is_some() {
+        TopLayer::ThemePicker
+    } else if state.font_picker.is_some() {
+        TopLayer::FontPicker
+    } else if state.show_export_modal {
+        TopLayer::ExportModal
+    } else if state.show_diagnostics {
+        TopLayer::Diagnostics
+    } else if state.rule_form.is_some()
+        && state
+            .rule_form_helper
+            .as_ref()
+            .is_some_and(|h| h.helper_type.is_some())
+    {
+        TopLayer::HelperModal
+    } else if state.pending_warning.is_some() {
+        TopLayer::Warning
+    } else if state.rule_form.is_some() {
+        TopLayer::RuleForm
+    } else {
+        match state.status {
+            AppStatus::AwaitingApply
+            | AppStatus::Applying
+            | AppStatus::PendingConfirmation { .. } => TopLayer::ApplyFlow,
+            AppStatus::AwaitingSaveToSystem => TopLayer::SaveToSystem,
+            _ => TopLayer::Base,
+        }
+    }
+}
+
+/// The message that closes the top-most layer on Escape, if any.
+///
+/// The apply countdown and a running apply are deliberately not closable by
+/// Escape: keeping or rolling back firewall rules needs an explicit click.
+fn escape_message(state: &State) -> Option<Message> {
+    use crate::app::AppStatus;
+
+    match top_layer(state) {
+        TopLayer::ShortcutsHelp => Some(Message::ToggleShortcutsHelp(false)),
+        TopLayer::ProfileSwitchConfirm => Some(Message::CancelProfileSwitch),
+        TopLayer::ProfileManager => {
+            // Close an inner prompt (delete confirm, rename, create) first
+            let mgr = state.profile_manager.as_ref()?;
+            Some(if mgr.deleting_name.is_some() {
+                Message::CancelDeleteProfile
+            } else if mgr.renaming_name.is_some() {
+                Message::CancelRenameProfile
+            } else if mgr.creating_new {
+                Message::CancelCreatingNewProfile
+            } else {
+                Message::CloseProfileManager
+            })
+        }
+        TopLayer::ThemePicker => Some(Message::CancelThemePicker),
+        TopLayer::FontPicker => Some(Message::CloseFontPicker),
+        TopLayer::ExportModal => Some(Message::ToggleExportModal(false)),
+        TopLayer::Diagnostics => Some(Message::ToggleDiagnostics(false)),
+        TopLayer::HelperModal => Some(Message::CloseHelper),
+        TopLayer::Warning => Some(Message::CancelWarning),
+        TopLayer::RuleForm => Some(Message::CancelRuleForm),
+        TopLayer::ApplyFlow => {
+            (state.status == AppStatus::AwaitingApply).then_some(Message::CancelApply)
+        }
+        TopLayer::SaveToSystem => Some(Message::SaveToSystemCancelled),
+        TopLayer::Base => state.deleting_id.is_some().then_some(Message::CancelDelete),
+    }
+}
+
+/// Subscription filter (`iced::event::listen_with`): forwards keyboard key
+/// presses with their capture status. Everything else is dropped here so it
+/// never reaches `update()`.
+pub(crate) fn keyboard_event_message(
+    event: iced::Event,
+    status: iced::event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }) => {
+            Some(Message::EventOccurred(event, status))
+        }
+        _ => None,
+    }
+}
+
+/// Handles keyboard shortcuts.
+///
+/// - Escape is global (a focused text input captures it to unfocus, and it
+///   still closes the top-most layer). On the base layer it cancels an active
+///   drag, then a pending rule delete, then clears the search.
+/// - Every other key only acts if no widget handled it
+///   (`Status::Ignored`), so Enter in a helper input adds the value instead of
+///   also saving the rule form.
+/// - Enter saves the rule form only while the form is the top layer.
+/// - Ctrl+N/S/E/Z/Y act on the rules behind any modal, so they only fire on
+///   the base layer (no form or dialog open).
+pub(crate) fn handle_event(
+    state: &mut State,
+    event: &iced::Event,
+    status: iced::event::Status,
+) -> Task<Message> {
+    if let Some(message) = shortcut_message(state, event, status) {
+        return Task::done(message);
+    }
+    if is_escape(event) {
+        // Base layer, nothing to confirm or cancel
+        if state.dragged_rule_id.is_some() {
+            state.clear_drag_state();
+        } else if !state.rule_search.is_empty() {
+            state.rule_search.clear();
+            state.rule_search_lowercase.clear();
+            state.update_filter_cache();
         }
     }
     Task::none()
+}
+
+fn is_escape(event: &iced::Event) -> bool {
+    matches!(
+        event,
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            ..
+        })
+    )
+}
+
+/// The message a key press maps to in the current state (see
+/// [`handle_event`] for the rules), without side effects.
+fn shortcut_message(
+    state: &State,
+    event: &iced::Event,
+    status: iced::event::Status,
+) -> Option<Message> {
+    use crate::app::AppStatus;
+    use iced::keyboard::{Key, key::Named};
+
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event
+    else {
+        return None;
+    };
+
+    if is_escape(event) {
+        return escape_message(state);
+    }
+    if status == iced::event::Status::Captured {
+        return None;
+    }
+
+    let layer = top_layer(state);
+    let command = modifiers.command() || modifiers.control();
+    match key.as_ref() {
+        Key::Named(Named::Enter) if layer == TopLayer::RuleForm => Some(Message::SaveRuleForm),
+        Key::Named(Named::F1) => Some(Message::ToggleShortcutsHelp(true)),
+        _ if !command || layer != TopLayer::Base => None,
+        Key::Character("n") => (!matches!(state.status, AppStatus::PendingConfirmation { .. }))
+            .then_some(Message::AddRuleClicked),
+        Key::Character("s") => Some(Message::ApplyClicked),
+        Key::Character("e") => Some(Message::ToggleExportModal(true)),
+        Key::Character("z") if !modifiers.shift() => {
+            state.command_history.can_undo().then_some(Message::Undo)
+        }
+        Key::Character("z" | "y") => state.command_history.can_redo().then_some(Message::Redo),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -548,63 +664,396 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_user_label_normal() {
-        let line = r#"tcp dport 22 accept comment "Allow SSH""#;
-        assert_eq!(
-            extract_user_label_from_line(line),
-            Some("Allow SSH".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_user_label_with_special_chars() {
+    fn test_extract_comment_from_line() {
         let line = r#"tcp dport 80 accept comment "Web Server - Port 80""#;
         assert_eq!(
-            extract_user_label_from_line(line),
-            Some("Web Server - Port 80".to_string())
+            extract_comment_from_line(line),
+            Some("Web Server - Port 80")
+        );
+        assert_eq!(
+            extract_comment_from_line(r#"tcp dport 22 accept comment """#),
+            None
+        );
+        assert_eq!(extract_comment_from_line("tcp dport 22 accept"), None);
+        assert_eq!(extract_comment_from_line("# Chain input rules:"), None);
+        assert_eq!(extract_comment_from_line(""), None);
+        assert_eq!(extract_comment_from_line("    "), None);
+    }
+
+    #[test]
+    fn test_comment_maps_to_user_rules_only() {
+        use crate::core::test_helpers::create_test_rule;
+        let mut quoted = create_test_rule("placeholder", Some(80));
+        quoted.label = r#"Quote "q" rule"#.to_string();
+        let rules = vec![create_test_rule("Allow SSH", Some(22)), quoted];
+        assert_eq!(
+            user_label_for_comment(&rules, "Allow SSH"),
+            Some("Allow SSH")
+        );
+        // The generated comment is sanitized; the real label is returned
+        assert_eq!(
+            user_label_for_comment(&rules, "Quote q rule"),
+            Some(r#"Quote "q" rule"#)
+        );
+        // System comments (whatever the generator emits) match no user rule
+        assert_eq!(user_label_for_comment(&rules, "allow from loopback"), None);
+        assert_eq!(user_label_for_comment(&rules, "allow icmp"), None);
+    }
+
+    #[test]
+    fn test_click_on_system_line_changes_nothing() {
+        use crate::core::test_helpers::create_test_rule;
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(create_test_rule("Allow SSH", Some(22)));
+        state.mark_profile_dirty();
+        for line in state.cached_nft_tokens.clone() {
+            handle_click_preview_line(&mut state, line.line_number);
+            assert!(
+                state.rule_search.is_empty() || state.rule_search == "Allow SSH",
+                "unexpected search {:?}",
+                state.rule_search
+            );
+        }
+        assert_eq!(
+            state.rule_search, "Allow SSH",
+            "the user rule line was found"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Keyboard: status filtering, layer order, Escape
+    // ------------------------------------------------------------------
+
+    use crate::app::{AppStatus, HelperType, PendingWarning, RuleForm, RuleFormHelper};
+    use iced::event::Status;
+    use iced::keyboard::{Key, Modifiers, key::Named};
+
+    fn key_event(key: Key, modifiers: Modifiers) -> iced::Event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        })
+    }
+
+    fn named(key: Named) -> iced::Event {
+        key_event(Key::Named(key), Modifiers::empty())
+    }
+
+    fn ctrl(c: &str) -> iced::Event {
+        key_event(Key::Character(c.into()), Modifiers::CTRL)
+    }
+
+    /// Runs a key press and returns (the debug form of) the message it sends,
+    /// if any; side effects of `handle_event` are applied to `state`.
+    fn press(state: &mut State, event: &iced::Event, status: Status) -> Option<String> {
+        let message = shortcut_message(state, event, status).map(|m| format!("{m:?}"));
+        let _ = handle_event(state, event, status);
+        message
+    }
+
+    fn open_helper(state: &mut State) {
+        state.rule_form = Some(RuleForm::default());
+        state.rule_form_helper = Some(RuleFormHelper {
+            helper_type: Some(HelperType::Ports),
+            input: "22".into(),
+            error: None,
+        });
+    }
+
+    #[test]
+    fn test_enter_in_helper_input_does_not_save_form() {
+        let mut state = create_test_state();
+        open_helper(&mut state);
+        // The helper input handled Enter (on_submit): nothing else happens
+        assert_eq!(
+            press(&mut state, &named(Named::Enter), Status::Captured),
+            None
+        );
+        // Even unhandled, Enter does not save the form behind the helper
+        assert_eq!(
+            press(&mut state, &named(Named::Enter), Status::Ignored),
+            None
+        );
+        // With the helper closed, Enter saves the form
+        state.rule_form_helper = None;
+        assert_eq!(
+            press(&mut state, &named(Named::Enter), Status::Ignored).as_deref(),
+            Some("SaveRuleForm")
         );
     }
 
     #[test]
-    fn test_extract_user_label_empty() {
-        // Empty label should be treated as "no label" - silently ignored
-        let line = r#"tcp dport 22 accept comment """#;
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_shortcuts_ignored_when_captured_or_behind_a_modal() {
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(crate::core::test_helpers::create_test_rule("A", Some(1)));
+        state.command_history.execute(
+            Box::new(crate::command::ToggleRuleCommand {
+                rule_id: state.ruleset.rules[0].id,
+                was_enabled: true,
+            }),
+            &mut state.ruleset,
+        );
+        state.mark_profile_dirty();
+
+        // Base layer: shortcuts work
+        assert_eq!(
+            press(&mut state, &ctrl("z"), Status::Ignored).as_deref(),
+            Some("Undo")
+        );
+        assert_eq!(
+            press(&mut state, &ctrl("e"), Status::Ignored).as_deref(),
+            Some("ToggleExportModal(true)")
+        );
+        // Captured by a widget: ignored
+        assert_eq!(press(&mut state, &ctrl("z"), Status::Captured), None);
+
+        // Rule form open: no undo/apply/new/export behind it
+        state.rule_form = Some(RuleForm::default());
+        for c in ["z", "y", "s", "n", "e"] {
+            assert_eq!(
+                press(&mut state, &ctrl(c), Status::Ignored),
+                None,
+                "Ctrl+{c}"
+            );
+        }
+        // F1 still opens the help
+        assert_eq!(
+            press(&mut state, &named(Named::F1), Status::Ignored).as_deref(),
+            Some("ToggleShortcutsHelp(true)")
+        );
     }
 
     #[test]
-    fn test_extract_user_label_no_comment() {
-        let line = r"tcp dport 22 accept";
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_ctrl_y_and_ctrl_shift_z_redo() {
+        let mut state = create_test_state();
+        state
+            .ruleset
+            .rules
+            .push(crate::core::test_helpers::create_test_rule("A", Some(1)));
+        state.command_history.execute(
+            Box::new(crate::command::ToggleRuleCommand {
+                rule_id: state.ruleset.rules[0].id,
+                was_enabled: true,
+            }),
+            &mut state.ruleset,
+        );
+        let _ = state.command_history.undo(&mut state.ruleset);
+        state.mark_profile_dirty();
+        assert_eq!(
+            press(&mut state, &ctrl("y"), Status::Ignored).as_deref(),
+            Some("Redo")
+        );
+        let shift_z = key_event(
+            Key::Character("z".into()),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        );
+        assert_eq!(
+            press(&mut state, &shift_z, Status::Ignored).as_deref(),
+            Some("Redo")
+        );
+    }
+
+    /// Escape closes the top-most layer only, one layer per press, in the
+    /// order the view stacks them.
+    #[test]
+    fn test_escape_closes_layers_top_down() {
+        let mut state = create_test_state();
+        state.rule_search = "ssh".into();
+        state.rule_search_lowercase = "ssh".into();
+        open_helper(&mut state);
+        state.show_diagnostics = true;
+        state.show_export_modal = true;
+        handle_open_font_picker(&mut state, FontPickerTarget::Mono);
+        handle_open_theme_picker(&mut state);
+        crate::app::handlers::handle_open_profile_manager(&mut state);
+        state.pending_profile_switch = Some("other".into());
+        state.show_shortcuts_help = true;
+
+        let expected = [
+            "ToggleShortcutsHelp(false)",
+            "CancelProfileSwitch",
+            "CloseProfileManager",
+            "CancelThemePicker",
+            "CloseFontPicker",
+            "ToggleExportModal(false)",
+            "ToggleDiagnostics(false)",
+            "CloseHelper",
+            "CancelRuleForm",
+        ];
+        for want in expected {
+            let got = press(&mut state, &named(Named::Escape), Status::Ignored)
+                .expect("a layer to close");
+            assert_eq!(got, want);
+            // Apply the message so the next layer becomes the top one
+            let message = match want {
+                "ToggleShortcutsHelp(false)" => Message::ToggleShortcutsHelp(false),
+                "CancelProfileSwitch" => Message::CancelProfileSwitch,
+                "CloseProfileManager" => Message::CloseProfileManager,
+                "CancelThemePicker" => Message::CancelThemePicker,
+                "CloseFontPicker" => Message::CloseFontPicker,
+                "ToggleExportModal(false)" => Message::ToggleExportModal(false),
+                "ToggleDiagnostics(false)" => Message::ToggleDiagnostics(false),
+                "CloseHelper" => Message::CloseHelper,
+                _ => Message::CancelRuleForm,
+            };
+            let _ = state.update(message);
+        }
+        assert_eq!(top_layer(&state), TopLayer::Base);
+        // Base layer: Escape clears the search
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored),
+            None
+        );
+        assert_eq!(state.rule_search, "");
     }
 
     #[test]
-    fn test_extract_user_label_system_comment() {
-        let line = r#"iifname "lo" accept comment "allow from loopback""#;
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_escape_is_global_even_when_an_input_captured_it() {
+        let mut state = create_test_state();
+        state.rule_form = Some(RuleForm::default());
+        // A focused text input captures Escape (to unfocus); the form still closes
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Captured).as_deref(),
+            Some("CancelRuleForm")
+        );
     }
 
     #[test]
-    fn test_extract_user_label_system_icmp() {
-        let line = r#"icmp type { echo-reply, echo-request } accept comment "allow icmp""#;
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_escape_in_profile_manager_closes_inner_prompt_first() {
+        let mut state = create_test_state();
+        crate::app::handlers::handle_open_profile_manager(&mut state);
+        crate::app::handlers::handle_delete_profile_requested(&mut state, "x".into());
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelDeleteProfile")
+        );
+        crate::app::handlers::handle_cancel_delete_profile(&mut state);
+        crate::app::handlers::handle_rename_profile_requested(&mut state, "test".into());
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelRenameProfile")
+        );
     }
 
     #[test]
-    fn test_extract_user_label_header_line() {
-        let line = "# Chain input rules:";
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_escape_on_confirmation_modals() {
+        let mut state = create_test_state();
+        state.pending_warning = Some(PendingWarning::EnableRpf);
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelWarning")
+        );
+        state.pending_warning = None;
+
+        state.status = AppStatus::AwaitingApply;
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelApply")
+        );
+        state.status = AppStatus::AwaitingSaveToSystem;
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("SaveToSystemCancelled")
+        );
+        // Applying / countdown: Escape must not confirm or roll back
+        state.status = AppStatus::Applying;
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored),
+            None
+        );
+        assert_eq!(state.status, AppStatus::Applying);
+
+        state.status = AppStatus::Idle;
+        state.deleting_id = Some(uuid::Uuid::new_v4());
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored).as_deref(),
+            Some("CancelDelete")
+        );
     }
 
     #[test]
-    fn test_extract_user_label_empty_line() {
-        let line = "";
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_escape_cancels_active_drag() {
+        let mut state = create_test_state();
+        state.rule_search = "keep".into();
+        state.dragged_rule_id = Some(uuid::Uuid::new_v4());
+        assert_eq!(
+            press(&mut state, &named(Named::Escape), Status::Ignored),
+            None
+        );
+        assert!(state.dragged_rule_id.is_none());
+        assert_eq!(state.rule_search, "keep", "only the drag was cancelled");
     }
 
     #[test]
-    fn test_extract_user_label_whitespace_only() {
-        let line = "    ";
-        assert_eq!(extract_user_label_from_line(line), None);
+    fn test_keyboard_filter_forwards_key_presses_only() {
+        let id = iced::window::Id::unique();
+        assert!(keyboard_event_message(named(Named::Enter), Status::Captured, id).is_some());
+        let release =
+            iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(Modifiers::empty()));
+        assert!(keyboard_event_message(release, Status::Ignored, id).is_none());
+    }
+
+    #[test]
+    fn test_font_picker_caches_filtered_list() {
+        static FONTS: std::sync::LazyLock<Vec<crate::fonts::FontChoice>> =
+            std::sync::LazyLock::new(|| {
+                vec![
+                    crate::fonts::FontChoice::SystemDefault,
+                    crate::fonts::FontChoice::SystemMonospace,
+                ]
+            });
+        let mut state = create_test_state();
+        handle_open_font_picker(&mut state, FontPickerTarget::Regular);
+        let picker = state.font_picker.as_ref().unwrap();
+        assert_eq!(picker.filtered, Vec::<usize>::new());
+        assert!(picker.count_display.contains("Loading"));
+        handle_fonts_loaded(&mut state, FONTS.as_slice());
+        assert_eq!(state.font_picker.as_ref().unwrap().filtered.len(), 2);
+        handle_font_picker_search_changed(&mut state, "monosp".into());
+        let picker = state.font_picker.as_ref().unwrap();
+        assert_eq!(picker.filtered, vec![1]);
+        assert_eq!(picker.count_display, "1 fonts match");
+    }
+
+    #[test]
+    fn test_theme_picker_caches_filtered_list() {
+        let mut state = create_test_state();
+        handle_open_theme_picker(&mut state);
+        let all = state.theme_picker.as_ref().unwrap().filtered.len();
+        assert!(all > 1);
+        handle_theme_picker_filter_changed(&mut state, ThemeFilter::Light);
+        let picker = state.theme_picker.as_ref().unwrap();
+        assert!(picker.filtered.len() < all);
+        assert!(
+            picker
+                .filtered
+                .iter()
+                .all(|&i| picker.cached_themes[i].1.is_light())
+        );
+    }
+
+    #[test]
+    fn test_theme_change_updates_iced_theme() {
+        let mut state = create_test_state();
+        let light = <crate::theme::ThemeChoice as IntoEnumIterator>::iter()
+            .find(|c| c.to_theme().is_light())
+            .expect("a light theme");
+        handle_theme_preview(&mut state, light);
+        let palette = state.iced_theme().palette();
+        assert_eq!(palette.background, state.theme.bg_base);
+        assert_eq!(palette.text, state.theme.fg_primary);
     }
 }

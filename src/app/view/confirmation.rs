@@ -75,9 +75,10 @@ fn build_awaiting_buttons(
         "Apply Now"
     };
 
+    // Cancel closes the dialog without applying; the edits stay
     row![
-        button(text("Discard").size(14).font(font))
-            .on_press(Message::CancelRuleForm)
+        button(text("Cancel").size(14).font(font))
+            .on_press(Message::CancelApply)
             .padding([10, 20])
             .style(move |_, status| secondary_button(theme, status)),
         button(text(button_text).size(14).font(font))
@@ -113,7 +114,7 @@ fn build_applying_buttons(
     };
 
     row![
-        button(text("Discard").size(14).font(font))
+        button(text("Cancel").size(14).font(font))
             .padding([10, 20])
             .style(move |_, status| secondary_button(theme, status)),
         button(text(button_text).size(14).font(font))

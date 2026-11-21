@@ -200,8 +200,9 @@ pub fn view_rule_form<'a>(
             ]
             .spacing(6);
 
-            // Chain selection (only visible in Server Mode)
-            if server_mode {
+            // Chain selection: visible in Server Mode, and for an Output rule
+            // in Desktop mode (which is inactive there) so it can be changed
+            if server_mode || form.chain == crate::core::firewall::Chain::Output {
                 context_col = context_col.push(
                     column![
                         container(

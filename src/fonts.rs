@@ -14,15 +14,19 @@ pub enum FontChoice {
         handle: Option<Font>,
         #[serde(skip)]
         name_lowercase: String,
+        /// fontdb reports a fixed-pitch face for this family (`post` table)
+        #[serde(skip)]
+        monospaced: bool,
     },
 }
 
 impl FontChoice {
-    pub fn name(&self) -> String {
+    /// Display name of the font (no allocation; safe to call from `view()`).
+    pub fn name(&self) -> &str {
         match self {
-            Self::SystemDefault => "System Default".to_string(),
-            Self::SystemMonospace => "System Monospace".to_string(),
-            Self::Specific { name, .. } => name.clone(),
+            Self::SystemDefault => "System Default",
+            Self::SystemMonospace => "System Monospace",
+            Self::Specific { name, .. } => name,
         }
     }
 
@@ -43,85 +47,69 @@ impl FontChoice {
         }
     }
 
-    /// Returns true if this font is monospaced (fixed-width)
+    /// Returns true if this font is monospaced (fixed-width).
+    ///
+    /// For system fonts this is what the font itself declares (fontdb reads
+    /// the `post` table's fixed-pitch flag), not a guess from the name: a
+    /// name heuristic listed display fonts such as "Monoton" and missed
+    /// monospaced fonts without "mono" in their name.
     pub fn is_monospace(&self) -> bool {
         match self {
             Self::SystemDefault => false,
             Self::SystemMonospace => true,
-            Self::Specific { name_lowercase, .. } => {
-                // Heuristic: Check if name contains common monospace indicators
-                // Use cached lowercase version for performance
-                name_lowercase.contains("mono")
-                    || name_lowercase.contains("code")
-                    || name_lowercase.contains("console")
-                    || name_lowercase.contains("courier")
-                    || name_lowercase.contains("terminal")
-                    || name_lowercase.contains("fixed")
-                    || name_lowercase.contains("source code")
-                    || name_lowercase.contains("jetbrains")
-                    || name_lowercase.contains("fira code")
-                    || name_lowercase.contains("inconsolata")
-                    || name_lowercase.contains("hack")
-                    || name_lowercase.contains("menlo")
-                    || name_lowercase.contains("consolas")
-                    || name_lowercase.contains("roboto mono")
-                    || name_lowercase.contains("ubuntu mono")
-                    || name_lowercase.contains("dejavu sans mono")
-                    || name_lowercase.contains("liberation mono")
-                    || name_lowercase.contains("noto mono")
-                    || name_lowercase.contains("cascadia")
-                    || name_lowercase.contains("iosevka")
-            }
+            Self::Specific { monospaced, .. } => *monospaced,
         }
     }
 
-    /// Resolves a font choice by populating its handle from the system cache if missing.
-    /// Used when loading from configuration.
-    pub fn resolve(&mut self, is_mono: bool) {
+    /// Gives a configured font a usable handle before the system font list
+    /// has loaded, so the UI starts in the right font.
+    ///
+    /// iced resolves fonts by family name, so this needs no font scan. The
+    /// name is leaked to get the `&'static str` iced requires; this happens
+    /// at most once per configured font at startup. [`Self::resolve`] later
+    /// swaps in the system list's handle (or falls back if the font is gone).
+    pub fn set_provisional_handle(&mut self) {
         if let Self::Specific {
             name,
             handle,
             name_lowercase,
+            ..
         } = self
         {
-            // Populate name_lowercase if empty (deserialized from old config)
             if name_lowercase.is_empty() {
                 *name_lowercase = name.to_lowercase();
             }
-
-            // Populate handle if missing
             if handle.is_none() {
-                let mut found_handle = None;
-                // Find matching font in system cache
-                for option in all_options() {
-                    if let Self::Specific {
-                        name: system_name,
-                        handle: system_handle,
-                        ..
-                    } = option
-                        && system_name == name
-                    {
-                        found_handle = *system_handle;
-                        break;
-                    }
-                }
-
-                if let Some(h) = found_handle {
-                    *handle = Some(h);
-                } else {
-                    // Font was deleted from system, fall back to appropriate default
-                    tracing::warn!(
-                        "Font '{}' not found on system, falling back to default.",
-                        name
-                    );
-                    *self = if is_mono {
-                        Self::SystemMonospace
-                    } else {
-                        Self::SystemDefault
-                    };
-                }
+                let leaked: &'static str = Box::leak(name.clone().into_boxed_str());
+                *handle = Some(Font::with_name(leaked));
             }
         }
+    }
+
+    /// Resolves a configured font against the loaded system font list:
+    /// takes its handle and monospace flag from there, or falls back to the
+    /// system default (monospace if `is_mono`) when the font is not installed.
+    ///
+    /// Returns `true` if the choice changed to the fallback.
+    pub fn resolve(&mut self, system_fonts: &[FontChoice], is_mono: bool) -> bool {
+        let Self::Specific { name, .. } = self else {
+            return false;
+        };
+        let found = system_fonts.iter().find(|option| {
+            matches!(option, Self::Specific { name: system_name, .. } if system_name == name)
+        });
+        if let Some(system_choice) = found {
+            *self = system_choice.clone();
+            return false;
+        }
+        // Font was deleted from system, fall back to appropriate default
+        tracing::warn!("Font '{name}' not found on system, falling back to default.");
+        *self = if is_mono {
+            Self::SystemMonospace
+        } else {
+            Self::SystemDefault
+        };
+        true
     }
 }
 
@@ -139,33 +127,42 @@ static SYSTEM_FONTS: OnceLock<Vec<FontChoice>> = OnceLock::new();
 /// This is still a leak, but bounds memory to `O(n_fonts)` instead of unbounded growth
 static FONT_NAMES_STORAGE: OnceLock<&'static [String]> = OnceLock::new();
 
-/// Returns all available font choices for the UI, cached
+/// Returns all available font choices for the UI, cached.
+///
+/// The first call scans and parses every installed font file, which can take
+/// a noticeable time: call it off the UI thread (the GUI does so with
+/// `spawn_blocking` at startup).
 pub fn all_options() -> &'static [FontChoice] {
     SYSTEM_FONTS.get_or_init(|| {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
 
-        let mut families: Vec<String> = db
-            .faces()
-            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
-            .collect();
-
-        families.sort();
-        families.dedup();
+        // Family name -> any face of the family declares fixed pitch
+        let mut families: std::collections::BTreeMap<String, bool> =
+            std::collections::BTreeMap::new();
+        for face in db.faces() {
+            if let Some((name, _)) = face.families.first() {
+                *families.entry(name.clone()).or_default() |= face.monospaced;
+            }
+        }
+        let (names, monospaced): (Vec<String>, Vec<bool>) = families.into_iter().unzip();
 
         // Store all font names in centralized static storage (one-time controlled leak)
         // Box::leak gives us 'static access to the Vec's contents
         let font_names: &'static [String] =
-            FONT_NAMES_STORAGE.get_or_init(|| Box::leak(families.into_boxed_slice()));
+            FONT_NAMES_STORAGE.get_or_init(|| Box::leak(names.into_boxed_slice()));
 
-        let mut options = vec![FontChoice::SystemDefault, FontChoice::SystemMonospace];
+        let mut options = Vec::with_capacity(font_names.len() + 2);
+        options.push(FontChoice::SystemDefault);
+        options.push(FontChoice::SystemMonospace);
 
         // Reference strings from the centralized storage
-        for name in font_names {
+        for (name, monospaced) in font_names.iter().zip(monospaced) {
             options.push(FontChoice::Specific {
                 name: name.clone(),
                 handle: Some(Font::with_name(name.as_str())),
                 name_lowercase: name.to_lowercase(),
+                monospaced,
             });
         }
         options
@@ -175,3 +172,47 @@ pub fn all_options() -> &'static [FontChoice] {
 // Re-export old types as aliases for compatibility
 pub type RegularFontChoice = FontChoice;
 pub type MonoFontChoice = FontChoice;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn specific(name: &str, monospaced: bool) -> FontChoice {
+        FontChoice::Specific {
+            name: name.to_string(),
+            handle: Some(Font::with_name("Test")),
+            name_lowercase: name.to_lowercase(),
+            monospaced,
+        }
+    }
+
+    #[test]
+    fn test_monospace_comes_from_the_font_not_its_name() {
+        assert!(!specific("Monoton", false).is_monospace());
+        assert!(specific("Iosevka Term", true).is_monospace());
+        assert!(FontChoice::SystemMonospace.is_monospace());
+        assert!(!FontChoice::SystemDefault.is_monospace());
+    }
+
+    #[test]
+    fn test_resolve_takes_system_entry_or_falls_back() {
+        let system = [specific("Fira Code", true)];
+        let mut configured = FontChoice::Specific {
+            name: "Fira Code".to_string(),
+            handle: None,
+            name_lowercase: String::new(),
+            monospaced: false,
+        };
+        configured.set_provisional_handle();
+        assert!(configured.to_font() != Font::DEFAULT);
+        assert!(!configured.resolve(&system, true));
+        assert!(
+            configured.is_monospace(),
+            "flag copied from the system list"
+        );
+
+        let mut missing = specific("Gone Font", false);
+        assert!(missing.resolve(&system, true));
+        assert_eq!(missing, FontChoice::SystemMonospace);
+    }
+}

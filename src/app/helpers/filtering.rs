@@ -11,19 +11,20 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 ///
 /// # Arguments
 ///
-/// * `fonts` - Iterator of font choices to filter
+/// * `fonts` - Iterator of (key, font choice) pairs to filter; the key (e.g.
+///   the font's index in its list) is returned with each match
 /// * `query` - Search string (case-insensitive matching)
 ///
 /// # Returns
 ///
-/// Vector of (font, score) tuples sorted by descending score (best matches first).
+/// Vector of (key, score) tuples sorted by descending score (best matches first).
 /// Higher scores indicate better matches.
-pub fn fuzzy_filter_fonts<'a>(
-    fonts: impl Iterator<Item = &'a crate::fonts::FontChoice>,
+pub fn fuzzy_filter_fonts<'a, K>(
+    fonts: impl Iterator<Item = (K, &'a crate::fonts::FontChoice)>,
     query: &str,
-) -> Vec<(&'a crate::fonts::FontChoice, u16)> {
+) -> Vec<(K, u16)> {
     if query.is_empty() {
-        return fonts.map(|f| (f, 0)).collect();
+        return fonts.map(|(key, _)| (key, 0)).collect();
     }
 
     let mut matcher = Matcher::new(Config::DEFAULT);
@@ -34,12 +35,12 @@ pub fn fuzzy_filter_fonts<'a>(
     let mut haystack_buf = Vec::new();
 
     let mut results: Vec<_> = fonts
-        .filter_map(|font| {
+        .filter_map(|(key, font)| {
             haystack_buf.clear(); // Reuse instead of reallocate
             let haystack = Utf32Str::new(font.name_lowercase(), &mut haystack_buf);
             matcher
                 .fuzzy_match(haystack, needle)
-                .map(|score| (font, score))
+                .map(|score| (key, score))
         })
         .collect();
 
@@ -110,7 +111,7 @@ mod tests {
     #[test]
     fn test_fuzzy_filter_fonts_empty_query() {
         let fonts = [FontChoice::SystemDefault, FontChoice::SystemMonospace];
-        let results = fuzzy_filter_fonts(fonts.iter(), "");
+        let results = fuzzy_filter_fonts(fonts.iter().enumerate(), "");
         assert_eq!(results.len(), 2);
         // All scores should be 0 for empty query
         assert!(results.iter().all(|(_, score)| *score == 0));
@@ -119,12 +120,12 @@ mod tests {
     #[test]
     fn test_fuzzy_filter_fonts_match() {
         let fonts = [FontChoice::SystemDefault, FontChoice::SystemMonospace];
-        let results = fuzzy_filter_fonts(fonts.iter(), "mono");
+        let results = fuzzy_filter_fonts(fonts.iter().enumerate(), "mono");
         // Should find SystemMonospace
         assert_eq!(results.len(), 1);
         // Score should be non-zero
         assert!(results[0].1 > 0);
-        assert_eq!(results[0].0, &FontChoice::SystemMonospace);
+        assert_eq!(results[0].0, 1, "index of SystemMonospace");
     }
 
     #[test]

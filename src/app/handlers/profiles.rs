@@ -20,12 +20,13 @@ use crate::app::{BannerSeverity, FirewallRuleset, Message, ProfileSaveOutcome, S
 use crate::audit;
 use crate::core::profiles::{UnreadableProfile, find_name_conflict, validate_profile_name};
 use iced::Task;
+use std::time::{Duration, Instant};
 use tracing::error;
 
 /// Normal autosave debounce after the last edit.
-const AUTOSAVE_DEBOUNCE_MS: u128 = 1000;
+const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(1000);
 /// Retry delay after a failed save (avoids hammering a full or read-only disk).
-const AUTOSAVE_RETRY_MS: u128 = 5000;
+const AUTOSAVE_RETRY: Duration = Duration::from_millis(5000);
 
 /// Returns `true` for messages that change the active profile's content, or
 /// would apply/persist it. They are refused while the profile is read-only
@@ -164,12 +165,9 @@ pub(crate) fn handle_profile_switched(
 
     let enable_event_log = state.enable_event_log;
     let to_profile = name;
-    Task::perform(
-        async move {
-            audit::log_profile_switched(enable_event_log, &from_profile, &to_profile).await;
-        },
-        |()| Message::AuditLogWritten,
-    )
+    super::audit_task(async move {
+        audit::log_profile_switched(enable_event_log, &from_profile, &to_profile).await;
+    })
 }
 
 /// Replaces an unreadable profile with an empty one ("Start fresh").
@@ -263,24 +261,18 @@ pub(crate) fn handle_profile_created(
             reset_editing_state(state);
             state.update_cached_text();
             state.mark_config_dirty();
-            Task::perform(
-                async move {
-                    audit::log_profile_created(enable_event_log, &name).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            super::audit_task(async move {
+                audit::log_profile_created(enable_event_log, &name).await;
+            })
         }
         Err(e) => {
             state.push_banner(
                 banner_error("Failed to create profile", &e),
                 BannerSeverity::Error,
             );
-            Task::perform(
-                async move {
-                    audit::log_profile_create_failed(enable_event_log, &name, e).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            super::audit_task(async move {
+                audit::log_profile_create_failed(enable_event_log, &name, e).await;
+            })
         }
     }
 }
@@ -351,12 +343,9 @@ pub(crate) fn handle_delete_profile_requested(state: &mut State, name: String) {
 /// Logs a refused or failed profile deletion.
 fn log_delete_failed(state: &State, name: String, reason: String) -> Task<Message> {
     let enable_event_log = state.enable_event_log;
-    Task::perform(
-        async move {
-            audit::log_profile_delete_failed(enable_event_log, &name, reason).await;
-        },
-        |()| Message::AuditLogWritten,
-    )
+    super::audit_task(async move {
+        audit::log_profile_delete_failed(enable_event_log, &name, reason).await;
+    })
 }
 
 /// Handles confirming profile deletion
@@ -409,12 +398,9 @@ pub(crate) fn handle_profile_deleted(
         Ok(profiles) => {
             let old_active = state.active_profile_name.clone();
             state.available_profiles.clone_from(&profiles);
-            let audit_task = Task::perform(
-                async move {
-                    audit::log_profile_deleted(enable_event_log, &name).await;
-                },
-                |()| Message::AuditLogWritten,
-            );
+            let audit_task = super::audit_task(async move {
+                audit::log_profile_deleted(enable_event_log, &name).await;
+            });
             // If the active profile vanished, switch to the first available
             if !profiles.iter().any(|p| p == &old_active) {
                 let next = profiles
@@ -538,24 +524,18 @@ pub(crate) fn handle_profile_renamed(
                 }
                 state.mark_config_dirty();
             }
-            Task::perform(
-                async move {
-                    audit::log_profile_renamed(enable_event_log, &old, &new).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            super::audit_task(async move {
+                audit::log_profile_renamed(enable_event_log, &old, &new).await;
+            })
         }
         Err(e) => {
             state.push_banner(
                 banner_error("Failed to rename profile", &e),
                 BannerSeverity::Error,
             );
-            Task::perform(
-                async move {
-                    audit::log_profile_rename_failed(enable_event_log, &old, e).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            super::audit_task(async move {
+                audit::log_profile_rename_failed(enable_event_log, &old, e).await;
+            })
         }
     }
 }
@@ -629,23 +609,31 @@ fn autosave_paused(state: &State) -> bool {
         || state.unreadable_profile.is_some()
 }
 
-/// Handles periodic profile save check (debounced)
-pub(crate) fn handle_check_profile_save(state: &mut State) -> Task<Message> {
+/// When the next autosave is due: `None` while there is nothing to save, a
+/// save is running, or autosave is paused. The debounce timer is re-armed
+/// after any message that makes this `Some` again (e.g. the running save
+/// finished, the switch dialog closed).
+pub(crate) fn profile_save_deadline(state: &State, now: Instant) -> Option<Instant> {
     if !state.profile_dirty || state.profile_save_in_flight || autosave_paused(state) {
-        return Task::none();
+        return None;
     }
-
     let debounce = if state.profile_save_error.is_some() {
-        AUTOSAVE_RETRY_MS
+        AUTOSAVE_RETRY
     } else {
-        AUTOSAVE_DEBOUNCE_MS
+        AUTOSAVE_DEBOUNCE
     };
-    if let Some(last_change) = state.last_profile_change
-        && last_change.elapsed().as_millis() < debounce
-    {
+    Some(
+        state
+            .last_profile_change
+            .map_or(now, |last_change| last_change + debounce),
+    )
+}
+
+/// Starts the autosave if it is due (see [`profile_save_deadline`]).
+pub(crate) fn run_profile_save_if_due(state: &mut State, now: Instant) -> Task<Message> {
+    if profile_save_deadline(state, now).is_none_or(|deadline| now < deadline) {
         return Task::none();
     }
-
     start_profile_save(state, None)
 }
 
@@ -669,7 +657,7 @@ pub(crate) fn handle_profile_saved(
             }
             let unchanged = outcome.snapshot.rules == state.ruleset.rules
                 && outcome.snapshot.advanced_security == state.ruleset.advanced_security;
-            state.cached_disk_profile = Some(outcome.snapshot);
+            state.set_cached_disk_profile(outcome.snapshot);
             if unchanged {
                 state.profile_dirty = false;
             }
@@ -768,16 +756,46 @@ mod tests {
     #[test]
     fn test_autosave_starts_and_marks_in_flight() {
         let mut state = dirty_state();
-        let _ = handle_check_profile_save(&mut state);
+        let _ = run_profile_save_if_due(&mut state, Instant::now());
         assert!(state.profile_save_in_flight);
         assert!(state.profile_dirty, "dirty until the save result arrives");
+    }
+
+    #[test]
+    fn test_autosave_timer_rearms_when_pause_ends() {
+        use crate::app::TimerKind;
+        let mut state = dirty_state();
+        state.pending_profile_switch = Some("other".into());
+        let _ = state.update(Message::Noop);
+        assert!(
+            !state.timers.is_armed(TimerKind::ProfileSave),
+            "no timer while paused"
+        );
+        let _ = state.update(Message::CancelProfileSwitch);
+        assert!(state.timers.is_armed(TimerKind::ProfileSave), "resumes");
+        // The edit is older than the debounce: the fired timer saves at once
+        let _ = state.update(Message::TimerFired(TimerKind::ProfileSave, 1));
+        assert!(state.profile_save_in_flight);
+        assert!(!state.timers.is_armed(TimerKind::ProfileSave));
+    }
+
+    #[test]
+    fn test_autosave_waits_for_debounce() {
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("New", Some(80)));
+        state.mark_profile_dirty();
+        let edited = state.last_profile_change.unwrap();
+        let _ = run_profile_save_if_due(&mut state, edited + Duration::from_millis(999));
+        assert!(!state.profile_save_in_flight, "too early");
+        let _ = run_profile_save_if_due(&mut state, edited + AUTOSAVE_DEBOUNCE);
+        assert!(state.profile_save_in_flight);
     }
 
     #[test]
     fn test_autosave_paused_while_switch_dialog_open() {
         let mut state = dirty_state();
         state.pending_profile_switch = Some("other".into());
-        let _ = handle_check_profile_save(&mut state);
+        let _ = run_profile_save_if_due(&mut state, Instant::now());
         assert!(
             !state.profile_save_in_flight,
             "Discard must be able to discard"
@@ -792,7 +810,7 @@ mod tests {
             reason: "damaged".into(),
             backup: None,
         });
-        let _ = handle_check_profile_save(&mut state);
+        let _ = run_profile_save_if_due(&mut state, Instant::now());
         assert!(!state.profile_save_in_flight);
     }
 
@@ -810,7 +828,7 @@ mod tests {
     #[test]
     fn test_save_success_clears_dirty_only_if_unchanged() {
         let mut state = dirty_state();
-        let _ = handle_check_profile_save(&mut state);
+        let _ = run_profile_save_if_due(&mut state, Instant::now());
         let outcome = saved(&state, None, Ok(()));
         // Another edit lands while the save is running
         state

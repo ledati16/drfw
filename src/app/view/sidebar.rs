@@ -83,6 +83,45 @@ fn invalid_badge<'a>(state: &'a State, reasons: &'a str) -> Element<'a, Message>
     .into()
 }
 
+/// Explains why an Output-chain rule does nothing in Desktop mode.
+const INACTIVE_OUTPUT_TOOLTIP: &str = "Desktop mode allows all outgoing traffic, so outbound \
+     (Output chain) rules are not applied. Enable Server Mode in Settings to use them, \
+     or edit the rule to make it inbound.";
+
+/// Small "INACTIVE IN DESKTOP MODE" badge with a tooltip explaining why.
+fn inactive_badge(state: &State) -> Element<'_, Message> {
+    let theme = &state.theme;
+    tooltip(
+        container(
+            text("INACTIVE IN DESKTOP MODE")
+                .size(9)
+                .font(state.font_mono)
+                .color(theme.warning)
+                .wrapping(Wrapping::None),
+        )
+        .padding([2, 6])
+        .style(move |_| container::Style {
+            border: Border {
+                radius: 4.0.into(),
+                color: theme.warning,
+                width: 1.0,
+            },
+            ..Default::default()
+        }),
+        container(
+            text(INACTIVE_OUTPUT_TOOLTIP)
+                .size(12)
+                .font(state.font_regular)
+                .color(theme.fg_primary),
+        )
+        .padding([6, 10])
+        .max_width(280.0)
+        .style(move |_| popup_container(theme)),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
 
@@ -155,11 +194,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     let all_tags = &state.cached_all_tags;
 
     // Phase 1 Optimization: Use pre-filtered rule indices (updated in update(), not every frame!)
-    let filtered_rules: Vec<_> = state
-        .cached_filtered_rule_indices
-        .iter()
-        .map(|&idx| &state.ruleset.rules[idx])
-        .collect();
+    let filtered_rules = &state.cached_filtered_rule_indices;
 
     // 3. Search and Filters Section
     let tag_cloud: Element<'_, Message> = if all_tags.is_empty() {
@@ -293,8 +328,14 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         // Phase 5: Pre-allocate Vec for better performance
         let mut rule_cards = Vec::with_capacity(filtered_rules.len());
 
-        for rule in filtered_rules {
-            // ... (Rule card logic remains the same)
+        for &rule_index in filtered_rules {
+            let Some(rule) = state.ruleset.rules.get(rule_index) else {
+                continue;
+            };
+            // Listed but not applied (Output rule in Desktop mode): dimmed like
+            // a disabled rule, with a badge explaining why
+            let is_inactive = state.rule_is_inactive(rule);
+            let looks_enabled = rule.enabled && !is_inactive;
             let is_editing = state.rule_form.as_ref().and_then(|f| f.id) == Some(rule.id);
             let is_deleting = state.deleting_id == Some(rule.id);
             let is_being_dragged = state.dragged_rule_id == Some(rule.id);
@@ -339,35 +380,18 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     theme.fg_muted
                 };
 
-                // Protocol/Port badge with chain arrow in Server Mode
-                // Performance: Use cached badge_display string (avoids format! every frame)
-                // Chain arrow still computed since it depends on app-level state (egress profile)
-                let server_mode = state.ruleset.advanced_security.egress_profile
-                    == crate::core::firewall::EgressProfile::Server;
-
-                // Chain arrow: only show in Server Mode (static str, no allocation)
-                let chain_arrow = if server_mode {
-                    match rule.chain {
-                        crate::core::firewall::Chain::Input => "↓",
-                        crate::core::firewall::Chain::Output => "↑",
-                    }
-                } else {
-                    ""
-                };
-
-                // Use cached badge_display when no chain arrow needed (most common case)
-                // Only allocate format string in Server Mode
-                let badge_text: std::borrow::Cow<'_, str> = if chain_arrow.is_empty() {
-                    std::borrow::Cow::Borrowed(&rule.badge_display)
-                } else {
-                    std::borrow::Cow::Owned(format!("{chain_arrow}{}", rule.badge_display))
-                };
+                // Protocol/Port badge (with chain arrow in Server Mode), cached in
+                // update() so no format! runs per frame
+                let badge_text = state
+                    .cached_rule_badges
+                    .get(rule_index)
+                    .unwrap_or(&rule.badge_display);
 
                 let badge = container(
                     text(badge_text)
                         .size(9)
                         .font(state.font_mono)
-                        .color(if rule.enabled {
+                        .color(if looks_enabled {
                             theme.syntax_type
                         } else {
                             theme.fg_muted
@@ -419,7 +443,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 // Issue #20: Pre-allocate tag items Vec with exact capacity
                 let mut tag_items: Vec<Element<'_, Message>> = Vec::with_capacity(rule.tags.len());
                 // Issue #15: Pre-compute all tag colors (enabled/disabled variants)
-                let is_enabled = rule.enabled;
+                let is_enabled = looks_enabled;
                 let tag_text_color = if is_enabled {
                     theme.fg_on_accent
                 } else {
@@ -506,7 +530,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                                 })
                                 .size(13)
                                 .font(state.font_regular)
-                                .color(if rule.enabled {
+                                .color(if looks_enabled {
                                     theme.fg_primary
                                 } else {
                                     theme.fg_muted
@@ -591,7 +615,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                             text(&rule.interface_display)
                                 .size(9)
                                 .font(state.font_mono)
-                                .color(if rule.enabled {
+                                .color(if looks_enabled {
                                     theme.fg_muted
                                 } else {
                                     Color {
@@ -614,6 +638,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 // Invalid-rule badge; reasons in the tooltip (cached in update())
                 if let Some(reasons) = state.cached_rule_issues.get(&rule.id) {
                     detail_items.push(invalid_badge(state, reasons));
+                }
+
+                // Output rule in Desktop mode: listed but not applied
+                if is_inactive {
+                    detail_items.push(inactive_badge(state));
                 }
 
                 // 3. Spacer (Fills middle to push protocol to right)
@@ -695,8 +724,8 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                     card_container(theme)
                 };
 
-                // Dim the card if the rule is disabled
-                if !rule.enabled && !is_editing && !is_being_dragged && !is_hover_target {
+                // Dim the card if the rule is disabled or inactive in this mode
+                if !looks_enabled && !is_editing && !is_being_dragged && !is_hover_target {
                     style.background = style.background.map(|b| match b {
                         iced::Background::Color(c) => {
                             iced::Background::Color(Color { a: 0.6, ..c })

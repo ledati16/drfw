@@ -6,40 +6,24 @@ use crate::app::ui_components::{
     section_header_container, themed_horizontal_rule, themed_scrollable, themed_text_input,
 };
 use crate::app::{
-    FontPickerState, FontPickerTarget, Message, State, ThemeFilter, ThemePickerState,
-    fuzzy_filter_fonts, fuzzy_filter_themes,
+    FONT_PICKER_DISPLAY_LIMIT, FontPickerState, FontPickerTarget, Message, State, ThemeFilter,
+    ThemePickerState,
 };
-use crate::theme::ThemeChoice;
 use iced::widget::{Id, button, column, container, row, rule, scrollable, space, text, text_input};
 use iced::{Alignment, Border, Color, Element, Length, Padding};
-use strum::IntoEnumIterator;
 
 pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> Element<'a, Message> {
     let theme = &state.theme;
-    // Phase 4: Use cached lowercase search term for fuzzy matching
-    let search_term = &picker.search_lowercase;
-
-    // Phase 4: Filter by target (mono vs regular) THEN fuzzy match
     let is_mono_picker = matches!(picker.target, FontPickerTarget::Mono);
-    let target_filtered = state.available_fonts.iter().filter(|f| {
-        // Filter monospace fonts for code font picker
-        !is_mono_picker || f.is_monospace()
-    });
 
-    // Phase 4: Apply fuzzy matching (returns fonts sorted by relevance)
-    let filtered_fonts: Vec<_> = fuzzy_filter_fonts(target_filtered, search_term)
-        .into_iter()
-        .map(|(font, _score)| font) // Discard scores, just use sorted order
-        .collect();
+    // Filtered and sorted in update() (FontPickerState::refilter), not per frame
+    let filtered_fonts = picker
+        .filtered
+        .iter()
+        .filter_map(|&index| state.available_fonts.get(index));
 
-    // Track counts for display
-    let filtered_count = filtered_fonts.len();
-    let display_limit = 30;
-    let displayed_count = filtered_count.min(display_limit);
-
-    // Limit visible items to improve rendering performance if there are many matches
-    // 30 is enough for a searchable list and keeps layout fast (reduced from 100)
-    let font_list = column(filtered_fonts.into_iter().take(display_limit).map(|f| {
+    // Limit visible items to keep layout fast with many matches
+    let font_list = column(filtered_fonts.take(FONT_PICKER_DISPLAY_LIMIT).map(|f| {
         let name = f.name();
         let preview_font = f.to_font(); // Cheap: just returns handle from FontChoice
 
@@ -132,7 +116,7 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                 scrollable(
                     column![
                         container(font_list).padding(8),
-                        if filtered_count == 0 {
+                        if picker.filtered.is_empty() && state.fonts_loaded {
                             container(
                                 text("No fonts found — try a different search")
                                     .size(11)
@@ -145,14 +129,12 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
                                 bottom: 4.0,
                                 left: 8.0,
                             })
-                        } else if filtered_count > display_limit {
+                        } else if let Some(overflow) = &picker.overflow_display {
                             container(
-                                text(format!(
-                                    "Showing {displayed_count} of {filtered_count} fonts — search to find more"
-                                ))
-                                .size(11)
-                                .font(state.font_regular)
-                                .color(theme.fg_muted),
+                                text(overflow)
+                                    .size(11)
+                                    .font(state.font_regular)
+                                    .color(theme.fg_muted),
                             )
                             .padding(Padding {
                                 top: 8.0,
@@ -176,14 +158,10 @@ pub fn view_font_picker<'a>(state: &'a State, picker: &'a FontPickerState) -> El
             .style(move |_| inset_container_bordered(theme)),
             row![
                 container(
-                    text(if filtered_count < state.available_fonts.len() {
-                        format!("{filtered_count} fonts match")
-                    } else {
-                        format!("{filtered_count} fonts available")
-                    })
-                    .size(10)
-                    .color(theme.fg_muted)
-                    .font(state.font_mono)
+                    text(&picker.count_display)
+                        .size(10)
+                        .color(theme.fg_muted)
+                        .font(state.font_mono)
                 )
                 .padding([2, 6])
                 .style(move |_| section_header_container(theme)),
@@ -217,41 +195,13 @@ pub fn view_theme_picker<'a>(
     const STATUS_COLOR_SIZE: f32 = 14.0;
 
     let theme = &state.theme;
-    let search_term = &picker.search_lowercase;
 
-    // Use pre-cached themes (computed once on modal open)
-    // Filter by light/dark first, then fuzzy match
-    let filter_passed =
-        picker
-            .cached_themes
-            .iter()
-            .filter(|(_choice, theme_instance)| match picker.filter {
-                ThemeFilter::All => true,
-                ThemeFilter::Light => theme_instance.is_light(),
-                ThemeFilter::Dark => !theme_instance.is_light(),
-            });
-
-    // Apply fuzzy matching on filtered themes (sorted by relevance)
-    let choices_only = filter_passed.clone().map(|(choice, _)| *choice);
-    let filtered_with_scores = fuzzy_filter_themes(choices_only, search_term);
-
-    // Reconstruct with cached theme instances (no duplicate to_theme() calls)
-    let filtered_themes: Vec<_> = filtered_with_scores
-        .into_iter()
-        .map(|(choice, _score)| {
-            // Find pre-cached theme instance
-            let theme_instance = picker
-                .cached_themes
-                .iter()
-                .find(|(c, _)| *c == choice)
-                .map(|(_, t)| t.clone())
-                .expect("filtered theme must exist in cache");
-            (choice, theme_instance)
-        })
-        .collect();
-
-    // Track counts for display
-    let filtered_count = filtered_themes.len();
+    // Filtered and sorted in update() (ThemePickerState::refilter), not per frame
+    let filtered_themes = picker
+        .filtered
+        .iter()
+        .filter_map(|&index| picker.cached_themes.get(index));
+    let filtered_count = picker.filtered.len();
 
     // Helper function for creating colored dot containers
     let make_color_dot = |color: Color, size: f32| {
@@ -268,7 +218,7 @@ pub fn view_theme_picker<'a>(
     // Pre-allocate theme card vector (show all themes, no limit)
     let mut theme_cards = Vec::with_capacity(filtered_count);
 
-    for (choice, theme_preview) in &filtered_themes {
+    for (choice, theme_preview) in filtered_themes {
         let is_selected = state.current_theme == *choice;
 
         // Extract colors for use in closures (Color is Copy)
@@ -407,22 +357,22 @@ pub fn view_theme_picker<'a>(
                     row![
                         button(text("Apply").size(12).font(state.font_regular))
                             .padding([6, 12])
-                            .on_press(Message::ThemePreviewButtonClick)
+                            .on_press(Message::Noop)
                             .style(move |_, status| primary_button(theme, status)),
                         button(text("Cancel").size(12).font(state.font_regular))
                             .padding([6, 12])
-                            .on_press(Message::ThemePreviewButtonClick)
+                            .on_press(Message::Noop)
                             .style(move |_, status| secondary_button(theme, status)),
                     ]
                     .spacing(6),
                     row![
                         button(text("Delete").size(12).font(state.font_regular))
                             .padding([6, 12])
-                            .on_press(Message::ThemePreviewButtonClick)
+                            .on_press(Message::Noop)
                             .style(move |_, status| danger_button(theme, status)),
                         button(text("Save").size(12).font(state.font_regular))
                             .padding([6, 12])
-                            .on_press(Message::ThemePreviewButtonClick)
+                            .on_press(Message::Noop)
                             .style(move |_, status| dirty_button(theme, status)),
                     ]
                     .spacing(6),
@@ -600,14 +550,10 @@ pub fn view_theme_picker<'a>(
             preview_panel,
             row![
                 container(
-                    text(if filtered_count < ThemeChoice::iter().count() {
-                        format!("{filtered_count} themes match")
-                    } else {
-                        format!("{filtered_count} themes available")
-                    })
-                    .size(10)
-                    .color(theme.fg_muted)
-                    .font(state.font_mono)
+                    text(&picker.count_display)
+                        .size(10)
+                        .color(theme.fg_muted)
+                        .font(state.font_mono)
                 )
                 .padding([2, 6])
                 .style(move |_| section_header_container(theme)),

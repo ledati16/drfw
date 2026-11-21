@@ -281,8 +281,6 @@ pub struct HighlightedLine {
     pub line_number: usize,
     pub indent: usize,
     pub tokens: Vec<Token>,
-    /// Pre-formatted line number for JSON view ("{:3} " format) - computed once, not every frame
-    pub formatted_line_number_json: String,
     /// Pre-formatted line number for NFT view ("{:4}" format) - computed once, not every frame
     pub formatted_line_number_nft: String,
 }
@@ -302,7 +300,6 @@ pub fn tokenize_nft(content: &str) -> Vec<HighlightedLine> {
                 line_number,
                 indent,
                 tokens,
-                formatted_line_number_json: format!("{line_number:3} "),
                 formatted_line_number_nft: format!("{line_number:4}"),
             }
         })
@@ -507,47 +504,85 @@ fn parse_nft_tokens(line: &str) -> Vec<Token> {
     tokens
 }
 
-/// Computes diff and tokenizes in one pass (Phase 1 optimization)
-/// Returns None if no diff or no changes detected
+/// nftables text with its highlighted lines (`lines[i]` is line `i`).
+#[derive(Debug, Clone)]
+pub struct TokenizedText {
+    pub text: String,
+    pub lines: Vec<HighlightedLine>,
+}
+
+impl TokenizedText {
+    /// Tokenizes `text` once.
+    pub fn new(text: String) -> Self {
+        let lines = tokenize_nft(&text);
+        Self { text, lines }
+    }
+}
+
+/// Borrowed nftables text with its highlighted lines (`lines[i]` is line `i`
+/// of `text`, as produced by [`tokenize_nft`]).
+#[derive(Debug, Clone, Copy)]
+pub struct TokenizedTextRef<'a> {
+    pub text: &'a str,
+    pub lines: &'a [HighlightedLine],
+}
+
+/// Computes a line diff and returns the highlighted diff lines, numbered in
+/// diff order.
+///
+/// Both sides arrive already tokenized (the old side is cached until the next
+/// apply, the new side is the preview cache), so this only diffs and copies.
+/// Returns every line of both texts, marked added/removed/unchanged; `None`
+/// only when both texts are empty. An unchanged ruleset therefore yields all
+/// lines as [`DiffType::Unchanged`], not `None`.
 pub fn compute_and_tokenize_diff(
-    old_text: &str,
-    new_text: &str,
+    old: &TokenizedText,
+    new: &TokenizedTextRef<'_>,
 ) -> Option<Vec<(DiffType, HighlightedLine)>> {
     use similar::ChangeTag;
 
-    let diff = similar::TextDiff::from_lines(old_text, new_text);
+    let diff = similar::TextDiff::from_lines(old.text.as_str(), new.text);
     // Issue #18: Pre-allocate Vec with estimated capacity (max of old/new line count)
-    let line_count = old_text.lines().count().max(new_text.lines().count());
-    let mut result = Vec::with_capacity(line_count);
-    let mut line_number = 0;
+    let mut result = Vec::with_capacity(old.lines.len().max(new.lines.len()));
 
     for change in diff.iter_all_changes() {
-        line_number += 1;
-
-        let diff_type = match change.tag() {
-            ChangeTag::Delete => DiffType::Removed,
-            ChangeTag::Insert => DiffType::Added,
-            ChangeTag::Equal => DiffType::Unchanged,
+        let (diff_type, cached) = match change.tag() {
+            ChangeTag::Delete => (
+                DiffType::Removed,
+                change.old_index().and_then(|i| old.lines.get(i)),
+            ),
+            ChangeTag::Insert => (
+                DiffType::Added,
+                change.new_index().and_then(|i| new.lines.get(i)),
+            ),
+            ChangeTag::Equal => (
+                DiffType::Unchanged,
+                change.new_index().and_then(|i| new.lines.get(i)),
+            ),
         };
 
-        // Get the line text without the trailing newline
-        let line_text = change.as_str().unwrap_or("").trim_end_matches('\n');
-
-        // Tokenize the line
-        let parsed = tokenize_nft(if line_text.is_empty() {
-            "\n"
+        // `similar` and `str::lines()` split lines the same way, so the cached
+        // line always exists; tokenize the change itself just in case.
+        let mut highlighted_line = if let Some(line) = cached {
+            line.clone()
         } else {
-            line_text
-        });
+            let line_text = change.as_str().unwrap_or("").trim_end_matches('\n');
+            let line_text = if line_text.is_empty() {
+                "\n"
+            } else {
+                line_text
+            };
+            let Some(line) = tokenize_nft(line_text).into_iter().next() else {
+                continue;
+            };
+            line
+        };
 
-        if let Some(mut highlighted_line) = parsed.into_iter().next() {
-            // Update line number to match diff line number
-            highlighted_line.line_number = line_number;
-            // Re-compute formatted line numbers since we changed line_number
-            highlighted_line.formatted_line_number_json = format!("{line_number:3} ");
-            highlighted_line.formatted_line_number_nft = format!("{line_number:4}");
-            result.push((diff_type, highlighted_line));
-        }
+        // Number lines in diff order
+        let line_number = result.len() + 1;
+        highlighted_line.line_number = line_number;
+        highlighted_line.formatted_line_number_nft = format!("{line_number:4}");
+        result.push((diff_type, highlighted_line));
     }
 
     if result.is_empty() {
@@ -586,12 +621,25 @@ mod tests {
         s
     }
 
+    /// Diffs two texts the way `State` does: old side cached, new side borrowed.
+    fn diff_texts(old: &str, new: &str) -> Option<Vec<(DiffType, HighlightedLine)>> {
+        let old = TokenizedText::new(old.to_string());
+        let new_lines = tokenize_nft(new);
+        compute_and_tokenize_diff(
+            &old,
+            &TokenizedTextRef {
+                text: new,
+                lines: &new_lines,
+            },
+        )
+    }
+
     #[test]
     fn test_compute_and_tokenize_diff_marks_changed_lines() {
         let old = "table inet drfw {\n\tchain input {\n\t\ttcp dport 22 accept\n\t}\n}\n";
         let new = "table inet drfw {\n\tchain input {\n\t\ttcp dport 22 accept\n\t\ttcp dport 443 accept\n\t}\n}\n";
 
-        let diff = compute_and_tokenize_diff(old, new).expect("diff should not be empty");
+        let diff = diff_texts(old, new).expect("diff should not be empty");
         let tags: Vec<DiffType> = diff.iter().map(|(t, _)| *t).collect();
         assert_eq!(
             tags,
@@ -614,7 +662,7 @@ mod tests {
     fn test_compute_and_tokenize_diff_replacement() {
         let old = "a\nb\nc\n";
         let new = "a\nx\nc\n";
-        let diff = compute_and_tokenize_diff(old, new).expect("diff should not be empty");
+        let diff = diff_texts(old, new).expect("diff should not be empty");
         let tags: Vec<DiffType> = diff.iter().map(|(t, _)| *t).collect();
         assert_eq!(
             tags,
@@ -625,6 +673,34 @@ mod tests {
                 DiffType::Unchanged,
             ]
         );
+    }
+
+    #[test]
+    fn test_diff_uses_tokens_of_the_right_side() {
+        // Removed lines come from the old text, added and unchanged from the new
+        let old = "keep\n\nold 1\n";
+        let new = "keep\n\nnew 2\n";
+        let diff = diff_texts(old, new).expect("non-empty");
+        let rendered: Vec<(DiffType, String)> =
+            diff.iter().map(|(t, l)| (*t, line_text(l))).collect();
+        assert_eq!(
+            rendered,
+            [
+                (DiffType::Unchanged, "keep".to_string()),
+                (DiffType::Unchanged, String::new()),
+                (DiffType::Removed, "old 1".to_string()),
+                (DiffType::Added, "new 2".to_string()),
+            ]
+        );
+        assert_eq!(diff[3].1.formatted_line_number_nft, "   4");
+    }
+
+    #[test]
+    fn test_diff_of_identical_texts_is_all_unchanged() {
+        let text = "a\nb\n";
+        let diff = diff_texts(text, text).expect("unchanged text still yields lines");
+        assert!(diff.iter().all(|(t, _)| *t == DiffType::Unchanged));
+        assert!(diff_texts("", "").is_none());
     }
 
     /// Every character of the source must survive tokenization, otherwise the
