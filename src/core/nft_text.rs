@@ -49,6 +49,8 @@ const RULE_INDENT: &str = "        ";
 /// Statement that nft is guaranteed to reject. Emitted in place of a rule that
 /// could not be rendered, so a broken file can never be loaded.
 const RENDER_ERROR_STATEMENT: &str = "drfw-render-error";
+/// Burst nft applies to a packet `limit` that does not specify one.
+const NFT_DEFAULT_LIMIT_BURST: u64 = 5;
 
 /// A chain block being assembled.
 struct ChainBlock {
@@ -252,12 +254,18 @@ fn render_statement(expr: &Value) -> Result<String, String> {
             let rate = u64_field(body, "rate")?;
             let per = symbol(str_field(body, "per")?)?;
             let over = if is_inverted(body) { "over " } else { "" };
-            let mut s = format!("limit rate {over}{rate}/{per}");
-            if let Some(burst) = body.get("burst") {
-                let burst = burst.as_u64().ok_or("non-numeric limit burst")?;
-                let _ = write!(s, " burst {burst} packets");
-            }
-            Ok(s)
+            // Always spell out the burst. Without one, the kernel applies nft's
+            // default of 5 packets (the listing shows `burst 5 packets`), so the
+            // explicit form loads the identical rule. It also avoids an nft 1.1.7
+            // parser bug: `limit rate over N/unit reject with tcp reset comment ".."`
+            // (no burst) is rejected as "unexpected junk".
+            let burst = match body.get("burst") {
+                Some(burst) => burst.as_u64().ok_or("non-numeric limit burst")?,
+                None => NFT_DEFAULT_LIMIT_BURST,
+            };
+            Ok(format!(
+                "limit rate {over}{rate}/{per} burst {burst} packets"
+            ))
         }
         "ct count" => {
             check_keys(body, &["val", "inv"], "ct count")?;

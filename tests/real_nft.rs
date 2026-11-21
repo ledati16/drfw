@@ -280,6 +280,18 @@ fn kitchen_sink_rules() -> Vec<Rule> {
         rules.push(r);
     }
 
+    // Regression: nft 1.1.7 rejects `limit rate over N/unit reject with tcp reset
+    // comment ".."` when no burst is spelled out (found by the differential proptest)
+    let mut r = rule("Rate reset", Protocol::Tcp, vec![PortEntry::Single(23)]);
+    r.action = Action::Reject;
+    r.reject_type = RejectType::TcpReset;
+    r.rate_limit = Some(RateLimit {
+        count: 1,
+        unit: TimeUnit::Second,
+        burst: None,
+    });
+    rules.push(r);
+
     for action in [Action::Accept, Action::Drop] {
         let mut r = rule(
             &format!("Ct {action:?}"),
