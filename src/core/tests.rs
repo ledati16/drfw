@@ -213,6 +213,8 @@ mod tests_impl {
                 "allow igmp (multicast group membership)",
                 "allow icmp",
                 "allow icmp v6",
+                "rate-limited reject",
+                "final counter",
             ]
         );
         let text = ruleset.to_nft_text();
@@ -418,8 +420,8 @@ mod tests_impl {
         // Verify all expected rules are present
         assert_eq!(
             json_comments.len(),
-            15,
-            "Should have 12 base rules + 3 user rules"
+            17,
+            "Should have 14 base rules + 3 user rules"
         );
         // 9 base rules, the user rules, then IGMP and the 2 ICMP allow rules
         assert_eq!(json_comments[9], "SSH Access");
@@ -444,8 +446,7 @@ mod tests_impl {
         ];
 
         for (i, label) in rule_labels.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation)] // i is 0..5, always fits in u16
-            let port = 8000 + i as u16;
+            let port = 8000 + u16::try_from(i).unwrap();
             let mut rule = test_rule(label, Protocol::Tcp, vec![PortEntry::Single(port)]);
             rule.id = Uuid::new_v4();
             ruleset.rules.push(rule);
@@ -464,6 +465,7 @@ mod tests_impl {
                 && !comment.starts_with("allow")  // Skip base rule comments
                 && !comment.starts_with("drop")
                 && !comment.starts_with("early")
+                && !["rate-limited reject", "final counter"].contains(&comment)
             {
                 json_user_rules.push(comment);
             }
@@ -892,6 +894,62 @@ mod integration_tests {
 
     use crate::core::firewall::{FirewallRuleset, PortEntry, Protocol};
     use crate::core::test_helpers::create_test_rule;
+
+    /// Every filter of every rule (source, interface, port range) reaches
+    /// the generated text.
+    #[test]
+    fn test_rule_filters_reach_generated_text() {
+        use crate::core::test_helpers::create_full_test_rule;
+        let mut ruleset = FirewallRuleset::new();
+
+        // Rule with source filter
+        ruleset.rules.push(create_full_test_rule(
+            "With Source",
+            Protocol::Tcp,
+            Some(22),
+            Some("10.0.0.0/8"),
+            None,
+        ));
+
+        // Rule with interface filter
+        ruleset.rules.push(create_full_test_rule(
+            "With Interface",
+            Protocol::Tcp,
+            Some(80),
+            None,
+            Some("eth0"),
+        ));
+
+        // Rule with port range (needs custom construction)
+        let mut port_range_rule =
+            create_full_test_rule("Port Range", Protocol::Tcp, None, None, None);
+        port_range_rule.ports = vec![PortEntry::Range {
+            start: 8000,
+            end: 8999,
+        }];
+        port_range_rule.rebuild_caches();
+        ruleset.rules.push(port_range_rule);
+
+        // Rule with everything
+        ruleset.rules.push(create_full_test_rule(
+            "Everything",
+            Protocol::Udp,
+            Some(53),
+            Some("8.8.8.8/32"),
+            Some("wlan0"),
+        ));
+
+        // Every filter of every rule reaches the generated rules
+        let text = ruleset.to_nft_text();
+        for expected in [
+            "ip saddr 10.0.0.0/8 tcp dport 22",
+            "iifname \"eth0\" tcp dport 80",
+            "tcp dport 8000-8999",
+            "iifname \"wlan0\" ip saddr 8.8.8.8 udp dport 53",
+        ] {
+            assert!(text.contains(expected), "{expected:?} missing:\n{text}");
+        }
+    }
 
     #[test]
     fn test_json_generation_with_all_protocol_types() {
@@ -1817,7 +1875,7 @@ mod generation_semantics_tests {
     }
 
     /// Forward rules go into the forward chain, after its base rules, only
-    /// with "Block forwarding" on; both interfaces are matched.
+    /// with "Block forwarded traffic" on; both interfaces are matched.
     #[test]
     fn test_forward_user_rules() {
         let mut ruleset = FirewallRuleset::new();
@@ -1918,11 +1976,49 @@ mod generation_semantics_tests {
             last = at;
         }
         assert!(last < text.find("# --- ICMP ---").unwrap());
+        // Only genuine queries fill the set: each protocol's group and port
+        // (NetBIOS: broadcast to the name service port)
         let output = &text[text.find("chain output").unwrap()..];
-        assert!(output.contains(
-            "meta l4proto udp fib daddr type { broadcast, multicast } update @discovery_reply { udp sport } \
-             comment \"remember ports we send discovery queries from\""
-        ), "{output}");
+        let update = "update @discovery_reply { udp sport } comment";
+        for line in [
+            "ip daddr 239.255.255.250 udp dport { 1900, 3702 }",
+            "ip6 daddr { ff02::c, ff05::c } udp dport { 1900, 3702 }",
+            "ip daddr 224.0.0.251 udp dport 5353",
+            "ip6 daddr ff02::fb udp dport 5353",
+            "ip daddr 224.0.0.252 udp dport 5355",
+            "ip6 daddr ff02::1:3 udp dport 5355",
+            "fib daddr type broadcast udp dport 137",
+        ] {
+            assert!(
+                output.contains(&format!("{line} {update}")),
+                "{line}:\n{output}"
+            );
+        }
+        assert_eq!(output.matches("@discovery_reply").count(), 7, "{output}");
+        assert!(!output.contains("multicast }"), "no catch-all: {output}");
+        // ... and their ports are the ones Exposure knows
+        let mut ports: Vec<u16> = Vec::new();
+        for command in ruleset.to_nftables_json()["nftables"].as_array().unwrap() {
+            let rule = &command["add"]["rule"];
+            if rule["chain"] != "output" {
+                continue;
+            }
+            for expr in rule["expr"].as_array().unwrap() {
+                let m = &expr["match"];
+                if m["left"]["payload"]["field"] == "dport" {
+                    let port = |v: &serde_json::Value| u16::try_from(v.as_u64().unwrap()).unwrap();
+                    match m["right"]["set"].as_array() {
+                        Some(set) => ports.extend(set.iter().map(port)),
+                        None => ports.push(port(&m["right"])),
+                    }
+                }
+            }
+        }
+        ports.sort_unstable();
+        ports.dedup();
+        let mut known = crate::core::firewall::DISCOVERY_QUERY_PORTS.to_vec();
+        known.sort_unstable();
+        assert_eq!(ports, known);
         // The output policy stays accept: the rule only records ports
         assert_eq!(chain_policy(&ruleset, "output"), "accept");
 

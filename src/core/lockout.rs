@@ -32,7 +32,7 @@
 //! # What is checked
 //!
 //! Open sessions survive any apply: established connections are accepted
-//! before any user rule, on input and (in Server mode) on output. The risk is
+//! before any user rule, on input and (in Server Mode) on output. The risk is
 //! the **next** connection. For each session the evaluator
 //! ([`crate::core::evaluate`]) is asked what the input chain does with a new
 //! TCP connection from the session's client address to the session's server
@@ -72,15 +72,15 @@
 //! several do, or when a loopback interface has it (an address on `lo` is
 //! reached through another interface).
 //!
-//! # Server mode
+//! # Server Mode
 //!
-//! Server mode (output policy drop) cannot cut the replies of an SSH session:
+//! Server Mode (output policy drop) cannot cut the replies of an SSH session:
 //! the generated output chain accepts `ct state established,related` before
 //! any user output rule, preceded only by the loopback accept and the
 //! `ct state invalid` drop. Replies of an open session, and the SYN-ACK of a
 //! new connection the input chain accepted, are in conntrack state
 //! established. So no output check is needed; a test guards this order.
-//! (Server mode can still slow a login down when `sshd` looks up the
+//! (Server Mode can still slow a login down when `sshd` looks up the
 //! client's name and no rule allows DNS.)
 
 use std::collections::HashSet;
@@ -1201,7 +1201,7 @@ mod tests {
         assert!(LockoutWarning::check(&ruleset, &[]).is_none());
     }
 
-    /// The Server mode argument of the module docs: in the generated output
+    /// The Server Mode argument of the module docs: in the generated output
     /// chain the established accept comes before every user rule, after
     /// only the loopback accept and the invalid drop.
     #[test]

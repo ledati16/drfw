@@ -5,6 +5,9 @@
 
 [graph]
 all-features = true
+# DRFW is Linux-only: macOS/Windows-only dependencies (metal, windows-*) are
+# not part of any build and do not need advisories or license reviews
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 [advisories]
 yanked = "deny"
@@ -17,7 +20,6 @@ unsound = "all"
 ignore = [
     { id = "RUSTSEC-2026-0253", reason = "lru 0.16 pop() panic-safety unsound (fixed in 0.18.2); cryoglyph in iced 0.14 pins lru 0.16" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; required by fontdb/cosmic-text in iced 0.14's text stack, no replacement upstream yet" },
-    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; compile-time proc macro only, via wgpu-hal/metal (macOS) in iced 0.14" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; via zbus <- mundy <- iced_winit 0.14 (system theme detection), awaiting upstream" },
@@ -32,7 +34,6 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "BSL-1.0",
     "CC0-1.0",
     "ISC",
     "MPL-2.0",

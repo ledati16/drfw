@@ -461,6 +461,55 @@ fn test_varied_rulesets_json_and_text_are_identical_in_kernel() {
     }
 }
 
+/// Every rule template (and Server Mode's essentials) loads in the kernel,
+/// as JSON, as the ruleset's text and as the text rendered from the recorded
+/// JSON (what "Save the last kept rules" writes), all three identical; with
+/// and without Server Mode, local discovery and "Block forwarded traffic".
+#[test]
+fn test_templates_and_essentials_load_in_kernel() {
+    use drfw::core::templates::{
+        server_essentials, tailscale_direct, trust_interface, vm_guest_dhcp_dns,
+    };
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let mut rules = server_essentials();
+    rules.extend(vm_guest_dhcp_dns("virbr0"));
+    rules.push(tailscale_direct());
+    rules.push(trust_interface("tailscale0"));
+    for (server, discovery, block_forwarding) in [(true, false, true), (false, true, false)] {
+        let mut ruleset = FirewallRuleset::new();
+        ruleset.rules.clone_from(&rules);
+        let adv = &mut ruleset.advanced_security;
+        adv.egress_profile = if server {
+            EgressProfile::Server
+        } else {
+            EgressProfile::Desktop
+        };
+        adv.local_discovery = discovery;
+        adv.block_forwarding = block_forwarding;
+        assert!(ruleset.validate_for_apply().is_ok(), "templates are valid");
+        let (from_json, from_text) = apply_both_forms(dir.path(), &ruleset);
+        if let Some(diff) = listing_difference(&from_json, &from_text) {
+            panic!("server {server}: JSON and text differ in kernel: {diff}");
+        }
+        let recorded = serde_json::to_string(&ruleset.to_nftables_json()).expect("JSON");
+        let text = drfw::core::nft_text::render_json(&recorded).expect("renders");
+        std::fs::write(dir.path().join("recorded.nft"), text).expect("write");
+        run_in_netns_ok(
+            dir.path(),
+            "nft -c -f recorded.nft && nft -f recorded.nft \
+             && nft -j list table inet drfw > from_record.out",
+        );
+        let from_record =
+            normalize_listing(&std::fs::read(dir.path().join("from_record.out")).expect("read"));
+        if let Some(diff) = listing_difference(&from_json, &from_record) {
+            panic!("server {server}: recorded-JSON text differs in kernel: {diff}");
+        }
+    }
+}
+
 #[test]
 fn test_loading_text_twice_does_not_duplicate_rules() {
     if !real_nft_available() {
@@ -1433,6 +1482,103 @@ fn test_guard_sigkill_after_apply_still_reverts() {
     assert!(!read(dir.path(), "after.out").contains("table inet drfw"));
 }
 
+/// A watcher that is terminated (`systemctl stop`, `kill`, shutdown) before
+/// the rules are confirmed reverts them at once, long before its deadline.
+/// The revert file and the watcher script are readable by root only; the
+/// status and `active` are world-readable.
+#[test]
+fn test_guard_terminated_watcher_reverts() {
+    use std::os::unix::fs::PermissionsExt;
+    if !real_nft_available() || !common::script_paths_usable() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    let start = std::time::Instant::now();
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "guard_apply new.json 120 {NONCE_A} > apply.out
+             stat -c '%n %a' state state/active state/revert-{NONCE_A}.nft \
+                 state/watcher-{NONCE_A}.sh > modes.out
+             nft list tables > during.out
+             kill -TERM \"$(sed -n 's/^watcher=setsid://p' apply.out)\"
+             wait_status {NONCE_A} > status.out
+             stat -c '%a' state/status-{NONCE_A} > status_mode.out
+             nft list tables > after.out"
+        ),
+    );
+    let took = start.elapsed();
+    assert!(read(dir.path(), "during.out").contains("table inet drfw"));
+    assert_eq!(read(dir.path(), "status.out"), "reverted\n");
+    assert!(
+        took < std::time::Duration::from_secs(30),
+        "reverted on the signal, not at the 120 s deadline: {took:?}"
+    );
+    assert!(!read(dir.path(), "after.out").contains("table inet drfw"));
+    let modes = read(dir.path(), "modes.out");
+    for (file, mode) in [
+        ("state", "755"),
+        ("state/active", "644"),
+        ("revert-", "600"),
+        ("watcher-", "600"),
+    ] {
+        assert!(
+            modes
+                .lines()
+                .any(|l| l.contains(file) && l.ends_with(&format!(" {mode}"))),
+            "{file} must be mode {mode}: {modes}"
+        );
+    }
+    assert_eq!(read(dir.path(), "status_mode.out"), "644\n");
+    let state = dir.path().join("state");
+    let mode = std::fs::metadata(&state).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+}
+
+/// A watcher killed with `SIGKILL` (no outcome) is reported as lost by
+/// `pending_guard`, not as a pending revert; while it runs it is pending.
+#[test]
+fn test_guard_killed_watcher_is_reported_lost() {
+    use drfw::core::apply_guard::{WatcherState, pending_guard};
+    if !real_nft_available() || !common::script_paths_usable() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    // The session ends with the watcher still running (120 s guard)
+    run_guard_session(
+        dir.path(),
+        &format!("guard_apply new.json 120 {NONCE_A} > apply.out"),
+    );
+    let apply = read(dir.path(), "apply.out");
+    let pid = apply
+        .lines()
+        .find_map(|l| l.strip_prefix("watcher=setsid:"))
+        .expect("setsid watcher")
+        .to_string();
+    let state = dir.path().join("state");
+    let pending = pending_guard(&state).unwrap().expect("pending");
+    assert_eq!(pending.watcher, WatcherState::Running, "{apply}");
+    let killed = Command::new("kill")
+        .args(["-KILL", &pid])
+        .status()
+        .expect("run kill");
+    assert!(killed.success());
+    let mut watcher = WatcherState::Running;
+    for _ in 0..100 {
+        watcher = pending_guard(&state)
+            .unwrap()
+            .expect("still no outcome")
+            .watcher;
+        if watcher != WatcherState::Running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(watcher, WatcherState::Gone);
+}
+
 // ============================================================================
 // Differential property test
 // ============================================================================
@@ -1564,7 +1710,11 @@ prop_compose! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+    #![proptest_config(ProptestConfig {
+        cases: common::proptest_cases(48),
+        failure_persistence: Some(common::proptest_persistence("tests/real_nft.proptest-regressions")),
+        ..ProptestConfig::default()
+    })]
 
     /// The text file and the JSON must load into byte-identical kernel rulesets.
     #[test]

@@ -145,6 +145,49 @@ pub(crate) fn render(commands: &[NftCommand]) -> String {
 /// to the rule (or chain, or header) they belong to. The text is exactly
 /// [`render`]'s.
 pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
+    render_checked(commands).0
+}
+
+/// Renders recorded nftables JSON (a `{"nftables": [...]}` document that
+/// [`FirewallRuleset::to_nftables_json`] generated, such as the bytes of the
+/// kept-ruleset record, [`crate::core::confirmed::ConfirmedRecord`]) as the
+/// `nft -f` text of exactly those commands, whichever DRFW version made
+/// them. The JSON carries no sections, so the text has no section comments;
+/// rules, comments and sets are the same as in `FirewallRuleset::to_nft_text`.
+///
+/// # Errors
+///
+/// `json` is not such a document, or holds a command or expression this
+/// renderer does not support (from another DRFW version): no text then,
+/// rather than one with an invalid statement.
+///
+/// [`FirewallRuleset::to_nftables_json`]: crate::core::firewall::FirewallRuleset::to_nftables_json
+pub fn render_json(json: &str) -> Result<String, String> {
+    let value: Value = serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+    let list = value
+        .get("nftables")
+        .and_then(Value::as_array)
+        .ok_or("no \"nftables\" command list")?;
+    let commands: Vec<NftCommand> = list
+        .iter()
+        .map(|command| NftCommand {
+            section: NO_SECTION,
+            origin: CommandOrigin::Setup,
+            value: command.clone(),
+        })
+        .collect();
+    let (rendered, errors) = render_checked(&commands);
+    match errors.first() {
+        Some(e) => Err(e.clone()),
+        None => Ok(rendered.text),
+    }
+}
+
+/// Section of the commands [`render_json`] renders: no section comments.
+const NO_SECTION: &str = "";
+
+/// [`render_with_map`], plus the errors (also embedded in the text).
+fn render_checked(commands: &[NftCommand]) -> (RenderedText, Vec<String>) {
     let mut preamble: Vec<String> = Vec::new();
     let mut table: Option<(String, String)> = None;
     // Set blocks with the origin of the command that declared them
@@ -193,11 +236,12 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
 
     let names = chains.iter().map(|c| c.name.clone()).collect();
     let Some((family, name)) = table else {
-        return RenderedText {
+        let rendered = RenderedText {
             text: doc.text,
             lines: doc.lines,
             chains: names,
         };
+        return (rendered, errors);
     };
 
     doc.line(LineSource::Header, format_args!(""));
@@ -228,11 +272,12 @@ pub(crate) fn render_with_map(commands: &[NftCommand]) -> RenderedText {
         doc.line(own, format_args!("{CHAIN_INDENT}}}"));
     }
     doc.line(LineSource::Header, format_args!("}}"));
-    RenderedText {
+    let rendered = RenderedText {
         text: doc.text,
         lines: doc.lines,
         chains: names,
-    }
+    };
+    (rendered, errors)
 }
 
 /// Applies one command to the document being assembled.
@@ -294,7 +339,7 @@ fn apply_command(
             let chain = symbol(str_field(spec, "chain")?)?;
             let line = render_rule(spec);
             let block = chain_block(chains, chain);
-            if block.last_section != Some(command.section) {
+            if command.section != NO_SECTION && block.last_section != Some(command.section) {
                 block.lines.push((String::new(), None));
                 block
                     .lines
@@ -711,6 +756,43 @@ mod tests {
             origin: CommandOrigin::Setup,
             value,
         }
+    }
+
+    /// Recorded JSON renders to the same rules, comments and sets as the
+    /// ruleset's own text, without the section comments; anything the
+    /// renderer does not know is an error, not a text.
+    #[test]
+    fn test_render_json_of_recorded_commands() {
+        use crate::core::test_helpers::create_test_ruleset;
+        let mut ruleset = create_test_ruleset();
+        ruleset.advanced_security.local_discovery = true;
+        let json = serde_json::to_string(&ruleset.to_nftables_json()).unwrap();
+        let from_json = render_json(&json).unwrap();
+        let text = ruleset.to_nft_text();
+        let without_sections: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("# ---"))
+            .collect();
+        let rendered: Vec<&str> = from_json.lines().collect();
+        let non_blank = |lines: &[&str]| -> Vec<String> {
+            lines
+                .iter()
+                .filter(|l| !l.trim().is_empty())
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(non_blank(&rendered), non_blank(&without_sections));
+        assert!(!from_json.contains("# ---"));
+        assert!(from_json.contains("set discovery_reply"));
+
+        // An older (or newer) DRFW's expression: an error
+        let mut odd: Value = serde_json::from_str(&json).unwrap();
+        let rules = odd["nftables"].as_array_mut().unwrap();
+        let last = rules.len() - 1;
+        rules[last]["add"]["rule"]["expr"] = json!([{ "quota": { "val": 1 } }]);
+        assert!(render_json(&odd.to_string()).is_err());
+        assert!(render_json("{}").is_err());
+        assert!(render_json("not json").is_err());
     }
 
     fn table_and_chain() -> Vec<NftCommand> {

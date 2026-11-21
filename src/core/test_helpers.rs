@@ -40,6 +40,15 @@ pub const CHRONO_TIMESTAMPS: &[(&str, i128)] = &[
 /// One-time initialization flag for mock nft setup
 static MOCK_NFT_INIT: Once = Once::new();
 
+/// Cases per property test: `PROPTEST_CASES` when set (as for proptest's own
+/// default), otherwise `default`.
+pub fn proptest_cases(default: u32) -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|cases| cases.parse().ok())
+        .unwrap_or(default)
+}
+
 /// Sets up the mock nft script for testing.
 ///
 /// Sets `DRFW_NFT_COMMAND` to the mock script path (`tests/mock_nft.sh`),

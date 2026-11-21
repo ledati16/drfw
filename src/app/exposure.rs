@@ -456,7 +456,11 @@ mod tests {
                 socket(Transport::Tcp, "0.0.0.0", 22),
                 socket(Transport::Tcp, "127.0.0.1", 631),
                 socket(Transport::Udp, "0.0.0.0", 5353),
-                socket(Transport::Tcp, "0.0.0.0", 8080),
+                // Docker's proxy runs as root
+                ListeningSocket {
+                    uid: 0,
+                    ..socket(Transport::Tcp, "0.0.0.0", 8080)
+                },
             ],
             &HashMap::new(),
             1000,

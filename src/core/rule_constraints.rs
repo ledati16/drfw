@@ -7,15 +7,11 @@
 //! # Design Rationale
 //!
 //! Extracting constraints from UI code provides:
-//! - Single source of truth for rule validation
+//! - One place for which fields combine (protocol and ports, reject type and
+//!   protocol, …), so the form offers only what [`crate::core::validate`]
+//!   (the authoritative rule validation) accepts
 //! - Testable constraint logic independent of UI
 //! - Type-safe test data generation (`stress_gen` uses same rules as GUI)
-//!
-//! # Note on Dead Code Warnings
-//!
-//! Some functions in this module may show as "unused" when compiling the binary
-//! target, but they ARE used by library consumers like `tools/stress_gen.rs`.
-//! These are intentionally public API for external use.
 //!
 //! # Examples
 //!

@@ -26,7 +26,8 @@
 //! - Save to System (GUI) and `drfw save`: a ruleset is "tested" when its
 //!   nftables JSON is **byte for byte** the recorded one
 //!   ([`ConfirmedRecord::matches`]).
-//! - The GUI's "Save the last applied rules" writes the recorded ruleset.
+//! - The GUI's "Save the last kept rules" writes the recorded nftables JSON
+//!   as text ([`ConfirmedRecord::nft_text`]).
 //! - The retention guard ([`crate::core::retention`]) compares a new ruleset
 //!   with the recorded one.
 //!
@@ -168,6 +169,18 @@ impl ConfirmedRecord {
     /// The exact nftables JSON text that was applied (what nft read on stdin).
     pub fn nftables_text(&self) -> &Arc<str> {
         &self.nftables
+    }
+
+    /// The `nft -f` text of exactly the recorded JSON
+    /// ([`crate::core::nft_text::render_json`]): what Save to System should
+    /// write for "the last kept rules". Unlike rendering [`Self::ruleset`]
+    /// again, it cannot change when a newer DRFW generates rules differently.
+    ///
+    /// # Errors
+    ///
+    /// The recorded JSON cannot be rendered (see `render_json`).
+    pub fn nft_text(&self) -> Result<String, String> {
+        crate::core::nft_text::render_json(&self.nftables)
     }
 
     /// The ruleset that was applied, if the record has it.

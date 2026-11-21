@@ -23,7 +23,7 @@
 //!
 //! Tokens live in a directory that must be owned by the user and closed to
 //! everyone else (`$XDG_RUNTIME_DIR`, else DRFW's state dir; see
-//! [`confirm_dir`]), and the watcher only counts tokens owned by the user's
+//! `confirm_dir`), and the watcher only counts tokens owned by the user's
 //! uid. The nonce is not a secret (other local users can see it in `ps`, in
 //! the unit name and in `/run/drfw/active`); ownership is the check. Any
 //! process running as the same user can create the confirm token. That is not
@@ -489,12 +489,34 @@ pub struct PendingGuard {
     pub armed_at: Option<std::time::SystemTime>,
     /// How the watcher was started (`systemd` or `setsid`)
     pub launcher: String,
+    /// Whether its watcher still runs
+    pub watcher: WatcherState,
 }
 
+/// Whether the watcher of a [`PendingGuard`] still runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatcherState {
+    /// It runs: the rules revert at the deadline unless they are confirmed
+    Running,
+    /// It ended without an outcome (killed with `SIGKILL`, crashed): the
+    /// rules stay as they are and will not revert by themselves
+    Gone,
+    /// It could not be checked: `/proc` hides other users' processes
+    /// (`hidepid`), no systemd cgroup hierarchy is mounted, or `active` was
+    /// written by an older DRFW (no pid)
+    Unknown,
+}
+
+/// The cgroup file system, where a systemd unit's processes are listed
+/// (world-readable).
+const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+
 /// Looks for an unfinished revert guard in `state_dir` (normally
-/// [`crate::elevation::GUARD_STATE_DIR`]). Needs no privileges: the apply
-/// script keeps the directory and its `active`/`status-*` files
-/// world-readable.
+/// [`crate::elevation::GUARD_STATE_DIR`]) and checks that its watcher still
+/// runs. Needs no privileges: the apply script keeps the directory and its
+/// `active`/`status-*` files world-readable, the watcher's process is found
+/// in `/proc` ([`crate::core::exposure::proc_root`]) or, for a
+/// `drfw-revert-<nonce>` unit, in its cgroup.
 ///
 /// A guard is pending while `active` names a nonce that has no `status-<nonce>`
 /// outcome yet (see [`crate::elevation::APPLY_SCRIPT`]).
@@ -503,6 +525,20 @@ pub struct PendingGuard {
 ///
 /// Returns `Err` if `active` exists but cannot be read.
 pub fn pending_guard(state_dir: &Path) -> std::io::Result<Option<PendingGuard>> {
+    pending_guard_in(
+        state_dir,
+        &crate::core::exposure::proc_root(),
+        Path::new(CGROUP_ROOT),
+    )
+}
+
+/// [`pending_guard`] with `proc_root` read as `/proc` and `cgroup_root` as
+/// `/sys/fs/cgroup`.
+fn pending_guard_in(
+    state_dir: &Path,
+    proc_root: &Path,
+    cgroup_root: &Path,
+) -> std::io::Result<Option<PendingGuard>> {
     let active = state_dir.join("active");
     let content = match std::fs::read_to_string(&active) {
         Ok(content) => content,
@@ -518,10 +554,71 @@ pub fn pending_guard(state_dir: &Path) -> std::io::Result<Option<PendingGuard>> 
     if !valid_nonce || state_dir.join(format!("status-{nonce}")).exists() {
         return Ok(None);
     }
+    let launcher = fields.next().unwrap_or("unknown");
+    let watcher = match launcher {
+        "systemd" => unit_state(nonce, cgroup_root),
+        "setsid" => process_state(nonce, fields.next(), proc_root),
+        _ => WatcherState::Unknown,
+    };
+    // An outcome written while we looked (the watcher just finished)
+    if watcher == WatcherState::Gone && state_dir.join(format!("status-{nonce}")).exists() {
+        return Ok(None);
+    }
     Ok(Some(PendingGuard {
         armed_at: std::fs::metadata(&active).and_then(|m| m.modified()).ok(),
-        launcher: fields.next().unwrap_or("unknown").to_string(),
+        launcher: launcher.to_string(),
+        watcher,
     }))
+}
+
+/// The `drfw-revert-<nonce>` unit still has processes: its cgroup (cgroup
+/// v2, or v1's `systemd` hierarchy) lists some. A unit started with
+/// `--collect` loses its cgroup when its process ends.
+fn unit_state(nonce: &str, cgroup_root: &Path) -> WatcherState {
+    let slices = [
+        cgroup_root.join("system.slice"),
+        cgroup_root.join("systemd/system.slice"),
+    ];
+    let Some(slice) = slices.iter().find(|dir| dir.is_dir()) else {
+        return WatcherState::Unknown;
+    };
+    let procs = slice
+        .join(format!("drfw-revert-{nonce}.service"))
+        .join("cgroup.procs");
+    match std::fs::read_to_string(procs) {
+        Ok(pids) if pids.split_whitespace().next().is_some() => WatcherState::Running,
+        Ok(_) => WatcherState::Gone,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => WatcherState::Gone,
+        Err(_) => WatcherState::Unknown,
+    }
+}
+
+/// The `setsid` watcher `pid` still runs: `/proc/<pid>/cmdline` names its
+/// script (`watcher-<nonce>.sh`; another program means the pid was reused).
+fn process_state(nonce: &str, pid: Option<&str>, proc_root: &Path) -> WatcherState {
+    let Some(pid) = pid.filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) else {
+        return WatcherState::Unknown;
+    };
+    // With `hidepid`, other users' processes (init's too) are invisible
+    if !proc_root.join("1").exists() {
+        return WatcherState::Unknown;
+    }
+    let script = format!("watcher-{nonce}.sh");
+    match std::fs::read(proc_root.join(pid).join("cmdline")) {
+        Ok(cmdline) if cmdline.is_empty() => WatcherState::Gone, // a zombie
+        Ok(cmdline) => {
+            let names_script = cmdline
+                .split(|&b| b == 0)
+                .any(|arg| arg.ends_with(script.as_bytes()));
+            if names_script {
+                WatcherState::Running
+            } else {
+                WatcherState::Gone
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => WatcherState::Gone,
+        Err(_) => WatcherState::Unknown,
+    }
 }
 
 /// Applies `json` (generated from `ruleset`) with one elevation and, if
@@ -741,7 +838,7 @@ mod tests {
         // No active file: nothing pending
         assert_eq!(pending_guard(dir.path()).unwrap(), None);
 
-        std::fs::write(dir.path().join("active"), format!("{nonce} systemd\n")).unwrap();
+        std::fs::write(dir.path().join("active"), format!("{nonce} systemd -\n")).unwrap();
         let pending = pending_guard(dir.path()).unwrap().expect("pending");
         assert_eq!(pending.launcher, "systemd");
         assert!(pending.armed_at.is_some());
@@ -753,6 +850,61 @@ mod tests {
         // A malformed active file is never reported as pending
         std::fs::write(dir.path().join("active"), "../../etc/passwd setsid\n").unwrap();
         assert_eq!(pending_guard(dir.path()).unwrap(), None);
+    }
+
+    /// The watcher's liveness: a `systemd` unit by its cgroup, a `setsid`
+    /// watcher by its pid and command line.
+    #[test]
+    fn test_pending_guard_checks_the_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, proc, cgroup) = (
+            dir.path().join("state"),
+            dir.path().join("proc"),
+            dir.path().join("cgroup"),
+        );
+        std::fs::create_dir_all(&state).unwrap();
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let check = |active: &str| {
+            std::fs::write(state.join("active"), active).unwrap();
+            pending_guard_in(&state, &proc, &cgroup)
+                .unwrap()
+                .expect("pending")
+                .watcher
+        };
+        let write = |path: PathBuf, contents: &[u8]| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        };
+
+        // systemd: no cgroup hierarchy, then the unit's cgroup
+        let systemd = format!("{nonce} systemd -\n");
+        assert_eq!(check(&systemd), WatcherState::Unknown);
+        std::fs::create_dir_all(cgroup.join("system.slice")).unwrap();
+        assert_eq!(check(&systemd), WatcherState::Gone, "no unit");
+        let procs = cgroup
+            .join("system.slice")
+            .join(format!("drfw-revert-{nonce}.service/cgroup.procs"));
+        write(procs.clone(), b"4242\n");
+        assert_eq!(check(&systemd), WatcherState::Running);
+        write(procs, b"");
+        assert_eq!(check(&systemd), WatcherState::Gone, "no process left");
+
+        // setsid: /proc hidden, the watcher, a reused pid, no process
+        let setsid = format!("{nonce} setsid 4242\n");
+        assert_eq!(check(&setsid), WatcherState::Unknown, "hidepid");
+        write(proc.join("1/cmdline"), b"/sbin/init\0");
+        assert_eq!(check(&setsid), WatcherState::Gone);
+        let cmdline = format!("/bin/sh\0/run/drfw/watcher-{nonce}.sh\0/run/drfw\0");
+        write(proc.join("4242/cmdline"), cmdline.as_bytes());
+        assert_eq!(check(&setsid), WatcherState::Running);
+        write(proc.join("4242/cmdline"), b"/usr/bin/vim\0");
+        assert_eq!(check(&setsid), WatcherState::Gone, "pid reused");
+        // An older DRFW recorded no pid
+        assert_eq!(check(&format!("{nonce} setsid\n")), WatcherState::Unknown);
+        // A finished guard is not pending, whatever its watcher does
+        std::fs::write(state.join(format!("status-{nonce}")), "reverted\n").unwrap();
+        std::fs::write(state.join("active"), &setsid).unwrap();
+        assert_eq!(pending_guard_in(&state, &proc, &cgroup).unwrap(), None);
     }
 
     #[cfg(unix)]

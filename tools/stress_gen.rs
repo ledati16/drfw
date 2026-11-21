@@ -56,7 +56,6 @@ use uuid::Uuid;
 #[derive(Parser)]
 #[command(name = "stress_gen")]
 #[command(about = "Generate stress-test profiles for DRFW development and testing")]
-#[allow(clippy::struct_excessive_bools)] // CLI args naturally have boolean flags
 struct Args {
     /// Number of rules to generate (overridden by --scenario)
     #[arg(short, long, default_value = "100")]
@@ -1034,17 +1033,14 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
     };
 
     // Use centralized constraint for port support
-    // Note: Negative check reads naturally here - "if protocol doesn't support ports"
-    #[allow(clippy::if_not_else)]
-    let ports = if !protocol_supports_ports(protocol) {
-        // Edge case: non-port protocol with ports specified (should be ignored by nft)
-        if rng.random_bool(0.3) {
-            vec![PortEntry::Single(22)] // Will be stripped when converting to nft
-        } else {
-            Vec::new()
-        }
-    } else {
+    let ports = if protocol_supports_ports(protocol) {
         edge_case_ports(rng)
+    } else if rng.random_bool(0.3) {
+        // Edge case: non-port protocol with ports specified (stripped when
+        // converting to nft)
+        vec![PortEntry::Single(22)]
+    } else {
+        Vec::new()
     };
 
     RuleConfig {
@@ -1133,11 +1129,10 @@ fn generate_coverage_rule(
     let (interface, output_interface) = random_interfaces(rng, chain);
 
     // Use centralized constraint logic for port support
-    #[allow(clippy::if_not_else)]
-    let ports = if !protocol_supports_ports(protocol) {
-        Vec::new()
-    } else {
+    let ports = if protocol_supports_ports(protocol) {
         random_ports(rng, protocol)
+    } else {
+        Vec::new()
     };
 
     // Force rate limit if time_unit is specified
@@ -1195,7 +1190,6 @@ fn generate_coverage_rule(
 /// 4. Reject type coverage
 /// 5. Time unit coverage
 /// 6. Random/edge case fill
-#[allow(clippy::too_many_lines)]
 fn generate_ruleset(
     rng: &mut impl Rng,
     count: usize,
@@ -1456,9 +1450,12 @@ fn main() {
     println!(
         "Generating {count} rules{}...",
         if edge_cases {
-            // edge_case_prob is 0.0-1.0, so *100 gives 0-100 which fits in u32
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let pct = (edge_case_prob * 100.0) as u32;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "edge_case_prob is a fixed 0.0-1.0 constant, so the percentage is 0-100"
+            )]
+            let pct = (edge_case_prob * 100.0).round() as u32;
             format!(" (with edge cases, {pct}% probability)")
         } else {
             String::new()

@@ -423,9 +423,7 @@ fn profile_json(ruleset: &FirewallRuleset) -> Result<Vec<u8>, ProfileError> {
 ///
 /// # Security
 ///
-/// On Unix systems, files are created with mode 0o600 (user read/write only).
-/// On Windows, files inherit directory permissions. Users should ensure the
-/// profiles directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\data\profiles`
+/// Files are created with mode 0o600 (user read/write only).
 ///
 /// # Errors
 ///
@@ -733,6 +731,32 @@ pub fn load_profile_or_preserve_blocking(name: &str) -> Result<FirewallRuleset, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_profile_name_validation() {
+        for name in ["default", "home-2", "my_profile", &"a".repeat(20)] {
+            assert!(validate_profile_name(name).is_ok(), "{name}");
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            "../etc/passwd",
+            "test/profile",
+            "test profile",
+            "dot.name",
+            "ümlaut",
+            &"a".repeat(21),
+        ] {
+            assert!(
+                matches!(
+                    validate_profile_name(name),
+                    Err(ProfileError::InvalidName(_))
+                ),
+                "{name:?} accepted"
+            );
+        }
+    }
 
     #[test]
     fn test_parse_profile_without_version_is_v1() {

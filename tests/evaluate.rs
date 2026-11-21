@@ -515,17 +515,38 @@ fn agreement_tally() -> String {
 fn assert_agrees(ruleset: &FirewallRuleset, probes: &[KernelProbe]) -> Result<(), String> {
     let outcomes = kernel_outcomes(ruleset, probes);
     let chain = InputChain::new(ruleset);
-    for (probe, outcome) in probes.iter().zip(&outcomes) {
+    let mut report = String::new();
+    let mut disagree = false;
+    let mut agreed = Vec::with_capacity(probes.len());
+    for (i, (probe, outcome)) in probes.iter().zip(&outcomes).enumerate() {
         let verdict = chain.evaluate(&probe.to_probe());
-        let (action, _) = verdict
-            .first_packet()
-            .ok_or_else(|| format!("unsettled verdict {verdict}"))?;
-        if outcome_name(action) != outcome {
-            return Err(format!(
-                "kernel {outcome}, evaluator {verdict}\nprobe: {probe:?}\nruleset:\n{}",
-                ruleset.to_nft_text()
-            ));
-        }
+        let Some((action, _)) = verdict.first_packet() else {
+            disagree = true;
+            let _ = writeln!(
+                report,
+                "probe {i}: {probe:?}\n  kernel {outcome}, evaluator UNSETTLED {verdict}"
+            );
+            continue;
+        };
+        let same = outcome_name(action) == outcome;
+        disagree |= !same;
+        let mark = if same { "agree" } else { "DISAGREE" };
+        let _ = writeln!(
+            report,
+            "probe {i} ({mark}): {probe:?}\n  kernel {outcome}, evaluator {verdict}"
+        );
+        agreed.push(action);
+    }
+    if disagree {
+        // Everything needed to reproduce it: every probe, the generated text
+        // and the exact JSON that was applied
+        return Err(format!(
+            "the evaluator and the kernel disagree\n{report}ruleset (text):\n{}\nruleset (JSON):\n{}",
+            ruleset.to_nft_text(),
+            serde_json::to_string(&ruleset.to_nftables_json()).unwrap_or_default()
+        ));
+    }
+    for action in agreed {
         let index = match action {
             Action::Accept => 0,
             Action::Drop => 1,
@@ -758,8 +779,8 @@ fn arb_any_source() -> impl Strategy<Value = IpAddr> {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 512,
-        failure_persistence: None,
+        cases: common::proptest_cases(512),
+        failure_persistence: Some(common::proptest_persistence("tests/evaluate.proptest-regressions")),
         ..ProptestConfig::default()
     })]
 
@@ -821,8 +842,8 @@ fn check_reachability_invariants(reach: &Reachability) -> Result<(), TestCaseErr
 proptest! {
     // Each case builds a namespace pair and runs a few probes
     #![proptest_config(ProptestConfig {
-        cases: 24,
-        failure_persistence: None,
+        cases: common::proptest_cases(24),
+        failure_persistence: Some(common::proptest_persistence("tests/evaluate.proptest-regressions")),
         ..ProptestConfig::default()
     })]
 

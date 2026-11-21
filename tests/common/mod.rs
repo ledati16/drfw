@@ -9,6 +9,7 @@
 //!   to the root scripts at all
 //! - rule builders on [`Rule::with_caches`], [`write_profile`]
 //! - [`EnvVarGuard`]: process-wide env changes, serialized and restored
+//! - [`proptest_cases`], [`proptest_persistence`]: property test settings
 //!
 //! Each crate uses only some of the helpers, hence the `dead_code` allow.
 
@@ -21,6 +22,30 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use drfw::core::firewall::{Chain, FirewallRuleset, PortEntry, Protocol, Rule};
+
+// ============================================================================
+// Property tests
+// ============================================================================
+
+/// Cases per property test: `PROPTEST_CASES` when set (as for proptest's
+/// own default), otherwise `default` (the test's own choice, which an
+/// explicit `cases` would otherwise force).
+pub fn proptest_cases(default: u32) -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|cases| cases.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Failures are kept in `file` (relative to the package root, where cargo
+/// runs integration tests; next to the test, by proptest's convention) and
+/// run first next time, so a failure seen once, under load for example,
+/// is not lost when the next run passes.
+pub fn proptest_persistence(
+    file: &'static str,
+) -> Box<dyn proptest::test_runner::FailurePersistence> {
+    Box::new(proptest::test_runner::FileFailurePersistence::Direct(file))
+}
 
 // ============================================================================
 // Real nft

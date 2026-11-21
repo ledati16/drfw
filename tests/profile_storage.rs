@@ -202,6 +202,22 @@ async fn test_missing_profile_is_the_normal_default_path() {
     assert_eq!(ruleset.rules.len(), 0);
 }
 
+/// Loading a profile that does not exist (`load_profile`, unlike
+/// `load_profile_or_preserve`) is `NotFound`; an invalid name never reaches
+/// the file system.
+#[tokio::test]
+async fn test_load_missing_or_invalid_profile() {
+    let (_guard, _root) = isolated().await;
+    assert!(matches!(
+        profiles::load_profile("nonexistent_abc").await,
+        Err(ProfileError::NotFound(_))
+    ));
+    assert!(matches!(
+        profiles::load_profile("../etc/passwd").await,
+        Err(ProfileError::InvalidName(_))
+    ));
+}
+
 #[tokio::test]
 async fn test_duplicate_ids_regenerated_and_invalid_rules_kept() {
     let (_guard, root) = isolated().await;
@@ -329,6 +345,10 @@ async fn test_rename_never_replaces_existing_profile() {
 #[tokio::test]
 async fn test_list_profiles_skips_invalid_names() {
     let (_guard, root) = isolated().await;
+    assert!(
+        profiles::list_profiles().await.unwrap().is_empty(),
+        "an empty data dir has no profiles (listing creates none)"
+    );
     let dir = profiles_dir(root.path());
     for file in [
         "good.json",

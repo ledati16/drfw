@@ -4,8 +4,11 @@
 [Unit]
 Description=DRFW Firewall Service
 Documentation=https://github.com/ledati16/drfw
-After=network-pre.target
-Before=network.target
+# Load before any network is configured (systemd.special(7): a firewall
+# orders itself Before= and pulls in network-pre.target; NetworkManager and
+# systemd-networkd start After= it), so no interface gets an address while
+# the drop policy is not loaded yet
+Before=network-pre.target
 Wants=network-pre.target
 Conflicts=nftables.service
 

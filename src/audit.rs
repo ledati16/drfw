@@ -177,9 +177,7 @@ impl AuditLog {
     ///
     /// # Security
     ///
-    /// On Unix systems, files are created with mode 0o600 (user read/write only).
-    /// On Windows, files inherit directory permissions. Users should ensure the
-    /// audit directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\data\state`
+    /// Files are created with mode 0o600 (user read/write only).
     ///
     /// # Errors
     ///

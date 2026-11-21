@@ -26,10 +26,19 @@
 //! - Local network discovery (a Desktop mode setting) is not counted as
 //!   exposure (see [`SocketExposure::local_discovery`]). Its multicast accepts
 //!   (mDNS, SSDP, WS-Discovery) only reach the discovery sockets themselves,
-//!   which are shown as [`LOCAL_DISCOVERY`]. Its accept of replies to this
-//!   computer's own queries only holds for a port that just sent a multicast
-//!   query, which is never a listening service's port, so it is left out of
-//!   every other socket's answer.
+//!   which are shown as [`LOCAL_DISCOVERY`]. Its accept of unicast replies
+//!   from private and link-local addresses holds for a UDP port that sent a
+//!   discovery query (SSDP, WS-Discovery, mDNS, LLMNR, `NetBIOS` name query)
+//!   within the last 10 seconds. The services on those protocols' own ports
+//!   ([`crate::core::firewall::DISCOVERY_QUERY_PORTS`]) announce and query
+//!   from them, so for UDP sockets on these ports the replies stay in the
+//!   answer, as a conditional access ([`LOCAL_DISCOVERY_REPLIES`] when
+//!   nothing else reaches them). Any other UDP socket only receives them
+//!   after sending such a query itself: a discovery client's temporary port
+//!   getting its answers, like the replies to an outgoing connection, so
+//!   they are left out of its answer. (A program that deliberately sends a
+//!   discovery query from a port it has bound opens that port to these
+//!   replies too; it could receive on that port anyway.)
 //!
 //! [`scan_host`] also returns the established TCP connections with their
 //! processes, for the SSH session detection of [`crate::core::lockout`].
@@ -548,22 +557,38 @@ pub struct SocketExposure {
     /// that traffic through DNAT and the forward chain, so the input rules
     /// evaluated above do not decide it. Set by
     /// [`SocketExposure::mark_published_by_docker`], which replaces the
-    /// verdict with [`crate::core::host_facts::DOCKER_PUBLISHED`].
+    /// verdict with [`crate::core::host_facts::DOCKER_PUBLISHED`] (or
+    /// [`crate::core::host_facts::DOCKER_PUBLISHED_FORWARD_FILTERED`], see
+    /// [`Self::docker_forward_filtered`]).
     pub docker_published: bool,
+    /// The ruleset blocks forwarded traffic ("Block forwarded traffic"), so
+    /// DRFW's forward chain does filter what Docker publishes: dropped
+    /// unless a Forwarded rule allows it. Set for every socket from the
+    /// ruleset ([`InputChain::blocks_forwarding`]); it only changes the
+    /// answer of a socket that is [`Self::docker_published`].
+    pub docker_forward_filtered: bool,
     /// Local network discovery lets the local network reach this socket:
     /// it is an mDNS, SSDP or WS-Discovery socket that the discovery
-    /// multicast accepts reach. That is not counted as exposure: the `open_*`
-    /// fields leave it out and [`SocketExposure::rank`] sorts it with the
-    /// sockets only some sources reach. The summary says [`LOCAL_DISCOVERY`]
-    /// for it, and `nobody` is `false`. (The accept of replies
-    /// to our own queries is left out of `per_family` for every socket; see
-    /// the module docs.)
+    /// multicast accepts reach, or a UDP socket on a discovery port that
+    /// receives the replies to its queries (see the module docs). That is
+    /// not counted as exposure: the `open_*` fields leave it out and
+    /// [`SocketExposure::rank`] sorts it with the sockets only some sources
+    /// reach. The summary says [`LOCAL_DISCOVERY`] (or
+    /// [`LOCAL_DISCOVERY_REPLIES`]) for it, and `nobody` is `false`. The
+    /// replies stay in `per_family` as a conditional access for a socket on
+    /// a discovery port only; every other socket's answer leaves them out.
     pub local_discovery: bool,
 }
 
 /// How a socket that local network discovery lets in reads in a summary
 /// ([`SocketExposure::local_discovery`]).
 pub const LOCAL_DISCOVERY: &str = "local network (discovery)";
+
+/// How a UDP socket on a discovery port reads in a summary when only the
+/// replies to its own discovery queries reach it (a `NetBIOS` name service
+/// socket on port 137, or one bound to a unicast address).
+pub const LOCAL_DISCOVERY_REPLIES: &str =
+    "local network, for 10 s after it sends a discovery query";
 
 /// `true` for a decider that is one of local discovery's multicast accepts.
 fn is_discovery_group_accept(decider: &Decider) -> bool {
@@ -580,28 +605,71 @@ fn is_discovery_access(access: &ConditionalAccess) -> bool {
     is_discovery_group_accept(&access.by) || access.when.contains(&Condition::DiscoveryReply)
 }
 
+/// What local discovery grants one family of a socket.
+#[derive(Default)]
+struct DiscoveryAccess {
+    /// The multicast accept that reaches the socket
+    group: Option<Decider>,
+    /// The accept of replies to the socket's own queries, kept as a
+    /// conditional access (a socket on a discovery port)
+    replies: Option<Decider>,
+}
+
+impl DiscoveryAccess {
+    /// Local discovery reaches the socket at all.
+    const fn any(&self) -> bool {
+        self.group.is_some() || self.replies.is_some()
+    }
+
+    /// The deciding discovery accept: the multicast accept, else the replies'.
+    fn decider(&self) -> Option<&Decider> {
+        self.group.as_ref().or(self.replies.as_ref())
+    }
+}
+
+/// `true` for a UDP socket on one of the discovery protocols' ports, which
+/// receives the replies to its own queries (see the module docs).
+fn on_discovery_port(socket: &SocketInfo) -> bool {
+    socket.transport == Transport::Udp
+        && crate::core::firewall::DISCOVERY_QUERY_PORTS.contains(&socket.port)
+}
+
 /// Takes local discovery's accesses out of one family's answer (see the
-/// module docs). Returns the multicast accept that reaches the socket, if
-/// one does (the socket is then a discovery socket).
-fn split_off_discovery(reach: &mut Reachability) -> Option<Decider> {
-    let mut group = None;
+/// module docs): `reach` keeps the reply access only when `keep_replies`
+/// (a socket on a discovery port); `shown` (for the summary text) has none
+/// of them.
+fn split_off_discovery(
+    reach: &mut Reachability,
+    keep_replies: bool,
+) -> (DiscoveryAccess, Reachability) {
+    let mut found = DiscoveryAccess::default();
     reach.conditional.retain(|access| {
         if !is_discovery_access(access) {
             return true;
         }
-        if group.is_none() && is_discovery_group_accept(&access.by) {
-            group = Some(access.by.clone());
+        if is_discovery_group_accept(&access.by) {
+            if found.group.is_none() {
+                found.group = Some(access.by.clone());
+            }
+            return false;
         }
-        false
+        if keep_replies {
+            found.replies.get_or_insert_with(|| access.by.clone());
+        }
+        keep_replies
     });
     // A socket bound to the group address itself: the multicast accept
     // matches it without conditions
     if !reach.accepted_by.is_empty() && reach.accepted_by.iter().all(is_discovery_group_accept) {
-        group = group.or_else(|| reach.accepted_by.first().cloned());
+        found.group = found.group.or_else(|| reach.accepted_by.first().cloned());
         reach.accepted_by.clear();
         reach.open = Reach::Nobody;
     }
-    group
+    let mut shown = reach.clone();
+    shown
+        .conditional
+        .retain(|access| !access.when.contains(&Condition::DiscoveryReply));
+    (found, shown)
 }
 
 /// Evaluates who can open a new connection to `socket` under `chain`.
@@ -617,6 +685,7 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
             decided_by: None,
             decided_by_display: String::new(),
             docker_published: false,
+            docker_forward_filtered: chain.blocks_forwarding(),
             local_discovery: false,
         };
     }
@@ -639,9 +708,14 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
             }
         })
         .collect();
-    // Per family: the discovery multicast accept that reaches the socket
-    let discovery: Vec<Option<Decider>> = per_family.iter_mut().map(split_off_discovery).collect();
-    let local_discovery = discovery.iter().any(Option::is_some);
+    // Per family: what local discovery grants, and the answer without it
+    // (for the text)
+    let keep_replies = on_discovery_port(socket);
+    let (discovery, shown): (Vec<DiscoveryAccess>, Vec<Reachability>) = per_family
+        .iter_mut()
+        .map(|reach| split_off_discovery(reach, keep_replies))
+        .unzip();
+    let local_discovery = discovery.iter().any(DiscoveryAccess::any);
 
     let scopes: Vec<EveryoneScope> = per_family
         .iter()
@@ -661,13 +735,22 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
         }
     }
     let nobody = per_family.iter().all(Reachability::nobody) && !local_discovery;
-    let texts: Vec<String> = per_family
+    let texts: Vec<String> = shown
         .iter()
         .zip(&discovery)
-        .map(|(reach, group)| match group {
-            None => reach.to_string(),
-            Some(_) if reach.nobody() => LOCAL_DISCOVERY.to_string(),
-            Some(_) => format!("{reach}; {LOCAL_DISCOVERY}"),
+        .map(|(reach, access)| {
+            let label = if access.group.is_some() {
+                LOCAL_DISCOVERY
+            } else {
+                LOCAL_DISCOVERY_REPLIES
+            };
+            if !access.any() {
+                reach.to_string()
+            } else if reach.nobody() {
+                label.to_string()
+            } else {
+                format!("{reach}; {label}")
+            }
         })
         .collect();
     let summary = if texts.windows(2).all(|w| w[0] == w[1]) {
@@ -687,14 +770,14 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
     };
     // The most exposed family's deciding rule; for a socket only discovery
     // reaches, the discovery accept
-    let decided_by = per_family
+    let decided_by = shown
         .iter()
         .find(|r| r.everyone_scope() == Some(EveryoneScope::AnyInterface))
-        .or_else(|| per_family.iter().find(|r| r.open_to_everyone()))
-        .or_else(|| per_family.iter().find(|r| !r.nobody()))
+        .or_else(|| shown.iter().find(|r| r.open_to_everyone()))
+        .or_else(|| shown.iter().find(|r| !r.nobody()))
         .and_then(Reachability::deciding)
-        .or_else(|| discovery.iter().flatten().next())
-        .or_else(|| per_family.first().and_then(Reachability::deciding))
+        .or_else(|| discovery.iter().find_map(DiscoveryAccess::decider))
+        .or_else(|| shown.first().and_then(Reachability::deciding))
         .cloned();
     let decided_by_display = decided_by.as_ref().map_or_default(ToString::to_string);
     SocketExposure {
@@ -707,6 +790,7 @@ pub fn evaluate_socket(chain: &InputChain, socket: &SocketInfo) -> SocketExposur
         decided_by,
         decided_by_display,
         docker_published: false,
+        docker_forward_filtered: chain.blocks_forwarding(),
         local_discovery,
     }
 }
@@ -791,14 +875,22 @@ impl SocketExposure {
     /// input rules do not filter it (see [`Self::docker_published`]), so
     /// "open to everyone", "nobody" and the deciding rule would all be
     /// wrong. The summary becomes
-    /// [`crate::core::host_facts::DOCKER_PUBLISHED`].
+    /// [`crate::core::host_facts::DOCKER_PUBLISHED`], or
+    /// [`crate::core::host_facts::DOCKER_PUBLISHED_FORWARD_FILTERED`] when
+    /// [`Self::docker_forward_filtered`].
     pub fn mark_published_by_docker(&mut self) {
+        use crate::core::host_facts::{DOCKER_PUBLISHED, DOCKER_PUBLISHED_FORWARD_FILTERED};
         self.docker_published = true;
         self.open_to_everyone = false;
         self.open_on_interfaces.clear();
         self.nobody = false;
         self.local_discovery = false;
-        self.summary = crate::core::host_facts::DOCKER_PUBLISHED.to_string();
+        self.summary = if self.docker_forward_filtered {
+            DOCKER_PUBLISHED_FORWARD_FILTERED
+        } else {
+            DOCKER_PUBLISHED
+        }
+        .to_string();
         self.decided_by = None;
         self.decided_by_display.clear();
     }
@@ -821,11 +913,12 @@ impl SocketExposure {
     }
 
     /// Sort rank, most exposed first: everyone on any interface (0),
-    /// everyone on some interfaces only or published by Docker (1), some
-    /// sources (2), nobody or local only (3).
+    /// everyone on some interfaces only or published by Docker without
+    /// forward filtering (1), some sources or published by Docker with
+    /// forward filtering (2), nobody or local only (3).
     pub fn rank(&self) -> u8 {
         if self.docker_published {
-            1
+            if self.docker_forward_filtered { 2 } else { 1 }
         } else if self.local_only || self.nobody {
             3
         } else if self.open_to_everyone {
@@ -1291,6 +1384,7 @@ not a line
             decided_by: None,
             decided_by_display: String::new(),
             docker_published: false,
+            docker_forward_filtered: false,
             local_discovery: false,
         };
         assert_eq!(
@@ -1343,6 +1437,14 @@ not a line
             }],
             bridges: true,
         };
+        // The fixture's socket belongs to a user: not Docker's proxy
+        assert_eq!(mark_docker_published(&mut rows, &containers), 0);
+        let root_owned = |rows: &mut [ExposureRow]| {
+            for row in rows.iter_mut().filter(|r| r.socket.port == 8080) {
+                row.socket.uid = 0;
+            }
+        };
+        root_owned(&mut rows);
         assert_eq!(mark_docker_published(&mut rows, &containers), 1);
         let marked = &rows[0];
         assert_eq!(
@@ -1355,11 +1457,27 @@ not a line
         assert!(marked.exposure.decided_by.is_none());
         assert_eq!(marked.exposure.decided_by_display, "");
         assert_eq!(marked.exposure.rank(), 1);
+        assert!(!marked.exposure.docker_forward_filtered);
         assert_eq!(
             rows.iter().filter(|r| r.exposure.docker_published).count(),
             1,
             "only the published socket"
         );
+
+        // With "Block forwarded traffic" DRFW's Forwarded rules decide it
+        let mut blocking = FirewallRuleset::new();
+        blocking.advanced_security.block_forwarding = true;
+        let mut rows = exposure_rows(&blocking, &fixture_sockets(false));
+        assert!(rows.iter().all(|r| r.exposure.docker_forward_filtered));
+        root_owned(&mut rows);
+        assert_eq!(mark_docker_published(&mut rows, &containers), 1);
+        let marked = rows.iter().find(|r| r.exposure.docker_published).unwrap();
+        assert_eq!(
+            marked.exposure.summary,
+            crate::core::host_facts::DOCKER_PUBLISHED_FORWARD_FILTERED
+        );
+        assert!(!marked.exposure.nobody && !marked.exposure.open_to_everyone);
+        assert_eq!(marked.exposure.rank(), 2);
     }
 
     // ── Local network discovery ───────────────────────────────────────
@@ -1399,7 +1517,8 @@ not a line
 
     /// Ordinary UDP services are not shown as reachable just because local
     /// discovery accepts replies to our own queries: that only holds for a
-    /// port that just sent a query.
+    /// port that just sent a discovery query, which a service on another
+    /// port than the discovery protocols' does not do.
     #[test]
     fn test_discovery_replies_are_not_exposure() {
         let ruleset = discovery_ruleset();
@@ -1452,6 +1571,50 @@ not a line
         assert_eq!(rows[0].exposure.summary, "everyone");
     }
 
+    /// UDP sockets on the discovery ports announce and query from them, so
+    /// the replies reach them: kept as a conditional access. Only the
+    /// replies reach the `NetBIOS` name service and LLMNR sockets, and a
+    /// discovery socket bound to a unicast address.
+    #[test]
+    fn test_discovery_port_sockets_receive_replies() {
+        use crate::core::evaluate::BASE_DISCOVERY_REPLY;
+        let ruleset = discovery_ruleset();
+        let replies_in = |exposure: &SocketExposure| {
+            exposure.per_family.iter().all(|r| {
+                r.conditional
+                    .iter()
+                    .any(|a| a.when.contains(&Condition::DiscoveryReply))
+            })
+        };
+        for (port, bind) in [(137, "0.0.0.0"), (5355, "::"), (5353, "192.168.1.5")] {
+            let rows = exposure_rows(&ruleset, &[udp_socket(port, bind)]);
+            let exposure = &rows[0].exposure;
+            assert_eq!(exposure.summary, LOCAL_DISCOVERY_REPLIES, "{port}");
+            assert!(exposure.local_discovery && !exposure.nobody, "{port}");
+            assert!(!exposure.open_to_everyone, "{port}");
+            assert_eq!(exposure.rank(), 2, "{port}");
+            assert!(replies_in(exposure), "{port}");
+            assert_eq!(
+                exposure.decided_by,
+                Some(Decider::BaseRule(BASE_DISCOVERY_REPLY)),
+                "{port}"
+            );
+            // Without discovery: closed
+            let rows = exposure_rows(&FirewallRuleset::new(), &[udp_socket(port, bind)]);
+            assert!(rows[0].exposure.nobody, "{port}");
+        }
+        // The multicast sockets keep the replies too
+        for port in [5353, 1900, 3702] {
+            let rows = exposure_rows(&ruleset, &[udp_socket(port, "::")]);
+            assert!(replies_in(&rows[0].exposure), "{port}");
+            assert_eq!(rows[0].exposure.summary, LOCAL_DISCOVERY, "{port}");
+        }
+        // TCP on 137 is not discovery
+        let mut tcp = udp_socket(137, "0.0.0.0");
+        tcp.transport = Transport::Tcp;
+        assert!(exposure_rows(&ruleset, &[tcp])[0].exposure.nobody);
+    }
+
     /// The discovery sockets read "local network (discovery)", decided by the
     /// discovery accept, not counted as open; with discovery off they are
     /// closed like any other port.
@@ -1479,9 +1642,10 @@ not a line
         assert_eq!(rows[0].exposure.summary, LOCAL_DISCOVERY);
         assert!(!rows[0].exposure.open_to_everyone);
 
-        // Bound to a unicast address: multicast does not reach it
+        // Bound to a unicast address: multicast does not reach it (the
+        // replies to its queries do, see the test above)
         let rows = exposure_rows(&ruleset, &[udp_socket(5353, "192.168.1.5")]);
-        assert!(rows[0].exposure.nobody, "{}", rows[0].exposure.summary);
+        assert_eq!(rows[0].exposure.summary, LOCAL_DISCOVERY_REPLIES);
 
         // TCP on a discovery port is not discovery
         let mut tcp = udp_socket(5353, "::");

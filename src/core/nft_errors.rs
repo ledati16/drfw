@@ -13,7 +13,7 @@
 //!
 //! [`FirewallRuleset::to_nft_text`] renders exactly the commands that are
 //! verified as JSON, so when a check fails, `verify::locate_errors` checks the
-//! text form too and [`AnnotatedText`] traces each error line back to what
+//! text form too and `AnnotatedText` traces each error line back to what
 //! produced it: a user rule, a base rule, a chain declaration or the
 //! header (see `nft_text::render_with_map`).
 //!

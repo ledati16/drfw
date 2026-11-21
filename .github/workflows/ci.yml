@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    # Release tags: the tagged commit is checked as it is
+    tags: ["v*"]
   pull_request:
     branches: [main]
   schedule:
@@ -53,6 +55,12 @@ jobs:
 
       - name: Clippy (stress_gen feature)
         run: cargo clippy --all-targets --locked --features stress_gen -- -D warnings
+
+      # Broken intra-doc links and malformed docs fail the build
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --locked
 
   test:
     name: Build & Test
@@ -108,11 +116,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Advisories, licenses, bans and sources; config in deny.toml
+      # Advisories, licenses, bans and sources; config in deny.toml (its
+      # [graph] section selects all features and the target platforms)
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          arguments: --all-features
 
   latest-stable:
     name: Latest stable (early warning)

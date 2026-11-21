@@ -14,13 +14,14 @@
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`nft_errors`]: Readable nft errors, mapped back to the rules that caused them
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
-//! - [`verify`]: Ruleset validation and syntax checking
+//! - [`verify`]: `nft --check` of a generated ruleset (syntax and kernel support)
 //! - [`error`]: Error types for firewall operations
 //! - [`profiles`]: Firewall profile management
 //! - [`rule_constraints`]: Business rules for valid field combinations
 //! - [`templates`]: Ready-made rules for common setups (Server Mode, VMs, Tailscale)
 //! - [`validate`]: Rule and ruleset validation (shared by the form, loader and apply)
-//! - [`retention`]: Confirmation before dropping most of the kept rules
+//! - [`retention`]: Confirmation before removing or changing most of the kept
+//!   rules, or turning on Server Mode or "Block forwarded traffic"
 
 pub(crate) mod addr_set;
 pub mod apply_guard;

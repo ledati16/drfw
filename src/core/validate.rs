@@ -3,7 +3,7 @@
 //! This is the **single** source of truth for "is this rule something nft can
 //! apply, and does it do what the user sees?". It is used by:
 //!
-//! - the GUI rule form ([`crate::app`]'s `RuleForm::validate` builds a candidate
+//! - the GUI rule form (`RuleForm::validate` in `app` builds a candidate
 //!   [`Rule`] and delegates here, so the form and the loader can never disagree),
 //! - the GUI sidebar (invalid rules are flagged, with the reason in a tooltip),
 //! - the apply / Save to System paths, which must refuse to run while
@@ -755,7 +755,7 @@ mod tests {
     }
 
     /// Forward rules only take part in the applied ruleset (and only block
-    /// applying when invalid) with "Block forwarding" on.
+    /// applying when invalid) with "Block forwarded traffic" on.
     #[test]
     fn test_forward_rules_apply_only_with_block_forwarding() {
         let mut rule = base_rule();

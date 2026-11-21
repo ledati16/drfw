@@ -11,8 +11,9 @@
 //! - IGMP membership reports and queries pass, in and (Server Mode) out
 //! - DHCP client replies from port 67 are accepted, also as broadcast
 //! - local network discovery: mDNS/SSDP multicast and unicast replies to
-//!   our own SSDP/NetBIOS/WS-Discovery queries, but only from private
-//!   sources and only to ports that sent a query
+//!   our own SSDP/WS-Discovery/mDNS/LLMNR/NetBIOS queries, but only from
+//!   private sources and only to ports that sent such a query (other
+//!   broadcast or multicast opens nothing)
 //! - anti-spoofing (RPF) drops a spoofed container-subnet source, yet a
 //!   full-tunnel VPN's underlay (fwmark policy routing) keeps working
 //! - the ICMP rate limit limits a ping flood (not only new pings)
@@ -37,6 +38,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::path::Path;
 
@@ -398,11 +400,47 @@ echo "broadcast $(count dhcp)"
 // S1: local network discovery
 // ============================================================================
 
+/// Discovery queries of the host in [`test_local_discovery`]: (name, our
+/// port, destination, extra `udp` argument). The answer comes from the
+/// peer's address of the same family to our port.
+const DISCOVERY_QUERIES: [(&str, u16, &str, &str); 10] = [
+    ("ssdp", 40900, "239.255.255.250:1900", ""),
+    ("wsd", 40901, "239.255.255.250:3702", ""),
+    ("mdns", 40902, "224.0.0.251:5353", ""),
+    ("llmnr", 40903, "224.0.0.252:5355", ""),
+    ("nbns", 40904, "10.9.0.255:137", "broadcast"),
+    ("nbns_all", 40905, "255.255.255.255:137", "broadcast"),
+    ("ssdp6", 40910, "[ff02::c%HIDX]:1900", ""),
+    ("wsd6", 40911, "[ff02::c%HIDX]:3702", ""),
+    ("mdns6", 40912, "[ff02::fb%HIDX]:5353", ""),
+    ("llmnr6", 40913, "[ff02::1:3%HIDX]:5355", ""),
+];
+
+/// Multicast and broadcast that is not a discovery query (the sweep's
+/// scenario: one broadcast to an arbitrary port opened the sender's port):
+/// the ports they are sent from must stay closed.
+const NOT_QUERIES: [(&str, u16, &str, &str); 7] = [
+    ("bcast_any_port", 40920, "10.9.0.255:9999", "broadcast"),
+    (
+        "bcast_all_any_port",
+        40921,
+        "255.255.255.255:9999",
+        "broadcast",
+    ),
+    ("ssdp_group_other_port", 40922, "239.255.255.250:9999", ""),
+    ("mdns_group_ssdp_port", 40923, "224.0.0.251:1900", ""),
+    ("netbios_datagram", 40924, "10.9.0.255:138", "broadcast"),
+    ("nbns_multicast", 40925, "224.0.0.1:137", ""),
+    ("v6_other_port", 40926, "[ff02::c%HIDX]:9999", ""),
+];
+
 /// With local discovery: mDNS and SSDP multicast reach the host; the unicast
-/// replies to our SSDP query (multicast), `NetBIOS` query (broadcast) and
-/// IPv6 SSDP query are accepted from the private peer, but not from a
-/// public source, nor to a port that sent no query. Without the setting
-/// none of it passes.
+/// replies to our SSDP, WS-Discovery, mDNS and LLMNR queries (multicast,
+/// IPv4 and IPv6) and `NetBIOS` name queries (broadcast) are accepted from
+/// the private peer, but not from a public source, nor to a port that sent
+/// no query, nor to a port that only sent other multicast or broadcast
+/// ([`NOT_QUERIES`]: a broadcast to an arbitrary port no longer opens the
+/// sender's port). Without the setting none of it passes.
 #[test]
 fn test_local_discovery() {
     if !lab_available() {
@@ -411,33 +449,50 @@ fn test_local_discovery() {
     let mut on = FirewallRuleset::new();
     on.advanced_security.local_discovery = true;
     let off = FirewallRuleset::new();
-    let script = r#"
+
+    let mut sends = String::new();
+    let mut answers = String::new();
+    let mut watches = String::new();
+    let mut names: Vec<&str> = Vec::new();
+    for (name, port, dest, extra) in DISCOVERY_QUERIES.iter().chain(&NOT_QUERIES) {
+        let (ours, peer, family) = if dest.starts_with('[') {
+            (format!("[fd09::1]:{port}"), "[fd09::2]", "ip6")
+        } else {
+            (format!("10.9.0.1:{port}"), "10.9.0.2", "ip")
+        };
+        let dest = dest.replace("HIDX", "$hidx");
+        let peer_addr = peer.trim_matches(['[', ']']);
+        writeln!(sends, "udp \"{ours}\" \"{dest}\" {extra}").unwrap();
+        writeln!(answers, "pudp \"{peer}:1900\" \"{ours}\"").unwrap();
+        writeln!(
+            watches,
+            "watch {name} {family} saddr {peer_addr} udp dport {port}"
+        )
+        .unwrap();
+        names.push(name);
+    }
+    let script = format!(
+        r#"
 ip route add 224.0.0.0/4 dev v0
 P ip route add 224.0.0.0/4 dev v1
 # A public address on the LAN (a spoofed or misconfigured device)
 P ip addr add 203.0.113.1/32 dev v1
 hidx=$(ifindex v0)
 pidx=$(ifindex v1 P)
-watch ssdp_reply ip saddr 10.9.0.2 udp dport 40900
-watch nbns_reply ip saddr 10.9.0.2 udp dport 40137
-watch ssdp6_reply ip6 saddr fd09::2 udp dport 40902
-watch other_port ip saddr 10.9.0.2 udp dport 40901
+{watches}
+watch no_query ip saddr 10.9.0.2 udp dport 40999
 watch public ip saddr 203.0.113.1 udp dport 40900
-watch mdns ip saddr 10.9.0.2 ip daddr 224.0.0.251 udp dport 5353
-watch ssdp ip saddr 10.9.0.2 ip daddr 239.255.255.250 udp dport 1900
-watch mdns6 ip6 saddr fd09::2 ip6 daddr ff02::fb udp dport 5353
-round() {
+watch mdns_in ip saddr 10.9.0.2 ip daddr 224.0.0.251 udp dport 5353
+watch ssdp_in ip saddr 10.9.0.2 ip daddr 239.255.255.250 udp dport 1900
+watch mdns6_in ip6 saddr fd09::2 ip6 daddr ff02::fb udp dport 5353
+round() {{
     load "$1"
-    # Our queries: SSDP (multicast), NetBIOS (broadcast), SSDP over IPv6
-    udp 10.9.0.1:40900 239.255.255.250:1900
-    udp 10.9.0.1:40137 10.9.0.255:137 broadcast
-    udp "[fd09::1]:40902" "[ff02::c%$hidx]:1900"
-    { nft list set inet drfw discovery_reply 2>/dev/null || echo none; } | tr -s ' \n\t' ' ' > "set_$1.out"
+    # Our queries, and multicast/broadcast that is not one
+{sends}
+    {{ nft list set inet drfw discovery_reply 2>/dev/null || echo none; }} | tr -s ' \n\t' ' ' > "set_$1.out"
     # The answers, and what must not pass
-    pudp 10.9.0.2:1900 10.9.0.1:40900
-    pudp 10.9.0.2:137 10.9.0.1:40137
-    pudp "[fd09::2]:1900" "[fd09::1]:40902"
-    pudp 10.9.0.2:1900 10.9.0.1:40901
+{answers}
+    pudp 10.9.0.2:1900 10.9.0.1:40999
     pudp 203.0.113.1:1900 10.9.0.1:40900
     # Multicast to us (we join the groups only now: a group address on v0
     # would turn our own queries to it into local traffic)
@@ -451,23 +506,22 @@ round() {
     ip addr del 224.0.0.251/32 dev v0
     ip addr del 239.255.255.250/32 dev v0
     ip -6 addr del ff02::fb/128 dev v0
-    for name in ssdp_reply nbns_reply ssdp6_reply other_port public mdns ssdp mdns6; do
+    for name in {all} no_query public mdns_in ssdp_in mdns6_in; do
         echo "$1_$name $(count $name)"
     done
-}
+}}
 round on
 round off
 cat set_on.out; echo
-"#;
-    let lines = lab(&[("on", &on), ("off", &off)], script);
-    for name in [
-        "ssdp_reply",
-        "nbns_reply",
-        "ssdp6_reply",
-        "mdns",
-        "ssdp",
-        "mdns6",
-    ] {
+"#,
+        all = names.join(" "),
+    );
+    let lines = lab(&[("on", &on), ("off", &off)], &script);
+    let accepted = DISCOVERY_QUERIES
+        .iter()
+        .map(|q| q.0)
+        .chain(["mdns_in", "ssdp_in", "mdns6_in"]);
+    for name in accepted {
         let on = value(&lines, &format!("on_{name}"));
         assert_eq!(on, 1, "{name} accepted with local discovery: {lines:#?}");
         assert_eq!(
@@ -476,15 +530,29 @@ cat set_on.out; echo
             "{name} not accepted without it"
         );
     }
-    for name in ["other_port", "public"] {
-        assert_eq!(value(&lines, &format!("on_{name}")), 0, "{name}");
+    for name in NOT_QUERIES
+        .iter()
+        .map(|q| q.0)
+        .chain(["no_query", "public"])
+    {
+        assert_eq!(
+            value(&lines, &format!("on_{name}")),
+            0,
+            "{name}: {lines:#?}"
+        );
         assert_eq!(value(&lines, &format!("off_{name}")), 0, "{name}");
     }
     let set = lines.last().expect("set listing");
-    for port in ["40900", "40137", "40902"] {
+    for (name, port, ..) in DISCOVERY_QUERIES {
         assert!(
             set.contains(&format!("{port} expires")),
-            "{port} not remembered: {set}"
+            "{name}: {port} not remembered: {set}"
+        );
+    }
+    for (name, port, ..) in NOT_QUERIES {
+        assert!(
+            !set.contains(&format!("{port} ")),
+            "{name}: {port} remembered: {set}"
         );
     }
 }

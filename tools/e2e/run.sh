@@ -394,10 +394,10 @@ print_plan() {
                 4) say "   4  confirm key keeps the rules; status confirmed; no revert later" ;;
                 5) say "   5  revert-now key restores immediately" ;;
                 6) say "   6  supersede: second apply during a countdown; timeout returns to the last confirmed state" ;;
-                7) say "   7  first apply with no table (Server mode), timeout: loopback works, no table left" ;;
+                7) say "   7  first apply with no table (Server Mode), timeout: loopback works, no table left" ;;
                 8) say "   8  Save to System: .drfw-orig once, .drfw-bak each save, nft -c, idempotent load, broken save rejected" ;;
                 9) say "   9  boot persistence: run --phase boot-prep, reboot, --phase boot-check" ;;
-                10) say "  10  Server mode over a veth: established inbound TCP survives, new one blocked, loopback works" ;;
+                10) say "  10  Server Mode over a veth: established inbound TCP survives, new one blocked, loopback works" ;;
             esac
         done
     else
@@ -711,11 +711,14 @@ evidence_tail() {
     done < <(tail -n "${2:-6}" <<<"$1")
 }
 
-# apply_now LOG METHOD PROFILE: `drfw apply PROFILE --no-confirm` as the
-# test user without a terminal; prints nothing, returns the CLI's status
+# apply_now LOG METHOD PROFILE: `drfw apply PROFILE --no-confirm --yes` as
+# the test user without a terminal; prints nothing, returns the CLI's status.
+# --yes: these scenarios test the apply itself, and the confirmation guard
+# (switching profiles removes most kept rules, Server Mode) would refuse
+# without a terminal (exit 9)
 apply_now() {
     local log=$1 method=$2 profile=$3
-    as_user_method "$method" "$DRFW" apply "$profile" --no-confirm </dev/null >"$log" 2>&1
+    as_user_method "$method" "$DRFW" apply "$profile" --no-confirm --yes </dev/null >"$log" 2>&1
 }
 
 # baseline PROFILE LABEL: reset, then a confirmed (unguarded) PROFILE as the
@@ -735,10 +738,11 @@ baseline() {
 ARM_NONCE=
 ARM_T0=
 # guard_arm TAG PROFILE TIMEOUT [PREV_NONCE]: `drfw apply PROFILE --confirm
-# TIMEOUT` in a PTY; waits until its guard is armed
+# TIMEOUT --yes` in a PTY (--yes: no y/N question of the confirmation guard
+# before the countdown); waits until its guard is armed
 guard_arm() {
     ARM_NONCE=
-    pty_start "$1" "$GUARD_METHOD" "$DRFW" apply "$2" --confirm "$3"
+    pty_start "$1" "$GUARD_METHOD" "$DRFW" apply "$2" --confirm "$3" --yes
     if ! ARM_NONCE=$(wait_new_guard "${4:-}" 60); then
         evidence "FAIL: no revert guard was armed within 60 s; CLI output:"
         evidence_tail "$(pty_out "$1")"
@@ -858,7 +862,7 @@ scenario_1() {
     else
         reset_state
         sudo_log_reset
-        pty_start s1-auto auto "$DRFW" apply e2e-a --no-confirm
+        pty_start s1-auto auto "$DRFW" apply e2e-a --no-confirm --yes
         pty_wait s1-auto 60
         rc=$PTY_RC
         local picked=sudo
@@ -1119,7 +1123,7 @@ scenario_7() {
         return
     fi
     if guard_arm s7 e2e-srv "$timeout"; then
-        check "Server mode is live (output policy drop)" \
+        check "Server Mode is live (output policy drop)" \
             eval 'nft list chain inet drfw output 2>/dev/null | grep -q "policy drop"' || bad=1
         check "loopback TCP works during the countdown" echo_once 127.0.0.1 "$LO_PORT" || bad=1
         status=$(wait_status "$ARM_NONCE" $((timeout + 20)))
@@ -1258,11 +1262,11 @@ scenario_8() {
 }
 
 # ----------------------------------------------------------------------------
-# Scenario 10: Server mode over the network
+# Scenario 10: Server Mode over the network
 # ----------------------------------------------------------------------------
 
 scenario_10() {
-    local name="10 Server mode: established inbound TCP and loopback keep working" bad=0 dir log rc i res
+    local name="10 Server Mode: established inbound TCP and loopback keep working" bad=0 dir log rc i res
     say "--- $name"
     if ! have_echo_tool || ! have_cmd ip; then
         skip "$name" "needs ip (iproute2) and socat or python3"
@@ -1313,7 +1317,7 @@ scenario_10() {
     log=$(log_file s10-apply)
     apply_now "$log" sudo e2e-srv
     rc=$?
-    check "drfw apply e2e-srv (Server mode) --no-confirm exits 0 ($rc)" test "$rc" -eq 0 || {
+    check "drfw apply e2e-srv (Server Mode) --no-confirm --yes exits 0 ($rc)" test "$rc" -eq 0 || {
         bad=1
         evidence_tail "$(cat -- "$log")"
     }
@@ -1331,7 +1335,7 @@ scenario_10() {
         grep -qx 'after=after' "$dir/result" || bad=1
     check "a NEW inbound connection to port $ECHO_PORT is blocked (no rule for it)" \
         eval '! echo_once "$IP_A" "$ECHO_PORT" "$PEER_NS"' || bad=1
-    check "loopback TCP works in Server mode" echo_once 127.0.0.1 "$LO_PORT" || bad=1
+    check "loopback TCP works in Server Mode" echo_once 127.0.0.1 "$LO_PORT" || bad=1
     touch -- "$dir/done"
     wait "$CLIENT_PID" 2>/dev/null
     CLIENT_PID=

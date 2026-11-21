@@ -3,9 +3,16 @@ name = "drfw"
 version = "0.9.0"
 edition = "2024"
 rust-version = "1.100"
+description = "A safe, transparent nftables firewall for Linux, with a GUI and CLI"
+authors = ["ledati16"]
 license = "MIT"
-default-run = "drfw"
+readme = "README.md"
 repository = "https://github.com/ledati16/drfw"
+keywords = ["firewall", "nftables", "linux", "gui", "security"]
+categories = ["command-line-utilities", "gui", "network-programming"]
+# An application, not a library for crates.io
+publish = false
+default-run = "drfw"
 
 [lints.clippy]
 # Enable pedantic lints for thorough code quality checks

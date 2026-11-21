@@ -457,7 +457,6 @@ pub fn validate_log_rate(rate: u32) -> Result<Option<String>, String> {
 /// - Prefix exceeds 64 characters
 /// - All characters are invalid (becomes empty after sanitization)
 pub fn validate_log_prefix(prefix: &str) -> Result<String, &'static str> {
-    // Phase 3.3: Use generic helper
     validate_labeled_string(prefix, 64, true, false).map_err(|err| match err {
         "Cannot be empty" => "Log prefix cannot be empty",
         "Too long" => "Log prefix too long (max 64 chars)",

@@ -11,7 +11,11 @@
 //! - [`docker_published_ports`]: the ports Docker publishes through
 //!   `docker-proxy` (its command line names them). Docker sends published
 //!   traffic through DNAT and the forward chain, so DRFW's input rules never
-//!   see it.
+//!   see it: with "Block forwarded traffic" on, DRFW's Forwarded rules
+//!   decide it, otherwise DRFW does not filter it. Only proxies running as root count, and only for sockets root
+//!   owns: any user can start a program named `docker-proxy`, which must not
+//!   relabel a real listening socket. (Rootless Docker's proxy runs as the
+//!   user; its traffic does reach the input rules.)
 //! - [`container_bridges_present`]: whether Docker or Podman bridge
 //!   interfaces exist (they may publish ports without a proxy).
 //!
@@ -20,7 +24,7 @@
 //! Like [`crate::core::exposure`], every file is read below
 //! [`crate::core::exposure::proc_root`], so `DRFW_TEST_PROC_DIR` replaces
 //! `/proc` (`sys/net/ipv4/ip_forward`, `sys/net/ipv6/conf/all/forwarding`,
-//! `<pid>/cmdline`, `net/dev`).
+//! `<pid>/cmdline`, `<pid>/status`, `net/dev`).
 
 use std::net::IpAddr;
 use std::path::Path;
@@ -36,14 +40,26 @@ pub const FORWARDING_WARNING: &str = "This computer forwards traffic between its
      networks may be reachable through it.";
 
 /// What the Exposure view and `drfw exposure` say instead of the evaluator's
-/// verdict for a port Docker publishes.
+/// verdict for a port Docker publishes, when the ruleset does not block
+/// forwarded traffic.
 pub const DOCKER_PUBLISHED: &str = "published by Docker: not filtered by DRFW's rules";
+
+/// [`DOCKER_PUBLISHED`] when the ruleset blocks forwarded traffic: Docker's
+/// DNAT sends the traffic through DRFW's forward chain, which drops it
+/// unless a Forwarded rule allows it.
+pub const DOCKER_PUBLISHED_FORWARD_FILTERED: &str =
+    "published by Docker: decided by your Forwarded rules (blocked unless one allows it)";
 
 /// The general note when Docker or Podman networks exist but no
 /// `docker-proxy` was found (published ports may then exist without a
-/// listening socket).
+/// listening socket), when the ruleset does not block forwarded traffic.
 pub const CONTAINER_NETWORKS_NOTE: &str = "Docker or Podman networks exist on this computer. \
      Ports they publish are not filtered by DRFW's rules and may not be listed here.";
+
+/// [`CONTAINER_NETWORKS_NOTE`] when the ruleset blocks forwarded traffic.
+pub const CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED: &str = "Docker or Podman networks exist \
+     on this computer. Ports they publish are decided by your Forwarded rules (blocked unless \
+     one allows them) and may not be listed here.";
 
 /// Whether the kernel forwards IPv4 and IPv6 traffic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -104,11 +120,13 @@ pub struct PublishedPort {
 impl PublishedPort {
     /// `socket` is the host side of this published port: same protocol and
     /// port, bound to the published address (or the wildcard address when
-    /// the port is published on all addresses). Loopback-only sockets are
-    /// never matched: only this computer can reach them anyway.
+    /// the port is published on all addresses), owned by root (as Docker's
+    /// proxy is). Loopback-only sockets are never matched: only this
+    /// computer can reach them anyway.
     pub fn matches(&self, socket: &SocketInfo) -> bool {
         if socket.transport != self.transport
             || socket.port != self.host_port
+            || socket.uid != 0
             || socket.scope == BindScope::LocalOnly
         {
             return false;
@@ -181,8 +199,9 @@ pub fn parse_docker_proxy_cmdline(cmdline: &[u8]) -> Option<PublishedPort> {
 }
 
 /// The ports published by the `docker-proxy` processes in [`proc_root`]
-/// (`/proc/<pid>/cmdline` is world-readable). Empty without Docker, or when
-/// Docker runs without its userland proxy.
+/// that run as root (`/proc/<pid>/cmdline` and `status` are
+/// world-readable). Empty without Docker, or when Docker runs without its
+/// userland proxy or rootless.
 pub fn docker_published_ports() -> Vec<PublishedPort> {
     docker_published_ports_in(&proc_root())
 }
@@ -200,12 +219,30 @@ pub fn docker_published_ports_in(root: &Path) -> Vec<PublishedPort> {
                 .to_str()
                 .is_some_and(|name| name.parse::<u32>().is_ok())
         })
+        .filter(|entry| runs_as_root(&entry.path()))
         .filter_map(|entry| std::fs::read(entry.path().join("cmdline")).ok())
         .filter_map(|cmdline| parse_docker_proxy_cmdline(&cmdline))
         .collect();
     ports.sort_by_key(|p| (p.transport, p.host_port));
     ports.dedup();
     ports
+}
+
+/// The process of `/proc/<pid>` (`dir`) runs as root: the real and the
+/// effective user of its `status` file's `Uid:` line are 0. (The owner of
+/// the directory itself is not proof: a process that makes itself
+/// non-dumpable gets a root-owned `/proc/<pid>`.)
+fn runs_as_root(dir: &Path) -> bool {
+    let Ok(status) = std::fs::read_to_string(dir.join("status")) else {
+        return false;
+    };
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .is_some_and(|uids| {
+            let mut ids = uids.split_whitespace();
+            ids.next() == Some("0") && ids.next() == Some("0")
+        })
 }
 
 /// `true` for interface names Docker or Podman create for their networks:
@@ -269,9 +306,21 @@ impl ContainerFacts {
     }
 
     /// [`CONTAINER_NETWORKS_NOTE`] when container networks exist but no
-    /// proxy was found; `None` otherwise.
+    /// proxy was found; `None` otherwise. For a ruleset that blocks
+    /// forwarded traffic, use [`Self::note_for`].
     pub fn note(&self) -> Option<&'static str> {
-        (self.bridges && self.published.is_empty()).then_some(CONTAINER_NETWORKS_NOTE)
+        self.note_for(false)
+    }
+
+    /// [`Self::note`] for a ruleset that blocks forwarded traffic
+    /// (`blocks_forwarding`, [`CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED`]) or
+    /// not.
+    pub fn note_for(&self, blocks_forwarding: bool) -> Option<&'static str> {
+        (self.bridges && self.published.is_empty()).then_some(if blocks_forwarding {
+            CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED
+        } else {
+            CONTAINER_NETWORKS_NOTE
+        })
     }
 }
 
@@ -487,19 +536,28 @@ mod tests {
             Some(CONTAINER_NETWORKS_NOTE),
             "no proxy found"
         );
+        assert_eq!(
+            facts.note_for(true),
+            Some(CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED)
+        );
 
+        let proxy =
+            |port: &str| cmdline(&["/usr/bin/docker-proxy", "-proto", "tcp", "-host-port", port]);
+        write(root, "4100/cmdline", &proxy("8080"));
         write(
             root,
-            "4100/cmdline",
-            &cmdline(&[
-                "/usr/bin/docker-proxy",
-                "-proto",
-                "tcp",
-                "-host-port",
-                "8080",
-            ]),
+            "4100/status",
+            b"Name:\tdocker-proxy\nUid:\t0\t0\t0\t0\n",
         );
         write(root, "4200/cmdline", &cmdline(&["/usr/bin/sshd", "-D"]));
+        write(root, "4200/status", b"Uid:\t0\t0\t0\t0\n");
+        // A user's program named docker-proxy (`exec -a docker-proxy …`),
+        // and one without a readable status: not Docker's
+        write(root, "4300/cmdline", &proxy("51022"));
+        write(root, "4300/status", b"Uid:\t1000\t1000\t1000\t1000\n");
+        write(root, "4400/cmdline", &proxy("51023"));
+        write(root, "4500/cmdline", &proxy("51024"));
+        write(root, "4500/status", b"Uid:\t1000\t0\t0\t0\n");
         write(
             root,
             "self/cmdline",
@@ -511,6 +569,10 @@ mod tests {
         assert_eq!(facts.note(), None, "the proxy is found");
         assert!(facts.publishes(&socket(Transport::Tcp, "0.0.0.0", 8080)));
         assert!(!facts.publishes(&socket(Transport::Tcp, "0.0.0.0", 22)));
+        // A user's socket on the published port is not the proxy's
+        let mut users = socket(Transport::Tcp, "0.0.0.0", 8080);
+        users.uid = 1000;
+        assert!(!facts.publishes(&users));
     }
 
     #[test]

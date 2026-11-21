@@ -27,7 +27,10 @@
 //! 10. the IGMP accept
 //! 11. with local network discovery (Desktop mode): the mDNS, SSDP and
 //!     WS-Discovery multicast accepts and the accepts of replies to this
-//!     computer's own discovery queries
+//!     computer's own discovery queries (unicast to a port that sent an
+//!     SSDP, WS-Discovery, mDNS, LLMNR or `NetBIOS` name query within the
+//!     last seconds; the output chain remembers those ports, see
+//!     [`crate::core::firewall::DISCOVERY_QUERY_PORTS`])
 //! 12. the ICMP and `ICMPv6` accepts (all types, or the essential types in
 //!     strict mode)
 //! 13. (the optional drop logging: logs, decides nothing; not modelled)
@@ -50,7 +53,7 @@
 //!
 //! A user rule is modelled the way the generator emits it: disabled rules and
 //! rules of the Output and Forward chains are skipped (they never see a
-//! packet addressed to this computer; Server Mode and "Block forwarding"
+//! packet addressed to this computer; Server Mode and "Block forwarded traffic"
 //! only change those chains), a rule is split into one copy per address family when it has
 //! addresses or a per-source limit, a copy is only made for a family that
 //! every non-empty address list has, and rules that cannot be expressed
@@ -152,8 +155,7 @@ pub const BASE_ICMPV6: &str = "allow icmp v6";
 pub const BASE_ICMP_STRICT: &str = "allow essential icmp (strict mode)";
 /// Comment of the generated `ICMPv6` accept in strict mode.
 pub const BASE_ICMPV6_STRICT: &str = "allow essential icmpv6 (strict mode)";
-/// Name of the generated rate-limited reject at the end of the input chain
-/// (it has no comment in the ruleset).
+/// Comment of the generated rate-limited reject at the end of the input chain.
 pub const BASE_FINAL_REJECT: &str = "rate-limited reject";
 
 /// Rate of the final reject (`limit rate 5/second`); over it, the policy drops.
@@ -341,8 +343,9 @@ pub enum Condition {
     /// The packet comes from this source port (probes have none)
     SourcePort(u16),
     /// The packet is a reply to one of this computer's own local discovery
-    /// queries: its destination port sent multicast or broadcast UDP within
-    /// the last seconds (probes are not replies)
+    /// queries: its destination port sent an SSDP, WS-Discovery, mDNS, LLMNR
+    /// or `NetBIOS` name query within the last seconds (probes are not
+    /// replies)
     DiscoveryReply,
     /// The source fails the reverse-path check (it would not be routed back
     /// through the input interface)
@@ -421,7 +424,9 @@ impl fmt::Display for Condition {
                 write_networks(f, networks)
             }
             Self::SourcePort(port) => write!(f, "from source port {port}"),
-            Self::DiscoveryReply => f.write_str("replying to our own discovery queries"),
+            Self::DiscoveryReply => {
+                f.write_str("replying to a discovery query sent from this port")
+            }
             Self::ReversePathFails => f.write_str("failing the reverse-path check"),
             Self::Unicast => f.write_str("unicast"),
         }
@@ -922,6 +927,8 @@ impl Node {
 #[derive(Debug, Clone)]
 pub struct InputChain {
     nodes: Vec<Node>,
+    /// The ruleset blocks forwarded traffic (forward chain policy drop)
+    blocks_forwarding: bool,
 }
 
 impl InputChain {
@@ -1003,7 +1010,18 @@ impl InputChain {
         ];
         nodes.push(reject);
 
-        Self { nodes }
+        Self {
+            nodes,
+            blocks_forwarding: advanced.block_forwarding,
+        }
+    }
+
+    /// The ruleset's forward chain drops what no Forwarded rule allows
+    /// ("Block forwarded traffic"). Not part of the input chain; Exposure
+    /// needs it for the ports Docker publishes, whose traffic is forwarded
+    /// ([`crate::core::exposure::SocketExposure::docker_forward_filtered`]).
+    pub const fn blocks_forwarding(&self) -> bool {
+        self.blocks_forwarding
     }
 
     /// Evaluates a new inbound connection (see [`evaluate_inbound`]).
@@ -1171,7 +1189,7 @@ fn push_discovery_nodes(nodes: &mut Vec<Node>) {
 /// `add_user_rule` (family copies, skipped rules).
 fn push_user_rule(nodes: &mut Vec<Node>, rule: &Rule) {
     // Output and Forward rules never see packets addressed to this computer
-    // (and are only generated in Server Mode / with "Block forwarding")
+    // (and are only generated in Server Mode / with "Block forwarded traffic")
     if !rule.enabled || rule.chain != Chain::Input {
         return;
     }
@@ -1786,7 +1804,7 @@ mod tests {
         assert_eq!(
             r.conditional[1].to_string(),
             "10.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 \
-             (unicast and replying to our own discovery queries)"
+             (unicast and replying to a discovery query sent from this port)"
         );
         let r6 = reach(&rs, &unknown(Transport::Udp, 3702, IpFamily::V6));
         assert_eq!(r6.conditional[0].by, Decider::BaseRule(BASE_SSDP_V6));
@@ -1928,11 +1946,10 @@ mod tests {
                 bits & 16 != 0 && bits & 64 == 0,
                 "discovery only in Desktop mode"
             );
-            // The names are the comments in the ruleset (the final reject has
-            // none; its origin names it)
+            // The names are the comments in the ruleset
             let text = rs.to_nft_text();
             for name in &modelled {
-                if *name != USER_RULES && *name != BASE_FINAL_REJECT {
+                if *name != USER_RULES {
                     assert!(text.contains(&format!("comment \"{name}\"")), "{name}");
                 }
             }

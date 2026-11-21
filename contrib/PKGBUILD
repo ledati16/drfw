@@ -2,16 +2,27 @@
 pkgname=drfw-git
 pkgver=r336.76fd4fc
 pkgrel=1
-pkgdesc="A minimal, safe, stateful nftables GUI for desktop Linux"
+pkgdesc="A safe, transparent nftables firewall for Linux, with a GUI and CLI"
 arch=('x86_64')
 url="https://github.com/ledati16/drfw"
 license=('MIT')
-depends=('nftables' 'gcc-libs' 'glibc')
+# The GUI loads libxkbcommon and the Wayland or X11 client libraries at run
+# time (not linked, so namcap cannot see them). The root-side revert guard
+# needs flock and setsid (util-linux) and uses systemd-run/systemctl when
+# systemd is PID 1.
+depends=(
+    'nftables' 'gcc-libs' 'glibc' 'util-linux' 'systemd'
+    'libxkbcommon' 'wayland' 'libx11' 'libxcursor' 'libxi' 'libxrandr'
+)
 makedepends=('git' 'cargo')
-checkdepends=('jq')  # tests/mock_nft.sh validates JSON with jq
+# tests/mock_nft.sh validates JSON with jq; the kernel tests (unprivileged
+# namespaces) need unshare/nsenter (util-linux), ip (iproute2) and ping (iputils)
+checkdepends=('jq' 'iproute2' 'iputils')
 optdepends=(
     'polkit: for pkexec elevation in GUI environments'
     'sudo: for sudo elevation in terminal environments'
+    'vulkan-icd-loader: GPU rendering (with a Vulkan driver; software rendering otherwise)'
+    'xdg-desktop-portal: file dialogs for exports'
 )
 provides=('drfw')
 conflicts=('drfw')
@@ -39,6 +50,9 @@ prepare() {
 # nftables.service. Naming nft explicitly lets the no-prompt check and the
 # elevated scripts use it without searching PATH.
 _drfw_env() {
+    # Same target dir for build, check and package (a CARGO_TARGET_DIR from
+    # the environment would otherwise put the binary elsewhere)
+    export CARGO_TARGET_DIR=target
     export DRFW_SYSTEM_NFT_PATH=/etc/nftables.conf
     export DRFW_SYSTEM_NFT_SERVICE=nftables.service
     export DRFW_NFT_PATH=/usr/bin/nft
@@ -46,7 +60,6 @@ _drfw_env() {
 
 build() {
     cd "${pkgname%-git}"
-    export CARGO_TARGET_DIR=target
     _drfw_env
     cargo build --frozen --release
 }

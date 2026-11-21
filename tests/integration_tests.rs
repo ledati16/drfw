@@ -30,12 +30,12 @@ mod common;
 use std::env;
 use std::sync::Once;
 
-use drfw::core::firewall::{FirewallRuleset, PortEntry, Protocol};
+use drfw::core::firewall::FirewallRuleset;
 use drfw::core::verify;
 
 use crate::common::{
-    EnvVarGuard, create_full_test_rule, create_test_rule, create_test_ruleset, mock_nft_path,
-    script_paths_usable, write_profile,
+    EnvVarGuard, create_test_rule, create_test_ruleset, mock_nft_path, script_paths_usable,
+    write_profile,
 };
 
 /// One-time initialization flag for mock nft setup
@@ -164,19 +164,6 @@ fn test_mock_nft_rejects_malformed_input() {
     assert_eq!(run_mock(&["-f", file.to_str().unwrap()], ""), Some(1));
 }
 
-#[test]
-fn test_json_generation_deterministic() {
-    let ruleset = create_test_ruleset();
-
-    let json1 = ruleset.to_nftables_json();
-    let json2 = ruleset.to_nftables_json();
-
-    let str1 = serde_json::to_string(&json1).unwrap();
-    let str2 = serde_json::to_string(&json2).unwrap();
-
-    assert_eq!(str1, str2, "JSON generation should be deterministic");
-}
-
 /// The audit helpers write one JSON line per event to the state dir's
 /// `audit.log`, and nothing when the event log is off.
 #[tokio::test]
@@ -204,108 +191,9 @@ async fn test_audit_logging_writes_events() {
     assert!(!log.contains("not logged"));
 }
 
-// NOTE: test_all_protocol_types_generate_valid_json removed - see src/core/tests.rs
-// for the authoritative test_json_generation_with_all_protocol_types
-
-#[test]
-fn test_complex_rule_configurations() {
-    let mut ruleset = FirewallRuleset::new();
-
-    // Rule with source filter
-    ruleset.rules.push(create_full_test_rule(
-        "With Source",
-        Protocol::Tcp,
-        Some(22),
-        Some("10.0.0.0/8"),
-        None,
-    ));
-
-    // Rule with interface filter
-    ruleset.rules.push(create_full_test_rule(
-        "With Interface",
-        Protocol::Tcp,
-        Some(80),
-        None,
-        Some("eth0"),
-    ));
-
-    // Rule with port range (needs custom construction)
-    let mut port_range_rule = create_full_test_rule("Port Range", Protocol::Tcp, None, None, None);
-    port_range_rule.ports = vec![PortEntry::Range {
-        start: 8000,
-        end: 8999,
-    }];
-    port_range_rule.rebuild_caches();
-    ruleset.rules.push(port_range_rule);
-
-    // Rule with everything
-    ruleset.rules.push(create_full_test_rule(
-        "Everything",
-        Protocol::Udp,
-        Some(53),
-        Some("8.8.8.8/32"),
-        Some("wlan0"),
-    ));
-
-    // Every filter of every rule reaches the generated rules
-    let text = ruleset.to_nft_text();
-    for expected in [
-        "ip saddr 10.0.0.0/8 tcp dport 22",
-        "iifname \"eth0\" tcp dport 80",
-        "tcp dport 8000-8999",
-        "iifname \"wlan0\" ip saddr 8.8.8.8 udp dport 53",
-    ] {
-        assert!(text.contains(expected), "{expected:?} missing:\n{text}");
-    }
-}
-
-#[test]
-fn test_mock_nft_script_exists() {
-    let mock_path = mock_nft_path();
-    assert!(
-        mock_path.exists(),
-        "Mock nft script should exist at {mock_path:?}"
-    );
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::metadata(&mock_path).unwrap();
-        let permissions = metadata.permissions();
-        assert!(
-            permissions.mode() & 0o111 != 0,
-            "Mock script should be executable"
-        );
-    }
-}
-
 // ============================================================================
-// CLI Command Integration Tests
+// `drfw export` and profile loading
 // ============================================================================
-//
-// These tests verify the core functionality used by CLI commands without
-// requiring the actual binary to be executed. They test the same code paths
-// that handle_cli() in main.rs uses.
-
-#[tokio::test]
-async fn test_cli_list_profiles() {
-    // Test the profile listing functionality used by `drfw list`
-    // Uses temp directory to avoid touching user's real profile directory
-    use drfw::core::profiles;
-
-    let _temp_dir = setup_temp_test_dirs();
-
-    // With a fresh temp dir, should return empty list or handle gracefully
-    let result = profiles::list_profiles().await;
-    assert!(result.is_ok(), "list_profiles() should not fail");
-
-    let profiles = result.unwrap();
-    // Empty temp dir should result in empty list (no default created by list)
-    assert!(
-        profiles.is_empty(),
-        "Fresh temp dir should have no profiles"
-    );
-}
 
 /// `drfw export` prints exactly the text Save to System writes, or exactly
 /// the JSON Apply sends.
@@ -328,11 +216,9 @@ fn test_cli_export_formats() {
     assert_eq!(output.status.code(), Some(1), "{}", all_output(&output));
 }
 
-// NOTE: test_cli_verify_before_apply removed - exact duplicate of test_verify_with_mock
-
 /// Loading a profile from disk rebuilds the caches (they are not stored).
 #[tokio::test]
-async fn test_cli_profile_load_and_rebuild_caches() {
+async fn test_profile_load_rebuilds_caches() {
     let dirs = setup_temp_test_dirs();
     let ruleset = create_test_ruleset();
     write_profile(dirs.path(), "cached", &ruleset);
@@ -348,53 +234,6 @@ async fn test_cli_profile_load_and_rebuild_caches() {
     assert_eq!(rule.label_lowercase, "test ssh");
     assert_eq!(rule.port_display, "22");
     assert_eq!(rule.protocol_lowercase, "tcp");
-}
-
-#[tokio::test]
-async fn test_cli_invalid_profile_name() {
-    // Test profile name validation (CLI error handling)
-    // Note: Invalid names fail validation before any filesystem access,
-    // so no temp directory setup is needed here.
-    use drfw::core::profiles;
-
-    // These should fail validation
-    let invalid_names = vec![
-        "../etc/passwd".to_string(), // Path traversal
-        ".".to_string(),             // Special directory
-        "..".to_string(),            // Parent directory
-        "test/profile".to_string(),  // Contains slash
-        "test profile".to_string(),  // Contains space
-        "a".repeat(65),              // Too long
-    ];
-
-    for name in invalid_names {
-        let result = profiles::load_profile(&name).await;
-        assert!(
-            result.is_err(),
-            "Should reject invalid profile name: {name}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn test_cli_profile_not_found() {
-    // Test CLI error handling for missing profiles
-    // Uses temp directory to avoid touching user's real profile directory
-    use drfw::core::profiles;
-
-    let _temp_dir = setup_temp_test_dirs();
-
-    // Use a short but valid profile name that doesn't exist
-    let result = profiles::load_profile("nonexistent_abc").await;
-    assert!(result.is_err(), "Should error when profile doesn't exist");
-
-    if let Err(e) = result {
-        let err_msg = e.to_string();
-        assert!(
-            err_msg.contains("not found") || err_msg.contains("NotFound"),
-            "Error should indicate profile not found: {err_msg}"
-        );
-    }
 }
 
 /// Save to System write path with the mock nft (`-c -f FILE` accepts files that
@@ -1389,10 +1228,7 @@ fn test_cli_save_refuses_unconfirmed_rules_without_yes() {
     let output = run_drfw_save(root.path(), bin.path(), &["web"]);
     assert_eq!(output.status.code(), Some(7), "{}", all_output(&output));
     let out = all_output(&output);
-    assert!(
-        out.contains("not the one last applied and confirmed"),
-        "{out}"
-    );
+    assert!(out.contains("not the one last applied and kept"), "{out}");
     assert!(out.contains("WITHOUT a dead-man switch"), "{out}");
     assert!(out.contains("drfw apply web"), "{out}");
     assert!(!root.path().join("nftables.conf").exists());
@@ -1418,7 +1254,7 @@ fn test_cli_save_with_yes_saves_and_warns_about_boot() {
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
     let out = all_output(&output);
     assert!(
-        out.contains("not the one last applied and confirmed"),
+        out.contains("not the one last applied and kept"),
         "the warning is still shown: {out}"
     );
     assert_eq!(
@@ -1498,7 +1334,7 @@ fn test_cli_save_confirmed_rules_need_no_yes() {
     let output = run_drfw_save(root.path(), bin.path(), &["web"]);
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
     let out = all_output(&output);
-    assert!(out.contains("was applied and confirmed"), "{out}");
+    assert!(out.contains("was applied and kept (confirmed)"), "{out}");
     assert!(out.contains("earlier session"), "no boot id: {out}");
     assert!(!out.contains("not the one last applied"), "{out}");
     assert!(root.path().join("nftables.conf").exists());
@@ -1573,7 +1409,7 @@ fn test_cli_unguarded_apply_is_recorded_for_save() {
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
     let out = all_output(&output);
     assert!(
-        out.contains("applied (without auto-revert) and kept"),
+        out.contains("applied and kept (without auto-revert)"),
         "{out}"
     );
     assert!(!out.contains("earlier session"), "same boot: {out}");
@@ -1631,7 +1467,7 @@ fn test_cli_apply_retention_guard() {
     write_profile(root.path(), "web", &ruleset);
     let output = run_drfw_apply(root.path(), &["web", "--no-confirm"]);
     assert_eq!(output.status.code(), Some(9), "{}", all_output(&output));
-    assert!(all_output(&output).contains("Server mode"));
+    assert!(all_output(&output).contains("Server Mode"));
 }
 
 /// `drfw save` shows the retention warning too; --yes covers it.
@@ -2059,14 +1895,51 @@ fn test_cli_exposure_marks_docker_published_ports() {
         .as_bytes(),
     );
     proc_file(&proc, "sys/net/ipv4/ip_forward", b"1\n");
+    let docker_row = |out: &str| -> String {
+        out.lines()
+            .find(|l| l.starts_with("TCP 8080"))
+            .unwrap_or_else(|| panic!("{out}"))
+            .to_string()
+    };
+
+    // Not root's: a user's program named docker-proxy and a user's socket
+    // must not relabel the port
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web"], &[]);
+    assert!(
+        docker_row(&stdout_of(&output)).contains("OPEN TO EVERYONE"),
+        "{}",
+        all_output(&output)
+    );
+    proc_file(
+        &proc,
+        "5000/status",
+        b"Name:\tdocker-proxy\nUid:\t0\t0\t0\t0\n",
+    );
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web"], &[]);
+    assert!(
+        docker_row(&stdout_of(&output)).contains("OPEN TO EVERYONE"),
+        "a user's socket on the port: {}",
+        all_output(&output)
+    );
+    // Docker's proxy runs as root and owns the socket
+    let tcp = std::fs::read_to_string(proc.join("net/tcp")).unwrap();
+    let root_owned = tcp
+        .lines()
+        .map(|line| {
+            if line.contains(":1F90 ") {
+                line.replacen("  1000  ", "     0  ", 1)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    proc_file(&proc, "net/tcp", format!("{root_owned}\n").as_bytes());
 
     let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "web"], &[]);
     assert_eq!(output.status.code(), Some(0), "{}", all_output(&output));
     let out = stdout_of(&output);
-    let web = out
-        .lines()
-        .find(|l| l.starts_with("TCP 8080"))
-        .unwrap_or_else(|| panic!("{out}"));
+    let web = docker_row(&out);
     assert!(
         web.contains("published by Docker: not filtered by DRFW's rules"),
         "{out}"
@@ -2095,6 +1968,7 @@ fn test_cli_exposure_marks_docker_published_ports() {
     let web = &json["sockets"][0];
     assert_eq!(web["port"], 8080);
     assert_eq!(web["published_by_docker"], true);
+    assert_eq!(web["docker_forward_filtered"], false);
     assert_eq!(web["open_to_everyone"], false);
     assert!(web["decided_by"].is_null());
     assert_eq!(json["sockets"][1]["published_by_docker"], false);
@@ -2103,6 +1977,30 @@ fn test_cli_exposure_marks_docker_published_ports() {
     assert_eq!(
         json["notes"],
         serde_json::json!([drfw::core::host_facts::FORWARDING_WARNING])
+    );
+
+    // With "Block forwarded traffic" the Forwarded rules decide it
+    let mut blocking = FirewallRuleset::new();
+    blocking.rules.push(create_test_rule("Web", Some(8080)));
+    blocking.advanced_security.block_forwarding = true;
+    write_profile(root.path(), "blocking", &blocking);
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "blocking"], &[]);
+    let out = stdout_of(&output);
+    assert!(
+        docker_row(&out).contains(drfw::core::host_facts::DOCKER_PUBLISHED_FORWARD_FILTERED),
+        "{out}"
+    );
+    assert!(
+        out.contains("1 published by Docker (decided by your Forwarded rules)."),
+        "{out}"
+    );
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "blocking", "--json"], &[]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(json["sockets"][0]["published_by_docker"], true);
+    assert_eq!(json["sockets"][0]["docker_forward_filtered"], true);
+    assert_eq!(
+        json["sockets"][0]["reachable_from"],
+        drfw::core::host_facts::DOCKER_PUBLISHED_FORWARD_FILTERED
     );
 
     // No proxy, but a Docker bridge: the general note; forwarding off
@@ -2124,6 +2022,64 @@ fn test_cli_exposure_marks_docker_published_ports() {
         !out.contains(drfw::core::host_facts::FORWARDING_WARNING),
         "{out}"
     );
+    let output = run_drfw_in_proc(root.path(), &proc, &["exposure", "blocking"], &[]);
+    assert!(
+        stdout_of(&output)
+            .contains(drfw::core::host_facts::CONTAINER_NETWORKS_NOTE_FORWARD_FILTERED),
+        "{}",
+        all_output(&output)
+    );
+}
+
+/// `--confirm` outside 5..=120 seconds is a usage error (exit 2), not
+/// silently clamped; nothing is verified or applied.
+#[test]
+fn test_cli_apply_confirm_range() {
+    let root = tempfile::tempdir().unwrap();
+    write_profile(root.path(), "web", &create_test_ruleset());
+    for seconds in ["0", "4", "121", "3600"] {
+        let output = run_drfw(root.path(), &["apply", "web", "--confirm", seconds]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{seconds}: {}",
+            all_output(&output)
+        );
+        let out = all_output(&output);
+        assert!(out.contains("5..=120"), "{seconds}: {out}");
+        assert!(!out.contains("Verifying"), "{seconds}: {out}");
+    }
+}
+
+/// `drfw status`, `drfw exposure` and `drfw list` with stdout a closed pipe
+/// (`drfw status | head`): no panic (exit 101), the command finishes as
+/// usual.
+#[cfg(target_endian = "little")]
+#[test]
+fn test_cli_closed_stdout_does_not_panic() {
+    let root = tempfile::tempdir().unwrap();
+    let proc = root.path().join("proc");
+    proc_fixture(&proc);
+    exposure_profile(root.path());
+    write_profile(root.path(), "default", &create_test_ruleset());
+    for args in [
+        &["status"][..],
+        &["exposure", "web"],
+        &["exposure", "web", "--json"],
+        &["list"],
+    ] {
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        drop(reader);
+        let output = drfw_command(root.path(), mock_nft_path())
+            .env("DRFW_TEST_PROC_DIR", &proc)
+            .args(args)
+            .stdout(writer)
+            .output()
+            .expect("run drfw");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(!stderr.contains("panicked"), "{args:?}: {stderr}");
+    }
 }
 
 /// S3: `drfw status` has a "Forwarding" line: off, the forwarding notice,

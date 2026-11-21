@@ -669,7 +669,7 @@ pub const GUARD_STATE_DIR: &str = "/run/drfw";
 macro_rules! watcher_script {
     () => {
         r#"set -u
-umask 022
+umask 077
 LC_ALL=C
 export LC_ALL
 state_dir=$1
@@ -784,6 +784,20 @@ confirm() {
     finish confirmed
 }
 
+# Stopped from outside (`systemctl stop`, `kill`, shutdown). The apply script
+# writes the status before it stops a guard it supersedes or that failed, so
+# that is a quiet exit; anything else means the rules were never confirmed:
+# revert them rather than leave them live without a guard
+on_signal() {
+    trap '' HUP INT TERM
+    if [ -e "$status_file" ]; then
+        exit 0
+    fi
+    log "stopped before the rules were confirmed; reverting"
+    revert
+}
+trap on_signal HUP INT TERM
+
 # Counted from now until the apply arms the guard, then afresh from that
 # moment, so the user gets the full timeout once the new rules are live
 deadline=$(( $(now_cs) + timeout * 100 ))
@@ -850,6 +864,15 @@ done
 /// whether or not the new rules went live. Problems are logged to the journal
 /// (stderr under systemd, else `logger -t drfw`).
 ///
+/// `SIGTERM`, `SIGHUP` or `SIGINT` (`systemctl stop`, `kill`, shutdown) end
+/// the guard like the deadline: it reverts, unless its status already
+/// exists (the apply script writes `superseded` or `not-applied` before it
+/// stops a watcher). Only `SIGKILL` (or a crash) ends it without an outcome;
+/// [`crate::core::apply_guard::pending_guard`] then reports the guard lost.
+/// It runs with umask 077: only the status files (and the apply script's
+/// `active`) are made world-readable, never the revert file, which holds the
+/// previous `inet drfw` table.
+///
 /// # Trust boundary
 ///
 /// `confirm_dir` is the user's `$XDG_RUNTIME_DIR` (or DRFW's state dir),
@@ -911,7 +934,13 @@ const _: () = assert!(
 /// The script ignores `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM` and `SIGPIPE`
 /// (an SSH drop, Ctrl-C after the password or a killed elevation tool must not
 /// stop it halfway), and the watcher is started **before** the new rules go
-/// live, so even `SIGKILL` cannot leave them without a guard.
+/// live, so even `SIGKILL` cannot leave them without a guard. A `setsid`
+/// watcher gets the default signal handling back (it reverts when
+/// terminated). It runs with umask 077: the revert file (the previous
+/// `inet drfw` table, which listing normally needs `CAP_NET_ADMIN` for), the
+/// watcher script and the lock are readable by root only; the state
+/// directory (755), the `status-*` files and `active` (644) are
+/// world-readable, for [`crate::core::apply_guard`].
 ///
 /// Steps:
 /// 1. Print `drfw-apply-started` (DRFW then knows authentication succeeded).
@@ -940,8 +969,9 @@ const _: () = assert!(
 ///    exits on the next poll) and `systemctl stop` its unit if it had one.
 /// 7. With a guard: create `<state_dir>/armed-<nonce>` (from now on the
 ///    watcher accepts confirm/revert tokens) and record the guard in
-///    `<state_dir>/active` (`<nonce> <systemd|setsid>`). Without one: remove
-///    `active`.
+///    `<state_dir>/active` (`<nonce> <systemd|setsid> <pid|->`, mode 644;
+///    the pid of a `setsid` watcher, `-` for a systemd unit). Without one:
+///    remove `active`.
 /// 8. Print `revert_file=<path>` and `watcher=<systemd:unit|setsid:pid|none>`.
 ///
 /// Exit codes: 0 success; 1 failure before anything changed; 3 nft rejected
@@ -952,7 +982,7 @@ const _: () = assert!(
 pub const APPLY_SCRIPT: &str = concat!(
     r#"trap '' HUP INT QUIT TERM PIPE
 set -u
-umask 022
+umask 077
 LC_ALL=C
 export LC_ALL
 printf 'drfw-apply-started\n'
@@ -1069,14 +1099,21 @@ if [ "$timeout" -gt 0 ]; then
             not_started "systemd-run failed: $out"
         fi
         launched=systemd
+        watcher_pid=-
         watcher="systemd:$unit.service"
     else
         command -v setsid >/dev/null 2>&1 || not_started "setsid not found"
-        setsid /bin/sh "$watcher_file" "$state_dir" "$timeout" "$nonce" "$confirm_dir" \
-            "$nft" "$uid" setsid </dev/null >/dev/null 2>&1 9>&- &
+        # Default signal handling for the watcher (this script ignores them):
+        # it reverts when it is terminated
+        (
+            trap - HUP INT QUIT TERM PIPE
+            exec setsid /bin/sh "$watcher_file" "$state_dir" "$timeout" "$nonce" \
+                "$confirm_dir" "$nft" "$uid" setsid </dev/null >/dev/null 2>&1 9>&-
+        ) &
         pid=$!
         kill -0 "$pid" 2>/dev/null || not_started "setsid failed"
         launched=setsid
+        watcher_pid=$pid
         watcher="setsid:$pid"
     fi
 fi
@@ -1113,8 +1150,8 @@ if ! : > "$armed_file"; then
     rm -f -- "$active_file"
     fail "the new rules are active, but the revert guard could not be armed: they revert in $timeout seconds and cannot be confirmed" 5
 fi
-printf '%s %s\n' "$nonce" "$launched" > "$active_file.tmp" \
-    && mv -f -- "$active_file.tmp" "$active_file"
+printf '%s %s %s\n' "$nonce" "$launched" "$watcher_pid" > "$active_file.tmp" \
+    && chmod 644 "$active_file.tmp" && mv -f -- "$active_file.tmp" "$active_file"
 printf 'revert_file=%s\nwatcher=%s\n' "$revert_file" "$watcher"
 exit 0
 "#
@@ -1339,7 +1376,9 @@ mod tests {
     }
 
     proptest::proptest! {
-        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(
+            crate::core::test_helpers::proptest_cases(64)
+        ))]
 
         /// Differential: shell `safe_path` vs the Rust predicates.
         #[test]

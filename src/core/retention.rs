@@ -5,9 +5,13 @@
 //! used is compared with the last ruleset applied and kept (the
 //! [`crate::core::confirmed`] record). A confirmation is required when it:
 //!
-//! - removes at least [`MIN_REMOVED`] of the enabled rules of the kept
-//!   ruleset, and at least [`MIN_REMOVED_PERCENT`] % of them. Rules are matched
-//!   by id; a rule that is disabled now counts as removed;
+//! - removes or changes at least [`MIN_REMOVED`] of the enabled rules of the
+//!   kept ruleset, and at least [`MIN_REMOVED_PERCENT`] % of them. Rules are
+//!   matched by id; a rule that is disabled now counts as removed, and so
+//!   does one edited to act on other traffic or differently
+//!   ([`same_effect`]: Accept turned into Drop, sources narrowed, moved to
+//!   another chain, …). Only the rules themselves are compared: moving a kept
+//!   rule below a new Drop rule is not detected;
 //! - switches the egress mode from Desktop to Server (outgoing connections
 //!   then need allow rules);
 //! - turns on "block forwarded traffic".
@@ -18,10 +22,10 @@
 //! Everything is computed once (in `update()` for the GUI); the GUI and the
 //! CLI show the same [`RetentionWarning::lines`].
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::core::firewall::{EgressProfile, FirewallRuleset};
+use crate::core::firewall::{Action, EgressProfile, FirewallRuleset, Rule};
 
 /// Fewest removed rules that require a confirmation.
 pub const MIN_REMOVED: usize = 3;
@@ -36,8 +40,12 @@ pub const MAX_NAMED: usize = 10;
 /// Why a ruleset needs an explicit confirmation, ready to display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetentionWarning {
-    /// Enabled rules of the kept ruleset that are gone or disabled
+    /// Enabled rules of the kept ruleset that are gone, disabled or changed
+    /// ([`Self::changed_count`] of them changed)
     pub removed_count: usize,
+    /// Of [`Self::removed_count`]: rules still enabled, but edited to act on
+    /// other traffic or differently
+    pub changed_count: usize,
     /// Enabled rules of the kept ruleset
     pub kept_enabled: usize,
     /// Desktop -> Server egress mode
@@ -56,18 +64,24 @@ impl RetentionWarning {
         let defaults = FirewallRuleset::new();
         let kept = kept.unwrap_or(&defaults);
 
-        let still_enabled: HashSet<uuid::Uuid> = next
+        let still_enabled: HashMap<uuid::Uuid, &Rule> = next
             .rules
             .iter()
             .filter(|r| r.enabled)
-            .map(|r| r.id)
+            .map(|r| (r.id, r))
             .collect();
         let kept_enabled: Vec<_> = kept.rules.iter().filter(|r| r.enabled).collect();
-        let removed: Vec<&str> = kept_enabled
-            .iter()
-            .filter(|r| !still_enabled.contains(&r.id))
-            .map(|r| r.label.as_str())
-            .collect();
+        let mut removed: Vec<&str> = Vec::new();
+        let mut changed: Vec<&str> = Vec::new();
+        for rule in &kept_enabled {
+            match still_enabled.get(&rule.id) {
+                None => removed.push(&rule.label),
+                Some(now) if !same_effect(rule, now) => changed.push(&rule.label),
+                Some(_) => {}
+            }
+        }
+        let changed_count = changed.len();
+        removed.append(&mut changed);
         let removes_many = removed.len() >= MIN_REMOVED
             && removed.len() * 100 >= kept_enabled.len() * MIN_REMOVED_PERCENT;
 
@@ -81,17 +95,26 @@ impl RetentionWarning {
         }
 
         let mut lines = Vec::with_capacity(3);
-        if removes_many {
+        if removes_many && changed_count == 0 {
             lines.push(format!(
                 "Removes {} of the {} enabled rules last applied and kept (deleted or disabled): {}",
                 removed.len(),
                 kept_enabled.len(),
                 name_list(&removed)
             ));
+        } else if removes_many {
+            lines.push(format!(
+                "Removes or changes {} of the {} enabled rules last applied and kept ({} deleted \
+                 or disabled, {changed_count} edited to act on other traffic or differently): {}",
+                removed.len(),
+                kept_enabled.len(),
+                removed.len() - changed_count,
+                name_list(&removed)
+            ));
         }
         if enables_server_mode {
             lines.push(
-                "Switches to Server mode: outgoing connections are blocked unless a rule allows them."
+                "Switches to Server Mode: outgoing connections are blocked unless a rule allows them."
                     .to_string(),
             );
         }
@@ -103,12 +126,32 @@ impl RetentionWarning {
         }
         Some(Self {
             removed_count: removed.len(),
+            changed_count,
             kept_enabled: kept_enabled.len(),
             enables_server_mode,
             enables_block_forwarding,
             lines,
         })
     }
+}
+
+/// `kept` and `now` (the same rule, by id) act on the same traffic in the
+/// same way: same chain, action (and reject type), protocol, ports,
+/// addresses, interfaces and limits. The label, tags and logging do not
+/// matter.
+pub fn same_effect(kept: &Rule, now: &Rule) -> bool {
+    kept.chain == now.chain
+        && kept.action == now.action
+        && (kept.action != Action::Reject || kept.reject_type == now.reject_type)
+        && kept.protocol == now.protocol
+        && kept.ports == now.ports
+        && kept.sources == now.sources
+        && kept.destinations == now.destinations
+        && kept.interface == now.interface
+        && kept.output_interface == now.output_interface
+        && kept.rate_limit == now.rate_limit
+        && kept.connection_limit == now.connection_limit
+        && kept.connection_limit_per_source == now.connection_limit_per_source
 }
 
 /// "a, b, c" for up to [`MAX_NAMED`] names, then "+N more".
@@ -200,6 +243,51 @@ mod tests {
         assert_eq!((warning.removed_count, warning.kept_enabled), (3, 5));
     }
 
+    /// A kept rule edited to act on other traffic or differently counts
+    /// like a removed one (Accept -> Drop, narrowed sources, moved to the
+    /// Output chain); relabelling, tags and logging do not.
+    #[test]
+    fn test_edited_rules_count_as_removed() {
+        use crate::core::firewall::Chain;
+        let kept = ruleset_with(5);
+        let mut next = kept.clone();
+        next.rules[0].action = Action::Drop;
+        next.rules[1].sources = vec!["192.168.1.0/24".parse().unwrap()];
+        assert_eq!(RetentionWarning::check(Some(&kept), &next), None, "2 of 5");
+        next.rules[2].chain = Chain::Output;
+        let warning = RetentionWarning::check(Some(&kept), &next).expect("3 of 5");
+        assert_eq!((warning.removed_count, warning.changed_count), (3, 3));
+        assert_eq!(
+            warning.lines,
+            vec![
+                "Removes or changes 3 of the 5 enabled rules last applied and kept (0 deleted \
+                 or disabled, 3 edited to act on other traffic or differently): \
+                 \"rule0\", \"rule1\", \"rule2\""
+                    .to_string()
+            ]
+        );
+        // One deleted and two edited
+        next.rules.remove(2);
+        next.rules[0].interface = Some("eth0".into());
+        let warning = RetentionWarning::check(Some(&kept), &next).expect("3 of 5");
+        assert_eq!((warning.removed_count, warning.changed_count), (3, 2));
+        assert!(warning.lines[0].contains("(1 deleted or disabled, 2 edited"));
+
+        // Cosmetic edits change nothing
+        let mut cosmetic = kept.clone();
+        for rule in &mut cosmetic.rules {
+            rule.label.push_str(" (renamed)");
+            rule.tags = vec!["web".into()];
+            rule.log_enabled = !rule.log_enabled;
+        }
+        assert_eq!(RetentionWarning::check(Some(&kept), &cosmetic), None);
+        assert!(same_effect(&kept.rules[0], &cosmetic.rules[0]));
+        // The reject type only matters for Reject rules
+        let mut reject = kept.rules[0].clone();
+        reject.reject_type = crate::core::firewall::RejectType::TcpReset;
+        assert!(same_effect(&kept.rules[0], &reject));
+    }
+
     #[test]
     fn test_names_are_capped() {
         let kept = ruleset_with(14);
@@ -220,7 +308,7 @@ mod tests {
         let warning = RetentionWarning::check(Some(&kept), &next).expect("server mode");
         assert!(warning.enables_server_mode && !warning.enables_block_forwarding);
         assert_eq!(warning.lines.len(), 1);
-        assert!(warning.lines[0].starts_with("Switches to Server mode"));
+        assert!(warning.lines[0].starts_with("Switches to Server Mode"));
 
         // Already Server: nothing new
         assert_eq!(RetentionWarning::check(Some(&next), &next), None);

@@ -500,7 +500,7 @@ EOF
 
 # write_profiles DIR: the kit's profiles in DIR/profiles/
 #   e2e-a / e2e-b / e2e-c: Desktop mode, one input rule each (e2e-A/B/C)
-#   e2e-srv: Server mode (output policy drop), one rule for a port nobody uses
+#   e2e-srv: Server Mode (output policy drop), one rule for a port nobody uses
 write_profiles() {
     local dir="$1/profiles"
     mkdir -p -- "$dir"

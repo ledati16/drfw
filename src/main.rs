@@ -65,6 +65,49 @@
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
+// `print!`/`println!` for this file: like std's, but a closed stdout
+// (`drfw status | head`) silently ends the output instead of panicking
+// (exit 101). SIGPIPE stays ignored (Rust's default): drfw writes to the
+// stdin of nft and of the elevation tool, and a child that exits early must
+// be an error to report, not a signal that kills drfw mid-apply.
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::write_stdout(format_args!($($arg)*))
+    };
+}
+macro_rules! println {
+    () => {
+        $crate::write_stdout(format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::write_stdout(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
+/// Writes `args` to stdout for [`print!`] and [`println!`]. Once stdout is a
+/// closed pipe, all further output is dropped and the command finishes as
+/// usual (with its own exit code).
+///
+/// # Panics
+///
+/// On any other write error, like `std::println!`.
+fn write_stdout(args: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CLOSED: AtomicBool = AtomicBool::new(false);
+    if CLOSED.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Err(e) = std::io::stdout().lock().write_fmt(args) {
+        assert!(
+            e.kind() == std::io::ErrorKind::BrokenPipe,
+            "failed printing to stdout: {e}"
+        );
+        CLOSED.store(true, Ordering::Relaxed);
+    }
+}
+
 use clap::{Parser, Subcommand, ValueEnum};
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use drfw::build_info::{LONG_VERSION, SHORT_VERSION};
@@ -89,11 +132,11 @@ mod exit_code {
     pub const STATE_UNKNOWN: u8 = 6;
     /// `drfw save` refused: the rules are not the ones last applied and kept
     /// and there was no `--yes` (or the question was answered no)
-    pub const NOT_CONFIRMED: u8 = 7;
+    pub const NOT_KEPT: u8 = 7;
     /// `drfw save` saved the file, but the boot service could not be enabled
     pub const NOT_ENABLED: u8 = 8;
     /// `drfw apply`/`drfw save` refused by the retention guard (most of the
-    /// kept rules removed, Server mode or forward blocking turned on) or the
+    /// kept rules removed, Server Mode or "Block forwarded traffic" turned on) or the
     /// SSH lockout check (new connections from a current SSH session's
     /// client would be blocked) without `--yes` (or the question was
     /// answered no); nothing was changed
@@ -112,10 +155,11 @@ Exit codes:
   5  apply: another apply replaced these rules before they were confirmed
   6  apply: the outcome is UNKNOWN: the new rules may be active
   7  save: not saved: the rules are not the ones last applied and
-     confirmed with `drfw apply` (pass --yes to save anyway)
+     kept (confirmed, or applied with --no-confirm) with `drfw apply`
+     or the GUI (pass --yes to save anyway)
   8  save: saved, but the boot service could not be enabled
   9  apply/save: not done: the ruleset removes most of the rules last
-     applied and kept, turns on Server mode or forward blocking, or would
+     applied and kept, turns on Server Mode or \"Block forwarded traffic\", or would
      block new SSH connections from a current session's client
      (pass --yes to go ahead)";
 
@@ -300,6 +344,15 @@ fn run_countdown(
     if let Err(e) = crossterm::terminal::enable_raw_mode() {
         return CountdownEnd::NoTerminal(e.to_string());
     }
+    // Keys typed before the countdown (an extra Enter after the sudo or run0
+    // password) must not confirm it: discard the terminal's pending input
+    // and anything crossterm has buffered already
+    let _ = nix::sys::termios::tcflush(std::io::stdin(), nix::sys::termios::FlushArg::TCIFLUSH);
+    while let Ok(true) = event::poll(std::time::Duration::ZERO) {
+        if event::read().is_err() {
+            break;
+        }
+    }
 
     let color = Stream::Stdout.colored();
     let mut shown = None;
@@ -452,7 +505,10 @@ async fn finish_guarded_apply(
 #[derive(Parser)]
 #[command(name = "drfw")]
 #[command(version = SHORT_VERSION, long_version = LONG_VERSION)]
-#[command(about = "Dumb Rust Firewall - A minimal nftables manager", long_about = None)]
+#[command(
+    about = "DRFW (Dumb Rust Firewall): a safe, transparent nftables firewall for Linux, with a GUI and CLI",
+    long_about = None
+)]
 #[command(after_help = EXIT_CODES_HELP)]
 struct Cli {
     #[command(subcommand)]
@@ -474,7 +530,7 @@ enum Commands {
     ///
     /// A ruleset that removes most of the rules last applied and kept (at
     /// least 3 and 40 % of the enabled ones; disabled counts as removed),
-    /// turns on Server mode or forward blocking, or would block (or may
+    /// turns on Server Mode or "Block forwarded traffic", or would block (or may
     /// block) new SSH connections from the client of a current SSH session,
     /// needs --yes (or an answer on a terminal). Open sessions survive any
     /// apply; the check is about reconnecting.
@@ -482,15 +538,21 @@ enum Commands {
     Apply {
         /// Name of the profile to apply
         name: String,
-        /// Auto-revert timeout in seconds (default: 15s, max: 120s)
-        #[arg(short, long, value_name = "SECONDS", default_value = "15")]
+        /// Auto-revert timeout in seconds, 5 to 120
+        #[arg(
+            short,
+            long,
+            value_name = "SECONDS",
+            default_value = "15",
+            value_parser = clap::value_parser!(u64).range(5..=120)
+        )]
         confirm: u64,
         /// Skip auto-revert confirmation (apply immediately without safety
         /// net); the rules count as kept at once
         #[arg(long, conflicts_with = "confirm")]
         no_confirm: bool,
         /// Apply even if it removes most of the rules last applied and kept,
-        /// turns on Server mode or forward blocking, or could lock out SSH
+        /// turns on Server Mode or "Block forwarded traffic", or could lock out SSH
         #[arg(short, long)]
         yes: bool,
     },
@@ -508,7 +570,7 @@ enum Commands {
     /// dead-man switch, so a profile that is not the one last applied and
     /// kept with `drfw apply` (or the GUI) needs --yes (or an answer on a
     /// terminal). So does one that removes most of the kept rules, turns on
-    /// Server mode or forward blocking, or would block new SSH connections
+    /// Server Mode or "Block forwarded traffic", or would block new SSH connections
     /// from the client of a current SSH session.
     #[command(after_help = EXIT_CODES_HELP)]
     Save {
@@ -656,7 +718,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
 
             println!();
             println!("Applying ruleset...");
-            let timeout_secs = if no_confirm { 0 } else { confirm.clamp(5, 120) };
+            let timeout_secs = if no_confirm { 0 } else { confirm };
             let result = core::apply_guard::apply_guarded(&nft_json, timeout_secs, &ruleset).await;
             audit::log_apply(
                 enable_event_log,
@@ -823,11 +885,11 @@ async fn print_status_report() {
     let guard_dir = std::path::Path::new(elevation::GUARD_STATE_DIR);
     let guard = match core::apply_guard::pending_guard(guard_dir) {
         Ok(None) => "none pending".to_string(),
-        Ok(Some(pending)) => format!(
-            "PENDING since {}: the last apply reverts automatically unless it is confirmed",
-            pending
+        Ok(Some(pending)) => pending_guard_status(
+            &pending
                 .armed_at
-                .map_or_else(|| "an unknown time".to_string(), local_time)
+                .map_or_else(|| "an unknown time".to_string(), local_time),
+            pending.watcher,
         ),
         Err(e) => format!(
             "unknown ({}/active cannot be read: {e})",
@@ -844,6 +906,24 @@ async fn print_status_report() {
         "Kernel",
         "not checked (listing it needs root); run `sudo nft list table inet drfw` to inspect it",
     );
+}
+
+/// The `Auto-revert` line of `drfw status` for a pending guard armed `since`.
+fn pending_guard_status(since: &str, watcher: core::apply_guard::WatcherState) -> String {
+    use core::apply_guard::WatcherState;
+    match watcher {
+        WatcherState::Running => format!(
+            "PENDING since {since}: the last apply reverts automatically unless it is confirmed"
+        ),
+        WatcherState::Gone => format!(
+            "LOST since {since}: the last apply was never confirmed, but its revert guard \
+             ended without reverting; its rules stay active. Apply again to keep or replace them"
+        ),
+        WatcherState::Unknown => format!(
+            "PENDING since {since}: the last apply reverts automatically unless it is confirmed \
+             (whether its revert guard still runs could not be checked)"
+        ),
+    }
 }
 
 /// Loads profile `name` for `drfw <verb>` and refuses it if an applied rule
@@ -1018,7 +1098,7 @@ fn save_error(output: &std::process::Output) -> String {
 ///
 /// # Errors
 ///
-/// [`exit_code::NOT_CONFIRMED`] when refused for want of a confirmation,
+/// [`exit_code::NOT_KEPT`] when refused for want of a confirmation,
 /// [`exit_code::NOT_ENABLED`] when the file was saved but `--enable-at-boot`
 /// could not enable the service, [`exit_code::FAILED`] otherwise.
 async fn save_profile(
@@ -1059,8 +1139,8 @@ async fn save_profile(
     };
     if let Some(record) = confirmed {
         let how = match record.kind() {
-            core::confirmed::RecordKind::Confirmed => "applied and confirmed",
-            core::confirmed::RecordKind::Unguarded => "applied (without auto-revert) and kept",
+            core::confirmed::RecordKind::Confirmed => "applied and kept (confirmed)",
+            core::confirmed::RecordKind::Unguarded => "applied and kept (without auto-revert)",
         };
         print_status(
             "✓",
@@ -1075,7 +1155,7 @@ async fn save_profile(
     } else {
         let warn = Stream::Stderr.colored();
         eprintln!(
-            "{} This ruleset is not the one last applied and confirmed on this machine (with `drfw apply` or the GUI).",
+            "{} This ruleset is not the one last applied and kept on this machine (with `drfw apply` or the GUI).",
             paint("WARNING:", Color::Red, warn)
         );
         eprintln!(
@@ -1086,12 +1166,12 @@ async fn save_profile(
         if !yes {
             if !std::io::stdin().is_terminal() {
                 return Err(failure(
-                    exit_code::NOT_CONFIRMED,
-                    "not saved: pass --yes to save rules that were not applied and confirmed",
+                    exit_code::NOT_KEPT,
+                    "not saved: pass --yes to save rules that were not applied and kept",
                 ));
             }
             if !ask_yes_no("Save anyway?").await {
-                return Err(failure(exit_code::NOT_CONFIRMED, "not saved"));
+                return Err(failure(exit_code::NOT_KEPT, "not saved"));
             }
         }
     }
@@ -1281,6 +1361,7 @@ fn exposure_json(
                 "interfaces": exposure.open_on_interfaces,
                 "nobody": exposure.nobody,
                 "published_by_docker": exposure.docker_published,
+                "docker_forward_filtered": exposure.docker_forward_filtered,
                 "local_discovery": exposure.local_discovery,
                 "decided_by": (!exposure.decided_by_display.is_empty())
                     .then_some(&exposure.decided_by_display),
@@ -1338,7 +1419,7 @@ impl ExposureNotes {
         Self {
             forwarding,
             forwarding_warning: core::host_facts::forwarding_warning(forwarding, ruleset),
-            containers: containers.note(),
+            containers: containers.note_for(ruleset.advanced_security.block_forwarding),
         }
     }
 
@@ -1501,6 +1582,9 @@ async fn print_exposure(
         }
         if published > 0 {
             let _ = write!(summary, ", {published} published by Docker");
+            if ruleset.advanced_security.block_forwarding {
+                summary.push_str(" (decided by your Forwarded rules)");
+            }
         }
         println!("{summary}.");
     }
@@ -1650,7 +1734,7 @@ mod tests {
             exit_code::REVERT_FAILED,
             exit_code::SUPERSEDED,
             exit_code::STATE_UNKNOWN,
-            exit_code::NOT_CONFIRMED,
+            exit_code::NOT_KEPT,
             exit_code::NOT_ENABLED,
             exit_code::RETENTION,
         ];

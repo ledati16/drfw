@@ -342,7 +342,7 @@ impl Action {
     }
 
     /// Returns single-character abbreviation for compact UI display
-    /// Used in action badges (Phase 2.3 optimization)
+    /// Used in action badges
     pub const fn as_char(self) -> &'static str {
         match self {
             Action::Accept => "A",
@@ -401,11 +401,6 @@ impl RejectType {
             RejectType::AdminProhibited => "Admin Prohibited",
             RejectType::TcpReset => "TCP Reset",
         }
-    }
-
-    /// Returns true if this reject type is only valid for TCP protocol
-    pub const fn requires_tcp(self) -> bool {
-        matches!(self, RejectType::TcpReset)
     }
 }
 
@@ -511,7 +506,7 @@ impl fmt::Display for RateLimit {
 ///
 /// Input rules always apply. Output rules only apply in Server Mode (the
 /// Desktop output policy accepts everything), and Forward rules only apply
-/// with "Block forwarding" on (otherwise the forward policy accepts
+/// with "Block forwarded traffic" on (otherwise the forward policy accepts
 /// everything); rules of an inactive chain stay in the profile but are not
 /// generated (see [`Rule::takes_effect`]).
 #[derive(
@@ -537,7 +532,7 @@ pub enum Chain {
     #[strum(serialize = "output")]
     Output,
     /// Routed traffic passing through this computer (containers, VMs, other
-    /// networks); only useful with "Block forwarding" (forward policy drop).
+    /// networks); only useful with "Block forwarded traffic" (forward policy drop).
     /// Both the input and the output interface can be matched.
     #[strum(serialize = "forward")]
     Forward,
@@ -563,7 +558,7 @@ pub struct Rule {
     #[serde(default)]
     pub output_interface: Option<String>,
     /// Chain the rule belongs to (Input, Output in Server Mode, Forward with
-    /// "Block forwarding")
+    /// "Block forwarded traffic")
     #[serde(default)]
     pub chain: Chain,
     #[serde(default = "default_true")]
@@ -629,11 +624,10 @@ pub struct Rule {
     #[serde(skip)]
     pub rate_limit_display: Option<String>,
     /// Cached action display string for efficient view rendering (e.g., "A", "D (5/s)", "R")
-    /// Combines action character with rate limit if present (Phase 2.3 optimization)
+    /// Combines action character with rate limit if present
     #[serde(skip)]
     pub action_display: String,
     /// Cached interface display string for efficient view rendering (e.g., "@eth0", "Any")
-    /// (Phase 2.3 optimization)
     #[serde(skip)]
     pub interface_display: String,
     /// Cached sanitized log prefix for nftables log expression
@@ -732,13 +726,13 @@ impl Rule {
                 format!("{}/{}", rl.count, unit_abbrev)
             }
         });
-        // Phase 2.3: Cache action display string (combines action + rate limit)
+        // Cache the action display string (combines action + rate limit)
         self.action_display = if let Some(ref rate_limit) = self.rate_limit_display {
             format!("{} ({})", self.action.as_char(), rate_limit)
         } else {
             self.action.as_char().to_string()
         };
-        // Phase 2.3: Cache interface display string
+        // Cache the interface display string
         self.interface_display = if let Some(ref iface) = self.interface {
             format!("@{iface}")
         } else {
@@ -841,49 +835,9 @@ impl Rule {
         }
     }
 
-    /// Updates label and its cached lowercase version
-    pub fn set_label(&mut self, label: String) {
-        self.label_lowercase = label.to_lowercase();
-        self.label = label;
-    }
-
-    /// Updates interface and its cached lowercase version
-    pub fn set_interface(&mut self, interface: Option<String>) {
-        self.interface_lowercase = interface.as_ref().map(|i| i.to_lowercase());
-        self.interface = interface;
-    }
-
-    /// Updates protocol and its cached lowercase version
-    pub fn set_protocol(&mut self, protocol: Protocol) {
-        self.protocol_lowercase = protocol.as_str();
-        self.protocol = protocol;
-    }
-
-    /// Adds a tag and updates the cached lowercase tags
-    pub fn add_tag(&mut self, tag: String) {
-        let tag_lowercase = tag.to_lowercase();
-        self.tags.push(tag);
-        self.tags_lowercase.push(tag_lowercase);
-    }
-
-    /// Removes a tag and updates the cached lowercase tags
-    pub fn remove_tag(&mut self, tag: &str) {
-        if let Some(pos) = self.tags.iter().position(|t| t == tag) {
-            self.tags.remove(pos);
-            self.tags_lowercase.remove(pos);
-        }
-    }
-
-    /// Sets all tags and updates the cached lowercase tags
-    pub fn set_tags(&mut self, tags: Vec<String>) {
-        self.tags_lowercase = tags.iter().map(|t| t.to_lowercase()).collect();
-        self.tags = tags;
-    }
-
     /// Creates a Rule with specified fields and auto-initializes caches.
     /// Useful for tests and manual rule creation.
     /// Advanced options (destinations, action, `rate_limit`, `connection_limit`) use defaults.
-    #[allow(clippy::too_many_arguments)]
     pub fn with_caches(
         id: Uuid,
         label: String,
@@ -962,7 +916,7 @@ pub enum EgressProfile {
     #[default]
     #[strum(serialize = "desktop")]
     Desktop,
-    /// Server mode: Deny all outbound by default, require explicit rules (OUTPUT DROP)
+    /// Server Mode: Deny all outbound by default, require explicit rules (OUTPUT DROP)
     #[strum(serialize = "server")]
     Server,
 }
@@ -1014,7 +968,8 @@ pub struct AdvancedSecuritySettings {
     pub block_forwarding: bool,
 
     /// Local network discovery: accept mDNS, SSDP and WS-Discovery multicast
-    /// and the unicast replies to this computer's own discovery queries.
+    /// and the unicast replies to this computer's own discovery queries
+    /// (SSDP, WS-Discovery, mDNS, LLMNR and `NetBIOS` name queries).
     ///
     /// Absent in older profiles (`false`). Only effective in Desktop mode;
     /// the generator ignores it in Server Mode.
@@ -1443,7 +1398,13 @@ impl FirewallRuleset {
         // DHCP replies: the request went to a broadcast (DHCPv4) or multicast
         // (DHCPv6) address, so conntrack cannot associate the reply. (Most
         // DHCPv4 clients receive on a packet socket before netfilter; clients
-        // using a UDP socket need this.)
+        // using a UDP socket need this.) Deliberately before the user rules,
+        // like ufw's: a broad user Drop (all UDP from a network, an
+        // interface) must not silently cost the machine its address at the
+        // next renewal, which on a remote server is a lockout. The match is
+        // narrow (server port to client port; DHCPv6 from link-local only),
+        // so it only reaches DHCP client sockets, and Exposure lists it as
+        // conditional access to port 68/546 ("from source port 67/547").
         cmds.push_base_rule(
             "input",
             vec![
@@ -1566,20 +1527,34 @@ impl FirewallRuleset {
         }
     }
 
-    /// The `discovery_reply` set and the output rule that fills it (local
+    /// The `discovery_reply` set and the output rules that fill it (local
     /// discovery, Desktop mode).
     ///
     /// Answers to SSDP, WS-Discovery, LLMNR, `NetBIOS` and one-shot mDNS
     /// queries are unicast to the port the query was sent from, from the
     /// answering device's address, so conntrack cannot match them to the
-    /// multicast/broadcast query. The set remembers the source ports of
-    /// outgoing multicast/broadcast UDP for [`DISCOVERY_REPLY_TIMEOUT_SECS`]
-    /// (`UPnP` devices answer within the query's MX, at most 5 s); the input
-    /// rules accept unicast UDP to those ports from private and link-local
-    /// sources. Keyed by port only, deliberately: the answering devices are
-    /// not known in advance.
+    /// multicast/broadcast query. The set remembers the source port of each
+    /// outgoing query for [`DISCOVERY_REPLY_TIMEOUT_SECS`] (`UPnP` devices
+    /// answer within the query's MX, at most 5 s); the input rules accept
+    /// unicast UDP to those ports from private and link-local sources. Keyed
+    /// by port only, deliberately: the answering devices are not known in
+    /// advance.
+    ///
+    /// Only genuine queries count: UDP to a discovery protocol's port at its
+    /// multicast group ([`DISCOVERY_QUERIES`]), or to the `NetBIOS` name
+    /// service port as broadcast. Other multicast or broadcast traffic (a
+    /// game's LAN announcement, a service broadcasting from its listening
+    /// port) never opens the port it was sent from.
     fn add_discovery_output_rules(cmds: &mut CommandList) {
         use serde_json::json;
+
+        // A single value, or an anonymous set of several
+        fn value_or_set<T: Serialize>(items: &[T]) -> serde_json::Value {
+            match items {
+                [one] => json!(one),
+                _ => json!({ "set": items }),
+            }
+        }
 
         cmds.section = SECTION_LOCAL;
         cmds.set_names.insert(DISCOVERY_REPLY_SET.to_string());
@@ -1595,21 +1570,35 @@ impl FirewallRuleset {
                 "size": DISCOVERY_REPLY_SET_SIZE,
             } } }),
         );
+        let remember = || {
+            json!({ "set": {
+                "op": "update",
+                "elem": { "payload": { "protocol": "udp", "field": "sport" } },
+                "set": format!("@{DISCOVERY_REPLY_SET}"),
+            } })
+        };
+        for query in DISCOVERY_QUERIES {
+            cmds.push_base_rule(
+                "output",
+                vec![
+                    Self::payload_match(query.family, "daddr", value_or_set(query.groups)),
+                    Self::payload_match("udp", "dport", value_or_set(query.ports)),
+                    remember(),
+                ],
+                query.comment,
+            );
+        }
         cmds.push_base_rule(
             "output",
             vec![
-                Self::meta_match("l4proto", "udp"),
                 Self::match_eq(
                     json!({ "fib": { "flags": ["daddr"], "result": "type" } }),
-                    json!({ "set": ["broadcast", "multicast"] }),
+                    "broadcast",
                 ),
-                json!({ "set": {
-                    "op": "update",
-                    "elem": { "payload": { "protocol": "udp", "field": "sport" } },
-                    "set": format!("@{DISCOVERY_REPLY_SET}"),
-                } }),
+                Self::payload_match("udp", "dport", NETBIOS_NAME_PORT),
+                remember(),
             ],
-            "remember ports we send discovery queries from",
+            "remember ports of our netbios name queries",
         );
     }
 
@@ -2119,28 +2108,22 @@ impl FirewallRuleset {
             );
         }
 
-        // These two have no comment in the ruleset; the origin names them for
-        // error messages.
-        // Rate-limited reject (prevents port scanning)
-        cmds.push(
-            CommandOrigin::BaseRule("rate-limited reject"),
-            Self::rule_add(
-                "input",
-                vec![
-                    Self::meta_match("pkttype", "host"),
-                    Self::rate_limit(5, "second"),
-                    json!({ "counter": null }),
-                    json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } }),
-                ],
-                "",
-            ),
+        // Rate-limited reject of unicast packets: a closed port answers
+        // like a host without the service (prevents slow scans from
+        // timing out on every port), at most 5 per second
+        cmds.push_base_rule(
+            "input",
+            vec![
+                Self::meta_match("pkttype", "host"),
+                Self::rate_limit(5, "second"),
+                json!({ "counter": null }),
+                json!({ "reject": { "type": "icmpx", "expr": "admin-prohibited" } }),
+            ],
+            "rate-limited reject",
         );
 
         // Final counter (catches all remaining drops from chain policy)
-        cmds.push(
-            CommandOrigin::BaseRule("final counter"),
-            Self::rule_add("input", vec![json!({ "counter": null })], ""),
-        );
+        cmds.push_base_rule("input", vec![json!({ "counter": null })], "final counter");
     }
 }
 
@@ -2250,6 +2233,84 @@ const DISCOVERY_REPLY_TIMEOUT_SECS: u32 = 10;
 const DISCOVERY_REPLY_SET_SIZE: u32 = 1024;
 /// Origin name of the `discovery_reply` set declaration (error messages).
 const DISCOVERY_SET_ORIGIN: &str = "discovery reply set";
+
+/// One kind of multicast discovery query whose source port the
+/// `discovery_reply` set remembers (see `add_discovery_output_rules`).
+struct DiscoveryQuery {
+    /// `ip` or `ip6`
+    family: &'static str,
+    /// The protocol's multicast groups
+    groups: &'static [&'static str],
+    /// Its destination ports
+    ports: &'static [u16],
+    /// The rule's comment
+    comment: &'static str,
+}
+
+/// The multicast discovery queries: SSDP and WS-Discovery (one group for
+/// both), mDNS and LLMNR, for IPv4 and IPv6. `NetBIOS` name queries
+/// (broadcast to [`NETBIOS_NAME_PORT`], IPv4 only) have their own rule.
+const DISCOVERY_QUERIES: [DiscoveryQuery; 6] = [
+    DiscoveryQuery {
+        family: "ip",
+        groups: &["239.255.255.250"],
+        ports: &[SSDP_PORT, WS_DISCOVERY_PORT],
+        comment: "remember ports of our ssdp and ws-discovery queries",
+    },
+    DiscoveryQuery {
+        family: "ip6",
+        groups: &["ff02::c", "ff05::c"],
+        ports: &[SSDP_PORT, WS_DISCOVERY_PORT],
+        comment: "remember ports of our ssdp and ws-discovery queries (ipv6)",
+    },
+    DiscoveryQuery {
+        family: "ip",
+        groups: &["224.0.0.251"],
+        ports: &[MDNS_PORT],
+        comment: "remember ports of our mdns queries",
+    },
+    DiscoveryQuery {
+        family: "ip6",
+        groups: &["ff02::fb"],
+        ports: &[MDNS_PORT],
+        comment: "remember ports of our mdns queries (ipv6)",
+    },
+    DiscoveryQuery {
+        family: "ip",
+        groups: &["224.0.0.252"],
+        ports: &[LLMNR_PORT],
+        comment: "remember ports of our llmnr queries",
+    },
+    DiscoveryQuery {
+        family: "ip6",
+        groups: &["ff02::1:3"],
+        ports: &[LLMNR_PORT],
+        comment: "remember ports of our llmnr queries (ipv6)",
+    },
+];
+
+/// SSDP (`UPnP` discovery) port.
+const SSDP_PORT: u16 = 1900;
+/// WS-Discovery port.
+const WS_DISCOVERY_PORT: u16 = 3702;
+/// mDNS port.
+const MDNS_PORT: u16 = 5353;
+/// LLMNR port.
+const LLMNR_PORT: u16 = 5355;
+/// `NetBIOS` name service port.
+const NETBIOS_NAME_PORT: u16 = 137;
+
+/// The destination ports of the discovery queries whose replies local
+/// discovery accepts: SSDP, WS-Discovery, mDNS, LLMNR and `NetBIOS` name
+/// service. Services on these ports announce themselves from them, so
+/// they receive the replies too (see [`crate::core::exposure`]).
+pub const DISCOVERY_QUERY_PORTS: [u16; 5] = [
+    SSDP_PORT,
+    WS_DISCOVERY_PORT,
+    MDNS_PORT,
+    LLMNR_PORT,
+    NETBIOS_NAME_PORT,
+];
 
 // Preview section headings (text output only; see `NftCommand::section`).
 const SECTION_SETUP: &str = "Setup";

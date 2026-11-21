@@ -37,9 +37,10 @@ pub struct AppConfig {
     /// changing them. Missing in older configs: `false`.
     #[serde(default)]
     pub local_discovery_notice_shown: bool,
-    /// Timeout in seconds for auto-revert countdown (default: 15s, max: 3600s)
+    /// Timeout in seconds for the auto-revert countdown (default: 15 s).
     ///
-    /// Clamped to 3600 seconds (1 hour) to prevent integer overflow in countdown calculations.
+    /// 5 to 120 seconds, the range of the GUI setting and of `drfw apply
+    /// --confirm`; the GUI clamps a hand-edited value into it.
     #[serde(default = "default_auto_revert_timeout")]
     pub auto_revert_timeout_secs: u64,
     /// Enable event logging for Diagnostics tab
@@ -95,9 +96,7 @@ fn config_path() -> Option<std::path::PathBuf> {
 ///
 /// # Security
 ///
-/// On Unix systems, files are created with mode 0o600 (user read/write only).
-/// On Windows, files inherit directory permissions. Users should ensure the
-/// data directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\data`
+/// Files are created with mode 0o600 (user read/write only).
 ///
 /// # Errors
 ///
