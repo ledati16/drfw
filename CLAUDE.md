@@ -210,23 +210,76 @@ audit log). Appends to the audit log are single `write`s instead (see §10).
 ## 4. Privilege Escalation
 
 ### What Runs Elevated
-Only three things, all in `src/elevation.rs`:
+Only three things, all built in `src/elevation.rs` (the only `create_elevated_*`
+builders), each as the root helper's request when the helper is installed:
 
-1. **`nft --json --check -f -`**: the authoritative verify, used only when the
-   unprivileged check (`unshare -rn nft --check`, private user + network namespace)
-   does not pass. Only a *pass* in the namespace is trusted.
-2. **`/bin/sh` + `APPLY_SCRIPT`**: apply and arm the revert guard (one prompt per apply).
-3. **`/bin/sh` + `SAVE_CONFIG_SCRIPT`**: Save to System, optionally followed by
+1. **check** (`nft --json --check -f -`, `NFT_JSON_CHECK_ARGS`): the authoritative
+   verify, used only when the unprivileged check (`unshare -rn nft --check`, private
+   user + network namespace) does not pass. Only a *pass* in the namespace is trusted.
+2. **apply** (`APPLY_SCRIPT`): apply and arm the revert guard.
+3. **save-config** (`SAVE_CONFIG_SCRIPT`): Save to System, optionally followed by
    `systemctl enable <SYSTEM_NFT_SERVICE>` in the same script (one prompt either way).
+
+What the elevation tool starts (`ElevationPlan`):
+- **Helper installed** (`distro::HELPER_PATH`, default `/usr/lib/drfw/drfw-helper`, a
+  regular file owned by root, it and every directory above it not group/world-writable:
+  `helper_is_trusted`): `<tool> <helper> check`, `<tool> <helper> apply <the 7 script
+  args>`, `<tool> <helper> save-config <target> <nft> <service|"">`.
+- **Otherwise** (development builds, `cargo run`, a tampered install): `<tool> /bin/sh
+  -c <script> <name> <args…>` and `<tool> <nft> --json --check -f -`, unchanged.
+- **Already root** (`Elevation::Direct`): the scripts run directly, never the helper
+  (it insists on `PKEXEC_UID`/`SUDO_UID`).
 
 Elevated `nft` is `distro::NFT_COMMAND`: the packager's `DRFW_NFT_PATH`, else plain
 `nft`. Unprivileged `systemctl is-enabled`/`is-active` queries (`core::boot`) never
 elevate.
 
 The scripts are compile-time constants. Data reaches them only as argv (checked
-against an allowlist inside the script) and stdin; nothing is ever interpolated into
-script text. Exit codes are structured, and 126/127 are never used by the scripts:
+against an allowlist inside the script, and by the helper before that) and stdin;
+nothing is ever interpolated into script text. Exit codes are structured, and 126/127
+are never used by the scripts or the helper (refusals exit 1, `drfw: drfw-helper: …`):
 callers read those as authentication failures of the elevation tool.
+
+### Root Helper (`drfw-helper`, `src/helper.rs`)
+A second binary (`src/helper_main.rs`, `[[bin]] drfw-helper`), installed by the
+package with the polkit action `org.drfw.helper` (`drfw print-polkit-policy`, template
+`contrib/org.drfw.helper.policy.in`: `auth_admin` for any/inactive, `auth_admin_keep`
+for active, `exec.path` = `HELPER_PATH`). In order, it:
+
+1. Refuses unless uid and euid are 0 and `PKEXEC_UID` (else `SUDO_UID`; run0 sets it
+   too) names the caller: a canonical decimal uid.
+2. Validates argv (`parse_request`): exactly `apply`, `save-config` or `check`, the
+   exact arity, and every **fixed** value equal to this build's (`GUARD_STATE_DIR`,
+   `NFT_COMMAND`, launcher `auto`, `SYSTEM_NFT_PATH`, `SYSTEM_NFT_SERVICE` or empty);
+   only timeout (≤ 3600), nonce (32 lowercase hex), token dir (`is_script_path`) and
+   uid (must equal the caller's) vary. `check` takes no arguments: never `-f <path>`.
+3. Reads stdin (≤ 64 MiB) and refuses payloads in which nft could see `include`
+   (`check_payload`: no `\` at all, every `"` closed on its line, no `include` in any
+   case outside strings). This matters for JSON too: `nft --json -f` parses input
+   that is not valid JSON as text, and `include "<file>"` makes root nft echo that
+   file in its errors.
+4. Puts the payload in a memfd as stdin, clears the environment (`PATH=SAFE_PATH`,
+   `/usr/sbin:/usr/bin:/sbin:/bin`, nothing else), `cd /`, and `exec`s `/bin/sh -c
+   <the same script>` or `nft`. Process tree, signals and exit codes stay the scripts'.
+
+**Why `auth_admin_keep` on the helper is safe, and was not on `/bin/sh` or `nft`:**
+polkit keeps the authorization for the *subject*, the process that ran `pkexec` (pid +
+start time), for ~5 minutes. Cached `/bin/sh` = any root command; cached `nft` = root
+`nft -c -f <any file>` (a file-read primitive). Cached helper = only what DRFW does
+anyway: apply a ruleset with a revert guard, write `SYSTEM_NFT_PATH`, enable
+`SYSTEM_NFT_SERVICE`, check a ruleset. No path, service, nft binary or environment
+variable can be chosen, and the `include` file read is refused. Whoever can drive the
+GUI process could already ask for all of that; the window only spares the prompt.
+
+**Test mode** (`cfg(debug_assertions)` only; release builds do not read the variables):
+`DRFW_HELPER_TEST_MODE=1` skips the root check and takes the fixed values from
+`DRFW_HELPER_TEST_{STATE_DIR,TARGET,NFT,SERVICE,PATH}`, launcher `setsid`, caller uid
+`getuid()`. It refuses when `PKEXEC_UID`/`SUDO_UID` is set or as root of the initial
+user namespace (`/proc/self/uid_map` identity), so it runs as the test user or as root
+of `unshare -rn` only. Tests: `tests/helper.rs` (binary, `tests/env_nft.sh` as nft),
+`tests/real_nft.rs` (apply/save/check in a namespace), unit tests in `helper.rs`.
+**Never** add a test-mode path that works in release builds, a way to pass a path or
+service through argv, or an argument that reaches nft as `-f <file>`.
 
 ### Elevation Strategy
 Chosen by the pure `select_elevation()` (inputs gathered by `current_elevation()`,
@@ -241,13 +294,19 @@ table-tested), from the `ElevationContext` the front end sets once at startup
 4. **CLI (or no context set):** stdin is a TTY → `run0` (systemd v256+, no SUID) if
    installed, else `sudo`; no TTY → `pkexec`
 
-Every elevated child uses `kill_on_drop(true)`. DRFW ships **no polkit rule**: every
-elevated operation asks once. Caching `/bin/sh` would allow arbitrary root commands;
-caching `nft` makes root `nft` (a file-read primitive: `nft -c -f <file>` echoes lines
-in errors) available to anything that can drive the DRFW process, only to save a
-prompt in the rare elevated-check fallback. Never suggest sudoers `NOPASSWD` for
-unattended applies: the elevated program is `/bin/sh`, so that is full root. Automation
-that already runs as root runs `drfw` as root (nothing is elevated then).
+Whichever tool, the plan elevates the helper when `helper_installed` (the table test
+covers both). Every elevated child uses `kill_on_drop(true)`.
+
+**Prompts.** With the helper: the first apply/save/elevated check of a GUI process in
+an active local session prompts, later ones within ~5 minutes do not (polkit
+`auth_admin_keep`, scoped to that process; remote/inactive sessions get `auth_admin`
+and are asked each time; each `drfw` CLI run is a new process, so `pkexec` asks again; `sudo` uses its
+own timestamp; `run0` asks each time). Without the helper: every elevated operation
+asks. DRFW ships the polkit **action** and **no polkit rule**: never add a rule that
+returns `YES` (that removes the password entirely) and never cache `/bin/sh` or `nft`.
+Never suggest sudoers `NOPASSWD` for unattended applies (for `/bin/sh` it is full root;
+for the helper it is root over the firewall and the boot config). Automation that
+already runs as root runs `drfw` as root (nothing is elevated then).
 
 **Rejected approaches:** custom auth dialogs (security complexity, maintenance burden),
 PAM directly (synchronous API conflicts with the async GUI), piping passwords to stdin
@@ -349,8 +408,9 @@ to `.drfw-orig`, never overwritten), sync, then rename into place. Any failure u
 here leaves the target untouched. Then, only if a service was passed, `systemctl enable`
 it (**never** `start`: that reloads rules mid-session); a failure there is reported as
 `enable=failed: ...` on stdout with exit 0, because the file was saved. `systemctl` is
-called by name, through the `PATH` the elevation tool gives root (pkexec, sudo's
-`secure_path`, run0); `APPLY_SCRIPT` already relies on that for `systemctl`/`systemd-run`.
+called by name, through the `PATH` root gets: the helper's fixed `SAFE_PATH`, or without
+the helper what the elevation tool sets (pkexec, sudo's `secure_path`, run0);
+`APPLY_SCRIPT` relies on the same for `systemctl`/`systemd-run`.
 
 The script ignores `HUP`/`INT`/`QUIT`/`TERM`/`PIPE` like `APPLY_SCRIPT`.
 
@@ -371,7 +431,8 @@ unit generated by `drfw print-service-unit` loads the same file.
 
 ### Compile-Time Distro Configuration
 `src/distro.rs`: `SYSTEM_NFT_PATH` (`DRFW_SYSTEM_NFT_PATH`), `SYSTEM_NFT_SERVICE`
-(`DRFW_SYSTEM_NFT_SERVICE`), `NFT_PATH` (`DRFW_NFT_PATH`, optional), re-exported as
+(`DRFW_SYSTEM_NFT_SERVICE`), `NFT_PATH` (`DRFW_NFT_PATH`, optional), `HELPER_PATH`
+(`DRFW_HELPER_PATH`, default `/usr/lib/drfw/drfw-helper`), re-exported as
 `drfw::SYSTEM_NFT_PATH`/`SYSTEM_NFT_SERVICE`. `const _: () = assert!(...)` checks them
 with the const fns `is_valid_absolute_path` (same `[A-Za-z0-9/._@+-]` allowlist as the
 scripts' `safe_path`, and stricter: no empty or `.` components) and
@@ -379,9 +440,11 @@ scripts' `safe_path`, and stricter: no empty or `.` components) and
 scripts' `safe_path` (absolute, allowlist, no `..` component; a differential proptest
 keeps the shell function and it in step). `unprivileged_nft()` is the `nft` DRFW runs
 itself (the namespace check); the real-nft tests probe and use the same one.
-`build.rs` has `rerun-if-env-changed` for all three. `contrib/drfw.service.in` is the
+`build.rs` has `rerun-if-env-changed` for all of them. `contrib/drfw.service.in` is the
 unit template; `drfw print-service-unit` (hidden) fills it with these values, and the
-PKGBUILD installs that output. Never hard-code `/etc/nftables.conf` or `nft` paths
+PKGBUILD installs that output. Likewise `contrib/org.drfw.helper.policy.in` and `drfw
+print-polkit-policy` (`distro::polkit_policy()`, exec path = `HELPER_PATH`); the
+PKGBUILD installs it to `/usr/share/polkit-1/actions/` and the helper to `HELPER_PATH`. Never hard-code `/etc/nftables.conf` or `nft` paths
 elsewhere; tests must compare against the constants (packagers build with overrides).
 
 ### Security Requirements
@@ -390,7 +453,7 @@ elsewhere; tests must compare against the constants (packagers build with overri
 - **Error translation:** Map exit codes to user actions (126=cancelled, 127=auth failed)
 - **Audit logging:** Log all privileged operations with timestamps
 - **Test bypass:** `DRFW_NFT_COMMAND` (set by the tests themselves, §6) runs that nft or
-  `tests/mock_nft.sh` directly, without elevation
+  `tests/mock_nft.sh` directly, without elevation and without the helper
 
 ### Subprocess Timeouts
 Every subprocess call has a timeout: async children via
@@ -481,7 +544,8 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/elevation.rs` | Unit + property tests for elevation, without touching the environment | Method selection table (`select_elevation`: root, `DRFW_ELEVATION_METHOD`, context, TTY, installed tools), command shapes per tool, `DRFW_NFT_COMMAND` precedence, the shell `safe_path` vs `distro::is_script_path` (differential proptest, three locales) |
 | `src/core/boot.rs` | `systemctl` output mapping | `enablement_from_output()`, `BootStatus` summaries and checkbox rules |
 | `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI binary, profiles | Mock verification **plumbing** (one pass, one refusal) and the mock's own input checks, guarded-apply plumbing (incl. a killed apply script → `StateUnknown`, guard still reverts; which applies write the kept-ruleset record), CLI `status` (incl. the SSH line)/`check`/`save`/`exposure` (table and `--json` shape on a `/proc` fixture)/`print-service-unit`, the retention guard and the SSH lockout check of `apply`/`save` (exit 9, `--yes`; a rate-limited SSH rule is a note without exit 9; interface-bound SSH against a `drfw-test-addresses` fixture; `SSH_CONNECTION` on the child only) and the `--help` exit codes (runs the real binary, in a hermetic environment), argument validation of both root scripts (every argument, unsafe state dirs; exit 1 and nothing created), save script incl. enable-at-boot (fake `systemctl`), `drfw export` output, audit log writes, profile load rebuilds caches |
-| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server Mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored) |
+| `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, per-source sets (replaced on apply, clients kept apart), Server Mode loopback, a user Drop rule blocks ping (two netns), interface length limit vs nft, Save to System script, revert guard end to end (incl. SIGHUP/INT/TERM/KILL right after the rules went live, tokens of other uids ignored), the root helper in its debug-build test mode (apply confirm/timeout, save-config, check, refusals incl. `include` payloads change nothing) |
+| `tests/helper.rs` | The `drfw-helper` binary as the test user (`tests/env_nft.sh` stands in for nft) | Refusal without root, test mode refused under pkexec/sudo and absent from release builds, the child's environment (only `SAFE_PATH`, cwd `/`), bad requests for every subcommand and `include` payloads refused before anything runs, `drfw print-polkit-policy` (xmllint where installed) |
 | `src/core/evaluate.rs` | Unit tests for the rule evaluator | Chain model (order, family copies, skipped rules), limits/conditions as `Limited`, reachability sets (subtracted drops, `AllExcept`, conditional access, caveats), **the modelled chain has the generator's base rules (by their real comments) in the generator's order** for every setting that changes it, ICMP section after the user rules |
 | `src/core/addr_set.rs` | Unit tests for the address-set arithmetic | Union/intersection/difference/complement, CIDR decomposition |
 | `src/core/exposure.rs` | Unit tests for socket discovery | `/proc/net` parsing (IPv4, IPv6, v4-mapped, UDP, established connections), inode → process mapping and `scan_host_in` on a fixture tree, dual-stack heuristic, exposure rows |
@@ -504,7 +568,7 @@ tests in `src/main.rs`, which run in the bin test target.
 | `src/config.rs` | Config loading | Old configs keep auto-revert off and get no notice, active-profile salvage |
 | `src/command.rs` | Undo/redo commands | Apply/undo of each command (incl. adding several rules, enabling Server Mode with its rules), history size cap, a new command clears redo |
 | `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse, exit codes distinct and documented, `drfw exposure` table and JSON |
-| `tests/root_e2e.rs` | `#[ignore]`d helpers for the disposable root e2e kit (`tools/e2e/run.sh`); no-ops without `DRFW_E2E_DISPOSABLE=1` | Save to System through the real elevation tool and the real `nft -c` |
+| `tests/root_e2e.rs` | `#[ignore]`d helpers for the disposable root e2e kit (`tools/e2e/run.sh`); no-ops without `DRFW_E2E_DISPOSABLE=1` | Save to System through the real elevation tool and the real `nft -c`; GUI-style applies from one process (the kit counts polkit prompts, scenario 11) |
 | `tests/common/mod.rs` | Helpers shared by the integration crates (`mod common;`): real-nft probe and `nft`/`unshare` with the library's `nft`, root-script path check, rule builders on `Rule::with_caches`, `write_profile`, `EnvVarGuard` | - |
 | `src/core/test_helpers.rs` | Shared lib test utilities (Rule/Ruleset creation, mock setup, `CHRONO_TIMESTAMPS`) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |

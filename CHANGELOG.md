@@ -50,6 +50,16 @@ what the generated ruleset contains, and what the GUI and CLI tell you about it.
 - **One password prompt per apply.** Confirm, "revert now" and the timeout need none:
   they are token files in your runtime directory (which must be yours, mode 0700), and
   the watcher only honours tokens you own. DRFW ships **no polkit rule** any more.
+- **Password is remembered for about 5 minutes again** (new `drfw-helper` + polkit
+  action); the prompt now says what it is for ("Authentication is required to change
+  the firewall rules"). DRFW elevates only the small root helper
+  `/usr/lib/drfw/drfw-helper`, which accepts DRFW's three requests (apply, save, check)
+  with this build's fixed paths, passes no environment on and refuses rulesets that
+  would make `nft` read another file (`include`). Its polkit action
+  `org.drfw.helper` uses `auth_admin_keep`, so further applies and saves from the same
+  DRFW window within about five minutes do not ask; another window or a new CLI run
+  does. Without the helper installed (a build run from the source tree) DRFW elevates
+  `/bin/sh` as before and asks every time.
 - **The first-apply lockout is fixed.** The old "snapshot" was taken inside the apply,
   so on a first apply it captured the new drop policies without any rules, and a
   revert left the machine offline. A revert now restores the previous table exactly,
@@ -324,6 +334,11 @@ upgrading.
 - The generated file's `#!` line uses the build's `nft` path.
 - `contrib/PKGBUILD` sets Arch's paths, installs no polkit rule, respects the pinned
   toolchain and runs the test suite in `check()` (no root needed).
+- **Root helper and polkit action:** a second binary, `drfw-helper`, installed at
+  `DRFW_HELPER_PATH` (default `/usr/lib/drfw/drfw-helper`), and `drfw
+  print-polkit-policy`, which prints the action `org.drfw.helper` with that path
+  (template `contrib/org.drfw.helper.policy.in`) for
+  `/usr/share/polkit-1/actions/`. The PKGBUILD installs both.
 
 ### Internal
 

@@ -307,10 +307,16 @@ installed, else `sudo`; without a terminal, and always in the GUI, with `pkexec`
 The environment variable `DRFW_ELEVATION_METHOD=sudo` (or `run0`, `pkexec`) overrides
 that choice, e.g. to use `sudo` where `run0` is installed but not usable, such as in
 some SSH sessions. It only changes which tool asks for the password; there is
-deliberately no password-less mode (the elevated program is `/bin/sh` with a fixed
-script, so a `NOPASSWD` rule for it would grant unrestricted root). An unknown value or
-a tool that is not installed is an error. Automation that already runs as root can run
-`drfw` as root: it then elevates nothing.
+deliberately no password-less mode (without the root helper the elevated program is
+`/bin/sh` with a fixed script, so a `NOPASSWD` rule for it would grant unrestricted
+root). An unknown value or a tool that is not installed is an error. Automation that
+already runs as root can run `drfw` as root: it then elevates nothing.
+
+**What is elevated.** A packaged DRFW installs a small root helper,
+`/usr/lib/drfw/drfw-helper`, and elevates only that program, with `pkexec`, `sudo` or
+`run0` alike: `drfw-helper apply|save-config|check …` (see [Safety
+Model](#safety-model)). A build run from the source tree (`cargo run`) has no
+installed helper and elevates `/bin/sh` with the same fixed scripts instead.
 
 ## Installation
 
@@ -318,7 +324,8 @@ a tool that is not installed is an error. Automation that already runs as root c
 
 **Required at runtime:**
 - Linux with nftables support, and the `nftables` package (`nft`)
-- Privilege escalation: `run0` (systemd v256+), `sudo`, or `pkexec` (the GUI uses `pkexec`)
+- Privilege escalation: `run0` (systemd v256+), `sudo`, or `pkexec` (the GUI uses `pkexec`,
+  so polkit and an authentication agent, which desktops start for you)
 - systemd is optional: without it the revert guard runs as a detached process, and
   DRFW cannot tell whether the rules load at boot
 - `unshare` (util-linux) and unprivileged user namespaces for the password-free
@@ -380,26 +387,45 @@ drfw
 1. **Launch DRFW**: `drfw`
 2. **Add a rule**: Click **Add Access Rule**, configure protocol/port/source/interface
 3. **Preview**: View syntax-highlighted nftables output in the preview pane
-4. **Apply**: Click **Apply Changes** — DRFW verifies, then applies with one elevation prompt
+4. **Apply**: Click **Apply Changes** — DRFW verifies, then applies (the first apply asks for your password)
 5. **Confirm**: Click **Confirm & Stay** (or press Ctrl+Enter) within the countdown, or rules auto-revert
 6. **Persist** (optional): **Save to System** (or `drfw save`) writes the rules to `/etc/nftables.conf` for boot
 
 ## Safety Model
 
-**One prompt per apply.** Apply runs one fixed, elevated script that saves the
+**At most one prompt per apply.** Apply runs one fixed, elevated script that saves the
 current `inet drfw` table (or notes that there is none) as a revert batch in
 root-owned `/run/drfw` (mode 755; the revert batch, the watcher script and the lock are
 0600, readable only by root; only `active` and the `status-*` files are 0644, for
 `drfw status`), starts a detached root watcher
-and only then applies the new ruleset. Nothing else needs a password (DRFW ships no
-polkit rule that would cache an authorization):
+and only then applies the new ruleset. Confirming or reverting never needs a password:
 
 | Step | Prompt | What happens |
 |------|--------|--------------|
 | Verify | none (normally) | `nft --check` in a private namespace; only if that is inconclusive is the elevated check used |
-| Apply | **one** | Save current table, apply, arm the revert guard |
+| Apply | **one**, or none if you authenticated in the last ~5 minutes (see below) | Save current table, apply, arm the revert guard |
 | Confirm | none | DRFW creates a token file in your runtime directory; the watcher sees it |
 | Revert now / timeout | none | The watcher restores the saved table |
+| Save to System | **one**, or none within ~5 minutes | Check and install the boot config (and enable the service) |
+
+**The password is remembered for about 5 minutes.** A packaged DRFW elevates only its
+root helper, `/usr/lib/drfw/drfw-helper`, through the polkit action `org.drfw.helper`
+("Authentication is required to change the firewall rules"). In an active local
+session (your desktop), that action lets polkit keep the authorization for about five
+minutes, for the running DRFW window only: the first apply, save or elevated check asks
+for your password, and further ones from the same window within those minutes do not.
+In a remote or inactive session polkit asks every time. Another program, a second DRFW window or a new
+`drfw apply` in a terminal asks again. In a terminal, `sudo` uses its own timestamp
+(by default 5 minutes per terminal); `run0` asks every time.
+
+This is safe because the helper is not a shell: it accepts only DRFW's three requests
+(apply with the revert guard, save the boot config, check a ruleset), checks every
+argument against the paths DRFW was built with (it cannot write any other file, start
+any other service or use another `nft`), passes nothing from your environment on, and
+refuses rulesets in which `nft` could read another file (an `include`). Remembering a
+password for `/bin/sh` (any root command) or for root `nft` (`nft -c -f <file>` shows
+the content of any file) would not be. A DRFW run from the source tree, with no
+installed helper, elevates `/bin/sh` with the same fixed scripts and asks every time.
 
 **Works over SSH.** The watcher runs as root on its own (a `drfw-revert-*`
 systemd unit, or a `setsid` process without systemd) and times out on the
@@ -777,6 +803,7 @@ read at **build** time (see `src/distro.rs`):
 | `DRFW_SYSTEM_NFT_PATH` | `/etc/nftables.conf` | File Save to System writes |
 | `DRFW_SYSTEM_NFT_SERVICE` | `nftables.service` | systemd unit that loads that file at boot (reported, and optionally enabled) |
 | `DRFW_NFT_PATH` | unset | Absolute `nft` path. Unset: the no-prompt check searches `/usr/sbin`, `/sbin`, `/usr/bin`, and elevated commands run plain `nft` |
+| `DRFW_HELPER_PATH` | `/usr/lib/drfw/drfw-helper` | Where the package installs the root helper; also the polkit action's exec path |
 
 Values are checked at compile time and a bad one fails the build: paths must be
 absolute and use only `A-Z a-z 0-9 / . _ @ + -` (the characters DRFW's root scripts
@@ -817,6 +844,29 @@ install -Dm644 drfw.service "$pkgdir/usr/lib/systemd/system/drfw.service"
 `package()`. The unit is ordered `Before=network-pre.target` with
 `Wants=network-pre.target`, so the rules are loaded before networking comes up.
 
+### The Root Helper and its polkit Action
+
+`cargo build --release` also builds `target/release/drfw-helper`. Install it, root-owned
+and mode 755, at `DRFW_HELPER_PATH`, and install the polkit action generated by the
+**built binary** (hidden command, like `print-service-unit`):
+
+```bash
+install -Dm755 target/release/drfw-helper "$pkgdir/usr/lib/drfw/drfw-helper"
+target/release/drfw print-polkit-policy > org.drfw.helper.policy
+install -Dm644 org.drfw.helper.policy \
+    "$pkgdir/usr/share/polkit-1/actions/org.drfw.helper.policy"
+```
+
+`contrib/org.drfw.helper.policy.in` is the template; the generated action names exactly
+the helper path the binary was built with, and sets `auth_admin` for inactive and
+remote sessions, `auth_admin_keep` for the active local session. DRFW elevates the
+helper only if it is a regular file owned by root and neither it nor any directory
+above it is group- or world-writable; otherwise (including a build run from the source
+tree) it elevates `/bin/sh` with the same fixed scripts, as before. Ship no polkit
+**rule** for DRFW: the action's defaults are what make the remembered password safe.
+Do not suggest a sudoers `NOPASSWD` rule either, not even for the helper: it applies
+any ruleset and replaces the boot config, which is root over the firewall.
+
 **Version string.** `drfw -V` and the GUI footer show the git commit when DRFW is built
 from a checkout (`0.9.0 (a3f8c21)`). A release tarball or any source without `.git`
 shows plain `0.9.0`, and `drfw --version` then reports commit and branch as `unknown`.
@@ -854,7 +904,9 @@ declare `drfw.service` in your configuration (from `drfw print-service-unit`, wi
 `wantedBy = [ "multi-user.target" ]`) instead of using the "enable at boot" checkbox.
 This setup is untested: DRFW's elevated scripts call coreutils and `systemctl` by name,
 and some elevation tools reset `PATH` to directories that are empty on NixOS; check
-your setup.
+your setup. Do not install the root helper there: it runs the scripts with the fixed
+`PATH=/usr/sbin:/usr/bin:/sbin:/bin`, which holds nothing on NixOS (without it, DRFW
+elevates `/bin/sh` and asks for the password on every apply).
 
 ## Development
 
@@ -864,7 +916,9 @@ your setup.
 src/
 ├── main.rs              # CLI front end (commands, countdown); everything else is the library
 ├── lib.rs               # Library root: all modules, `run_gui()`
-├── distro.rs            # Compile-time paths/service for packagers, `print-service-unit`
+├── distro.rs            # Compile-time paths/service for packagers, `print-service-unit`, `print-polkit-policy`
+├── helper.rs            # The root helper `drfw-helper`: request validation, payload check, exec
+├── helper_main.rs       # `drfw-helper` binary (calls `helper::main`)
 ├── build_info.rs        # Version strings (git commit, build time) from build.rs
 ├── app/                 # GUI application (private to the library)
 │   ├── mod.rs          # State machine, messages
@@ -898,7 +952,7 @@ src/
 ├── utils.rs            # XDG directories and other helpers
 ├── validators.rs       # Input validation
 ├── audit.rs            # Audit logging
-└── elevation.rs        # Privilege escalation, fixed apply/watcher/save scripts
+└── elevation.rs        # Privilege escalation (helper or `/bin/sh`), fixed apply/watcher/save scripts
 tests/
 ├── integration_tests.rs # Mock-nft flows, save script + fake systemctl, CLI binary (`status`, `check`, `apply`, `save`, `exposure`)
 ├── baseline.rs          # DRFW's base rules in the kernel, across veth pairs (unshare -rn)

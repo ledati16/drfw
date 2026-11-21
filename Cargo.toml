@@ -93,7 +93,7 @@ tracing-subscriber = "0.3"  # Logging configuration and output formatting
 # ═══════════════════════════════════════════════════════════════════════════
 fontdb = "0.23"  # System font enumeration for font picker
 clap = { version = "4", features = ["derive"] }  # CLI argument parsing
-nix = { version = "0.32", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty)
+nix = { version = "0.32", features = ["fs", "term", "user"] }  # Safe Unix syscalls (getuid, isatty, memfd_create)
 crossterm = "0.29"  # Terminal control for CLI countdown timers
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -114,6 +114,12 @@ rand = "0.10"
 # ═══════════════════════════════════════════════════════════════════════════
 # Development Tools
 # ═══════════════════════════════════════════════════════════════════════════
+
+# The root helper (src/helper.rs): the only program DRFW elevates when it is
+# installed at DRFW_HELPER_PATH (default /usr/lib/drfw/drfw-helper)
+[[bin]]
+name = "drfw-helper"
+path = "src/helper_main.rs"
 
 [[bin]]
 name = "stress_gen"

@@ -17,6 +17,9 @@
 //!   `DRFW_E2E_ALLOW_BARE_METAL=1` (set by `run.sh --i-know-this-is-not-my-workstation`)
 //! - `DRFW_E2E_SAVE_PROFILE`: profile to save (loaded from `DRFW_TEST_DATA_DIR`)
 //! - `DRFW_E2E_SAVE_TARGET`: file to replace (default [`drfw::SYSTEM_NFT_PATH`])
+//! - `DRFW_E2E_APPLY_PROFILES`: comma-separated profiles that
+//!   `e2e_gui_applies_in_one_process` applies one after the other, in this one
+//!   process, the way the GUI does (`pkexec`, no auto-revert)
 //!
 //! `DRFW_NFT_COMMAND` must NOT be set: it would bypass elevation and the real
 //! `nft`, which is what these tests exist to exercise.
@@ -89,6 +92,38 @@ fn e2e_print_paths() {
     println!("E2E SYSTEM_NFT_PATH={}", drfw::SYSTEM_NFT_PATH);
     println!("E2E SYSTEM_NFT_SERVICE={}", drfw::SYSTEM_NFT_SERVICE);
     println!("E2E GUARD_STATE_DIR={}", drfw::elevation::GUARD_STATE_DIR);
+    println!("E2E HELPER_PATH={}", drfw::distro::HELPER_PATH);
+}
+
+/// Applies `DRFW_E2E_APPLY_PROFILES` one after the other from this single
+/// process, through the GUI's elevation (`pkexec`) and code path
+/// (`apply_guarded`, auto-revert off): the kit counts how often the polkit
+/// agent asked for a password (once, with the helper's `auth_admin_keep`).
+#[tokio::test]
+#[ignore = "root e2e kit helper (tools/e2e/run.sh); applies firewall rules"]
+async fn e2e_gui_applies_in_one_process() {
+    if !disposable() {
+        return;
+    }
+    drfw::elevation::set_context(drfw::elevation::ElevationContext::Gui);
+    let names =
+        std::env::var("DRFW_E2E_APPLY_PROFILES").expect("DRFW_E2E_APPLY_PROFILES is not set");
+    for name in names.split(',') {
+        let ruleset = drfw::core::profiles::load_profile(name)
+            .await
+            .unwrap_or_else(|e| panic!("cannot load profile {name}: {e}"));
+        let started = std::time::Instant::now();
+        let result =
+            drfw::core::apply_guard::apply_guarded(&ruleset.to_nftables_json(), 0, &ruleset).await;
+        println!(
+            "E2E applied={name} result={} seconds={}",
+            result
+                .as_ref()
+                .map_or_else(ToString::to_string, |_| "ok".to_string()),
+            started.elapsed().as_secs()
+        );
+        assert!(result.is_ok(), "apply of {name} failed");
+    }
 }
 
 /// Save to System with a valid profile: succeeds and writes exactly the text.

@@ -8,6 +8,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DRFW_SYSTEM_NFT_PATH");
     println!("cargo:rerun-if-env-changed=DRFW_SYSTEM_NFT_SERVICE");
     println!("cargo:rerun-if-env-changed=DRFW_NFT_PATH");
+    println!("cargo:rerun-if-env-changed=DRFW_HELPER_PATH");
 
     // Embed git commit, build time, and dirty status
     shadow_rs::ShadowBuilder::builder()

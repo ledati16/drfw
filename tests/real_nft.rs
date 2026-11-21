@@ -25,6 +25,10 @@
 //!   confirm/revert tokens (only the applying uid's), superseding applies,
 //!   rejected rulesets, and SIGHUP/SIGINT/SIGTERM/SIGKILL right after the
 //!   new rules went live.
+//! - The root helper `drfw-helper` (debug-build test mode): apply with
+//!   confirm and timeout, Save to System and the check through it, and
+//!   refused requests (foreign state dir, foreign uid, `include` payloads)
+//!   that change nothing.
 //!
 //! The probe, the `nft` binary (the one the library runs unprivileged, put
 //! first on the scripts' `PATH`) and the rule builder come from
@@ -1577,6 +1581,265 @@ fn test_guard_killed_watcher_is_reported_lost() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert_eq!(watcher, WatcherState::Gone);
+}
+
+// ============================================================================
+// The root helper (`drfw-helper`) in test mode, against the real kernel
+// ============================================================================
+//
+// The helper runs as root of the namespace (`unshare -rn`), in its debug-build
+// test mode (`DRFW_HELPER_TEST_MODE=1`): the state directory, config file and
+// nft come from `DRFW_HELPER_TEST_*` instead of this build's fixed paths, the
+// watcher is started with `setsid`, and the caller uid is the namespace's 0.
+// Everything else is the production path: argv validation, the payload check,
+// the cleared environment, then `exec` of the same fixed script.
+
+/// The helper binary built with these tests.
+const HELPER: &str = env!("CARGO_BIN_EXE_drfw-helper");
+
+/// Shell helpers for helper sessions (after [`GUARD_HELPERS`]):
+/// - `helper ARGS…`: runs `drfw-helper` in test mode
+/// - `helper_apply FILE TIMEOUT NONCE`: `helper apply` with FILE on stdin and
+///   exactly the arguments DRFW builds
+/// - `helper_save FILE`: `helper save-config` of FILE to `$PWD/nftables.conf`
+const HELPER_HELPERS: &str = r#"
+helper() {
+    env DRFW_HELPER_TEST_MODE=1 DRFW_HELPER_TEST_STATE_DIR="$PWD/state" \
+        DRFW_HELPER_TEST_TARGET="$PWD/nftables.conf" DRFW_HELPER_TEST_NFT="$DRFW_NFT" \
+        "$DRFW_HELPER" "$@"
+}
+helper_apply() {
+    helper apply "$PWD/state" "$2" "$3" "$PWD/confirm" "$DRFW_NFT" setsid "$(id -u)" < "$1"
+}
+helper_save() {
+    helper save-config "$PWD/nftables.conf" "$DRFW_NFT" "" < "$1"
+}
+"#;
+
+/// The helper's test mode exists only in debug builds (`cargo test`).
+fn helper_test_mode_available() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+    eprintln!("SKIPPING drfw-helper namespace test: release build (no test mode)");
+    false
+}
+
+/// Runs `body` (after [`GUARD_HELPERS`] and [`HELPER_HELPERS`]) in one
+/// private namespace session.
+fn run_helper_session(dir: &Path, body: &str) -> Output {
+    let script = format!("{GUARD_HELPERS}\n{HELPER_HELPERS}\n{body}");
+    let output = unshare()
+        .args(["-rn", "/bin/sh", "-c", &script])
+        .env("DRFW_HELPER", HELPER)
+        .env("DRFW_NFT", common::nft())
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn unshare");
+    assert!(
+        output.status.success(),
+        "helper session failed: {body}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// The `nft` path must be absolute for the helper's test override.
+fn nft_is_absolute() -> bool {
+    if Path::new(common::nft()).is_absolute() {
+        return true;
+    }
+    common::skip(
+        "drfw-helper namespace test",
+        "nft was not found at an absolute path",
+    )
+}
+
+/// Apply through the helper: the guard works exactly as with the script.
+/// A confirmed apply stays; a second apply that times out returns to it.
+#[test]
+fn test_helper_apply_confirm_then_timeout() {
+    if !helper_test_mode_available()
+        || !real_nft_available()
+        || !common::script_paths_usable()
+        || !nft_is_absolute()
+    {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "first.json", &kitchen_sink_ruleset());
+    write_json(dir.path(), "second.json", &other_ruleset());
+    run_helper_session(
+        dir.path(),
+        &format!(
+            "helper_apply first.json {PENDING_TIMEOUT_SECS} {NONCE_A} > apply_a.out
+             echo $? > rc_a.out
+             nft -j list table inet drfw > kept.json
+             touch confirm/drfw-confirm-{NONCE_A}
+             wait_status {NONCE_A} > status_a.out
+             wait_watcher_exit apply_a.out
+             helper_apply second.json 1 {NONCE_B} > apply_b.out
+             echo $? > rc_b.out
+             wait_status {NONCE_B} > status_b.out
+             wait_watcher_exit apply_b.out
+             nft -j list table inet drfw > after.json"
+        ),
+    );
+    assert_eq!(read(dir.path(), "rc_a.out"), "0\n");
+    assert_eq!(read(dir.path(), "rc_b.out"), "0\n");
+    let apply_a = read(dir.path(), "apply_a.out");
+    assert!(
+        apply_a.starts_with("drfw-apply-started\n") && apply_a.contains("watcher=setsid:"),
+        "{apply_a}"
+    );
+    assert_eq!(read(dir.path(), "status_a.out"), "confirmed\n");
+    assert_eq!(read(dir.path(), "status_b.out"), "reverted\n");
+    let kept = listing(dir.path(), "kept.json");
+    let after = listing(dir.path(), "after.json");
+    assert!(
+        listing_difference(&kept, &after).is_none(),
+        "the timed-out apply must return to the confirmed rules: {}",
+        listing_difference(&kept, &after).unwrap_or_default()
+    );
+}
+
+/// Refused requests change nothing: a foreign state directory, a uid that is
+/// not the caller's, and an `include` payload (which root nft would follow:
+/// the session first shows that plain `nft -j -c` echoes the file's content).
+#[test]
+fn test_helper_refusals_change_nothing() {
+    if !helper_test_mode_available()
+        || !real_nft_available()
+        || !common::script_paths_usable()
+        || !nft_is_absolute()
+    {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    std::fs::write(dir.path().join("secret"), "TOPSECRET-CONTENT\n").expect("write secret");
+    run_helper_session(
+        dir.path(),
+        &format!(
+            r#"printf 'include "%s"\n' "$PWD/secret" > include.payload
+             "$DRFW_NFT" -j -c -f - < include.payload > plain_nft.out 2>&1
+             helper check < include.payload > check.out 2> check.err
+             echo $? > rc_check.out
+             helper_apply include.payload 4 {NONCE_A} > apply_include.out 2> apply_include.err
+             echo $? > rc_include.out
+             helper apply "$PWD/elsewhere" 4 {NONCE_A} "$PWD/confirm" "$DRFW_NFT" setsid \
+                 "$(id -u)" < new.json > apply_dir.out 2> apply_dir.err
+             echo $? > rc_dir.out
+             helper apply "$PWD/state" 4 {NONCE_A} "$PWD/confirm" "$DRFW_NFT" setsid \
+                 "$(( $(id -u) + 1 ))" < new.json > apply_uid.out 2> apply_uid.err
+             echo $? > rc_uid.out
+             nft list tables > tables.out
+             ls -A > files.out"#
+        ),
+    );
+    // Without the helper, root nft would have shown the file
+    assert!(
+        read(dir.path(), "plain_nft.out").contains("TOPSECRET-CONTENT"),
+        "plain nft did not follow the include; the test would prove nothing"
+    );
+    for (rc, err, reason) in [
+        ("rc_check.out", "check.err", "include statement"),
+        ("rc_include.out", "apply_include.err", "include statement"),
+        ("rc_dir.out", "apply_dir.err", "the state directory must be"),
+        (
+            "rc_uid.out",
+            "apply_uid.err",
+            "the uid must be the caller's",
+        ),
+    ] {
+        assert_eq!(
+            read(dir.path(), rc),
+            "1\n",
+            "{err}: {}",
+            read(dir.path(), err)
+        );
+        let err_text = read(dir.path(), err);
+        assert!(err_text.contains(reason), "{err}: {err_text}");
+        assert!(!err_text.contains("TOPSECRET"), "{err}: {err_text}");
+    }
+    assert_eq!(read(dir.path(), "check.out"), "");
+    assert_eq!(read(dir.path(), "apply_include.out"), "");
+    assert!(
+        !read(dir.path(), "tables.out").contains("table inet drfw"),
+        "a refused apply changed the ruleset"
+    );
+    let files = read(dir.path(), "files.out");
+    assert!(
+        !files.lines().any(|f| f == "state" || f == "elsewhere"),
+        "a refused apply created its state directory: {files}"
+    );
+}
+
+/// Save to System through the helper: installs a valid config (backup
+/// kept), rejects an invalid one with exit 3 and an `include` with exit 1,
+/// both leaving the file untouched.
+#[test]
+fn test_helper_save_config_and_check() {
+    if !helper_test_mode_available()
+        || !real_nft_available()
+        || !common::script_paths_usable()
+        || !nft_is_absolute()
+    {
+        return;
+    }
+    let dir = work_dir();
+    let text = kitchen_sink_ruleset().to_nft_text();
+    std::fs::write(dir.path().join("good.nft"), &text).expect("write good");
+    std::fs::write(
+        dir.path().join("bad.nft"),
+        "table inet drfw { chain input { bogus } }\n",
+    )
+    .expect("write bad");
+    std::fs::write(
+        dir.path().join("include.nft"),
+        format!("{text}include \"/etc/hostname\"\n"),
+    )
+    .expect("write include");
+    std::fs::write(dir.path().join("nftables.conf"), "# old config\n").expect("write old");
+    write_json(dir.path(), "good.json", &kitchen_sink_ruleset());
+    std::fs::write(
+        dir.path().join("bad.json"),
+        r#"{"nftables":[{"add":{"bogus":{}}}]}"#,
+    )
+    .expect("write bad json");
+    run_helper_session(
+        dir.path(),
+        "helper_save good.nft > save_good.out 2>&1; echo $? > rc_good.out
+         cp nftables.conf after_good.conf
+         helper_save bad.nft > save_bad.out 2>&1; echo $? > rc_bad.out
+         helper_save include.nft > save_include.out 2>&1; echo $? > rc_include.out
+         helper check < good.json > check_good.out 2>&1; echo $? > rc_check_good.out
+         helper check < bad.json > check_bad.out 2>&1; echo $? > rc_check_bad.out
+         nft list tables > tables.out",
+    );
+    assert_eq!(
+        read(dir.path(), "rc_good.out"),
+        "0\n",
+        "{}",
+        read(dir.path(), "save_good.out")
+    );
+    assert_eq!(read(dir.path(), "after_good.conf"), text);
+    assert_eq!(read(dir.path(), "nftables.conf.drfw-bak"), "# old config\n");
+    assert!(
+        read(dir.path(), "save_good.out").contains("backup="),
+        "{}",
+        read(dir.path(), "save_good.out")
+    );
+    assert_eq!(read(dir.path(), "rc_bad.out"), "3\n");
+    assert_eq!(read(dir.path(), "rc_include.out"), "1\n");
+    assert!(read(dir.path(), "save_include.out").contains("include statement"));
+    // Neither failure touched the installed file
+    assert_eq!(read(dir.path(), "nftables.conf"), text);
+    assert_eq!(read(dir.path(), "rc_check_good.out"), "0\n");
+    assert_ne!(read(dir.path(), "rc_check_bad.out"), "0\n");
+    // A check never changes the ruleset
+    assert!(!read(dir.path(), "tables.out").contains("table inet drfw"));
 }
 
 // ============================================================================

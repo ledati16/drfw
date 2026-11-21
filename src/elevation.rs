@@ -1,18 +1,28 @@
 //! Privilege elevation for system operations
 //!
-//! This module provides controlled privilege escalation to execute commands
-//! with root privileges. DRFW runs as an unprivileged user and only elevates for
-//! specific operations:
+//! DRFW runs as an unprivileged user and elevates for exactly three things:
 //!
-//! - **nft**: Firewall rule verification and application
-//! - **/bin/sh** running the fixed [`SAVE_CONFIG_SCRIPT`]: verified, atomic writes of
-//!   the system nftables configuration (Save to System), optionally followed by
-//!   `systemctl enable` of the boot service
+//! - **apply**: the fixed [`APPLY_SCRIPT`] applies a ruleset and arms the
+//!   root-side revert guard ([`WATCHER_SCRIPT`]); see [`crate::core::apply_guard`]
+//! - **save-config**: the fixed [`SAVE_CONFIG_SCRIPT`] verifies and atomically
+//!   writes the system nftables configuration (Save to System), optionally
+//!   followed by `systemctl enable` of the boot service
+//! - **check**: `nft --json --check -f -` ([`NFT_JSON_CHECK_ARGS`]), only when
+//!   the unprivileged namespace check is inconclusive
 //!
 //! `nft` is [`crate::distro::NFT_COMMAND`]: the packager's `DRFW_NFT_PATH`, or
 //! plain `nft` resolved by the elevation tool.
-//! - **/bin/sh** running the fixed [`APPLY_SCRIPT`]: applies a ruleset and arms the
-//!   root-side revert guard ([`WATCHER_SCRIPT`]); see [`crate::core::apply_guard`]
+//!
+//! # What is elevated: the helper, else `/bin/sh`
+//!
+//! When the root helper `drfw-helper` ([`crate::helper`]) is installed at
+//! [`crate::distro::HELPER_PATH`] as a regular file owned by root, with no
+//! group- or world-writable file or directory on the way, DRFW elevates it:
+//! `pkexec <helper> apply|save-config|check …`. The helper validates the
+//! request again as root (this build's fixed paths, nonce, uid, payload) and
+//! then runs the same fixed script, or `nft` for the check. Otherwise
+//! (development builds, `cargo run`), DRFW elevates `/bin/sh -c <script>`
+//! and `nft` directly, exactly as before the helper existed.
 //!
 //! # Elevation Strategy
 //!
@@ -27,38 +37,45 @@
 //!   stdin, `run0` (systemd v256+, no SUID) if installed, else `sudo`; without
 //!   one, `pkexec`.
 //!
-//! `DRFW_ELEVATION_METHOD` overrides both.
+//! `DRFW_ELEVATION_METHOD` overrides both. Already root: nothing is elevated
+//! and the scripts run directly (never the helper, which insists on being
+//! started by `pkexec`, `sudo` or `run0`).
 //!
 //! # Prompts
 //!
-//! Every elevated operation asks once: Apply and Save to System each run one
-//! fixed `/bin/sh` script (see [`APPLY_SCRIPT`], [`SAVE_CONFIG_SCRIPT`]), and
-//! the rare elevated `nft --check` fallback asks too. DRFW ships no polkit rule
-//! that caches authorizations: caching `/bin/sh` would allow arbitrary root
-//! commands, and caching `nft` would make root `nft` (which can read any file
-//! via `nft -c -f <file>`) available to anything that can drive the DRFW
-//! process, just to save a prompt in a fallback path.
+//! With the helper installed, the polkit action `org.drfw.helper`
+//! ([`crate::distro::polkit_policy`]) has `auth_admin_keep` for an active
+//! local session: the first apply, save or elevated check asks for the
+//! password, and polkit remembers it for about five minutes **for that DRFW
+//! process only** (the subject is the process that ran `pkexec`). Remote and
+//! inactive sessions get `auth_admin` and are asked every time. The dialog says "Authentication is required
+//! to change the firewall rules". `sudo` uses its own timestamp. Without the
+//! helper every elevated operation asks: polkit cannot safely remember an
+//! authorization for `/bin/sh` (that would be any root command) or for `nft`
+//! (root `nft -c -f <file>` reads any file).
 //!
 //! # Environment Variables
 //!
 //! - `DRFW_NFT_COMMAND`: Path to nft binary or mock script. When set, uses this path
-//!   directly without elevation. Used for testing with mock nft.
+//!   directly without elevation (and without the helper). Used for testing with mock nft.
 //!   The lib tests set it themselves (`setup_mock_nft()`); the real-nft
 //!   integration tests need it unset.
 //!
 //! - `DRFW_ELEVATION_METHOD`: Force a specific elevation method (`sudo`, `run0`, or `pkexec`),
 //!   e.g. `sudo` where `run0` is installed but not usable. It changes only which tool asks
-//!   for the password. There is deliberately no unattended (password-less) mode: the
-//!   elevated program is `/bin/sh`, so a sudoers `NOPASSWD` rule for it would grant
-//!   unrestricted root. Automation that already runs as root can run `drfw` as root
-//!   (it then elevates nothing), or load `drfw export` output with `nft -f`.
+//!   for the password. There is deliberately no unattended (password-less) mode: without
+//!   the helper the elevated program is `/bin/sh`, so a sudoers `NOPASSWD` rule for it
+//!   would grant unrestricted root. Automation that already runs as root can run `drfw` as
+//!   root (it then elevates nothing), or load `drfw export` output with `nft -f`.
 //!
 //! # Security
 //!
-//! - Only specific programs can be elevated (nft, and `/bin/sh` with a fixed script)
+//! - Only fixed programs are elevated: the helper, or `nft` and `/bin/sh`
+//!   with a fixed script; the `create_elevated_*` functions are the only
+//!   builders
 //! - Every elevated child is spawned with `kill_on_drop(true)`, so a timed-out or
 //!   abandoned call does not leave an orphaned authentication dialog behind
-//! - All inputs are validated before elevation
+//! - All inputs are validated before elevation, and again as root
 //! - Commands are constructed safely without shell interpolation
 //! - Audit logging tracks all privileged operations (via caller)
 //! - The elevation tool is checked for availability before use; the target
@@ -68,11 +85,11 @@
 //! # Example
 //!
 //! ```no_run
-//! use drfw::elevation::create_elevated_nft_command;
+//! use drfw::elevation::create_elevated_check_command;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut cmd = create_elevated_nft_command(&["--json", "list", "ruleset"])?;
-//! let output = cmd.output().await?;
+//! let mut cmd = create_elevated_check_command()?;
+//! cmd.stdin(std::process::Stdio::piped());
 //! # Ok(())
 //! # }
 //! ```
@@ -214,8 +231,8 @@ fn binary_exists(name: &str) -> bool {
 /// How a program that needs root is started.
 ///
 /// Private on purpose: only the `create_elevated_*` functions build elevated
-/// commands, so only approved programs (`nft`, `/bin/sh` with a fixed script)
-/// are ever elevated.
+/// commands, so only approved programs (the helper, or `nft` and `/bin/sh`
+/// with a fixed script) are ever elevated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Elevation {
     /// Already root: run the program itself (no prompt)
@@ -272,12 +289,112 @@ struct ElevationInputs<'a> {
     stdin_is_tty: bool,
     /// Whether an elevation tool is installed (looked up in `PATH`)
     available: &'a dyn Fn(&str) -> bool,
+    /// The root helper is installed and trusted ([`helper_is_trusted`])
+    helper_installed: bool,
+}
+
+/// How a root operation runs: with which tool, and whether through the
+/// helper ([`crate::distro::HELPER_PATH`]) or `/bin/sh`/`nft` directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ElevationPlan {
+    /// The elevation tool (or none)
+    elevation: Elevation,
+    /// Elevate the helper instead of `/bin/sh -c <script>` / `nft`
+    helper: bool,
+}
+
+impl ElevationPlan {
+    /// Today's behaviour without the helper (also: test mode, root).
+    const fn direct() -> Self {
+        Self {
+            elevation: Elevation::Direct,
+            helper: false,
+        }
+    }
+
+    /// The command for one of the fixed scripts: `<tool> <helper> <request>
+    /// <args…>`, or `<tool> /bin/sh -c <script> <name> <args…>`.
+    fn script_command(
+        self,
+        request: &str,
+        script: &str,
+        script_name: &str,
+        args: &[&str],
+    ) -> Command {
+        if self.helper {
+            let mut helper_args = Vec::with_capacity(args.len() + 1);
+            helper_args.push(request);
+            helper_args.extend_from_slice(args);
+            return self
+                .elevation
+                .command(crate::distro::HELPER_PATH, &helper_args);
+        }
+        let mut shell_args = Vec::with_capacity(args.len() + 3);
+        shell_args.extend_from_slice(&["-c", script, script_name]);
+        shell_args.extend_from_slice(args);
+        self.elevation.command(SHELL_PATH, &shell_args)
+    }
+
+    /// The elevated `nft --json --check -f -`: `<tool> <helper> check`, or
+    /// `<tool> <nft> --json --check -f -`.
+    fn check_command(self) -> Command {
+        if self.helper {
+            self.elevation
+                .command(crate::distro::HELPER_PATH, &[crate::helper::CHECK])
+        } else {
+            self.elevation
+                .command(crate::distro::NFT_COMMAND, &NFT_JSON_CHECK_ARGS)
+        }
+    }
+}
+
+/// Arguments of the check-only `nft` run that reads JSON from stdin (the
+/// unprivileged check, the elevated fallback and the helper's `check`).
+pub const NFT_JSON_CHECK_ARGS: [&str; 4] = ["--json", "--check", "-f", "-"];
+
+/// True if a directory entry with this owner and mode may be trusted as part
+/// of the helper's path: owned by root and not writable by group or others;
+/// the helper itself must also be a regular executable file.
+const fn trusted_entry(is_helper: bool, is_file: bool, is_dir: bool, uid: u32, mode: u32) -> bool {
+    let kind_ok = if is_helper {
+        is_file && mode & 0o111 != 0
+    } else {
+        is_dir
+    };
+    kind_ok && uid == 0 && mode & 0o022 == 0
+}
+
+/// Whether the helper at `path` is installed the way a package installs it:
+/// a regular executable file (not a symlink) owned by root, in directories
+/// owned by root, none of them group- or world-writable. Anything else (not
+/// installed, a development copy, a tampered permission) means DRFW does not
+/// elevate it and falls back to `/bin/sh`.
+fn helper_is_trusted(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !trusted_entry(
+        true,
+        meta.file_type().is_file(),
+        false,
+        meta.uid(),
+        meta.mode(),
+    ) {
+        return false;
+    }
+    path.ancestors().skip(1).all(|dir| {
+        std::fs::metadata(dir)
+            .is_ok_and(|meta| trusted_entry(false, false, meta.is_dir(), meta.uid(), meta.mode()))
+    })
 }
 
 /// Chooses how to elevate: root needs nothing; `DRFW_ELEVATION_METHOD`
 /// (case-insensitive, empty = unset) overrides the front end's choice; the
 /// CLI on a terminal uses `run0`, else `sudo`; the GUI, or no terminal,
-/// `pkexec`. Pure, so every combination is tested.
+/// `pkexec`. Whatever the tool, the installed helper is elevated instead of
+/// `/bin/sh`/`nft` (never when already root). Pure, so every combination is
+/// tested.
 ///
 /// # Errors
 ///
@@ -285,7 +402,16 @@ struct ElevationInputs<'a> {
 /// - [`ElevationError::MethodNotAvailable`]: the requested tool (or, on a
 ///   terminal, both `run0` and `sudo`) is not installed
 /// - [`ElevationError::PkexecNotFound`]: `pkexec` is needed but not installed
-fn select_elevation(inputs: &ElevationInputs<'_>) -> Result<Elevation, ElevationError> {
+fn select_elevation(inputs: &ElevationInputs<'_>) -> Result<ElevationPlan, ElevationError> {
+    let elevation = select_tool(inputs)?;
+    Ok(ElevationPlan {
+        elevation,
+        helper: inputs.helper_installed && elevation != Elevation::Direct,
+    })
+}
+
+/// The tool part of [`select_elevation`].
+fn select_tool(inputs: &ElevationInputs<'_>) -> Result<Elevation, ElevationError> {
     if inputs.is_root {
         return Ok(Elevation::Direct);
     }
@@ -326,14 +452,14 @@ fn select_elevation(inputs: &ElevationInputs<'_>) -> Result<Elevation, Elevation
 }
 
 /// [`select_elevation`] for this process (uid, `DRFW_ELEVATION_METHOD`,
-/// context, stdin, `PATH`).
+/// context, stdin, `PATH`, the helper at [`crate::distro::HELPER_PATH`]).
 ///
 /// # Panics
 ///
 /// In the library's own unit tests, always: they must never elevate (nor run
 /// anything as root). Tests use `DRFW_NFT_COMMAND` (`setup_mock_nft()`) or the
 /// pure functions.
-fn current_elevation() -> Result<Elevation, ElevationError> {
+fn current_elevation() -> Result<ElevationPlan, ElevationError> {
     use std::os::fd::AsFd;
 
     crate::utils::deny_in_lib_tests(
@@ -346,30 +472,25 @@ fn current_elevation() -> Result<Elevation, ElevationError> {
         context: context(),
         stdin_is_tty: nix::unistd::isatty(std::io::stdin().as_fd()).unwrap_or(false),
         available: &binary_exists,
+        helper_installed: helper_is_trusted(std::path::Path::new(crate::distro::HELPER_PATH)),
     })
 }
 
-/// Creates an elevated `nft` command with the specified arguments
+/// Creates the elevated `nft --json --check -f -` (the authoritative check,
+/// used when the unprivileged namespace check is inconclusive).
 ///
-/// This function constructs a command that will execute `nft` with root privileges.
-/// The arguments are passed directly without shell interpretation, preventing
-/// command injection.
+/// The caller writes the nftables JSON to the command's stdin. With the
+/// helper installed this is `<tool> <helper> check` (the helper runs exactly
+/// that `nft` command, reading stdin only); otherwise `<tool> <nft> --json
+/// --check -f -`.
 ///
 /// # Elevation Strategy
 ///
-/// 1. **Custom command**: If `DRFW_NFT_COMMAND` is set, uses that path directly (no elevation)
+/// 1. **Custom command**: If `DRFW_NFT_COMMAND` is set, runs that path directly (no elevation)
 /// 2. **Already root**: runs `nft` directly
 /// 3. `DRFW_ELEVATION_METHOD`, else by [`ElevationContext`]: the GUI uses
-///    `pkexec nft`; the CLI uses `run0 nft` (else `sudo nft`) with a TTY and
-///    `pkexec nft` without one
-///
-/// # Arguments
-///
-/// * `args` - Command-line arguments to pass to `nft`
-///
-/// # Returns
-///
-/// A configured tokio `Command`, ready to spawn.
+///    `pkexec`; the CLI uses `run0` (else `sudo`) with a TTY and `pkexec`
+///    without one
 ///
 /// # Errors
 ///
@@ -378,50 +499,26 @@ fn current_elevation() -> Result<Elevation, ElevationError> {
 ///   installed, or the CLI on a TTY finds neither `run0` nor `sudo`
 /// - [`ElevationError::InvalidMethod`] - `DRFW_ELEVATION_METHOD` is not `sudo`, `run0` or `pkexec`
 ///
-/// # Example
-///
-/// ```no_run
-/// use drfw::elevation::create_elevated_nft_command;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // List current ruleset
-/// let mut cmd = create_elevated_nft_command(&["list", "ruleset"])?;
-/// let output = cmd.output().await?;
-///
-/// // Apply rules from stdin
-/// let mut cmd = create_elevated_nft_command(&["--json", "-f", "-"])?;
-/// cmd.stdin(std::process::Stdio::piped());
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Security
-///
-/// Arguments are passed directly to `nft` without shell interpretation.
-/// Callers must ensure arguments are properly validated before calling this function.
-/// See CLAUDE.md Section 5 for input validation guidelines.
-///
 /// # Testing
 ///
 /// Set `DRFW_NFT_COMMAND` to a mock script path (e.g., `tests/mock_nft.sh`) to use
 /// a mock nft for testing without requiring root privileges.
-pub fn create_elevated_nft_command(args: &[&str]) -> Result<Command, ElevationError> {
-    nft_command(test_nft_command().as_deref(), args, current_elevation)
+pub fn create_elevated_check_command() -> Result<Command, ElevationError> {
+    check_command(test_nft_command().as_deref(), current_elevation)
 }
 
-/// [`create_elevated_nft_command`] with the `DRFW_NFT_COMMAND` override and
+/// [`create_elevated_check_command`] with the `DRFW_NFT_COMMAND` override and
 /// the elevation choice passed in; `elevation` is only asked without an
 /// override.
-fn nft_command(
+fn check_command(
     test_nft: Option<&str>,
-    args: &[&str],
-    elevation: impl FnOnce() -> Result<Elevation, ElevationError>,
+    elevation: impl FnOnce() -> Result<ElevationPlan, ElevationError>,
 ) -> Result<Command, ElevationError> {
     // Explicit nft command override (tests, with the mock): no elevation
     if let Some(nft_path) = test_nft {
-        return Ok(Elevation::Direct.command(nft_path, args));
+        return Ok(Elevation::Direct.command(nft_path, &NFT_JSON_CHECK_ARGS));
     }
-    Ok(elevation()?.command(crate::distro::NFT_COMMAND, args))
+    Ok(elevation()?.check_command())
 }
 
 /// Returns `DRFW_NFT_COMMAND` when set and non-empty (test mode: no elevation).
@@ -575,15 +672,17 @@ exit 0
 );
 
 /// `$0` for [`SAVE_CONFIG_SCRIPT`] (shows up in `ps` and in shell error messages).
-const SAVE_CONFIG_SCRIPT_NAME: &str = "drfw-save-config";
+pub(crate) const SAVE_CONFIG_SCRIPT_NAME: &str = "drfw-save-config";
 
 /// Absolute shell path: elevation tools must not resolve `sh` through `PATH`.
-const SHELL_PATH: &str = "/bin/sh";
+pub(crate) const SHELL_PATH: &str = "/bin/sh";
 
 /// Creates the (elevated) command that installs a new system nftables config.
 ///
-/// Runs [`SAVE_CONFIG_SCRIPT`] with `/bin/sh` and a single elevation prompt.
-/// The caller writes the file content to the command's stdin.
+/// Runs [`SAVE_CONFIG_SCRIPT`] with a single elevation prompt: through the
+/// helper (`<helper> save-config <target> <nft> <service>`) when it is
+/// installed, else with `/bin/sh`. The caller writes the file content to the
+/// command's stdin. The helper accepts only this build's target and service.
 ///
 /// # Arguments
 ///
@@ -595,7 +694,7 @@ const SHELL_PATH: &str = "/bin/sh";
 ///
 /// When `DRFW_NFT_COMMAND` is set, the script runs **without elevation** and
 /// uses that command for the `nft -c` check, mirroring
-/// [`create_elevated_nft_command`]. Tests point `target` at a temporary
+/// [`create_elevated_check_command`]. Tests point `target` at a temporary
 /// directory and put a fake `systemctl` first on the child's `PATH`.
 ///
 /// # Errors
@@ -633,23 +732,18 @@ fn save_config_command(
     test_nft: Option<&str>,
     target: &str,
     enable_service: Option<&str>,
-    elevation: impl FnOnce() -> Result<Elevation, ElevationError>,
+    elevation: impl FnOnce() -> Result<ElevationPlan, ElevationError>,
 ) -> Result<Command, ElevationError> {
     let service = enable_service.unwrap_or_default();
-    let (elevation, nft) = match test_nft {
-        Some(nft) => (Elevation::Direct, nft),
+    let (plan, nft) = match test_nft {
+        Some(nft) => (ElevationPlan::direct(), nft),
         None => (elevation()?, crate::distro::NFT_COMMAND),
     };
-    Ok(elevation.command(
-        SHELL_PATH,
-        &[
-            "-c",
-            SAVE_CONFIG_SCRIPT,
-            SAVE_CONFIG_SCRIPT_NAME,
-            target,
-            nft,
-            service,
-        ],
+    Ok(plan.script_command(
+        crate::helper::SAVE_CONFIG,
+        SAVE_CONFIG_SCRIPT,
+        SAVE_CONFIG_SCRIPT_NAME,
+        &[target, nft, service],
     ))
 }
 
@@ -1158,7 +1252,7 @@ exit 0
 );
 
 /// `$0` for [`APPLY_SCRIPT`] (shows up in `ps` and in shell error messages).
-const APPLY_SCRIPT_NAME: &str = "drfw-apply";
+pub(crate) const APPLY_SCRIPT_NAME: &str = "drfw-apply";
 
 /// How [`APPLY_SCRIPT`] starts its watcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1181,7 +1275,8 @@ impl WatcherLauncher {
 
 /// Creates the (elevated) command that applies a ruleset with a revert guard.
 ///
-/// Runs [`APPLY_SCRIPT`] with `/bin/sh` and a single elevation prompt; the
+/// Runs [`APPLY_SCRIPT`] with a single elevation prompt, through the helper
+/// (`<helper> apply <args…>`) when it is installed, else with `/bin/sh`; the
 /// caller writes the nftables JSON to the command's stdin. Returns the command
 /// and the state directory whose `status-<nonce>` file will hold the outcome.
 ///
@@ -1221,40 +1316,58 @@ pub fn create_elevated_apply_command(
                 ))
             })?;
         let state_str = state_dir.to_string_lossy().into_owned();
-        let cmd = Elevation::Direct.command(
-            SHELL_PATH,
-            &[
-                "-c",
-                APPLY_SCRIPT,
-                APPLY_SCRIPT_NAME,
-                &state_str,
-                &timeout,
-                nonce,
-                confirm_dir,
-                &nft_path,
-                WatcherLauncher::Setsid.as_arg(),
-                &uid,
-            ],
+        let cmd = apply_command(
+            ElevationPlan::direct(),
+            &state_str,
+            &timeout,
+            nonce,
+            confirm_dir,
+            &nft_path,
+            WatcherLauncher::Setsid,
+            &uid,
         );
         return Ok((cmd, state_dir));
     }
 
-    let cmd = current_elevation()?.command(
-        SHELL_PATH,
-        &[
-            "-c",
-            APPLY_SCRIPT,
-            APPLY_SCRIPT_NAME,
-            GUARD_STATE_DIR,
-            &timeout,
-            nonce,
-            confirm_dir,
-            crate::distro::NFT_COMMAND,
-            WatcherLauncher::Auto.as_arg(),
-            &uid,
-        ],
+    let cmd = apply_command(
+        current_elevation()?,
+        GUARD_STATE_DIR,
+        &timeout,
+        nonce,
+        confirm_dir,
+        crate::distro::NFT_COMMAND,
+        WatcherLauncher::Auto,
+        &uid,
     );
     Ok((cmd, std::path::PathBuf::from(GUARD_STATE_DIR)))
+}
+
+/// The [`APPLY_SCRIPT`] command for `plan`, with the script's arguments in
+/// order (the helper receives the same ones).
+fn apply_command(
+    plan: ElevationPlan,
+    state_dir: &str,
+    timeout: &str,
+    nonce: &str,
+    confirm_dir: &str,
+    nft: &str,
+    launcher: WatcherLauncher,
+    uid: &str,
+) -> Command {
+    plan.script_command(
+        crate::helper::APPLY,
+        APPLY_SCRIPT,
+        APPLY_SCRIPT_NAME,
+        &[
+            state_dir,
+            timeout,
+            nonce,
+            confirm_dir,
+            nft,
+            launcher.as_arg(),
+            uid,
+        ],
+    )
 }
 
 #[cfg(test)]
@@ -1404,21 +1517,30 @@ mod tests {
         context: ElevationContext,
         stdin_is_tty: bool,
         installed: &[&str],
-    ) -> Result<Elevation, ElevationError> {
+        helper_installed: bool,
+    ) -> Result<ElevationPlan, ElevationError> {
         select_elevation(&ElevationInputs {
             is_root,
             method,
             context,
             stdin_is_tty,
             available: &|tool| installed.contains(&tool),
+            helper_installed,
         })
     }
 
     /// What a selection result is, for comparing (`ElevationError` holds an
-    /// `io::Error` and has no `PartialEq`).
-    fn outcome(result: Result<Elevation, ElevationError>) -> String {
+    /// `io::Error` and has no `PartialEq`): `Pkexec`, or `Pkexec+helper`.
+    fn outcome(result: Result<ElevationPlan, ElevationError>) -> String {
         match result {
-            Ok(elevation) => format!("{elevation:?}"),
+            Ok(ElevationPlan {
+                elevation,
+                helper: false,
+            }) => format!("{elevation:?}"),
+            Ok(ElevationPlan {
+                elevation,
+                helper: true,
+            }) => format!("{elevation:?}+helper"),
             Err(ElevationError::InvalidMethod(m)) => format!("invalid {m}"),
             Err(ElevationError::MethodNotAvailable(m)) => format!("unavailable {m}"),
             Err(ElevationError::PkexecNotFound) => "no pkexec".to_string(),
@@ -1471,10 +1593,78 @@ mod tests {
         ];
         for &(is_root, method, context, tty, installed, expected) in cases {
             assert_eq!(
-                outcome(select(is_root, method, context, tty, installed)),
+                outcome(select(is_root, method, context, tty, installed, false)),
                 expected,
                 "root={is_root} method={method:?} {context:?} tty={tty} installed={installed:?}"
             );
+            // With the helper installed: the same tool (or error), elevating
+            // the helper; root still runs the scripts directly
+            let with_helper = match expected {
+                "Direct" => "Direct".to_string(),
+                "Run0" | "Sudo" | "Pkexec" => format!("{expected}+helper"),
+                error => error.to_string(),
+            };
+            assert_eq!(
+                outcome(select(is_root, method, context, tty, installed, true)),
+                with_helper,
+                "helper installed: root={is_root} method={method:?} {context:?} tty={tty} \
+                 installed={installed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_trusted_entry_table() {
+        // (helper?, file?, dir?, uid, mode, trusted)
+        #[rustfmt::skip]
+        let cases = [
+            // The helper: root-owned regular executable, not group/world-writable
+            (true, true, false, 0, 0o100_755, true),
+            (true, true, false, 0, 0o100_700, true),
+            (true, true, false, 0, 0o104_755, true),
+            (true, true, false, 1000, 0o100_755, false),
+            (true, true, false, 0, 0o100_775, false),
+            (true, true, false, 0, 0o100_757, false),
+            (true, true, false, 0, 0o100_644, false),
+            (true, false, false, 0, 0o120_777, false),
+            (true, false, true, 0, 0o040_755, false),
+            // Its directories: root-owned, not group/world-writable
+            (false, false, true, 0, 0o040_755, true),
+            (false, false, true, 0, 0o041_777, false),
+            (false, false, true, 0, 0o040_775, false),
+            (false, false, true, 1000, 0o040_755, false),
+            (false, true, false, 0, 0o100_755, false),
+        ];
+        for (helper, file, dir, uid, mode, trusted) in cases {
+            assert_eq!(
+                trusted_entry(helper, file, dir, uid, mode),
+                trusted,
+                "helper={helper} file={file} dir={dir} uid={uid} mode={mode:o}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_helper_is_trusted_on_real_files() {
+        use std::os::unix::fs::MetadataExt;
+        assert!(!helper_is_trusted(std::path::Path::new(
+            "/nonexistent/drfw-helper"
+        )));
+        // A copy owned by the user running the tests (a development build)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let copy = dir.path().join("drfw-helper");
+        std::fs::write(&copy, "#!/bin/sh\n").expect("write");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        if !nix::unistd::getuid().is_root() {
+            assert!(!helper_is_trusted(&copy));
+        }
+        // A root-owned system binary in root-owned directories passes
+        let system = std::path::Path::new("/usr/bin/env");
+        if std::fs::symlink_metadata(system).is_ok_and(|m| m.is_file() && m.uid() == 0) {
+            assert!(helper_is_trusted(system));
         }
     }
 
@@ -1524,28 +1714,140 @@ mod tests {
     /// `DRFW_NFT_COMMAND` runs that command directly: the elevation choice is
     /// never even made (an invalid `DRFW_ELEVATION_METHOD` cannot matter).
     #[test]
-    fn test_nft_command_override_skips_elevation() {
-        let cmd = nft_command(Some(MOCK_NFT), &["list", "ruleset"], || {
-            panic!("the override must not elevate")
-        })
-        .expect("override");
+    fn test_check_command_override_skips_elevation() {
+        let cmd = check_command(Some(MOCK_NFT), || panic!("the override must not elevate"))
+            .expect("override");
         assert_eq!(
             argv(&cmd),
-            (MOCK_NFT.into(), vec!["list".into(), "ruleset".into()])
+            (
+                MOCK_NFT.into(),
+                NFT_JSON_CHECK_ARGS.map(String::from).to_vec()
+            )
         );
 
-        let cmd = nft_command(None, &["-c"], || Ok(Elevation::Sudo)).expect("elevated");
+        let sudo = |helper| {
+            move || {
+                Ok(ElevationPlan {
+                    elevation: Elevation::Sudo,
+                    helper,
+                })
+            }
+        };
+        let cmd = check_command(None, sudo(false)).expect("elevated");
+        let mut expected = vec![crate::distro::NFT_COMMAND.to_string()];
+        expected.extend(NFT_JSON_CHECK_ARGS.map(String::from));
+        assert_eq!(argv(&cmd), ("sudo".into(), expected));
+        // The helper's `check`: no nft arguments, never a file from argv
+        let cmd = check_command(None, sudo(true)).expect("helper");
         assert_eq!(
             argv(&cmd),
             (
                 "sudo".into(),
-                vec![crate::distro::NFT_COMMAND.into(), "-c".into()]
+                vec![crate::distro::HELPER_PATH.into(), "check".into()]
             )
         );
-        let error = nft_command(None, &["-c"], || {
-            Err(ElevationError::InvalidMethod("x".into()))
-        });
+        let error = check_command(None, || Err(ElevationError::InvalidMethod("x".into())));
         assert!(matches!(error, Err(ElevationError::InvalidMethod(_))));
+    }
+
+    /// With the helper, the request carries the scripts' arguments unchanged,
+    /// and the helper accepts what DRFW builds (production values).
+    #[test]
+    fn test_helper_commands_are_accepted_by_the_helper() {
+        let pkexec_helper = ElevationPlan {
+            elevation: Elevation::Pkexec,
+            helper: true,
+        };
+        let config = crate::helper::HelperConfig::production(1000);
+        let helper_args = |cmd: &Command| {
+            let (program, args) = argv(cmd);
+            assert_eq!(program, "pkexec");
+            assert_eq!(
+                &args[..2],
+                ["--disable-internal-agent", crate::distro::HELPER_PATH]
+            );
+            args[2..].to_vec()
+        };
+
+        let cmd = apply_command(
+            pkexec_helper,
+            GUARD_STATE_DIR,
+            "30",
+            "0123456789abcdef0123456789abcdef",
+            "/run/user/1000",
+            crate::distro::NFT_COMMAND,
+            WatcherLauncher::Auto,
+            "1000",
+        );
+        let args = helper_args(&cmd);
+        assert_eq!(args[0], "apply");
+        assert!(matches!(
+            crate::helper::parse_request(&args, &config),
+            Ok(crate::helper::Request::Apply(_))
+        ));
+
+        for service in [Some(crate::SYSTEM_NFT_SERVICE), None] {
+            let cmd =
+                save_config_command(None, crate::SYSTEM_NFT_PATH, service, || Ok(pkexec_helper))
+                    .expect("helper");
+            let args = helper_args(&cmd);
+            assert_eq!(
+                args,
+                [
+                    "save-config",
+                    crate::SYSTEM_NFT_PATH,
+                    crate::distro::NFT_COMMAND,
+                    service.unwrap_or_default()
+                ]
+            );
+            assert!(matches!(
+                crate::helper::parse_request(&args, &config),
+                Ok(crate::helper::Request::SaveConfig(_))
+            ));
+        }
+
+        let args = helper_args(&pkexec_helper.check_command());
+        assert_eq!(
+            crate::helper::parse_request(&args, &config),
+            Ok(crate::helper::Request::Check)
+        );
+    }
+
+    /// Without the helper (development builds): exactly the pre-helper
+    /// commands, `/bin/sh -c <script>` through the tool.
+    #[test]
+    fn test_apply_command_without_helper_runs_the_script() {
+        let cmd = apply_command(
+            ElevationPlan {
+                elevation: Elevation::Run0,
+                helper: false,
+            },
+            GUARD_STATE_DIR,
+            "30",
+            "0123456789abcdef0123456789abcdef",
+            "/run/user/1000",
+            "nft",
+            WatcherLauncher::Auto,
+            "1000",
+        );
+        let (program, args) = argv(&cmd);
+        assert_eq!(program, "run0");
+        assert_eq!(
+            args,
+            [
+                SHELL_PATH,
+                "-c",
+                APPLY_SCRIPT,
+                APPLY_SCRIPT_NAME,
+                GUARD_STATE_DIR,
+                "30",
+                "0123456789abcdef0123456789abcdef",
+                "/run/user/1000",
+                "nft",
+                "auto",
+                "1000"
+            ]
+        );
     }
 
     #[test]
@@ -1573,8 +1875,13 @@ mod tests {
         );
 
         // Elevated: the script through the tool, with the build's nft
-        let cmd = save_config_command(None, "/etc/x.conf", None, || Ok(Elevation::Pkexec))
-            .expect("elevated");
+        let cmd = save_config_command(None, "/etc/x.conf", None, || {
+            Ok(ElevationPlan {
+                elevation: Elevation::Pkexec,
+                helper: false,
+            })
+        })
+        .expect("elevated");
         let (program, args) = argv(&cmd);
         assert_eq!(program, "pkexec");
         assert_eq!(

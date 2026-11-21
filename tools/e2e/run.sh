@@ -8,7 +8,7 @@
 #
 # See tools/e2e/README.md. Quick reference:
 #   DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh --dry-run      # plan + safety checks only
-#   DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh                # scenarios 1-8 and 10
+#   DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh                # scenarios 1-8, 10 and 11
 #   DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh --phase boot-prep    # scenario 9, then reboot
 #   DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh --phase boot-check   # after the reboot
 #
@@ -51,6 +51,7 @@ LOCK_FILE=/run/drfw-e2e.lock
 SUDOERS_FILE=/etc/sudoers.d/90-drfw-e2e
 SUDO_LOG=/var/log/drfw-e2e-sudo.log
 POLKIT_RULE=/etc/polkit-1/rules.d/10-drfw-e2e.rules
+POLKIT_ACTION=/usr/share/polkit-1/actions/org.drfw.helper.policy
 GUARD_DIR=/run/drfw
 PEER_NS=drfw-e2e-peer
 VETH_A=drfwe2e0
@@ -59,7 +60,7 @@ IP_A=10.213.47.1
 IP_B=10.213.47.2
 ECHO_PORT=47501
 LO_PORT=47502
-ALL_SCENARIOS="1 2 3 4 5 6 7 8 10"
+ALL_SCENARIOS="1 2 3 4 5 6 7 8 10 11"
 
 # ----------------------------------------------------------------------------
 # Options
@@ -73,6 +74,7 @@ STRICT=0
 GUARD_METHOD=sudo
 OPT_DRFW=
 OPT_E2E_BIN=
+OPT_HELPER=
 OPT_NFT_CONF=
 OPT_SERVICE=
 ORIG_ARGS=("$@")
@@ -94,6 +96,8 @@ Options:
   --e2e-bin PATH         Test binary built from tests/root_e2e.rs (needed for
                          Save to System; default: tools/e2e/bin/root_e2e or the
                          newest root_e2e-* in the cargo target dir)
+  --helper PATH          drfw-helper release binary for scenario 11 (default:
+                         tools/e2e/bin/drfw-helper, then the cargo target dir)
   --nft-conf PATH        System nftables config (default: as compiled into drfw)
   --service NAME         Boot service (default: as compiled into drfw)
   --strict               Count skipped scenarios as failures
@@ -133,6 +137,11 @@ while [ $# -gt 0 ]; do
         --e2e-bin)
             [ $# -ge 2 ] || die "--e2e-bin needs a value"
             OPT_E2E_BIN=$2
+            shift
+            ;;
+        --helper)
+            [ $# -ge 2 ] || die "--helper needs a value"
+            OPT_HELPER=$2
             shift
             ;;
         --nft-conf)
@@ -227,9 +236,29 @@ find_e2e_bin() {
     done < <(target_dirs) | head -n1
 }
 
+find_helper() {
+    local dir
+    if [ -n "$OPT_HELPER" ]; then
+        printf '%s\n' "$OPT_HELPER"
+        return
+    fi
+    if [ -x "$KIT_DIR/bin/drfw-helper" ]; then
+        printf '%s\n' "$KIT_DIR/bin/drfw-helper"
+        return
+    fi
+    while IFS= read -r dir; do
+        if [ -x "$dir/release/drfw-helper" ]; then
+            printf '%s\n' "$dir/release/drfw-helper"
+            return
+        fi
+    done < <(target_dirs)
+}
+
 DRFW=$(find_drfw)
 E2E_BIN=$(find_e2e_bin)
 [ -n "$E2E_BIN" ] && [ ! -x "$E2E_BIN" ] && E2E_BIN=
+HELPER_BIN=$(find_helper)
+[ -n "$HELPER_BIN" ] && [ ! -x "$HELPER_BIN" ] && HELPER_BIN=
 
 # e2e_bin_run TESTNAME: runs one ignored test of the e2e binary
 e2e_bin_run() {
@@ -259,6 +288,16 @@ discover_paths() {
     [ -n "$OPT_NFT_CONF$OPT_SERVICE" ] && PATHS_FROM="$PATHS_FROM, overridden"
 }
 discover_paths
+
+# The helper path compiled into drfw: the exec path of its polkit action
+# (`drfw print-polkit-policy`); empty for a drfw without the helper
+HELPER_PATH=
+POLICY_XML=
+if [ -x "$DRFW" ]; then
+    POLICY_XML=$("$DRFW" print-polkit-policy 2>/dev/null)
+    HELPER_PATH=$(sed -n 's|.*<annotate key="org.freedesktop.policykit.exec.path">\(/[^<]*\)</annotate>.*|\1|p' \
+        <<<"$POLICY_XML" | head -n1)
+fi
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 polkit_active() { systemctl is-active --quiet polkit.service 2>/dev/null; }
@@ -341,7 +380,20 @@ requirements() {
         say "  [NO] sudo/visudo not found (scenario 1 and the guard scenarios elevate with sudo)"
         bad=1
     fi
+    if [ -n "$HELPER_BIN" ] && [ -n "$HELPER_PATH" ]; then
+        say "  [ok] drfw-helper: $HELPER_BIN (installed as $HELPER_PATH for scenario 11)"
+    elif [ -z "$HELPER_PATH" ]; then
+        say "  [--] drfw has no print-polkit-policy (built before the helper): scenario 11 is skipped"
+    else
+        say "  [--] drfw-helper binary not found (use --helper PATH): scenario 11 is skipped."
+        say "       Build: cargo build --release --bin drfw-helper"
+    fi
     if have_pkexec; then say "  [ok] pkexec + polkit"; else say "  [--] pkexec or polkit missing: pkexec checks skipped"; fi
+    if have_cmd pkttyagent && have_cmd chpasswd; then
+        say "  [ok] pkttyagent + chpasswd (scenario 11 counts real password prompts)"
+    else
+        say "  [--] pkttyagent or chpasswd missing: scenario 11 skips the prompt count"
+    fi
     if have_run0; then say "  [ok] run0 + polkit"; else say "  [--] run0 or polkit missing: run0 checks skipped"; fi
     if have_echo_tool; then say "  [ok] socat or python3 (TCP echo)"; else say "  [--] neither socat nor python3: scenarios 7 and 10 are skipped"; fi
     if have_cmd ip; then say "  [ok] ip (iproute2)"; else say "  [--] ip not found: scenario 10 is skipped"; fi
@@ -352,6 +404,7 @@ print_plan() {
     say "DRFW root e2e kit, phase: $PHASE"
     say "  drfw binary:        ${DRFW:-<not found>}"
     say "  e2e test binary:    ${E2E_BIN:-<not found>}"
+    say "  drfw-helper:        ${HELPER_BIN:-<not found>} -> ${HELPER_PATH:-<not in this drfw>}"
     say "  system config:      $NFT_CONF ($PATHS_FROM)"
     say "  boot service:       $SERVICE"
     say "  guard elevation:    $GUARD_METHOD"
@@ -362,8 +415,11 @@ print_plan() {
     case $PHASE in
         all)
             say "  - create user $TEST_USER (deleted on exit if the kit created it)"
-            say "  - $SUDOERS_FILE: NOPASSWD /bin/sh and nft for $TEST_USER only, logging to $SUDO_LOG"
-            say "  - $POLKIT_RULE: pkexec (/bin/sh, nft) and systemd units for $TEST_USER only"
+            say "  - $SUDOERS_FILE: NOPASSWD /bin/sh, nft and the helper for $TEST_USER only, logging to $SUDO_LOG"
+            say "  - $POLKIT_RULE: pkexec (/bin/sh, nft) and systemd units for $TEST_USER only;"
+            say "    $TEST_USER is its own polkit admin (scenario 11 authenticates with a random password)"
+            say "  - scenario 11: install the helper at ${HELPER_PATH:-<helper path>} and $POLKIT_ACTION"
+            say "    (removed again unless an identical copy was already installed)"
             say "  - back up $NFT_CONF{,.drfw-orig,.drfw-bak}, the enablement of $SERVICE and the"
             say "    inet drfw table; restored on exit"
             say "  - apply/delete the nftables table inet drfw (no other table is touched)"
@@ -398,6 +454,11 @@ print_plan() {
                 8) say "   8  Save to System: .drfw-orig once, .drfw-bak each save, nft -c, idempotent load, broken save rejected" ;;
                 9) say "   9  boot persistence: run --phase boot-prep, reboot, --phase boot-check" ;;
                 10) say "  10  Server Mode over a veth: established inbound TCP survives, new one blocked, loopback works" ;;
+                11)
+                    say "  11  root helper: installed helper and polkit action, DRFW elevates only the helper"
+                    say "      (sudo log), guard timeout and Save to System through it, refusals as root, and"
+                    say "      two GUI applies from one process prompt for a password once (pkttyagent)"
+                    ;;
             esac
         done
     else
@@ -554,7 +615,7 @@ write_sudoers() {
     cat >"$tmp" <<EOF
 # drfw e2e kit (tools/e2e/run.sh); removed on exit. Test user only.
 Defaults:$TEST_USER logfile=$SUDO_LOG, loglinelen=0, !lecture
-$TEST_USER ALL=(root) NOPASSWD: /bin/sh, /usr/bin/sh, /usr/bin/nft, /usr/sbin/nft, /sbin/nft
+$TEST_USER ALL=(root) NOPASSWD: /bin/sh, /usr/bin/sh, /usr/bin/nft, /usr/sbin/nft, /sbin/nft${HELPER_PATH:+, $HELPER_PATH}
 EOF
     if ! visudo -cqf "$tmp"; then
         rm -f -- "$tmp"
@@ -583,7 +644,27 @@ polkit.addRule(function(action, subject) {
     if (action.id.indexOf("org.freedesktop.systemd1.") == 0) {
         return polkit.Result.YES;
     }
+    // org.drfw.helper (scenario 11, with a real password): an active local
+    // session gets the action's own default, auth_admin_keep. The kit's
+    // processes (runuser, no seat) count as non-local, for which the action
+    // says auth_admin; give them what an active local session gets so the
+    // prompts can be counted (the defaults themselves are checked with pkaction)
+    if (action.id == "org.drfw.helper") {
+        if (subject.local && subject.active) {
+            return polkit.Result.NOT_HANDLED;
+        }
+        polkit.log("drfw e2e: org.drfw.helper for a non-local subject: auth_admin_keep");
+        return polkit.Result.AUTH_ADMIN_KEEP;
+    }
     return polkit.Result.NOT_HANDLED;
+});
+// The test user authenticates as itself for auth_admin (scenario 11), so
+// pkttyagent asks for its password and nothing else
+polkit.addAdminRule(function(action, subject) {
+    if (subject.user == "$TEST_USER") {
+        return ["unix-user:$TEST_USER"];
+    }
+    return null;
 });
 EOF
     chmod 0644 -- "$POLKIT_RULE"
@@ -601,6 +682,10 @@ setup_env() {
     if [ -n "$E2E_BIN" ]; then
         install -m 0755 -- "$E2E_BIN" "$BIN_DIR/root_e2e" || return 1
         E2E_BIN=$BIN_DIR/root_e2e
+    fi
+    if [ -n "$HELPER_BIN" ]; then
+        install -m 0755 -- "$HELPER_BIN" "$BIN_DIR/drfw-helper" || return 1
+        HELPER_BIN=$BIN_DIR/drfw-helper
     fi
 
     if id -u "$TEST_USER" >/dev/null 2>&1; then
@@ -678,6 +763,7 @@ on_exit() {
         fi
         [ -f "$SUDO_LOG" ] && cp -- "$SUDO_LOG" "$LOG_DIR/sudo.log"
         rm -f -- "$SUDOERS_FILE" "$SUDO_LOG" "$POLKIT_RULE"
+        helper_uninstall || bad=1
         rm -rf -- "${USER_ROOT:?}" "${RT_DIR:?}"
         if [ -e "$WORK/.created-user" ]; then
             userdel "$TEST_USER" 2>/dev/null || warn "cannot delete user $TEST_USER"
@@ -814,7 +900,8 @@ scenario_1() {
     check "sudo: drfw apply --no-confirm exits 0 (exit $rc)" test "$rc" -eq 0 || bad=1
     check "sudo: rule e2e-A is live in inet drfw" drfw_table_has_rule e2e-A || bad=1
     cmds=$(sudo_log_commands)
-    sh_n=$(awk '$2 ~ /\/sh$/ {n += $1} END {print n + 0}' <<<"$cmds")
+    # A helper installed before the run (a packaged drfw) replaces /bin/sh
+    sh_n=$(awk -v h="$HELPER_PATH" '$2 ~ /\/sh$/ || (h != "" && $2 == h) {n += $1} END {print n + 0}' <<<"$cmds")
     nft_n=$(awk '$2 ~ /\/nft$/ {n += $1} END {print n + 0}' <<<"$cmds")
     evidence "info: sudo log: $(tr '\n' ' ' <<<"$cmds")"
     if [ "$userns" = 1 ]; then
@@ -1190,7 +1277,7 @@ scenario_8() {
         evidence_tail "$(cat -- "$log")" 10
     }
     check "the save elevated the save script with sudo ($(sudo_log_commands | tr '\n' ' '))" \
-        eval 'sudo_log_commands | grep -q "/sh$"' || bad=1
+        eval 'sudo_log_commands | grep -Eq "/sh\$|${HELPER_PATH:-/nonexistent}\$"' || bad=1
     h_a=$(file_digest "$NFT_CONF")
     check "$NFT_CONF now holds e2e-A ($h_a)" grep -qF 'comment "e2e-A"' "$NFT_CONF" || bad=1
     check "$NFT_CONF is root-owned, mode 644 ($(stat -c '%U %a' "$NFT_CONF"))" \
@@ -1258,6 +1345,286 @@ scenario_8() {
     check ".drfw-orig untouched" test "$(file_digest "$orig")" = "$h_orig" || bad=1
     check "no temporary file left" test ! -e "$tmpf" || bad=1
 
+    verdict "$name" "$bad"
+}
+
+# ----------------------------------------------------------------------------
+# Scenario 11: the root helper and its polkit action
+# ----------------------------------------------------------------------------
+
+HELPER_STATE=$WORK/helper-installed
+
+# helper_install: puts the helper at HELPER_PATH (root:root 755) and the
+# generated action at POLKIT_ACTION (644). An identical copy that was already
+# there is used as it is and left in place; a different one is never replaced.
+# Markers in HELPER_STATE record what the kit created (files, directories).
+helper_install() {
+    local f src mode key
+    install -d -m 700 -- "$HELPER_STATE" || return 1
+    printf '%s\n' "$POLICY_XML" >"$HELPER_STATE/policy.xml" || return 1
+    for f in "$HELPER_PATH" "$POLKIT_ACTION"; do
+        key=$(basename -- "$f")
+        if [ "$f" = "$POLKIT_ACTION" ]; then
+            src=$HELPER_STATE/policy.xml
+            mode=0644
+        else
+            src=$HELPER_BIN
+            mode=0755
+        fi
+        if [ -e "$f" ] && [ ! -e "$HELPER_STATE/$key.ours" ]; then
+            if cmp -s -- "$src" "$f"; then
+                note "$f is already installed (identical); using it and leaving it in place"
+                continue
+            fi
+            warn "$f exists and differs from this build; not replacing it"
+            return 1
+        fi
+        [ -d "$(dirname -- "$f")" ] || : >"$HELPER_STATE/$key.dir-ours"
+        : >"$HELPER_STATE/$key.ours"
+        install -D -o root -g root -m "$mode" -- "$src" "$f" || return 1
+    done
+    # polkitd picks up new actions through inotify
+    sleep 1
+}
+
+# helper_uninstall: removes what helper_install put there (on exit too):
+# only the two files, their directory if the kit created it, and its markers
+helper_uninstall() {
+    local f key bad=0
+    [ -d "$HELPER_STATE" ] || return 0
+    for f in "$HELPER_PATH" "$POLKIT_ACTION"; do
+        [ -n "$f" ] || continue
+        key=$(basename -- "$f")
+        if [ -e "$HELPER_STATE/$key.ours" ]; then
+            rm -f -- "$f" || bad=1
+        fi
+        if [ -e "$HELPER_STATE/$key.dir-ours" ]; then
+            rmdir -- "$(dirname -- "$f")" 2>/dev/null
+        fi
+        if [ "$bad" -eq 0 ]; then
+            rm -f -- "$HELPER_STATE/$key.ours" "$HELPER_STATE/$key.dir-ours"
+        fi
+    done
+    if [ "$bad" -eq 0 ]; then
+        rm -f -- "$HELPER_STATE/policy.xml"
+        rmdir -- "$HELPER_STATE"
+    fi
+    return "$bad"
+}
+
+# helper_refuses WHAT REASON ARGS...: runs the helper as root through sudo as
+# the test user (so SUDO_UID is set, as in real use) with ARGS and the payload
+# in $WORK/helper-payload; it must exit 1 with REASON and print no secret
+helper_refuses() {
+    # shellcheck disable=SC2034 # reason is read in check's eval
+    local what=$1 reason=$2 out rc
+    shift 2
+    out=$(as_user sudo -n -- "$HELPER_PATH" "$@" <"$WORK/helper-payload" 2>&1)
+    rc=$?
+    printf '%s\n' "$out" >>"$(log_file s11-refusals)"
+    check "refused as root: $what (exit $rc: $(head -n1 <<<"$out"))" \
+        eval '[ "$rc" -eq 1 ] && grep -qF -- "drfw: drfw-helper: " <<<"$out" && grep -qF -- "$reason" <<<"$out" && ! grep -qF -- "$SECRET" <<<"$out"'
+}
+
+# prompt_session TAG PROFILES: as the test user in a PTY, starts pkttyagent
+# for one process, which then becomes the e2e binary and applies PROFILES
+# (comma separated) the way the GUI does; answers every password prompt.
+# Prints the number of prompts.
+prompt_session() {
+    local tag=$1 profiles=$2 out give_up seen=0 n agent dir
+    local -a env_extra=(DRFW_E2E_DISPOSABLE=1 "DRFW_E2E_APPLY_PROFILES=$profiles")
+    [ -n "${DRFW_E2E_ALLOW_BARE_METAL:-}" ] && env_extra+=(DRFW_E2E_ALLOW_BARE_METAL=1)
+    dir=$(pty_dir "$tag")
+    # The shell starts the agent for its own PID, then execs the e2e binary:
+    # same PID and start time, so the agent answers that process's pkexec
+    pty_start "$tag" auto env "${env_extra[@]}" sh -c \
+        'pkttyagent --process "$$" & echo "$!" > "$1/agent"; sleep 2
+         exec "$0" --ignored --exact e2e_gui_applies_in_one_process --nocapture --test-threads=1' \
+        "$E2E_BIN" "$dir"
+    give_up=$(($(now_ms) + 150000))
+    while kill -0 "${PTY_RUNNER[$tag]}" 2>/dev/null && [ "$(now_ms)" -lt "$give_up" ]; do
+        out=$(pty_out "$tag")
+        n=$(grep -c 'Password:' <<<"$out")
+        if [ "$n" -gt "$seen" ]; then
+            seen=$n
+            sleep 0.3
+            pty_send "$tag" "$HELPER_PW"$'\n'
+        fi
+        # The agent outlives the process it serves: stop it (by PID) once
+        # the test binary has printed its summary
+        if grep -q '^test result:' <<<"$out" && [ -s "$dir/agent" ]; then
+            read -r agent <"$dir/agent" && kill "$agent" 2>/dev/null
+            rm -f -- "$dir/agent"
+        fi
+        sleep 0.2
+    done
+    if [ -s "$dir/agent" ]; then
+        read -r agent <"$dir/agent" && kill "$agent" 2>/dev/null
+    fi
+    pty_wait "$tag" 5
+    out=$(pty_out "$tag")
+    printf '%s\n' "$out" >"$(log_file "cli-$tag")"
+    grep -c 'Password:' <<<"$out"
+}
+
+scenario_11() {
+    local name="11 root helper and polkit action" bad=0 out rc cmds n before after helper_n sh_n nft_n
+    local h_passwd tag
+    say "--- $name"
+    if [ -z "$HELPER_PATH" ]; then
+        skip "$name" "this drfw has no print-polkit-policy (built before the helper)"
+        return
+    fi
+    if [ -z "$HELPER_BIN" ]; then
+        skip "$name" "no drfw-helper binary (cargo build --release --bin drfw-helper; or --helper)"
+        return
+    fi
+    reset_state
+    if ! helper_install; then
+        fail "$name" "could not install the helper at $HELPER_PATH or $POLKIT_ACTION"
+        helper_uninstall
+        return
+    fi
+
+    # 11a: installed as a package would
+    check "helper installed root:root 755 at $HELPER_PATH ($(stat -c '%U:%G %a' "$HELPER_PATH"))" \
+        test "$(stat -c '%U:%G %a' "$HELPER_PATH")" = "root:root 755" || bad=1
+    check "polkit action file names the helper" \
+        grep -qF "<annotate key=\"org.freedesktop.policykit.exec.path\">$HELPER_PATH</annotate>" "$POLKIT_ACTION" || bad=1
+    if have_cmd pkaction && polkit_active; then
+        out=$(pkaction --action-id org.drfw.helper --verbose 2>&1)
+        printf '%s\n' "$out" >"$(log_file s11-pkaction)"
+        check "polkitd loaded org.drfw.helper: implicit active auth_admin_keep, any/inactive auth_admin" \
+            eval 'grep -Eq "implicit active: +auth_admin_keep" <<<"$out" && grep -Eq "implicit any: +auth_admin$" <<<"$out" && grep -Eq "implicit inactive: +auth_admin$" <<<"$out"' || bad=1
+        check "polkitd reports the exec path $HELPER_PATH" \
+            eval 'grep -qF -- "$HELPER_PATH" <<<"$out"' || bad=1
+    else
+        evidence "skip: pkaction (pkaction or polkit.service not available)"
+    fi
+
+    # 11b: refusals as root (and not as root)
+    SECRET="drfw-e2e-secret-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+    printf '%s\n' "$SECRET" >"$WORK/helper-secret"
+    chmod 0600 -- "$WORK/helper-secret"
+    printf '{"nftables":[]}\n' >"$WORK/helper-payload"
+    chmod 0644 -- "$WORK/helper-payload"
+    : >"$(log_file s11-refusals)"
+    before=$(drfw_table_dump)
+    h_passwd=$(file_digest /etc/passwd)
+    out=$(as_user "$HELPER_PATH" check <"$WORK/helper-payload" 2>&1)
+    rc=$?
+    check "as the test user (not root): refused (exit $rc: $out)" \
+        eval '[ "$rc" -eq 1 ] && grep -qF "must run as root" <<<"$out"' || bad=1
+    out=$(env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin "$HELPER_PATH" check <"$WORK/helper-payload" 2>&1)
+    rc=$?
+    check "as root without pkexec/sudo/run0: refused (exit $rc: $out)" \
+        eval '[ "$rc" -eq 1 ] && grep -qF "must be started by pkexec, sudo or run0" <<<"$out"' || bad=1
+    out=$(env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin SUDO_UID=0 DRFW_HELPER_TEST_MODE=1 \
+        DRFW_HELPER_TEST_STATE_DIR="$WORK/fake-state" "$HELPER_PATH" apply "$WORK/fake-state" 5 \
+        0123456789abcdef0123456789abcdef "$RT_DIR" nft setsid 0 <"$WORK/helper-payload" 2>&1)
+    rc=$?
+    check "release build: the test-mode variables are ignored as root (exit $rc: $out)" \
+        eval '[ "$rc" -eq 1 ] && grep -qF "the state directory must be" <<<"$out" && [ ! -e "$WORK/fake-state" ]' || bad=1
+    local uid nonce=0123456789abcdef0123456789abcdef nft_arg
+    uid=$(id -u "$TEST_USER")
+    # The nft argument DRFW passes is NFT_COMMAND: read it from a refusal
+    nft_arg=$(as_user sudo -n -- "$HELPER_PATH" save-config "$NFT_CONF" __probe__ "" \
+        <"$WORK/helper-payload" 2>&1 | sed -n 's/.*nft must be "\([^"]*\)".*/\1/p')
+    nft_arg=${nft_arg:-nft}
+    evidence "info: the helper's nft is '$nft_arg'"
+    helper_refuses "unknown request" "unknown request" list ruleset || bad=1
+    helper_refuses "no request" "missing request" || bad=1
+    helper_refuses "check with a file argument" "check takes 0 arguments" check -f "$WORK/helper-secret" || bad=1
+    helper_refuses "apply to another state dir" "the state directory must be" \
+        apply /tmp/drfw-e2e-state 5 "$nonce" "$RT_DIR" "$nft_arg" auto "$uid" || bad=1
+    helper_refuses "apply with a bad nonce" "invalid nonce" \
+        apply "$GUARD_DIR" 5 "../../etc/passwd" "$RT_DIR" "$nft_arg" auto "$uid" || bad=1
+    helper_refuses "apply for another uid" "the uid must be the caller's" \
+        apply "$GUARD_DIR" 5 "$nonce" "$RT_DIR" "$nft_arg" auto 0 || bad=1
+    helper_refuses "apply with another nft" "nft must be" \
+        apply "$GUARD_DIR" 5 "$nonce" "$RT_DIR" /bin/true auto "$uid" || bad=1
+    helper_refuses "save-config to /etc/passwd" "the target must be" \
+        save-config /etc/passwd "$nft_arg" "" || bad=1
+    helper_refuses "save-config enabling another service" "the service must be" \
+        save-config "$NFT_CONF" "$nft_arg" sshd.service || bad=1
+    printf 'include "%s"\n' "$WORK/helper-secret" >"$WORK/helper-payload"
+    helper_refuses "check of an include payload" "include statement" check || bad=1
+    helper_refuses "apply of an include payload" "include statement" \
+        apply "$GUARD_DIR" 0 "$nonce" "$RT_DIR" "$nft_arg" auto "$uid" || bad=1
+    out=$(nft -j -c -f - <"$WORK/helper-payload" 2>&1)
+    check "(control: plain root nft -j -c follows the include and prints the secret)" \
+        eval 'grep -qF -- "$SECRET" <<<"$out"' || bad=1
+    after=$(drfw_table_dump)
+    check "the refusals changed no rules ($(dump_digest "$before") = $(dump_digest "$after"))" \
+        test "$before" = "$after" || bad=1
+    check "the refusals left /etc/passwd alone" test "$(file_digest /etc/passwd)" = "$h_passwd" || bad=1
+    rm -f -- "$WORK/helper-secret" "$WORK/helper-payload"
+
+    # 11c: DRFW elevates the helper, never /bin/sh or nft (sudo log)
+    reset_state
+    sudo_log_reset
+    tag=s11-apply
+    apply_now "$(log_file "$tag")" sudo e2e-a
+    rc=$?
+    cmds=$(sudo_log_commands)
+    evidence "info: sudo log: $(tr '\n' ' ' <<<"$cmds")"
+    check "sudo: drfw apply exits 0 and e2e-A is live (exit $rc)" \
+        eval '[ "$rc" -eq 0 ] && drfw_table_has_rule e2e-A' || {
+        bad=1
+        evidence_tail "$(cat -- "$(log_file "$tag")")"
+    }
+    helper_n=$(awk -v h="$HELPER_PATH" '$2 == h {n += $1} END {print n + 0}' <<<"$cmds")
+    sh_n=$(awk '$2 ~ /\/sh$/ {n += $1} END {print n + 0}' <<<"$cmds")
+    nft_n=$(awk '$2 ~ /\/nft$/ {n += $1} END {print n + 0}' <<<"$cmds")
+    check "sudo elevated only the helper ($helper_n x helper, $sh_n x sh, $nft_n x nft)" \
+        eval '[ "$helper_n" -ge 1 ] && [ "$sh_n" -eq 0 ] && [ "$nft_n" -eq 0 ]' || bad=1
+    if [ "$GUARD_METHOD" = sudo ]; then
+        evidence "guard timeout through the helper (systemd watcher, revert on time):"
+        guard_timeout_case s11-guard e2e-A || bad=1
+    fi
+    if [ -n "$E2E_BIN" ]; then
+        sudo_log_reset
+        save_as sudo e2e_save_profile e2e-a "$(log_file s11-save)"
+        rc=$?
+        cmds=$(sudo_log_commands)
+        check "Save to System through the helper (exit $rc; sudo log: $(tr '\n' ' ' <<<"$cmds"))" \
+            eval '[ "$rc" -eq 0 ] && grep -qF -- "$HELPER_PATH" <<<"$cmds" && ! grep -Eq "/sh$" <<<"$cmds"' || {
+            bad=1
+            evidence_tail "$(cat -- "$(log_file s11-save)")" 10
+        }
+    fi
+
+    # 11d: one password for two GUI applies from one process (auth_admin_keep)
+    if [ -z "$E2E_BIN" ] || ! have_pkexec || ! have_cmd pkttyagent || ! have_cmd chpasswd; then
+        evidence "skip: prompt count (needs the e2e binary, pkexec + polkit, pkttyagent, chpasswd)"
+    else
+        HELPER_PW="e2e-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+        printf '%s:%s\n' "$TEST_USER" "$HELPER_PW" | chpasswd || bad=1
+        reset_state
+        n=$(prompt_session s11-prompt-a e2e-a,e2e-b)
+        out=$(pty_out s11-prompt-a)
+        check "two applies from one process: both applied, e2e-B live" \
+            eval 'grep -q "E2E applied=e2e-a result=ok" <<<"$out" && grep -q "E2E applied=e2e-b result=ok" <<<"$out" && drfw_table_has_rule e2e-B' || {
+            bad=1
+            evidence_tail "$out" 12
+        }
+        check "the polkit agent asked for a password once for both ($n)" test "$n" -eq 1 || bad=1
+        check "the dialog was for org.drfw.helper and said what it is for" \
+            eval 'grep -q "AUTHENTICATING FOR org.drfw.helper" <<<"$out" && grep -qF "Authentication is required to change the firewall rules" <<<"$out"' || bad=1
+        n=$(prompt_session s11-prompt-b e2e-c)
+        out=$(pty_out s11-prompt-b)
+        check "a new process asks again ($n prompt(s)), e2e-C live" \
+            eval '[ "$n" -eq 1 ] && grep -q "E2E applied=e2e-c result=ok" <<<"$out" && drfw_table_has_rule e2e-C' || {
+            bad=1
+            evidence_tail "$out" 12
+        }
+        passwd -l "$TEST_USER" >/dev/null 2>&1
+    fi
+
+    reset_state
+    helper_uninstall || bad=1
+    check "helper and action removed again (unless they were installed before the run)" \
+        eval '[ ! -e "$HELPER_STATE" ]' || bad=1
     verdict "$name" "$bad"
 }
 

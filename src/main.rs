@@ -625,6 +625,13 @@ enum Commands {
     /// loads exactly the file Save to System writes.
     #[command(hide = true)]
     PrintServiceUnit,
+    /// Print the polkit action `org.drfw.helper` for this build (for packagers)
+    ///
+    /// Fills `contrib/org.drfw.helper.policy.in` with the helper path this
+    /// binary was compiled with (`DRFW_HELPER_PATH`), so the installed action
+    /// names exactly the helper DRFW elevates.
+    #[command(hide = true)]
+    PrintPolkitPolicy,
 }
 
 /// Output format of `drfw export`
@@ -641,9 +648,16 @@ fn main() -> ExitCode {
 
     // Runs at package time (often as a build user or under fakeroot): no
     // runtime, no data directories
-    if matches!(cli.command, Some(Commands::PrintServiceUnit)) {
-        print!("{}", drfw::distro::service_unit());
-        return ExitCode::SUCCESS;
+    match cli.command {
+        Some(Commands::PrintServiceUnit) => {
+            print!("{}", drfw::distro::service_unit());
+            return ExitCode::SUCCESS;
+        }
+        Some(Commands::PrintPolkitPolicy) => {
+            print!("{}", drfw::distro::polkit_policy());
+            return ExitCode::SUCCESS;
+        }
+        _ => {}
     }
     let _ = drfw::utils::ensure_dirs();
 
@@ -769,6 +783,7 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
         } => save_profile(&name, enable_at_boot, yes).await?,
         // Handled in main() before the runtime starts
         Commands::PrintServiceUnit => print!("{}", drfw::distro::service_unit()),
+        Commands::PrintPolkitPolicy => print!("{}", drfw::distro::polkit_policy()),
         Commands::Check { name } => check_profile(&name).await?,
         Commands::Exposure { name, json } => print_exposure(name, json).await?,
         Commands::Export { name, format } => {

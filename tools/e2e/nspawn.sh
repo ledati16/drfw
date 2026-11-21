@@ -29,6 +29,7 @@ SUITE=trixie
 MIRROR=http://deb.debian.org/debian
 DRFW_BIN=
 E2E_BIN=
+HELPER_BIN=
 NO_BUILD=0
 NO_MODPROBE=0
 KEEP=0
@@ -75,6 +76,7 @@ Options:
   --mirror URL       debootstrap mirror (default: http://deb.debian.org/debian)
   --drfw PATH        Use this drfw binary instead of building
   --e2e-bin PATH     Use this root_e2e test binary instead of building
+  --helper PATH      Use this drfw-helper binary instead of building
   --no-build         Do not run cargo; find the binaries in the target dir
   --no-modprobe      Do not load nftables kernel modules on the host
   --keep             Leave the container running after run/boot
@@ -99,6 +101,7 @@ while [ $# -gt 0 ]; do
         --mirror) MIRROR=${2:?}; shift ;;
         --drfw) DRFW_BIN=${2:?}; shift ;;
         --e2e-bin) E2E_BIN=${2:?}; shift ;;
+        --helper) HELPER_BIN=${2:?}; shift ;;
         --no-build) NO_BUILD=1 ;;
         --no-modprobe) NO_MODPROBE=1 ;;
         --keep) KEEP=1 ;;
@@ -156,6 +159,7 @@ find_built() {
     local t
     t=$(target_dir)
     [ -n "$DRFW_BIN" ] || { [ -x "$t/release/drfw" ] && DRFW_BIN=$t/release/drfw; }
+    [ -n "$HELPER_BIN" ] || { [ -x "$t/release/drfw-helper" ] && HELPER_BIN=$t/release/drfw-helper; }
     if [ -z "$E2E_BIN" ] && [ -d "$t/release" ]; then
         E2E_BIN=$(find "$t/release" -type f -name 'root_e2e-*' -perm -u+x -printf '%T@ %p\n' 2>/dev/null |
             sort -rn | head -n1 | cut -d' ' -f2-)
@@ -164,19 +168,20 @@ find_built() {
 
 build() {
     local out
-    say "Building drfw and the root_e2e test binary (cargo, as $(id -un))..."
+    say "Building drfw, drfw-helper and the root_e2e test binary (cargo, as $(id -un))..."
     if [ "$DRY_RUN" = 1 ]; then
-        run cargo build --release --bin drfw
+        run cargo build --release --bin drfw --bin drfw-helper
         run cargo test --release --test root_e2e --no-run
         return 0
     fi
-    (cd -- "$REPO_DIR" && cargo build --release --bin drfw) || die "cargo build failed"
+    (cd -- "$REPO_DIR" && cargo build --release --bin drfw --bin drfw-helper) || die "cargo build failed"
     out=$(cd -- "$REPO_DIR" && cargo test --release --test root_e2e --no-run 2>&1) || {
         printf '%s\n' "$out" >&2
         die "cargo test --no-run failed"
     }
     E2E_BIN=$(sed -n 's/.*Executable .*root_e2e\.rs (\(.*\))$/\1/p' <<<"$out" | tail -n1)
     DRFW_BIN=$(target_dir)/release/drfw
+    HELPER_BIN=$(target_dir)/release/drfw-helper
 }
 
 needs_binaries() { case $CMD in run | boot | all) return 0 ;; esac; return 1; }
@@ -195,6 +200,7 @@ if [ "$EUID" -ne 0 ]; then
         extra=()
         [ -n "$DRFW_BIN" ] && extra+=(--drfw "$DRFW_BIN")
         [ -n "$E2E_BIN" ] && extra+=(--e2e-bin "$E2E_BIN")
+        [ -n "$HELPER_BIN" ] && extra+=(--helper "$HELPER_BIN")
         exec sudo -- bash "$SELF" --no-build "${extra[@]}" "${ORIG_ARGS[@]}"
     fi
 else
@@ -265,6 +271,11 @@ stage() {
         run install -m 0755 -- "$E2E_BIN" "$dest/bin/root_e2e"
     else
         say "  (no root_e2e test binary: scenario 8 will be skipped)"
+    fi
+    if [ -n "$HELPER_BIN" ]; then
+        run install -m 0755 -- "$HELPER_BIN" "$dest/bin/drfw-helper"
+    else
+        say "  (no drfw-helper binary: scenario 11 will be skipped)"
     fi
 }
 

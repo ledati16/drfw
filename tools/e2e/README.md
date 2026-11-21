@@ -82,7 +82,7 @@ re-runs itself through `sudo` and:
 3. Boots the container as a transient unit: `systemd-nspawn --boot
    --private-network` with systemd as PID 1. All nftables changes happen in
    the container's own network namespace, never in the host's.
-4. Copies `run.sh`, `lib.sh` and both binaries to `/opt/drfw-e2e/tools/e2e`
+4. Copies `run.sh`, `lib.sh` and the binaries (`drfw`, `drfw-helper`, `root_e2e`) to `/opt/drfw-e2e/tools/e2e`
    and runs `run.sh` with `systemd-run -M drfw-e2e --wait --pipe`.
 5. `boot`: `--phase boot-prep`, `systemctl -M drfw-e2e reboot` (nspawn exits
    with 133, the unit restarts it), then `--phase boot-check`.
@@ -119,10 +119,11 @@ Disable any other firewall in the VM (firewalld, ufw, the distribution's
 
 ```bash
 # On the host
-cargo build --release
+cargo build --release                           # drfw and drfw-helper
 cargo test --release --test root_e2e --no-run   # prints the test binary path
-# Copy tools/e2e/ to the VM, put the binaries at tools/e2e/bin/drfw and
-# tools/e2e/bin/root_e2e (or pass --drfw / --e2e-bin), then in the VM:
+# Copy tools/e2e/ to the VM, put the binaries at tools/e2e/bin/drfw,
+# tools/e2e/bin/drfw-helper and tools/e2e/bin/root_e2e (or pass --drfw /
+# --helper / --e2e-bin), then in the VM:
 sudo DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh --dry-run
 sudo DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh
 sudo DRFW_E2E_DISPOSABLE=1 tools/e2e/run.sh --phase boot-prep
@@ -135,7 +136,8 @@ Take a VM snapshot first if you want to be able to roll back exactly.
 ### run.sh options
 
 `--only 2,4,6` runs some scenarios; `--method pkexec|run0` elevates the guard
-scenarios 2 to 7 with something other than sudo; `--nft-conf` and `--service`
+scenarios 2 to 7 with something other than sudo; `--helper PATH` names the
+`drfw-helper` release binary for scenario 11; `--nft-conf` and `--service`
 override the compiled-in paths (normally discovered from the `root_e2e`
 binary, else from `drfw status`); `--strict` counts skips as failures.
 
@@ -149,13 +151,20 @@ is missing. Logs (CLI output of every step, the sudo log) are kept in
   `/run/drfw-e2e-rt`, profiles in `/var/lib/drfw-e2e/user/data`
   (`DRFW_TEST_DATA_DIR`). Every CLI call runs as this user through `runuser`
   with a clean environment.
-- `/etc/sudoers.d/90-drfw-e2e`: `NOPASSWD` for `/bin/sh` and `nft`, for this
-  user only, logging every call to `/var/log/drfw-e2e-sudo.log`. The kit
+- `/etc/sudoers.d/90-drfw-e2e`: `NOPASSWD` for `/bin/sh`, `nft` and the helper
+  path compiled into `drfw`, for this user only, logging every call to
+  `/var/log/drfw-e2e-sudo.log`. The kit
   counts those entries to prove how often (and for what) DRFW elevated. This
   is effectively root for the test user, which is fine in a throwaway
   environment and is exactly what DRFW must never recommend on a real host.
 - `/etc/polkit-1/rules.d/10-drfw-e2e.rules`: `pkexec` of `/bin/sh` and `nft`
-  and systemd unit management (for `run0`), for this user only.
+  and systemd unit management (for `run0`), for this user only. For
+  `org.drfw.helper` it never answers YES: an active local session gets the
+  action's own default (`auth_admin_keep`); the kit's processes have no seat,
+  which polkit treats like a remote session (the action says `auth_admin`
+  there), so the rule returns `AUTH_ADMIN_KEEP` for them, what a desktop session
+  gets. It also makes the test user its own polkit administrator
+  (`addAdminRule`), so the prompt asks for the test user's password.
 - Profiles `e2e-a`, `e2e-b`, `e2e-c` (Desktop mode, one input rule each,
   labelled `e2e-A`/`e2e-B`/`e2e-C`, so the live table can be identified by the
   rule comment) and `e2e-srv` (Server Mode, one rule for an unused port).
@@ -236,11 +245,46 @@ Each prints `PASS`/`FAIL` with the evidence for every sub-check.
     for 47501) is applied: the established session still echoes, a new
     connection from the peer is blocked, and loopback TCP works.
 
+11. **Root helper and polkit action** (needs a `drfw-helper` release binary and
+    a `drfw` with `print-polkit-policy`). Installs the helper at the path from
+    `drfw print-polkit-policy` (root:root 755) and that output as
+    `/usr/share/polkit-1/actions/org.drfw.helper.policy`; both are removed at
+    the end and on exit (an identical copy installed before the run is used
+    and left alone; a different one makes the scenario fail without touching
+    it).
+    - (a) `pkaction --verbose` shows the action's defaults (`auth_admin_keep`
+      for active local sessions, `auth_admin` otherwise) and the exec path.
+    - (b) Refusals: as the test user (not root); as root without
+      pkexec/sudo/run0; the release build ignoring the test-mode variables as
+      root; and, as root through sudo, an unknown request, no request, `check`
+      with a file argument, `apply` with another state dir, a bad nonce,
+      another uid or another `nft`, `save-config` to `/etc/passwd` or enabling
+      another service, and `check`/`apply` of a payload that `include`s a
+      root-only secret file (the control shows plain root `nft -j -c` prints
+      the secret). Every refusal exits 1 without printing the secret; the
+      ruleset and `/etc/passwd` are unchanged.
+    - (c) `drfw apply` via sudo elevates only the helper (sudo log: no
+      `/bin/sh`, no `nft`); a guarded apply through the helper times out and
+      reverts on the systemd path (as scenario 2); Save to System goes through
+      the helper.
+    - (d) **Prompt count.** The test user gets a random password. In a PTY, a
+      shell starts `pkttyagent --process $$` (a text polkit agent for that one
+      process) and then `exec`s the `root_e2e` binary, which keeps the PID and
+      start time polkit identifies the subject by. That process applies
+      `e2e-a` and then `e2e-b` exactly like the GUI (`pkexec`, `apply_guarded`).
+      The kit types the password whenever the agent prints `Password:` and
+      counts the prompts: exactly **one** for both applies, for
+      `org.drfw.helper`, with the text "Authentication is required to change
+      the firewall rules". A second process applying `e2e-c` is asked again
+      (the authorization is kept for the process that asked, not the user).
+      Skipped without `pkttyagent`, `chpasswd`, pkexec or polkit.
+
 ## What this kit cannot cover
 
-- Interactive authentication (typing a password into sudo, run0 or a polkit
-  agent): the kit grants the test user access without one. The
-  cancel/refuse paths (exit 126/127) are covered by unit tests.
+- Interactive authentication with a graphical agent: scenario 11 types the
+  password into the text agent `pkttyagent`; the other scenarios grant the
+  test user access without one. The cancel/refuse paths (exit 126/127) are
+  covered by unit tests.
 - The GUI. Its Apply and Save to System handlers call the same library
   functions the kit drives (`apply_guarded`, `write_config_file`).
 - The `setsid` watcher launcher (systemd not PID 1): `tests/real_nft.rs`

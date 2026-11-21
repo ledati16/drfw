@@ -29,8 +29,9 @@ const UNPRIVILEGED_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 /// authentication dialog.
 const ELEVATED_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Arguments for a check-only run of nft reading JSON from stdin.
-const CHECK_ARGS: [&str; 4] = ["--json", "--check", "-f", "-"];
+/// Arguments for a check-only run of nft reading JSON from stdin (the same
+/// the elevated check and the root helper's `check` use).
+const CHECK_ARGS: [&str; 4] = crate::elevation::NFT_JSON_CHECK_ARGS;
 
 /// Arguments for a check-only run of nft reading the text form from stdin
 /// (only used to locate errors, see [`locate_errors`]).
@@ -264,7 +265,7 @@ pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyRes
     }
 
     info!("Verifying ruleset via nft --json --check (elevated)");
-    let command = crate::elevation::create_elevated_nft_command(&CHECK_ARGS)
+    let command = crate::elevation::create_elevated_check_command()
         .map_err(|e| VerifyError::Auth(AuthError::Unavailable(e.to_string())))?;
     let elevated = crate::elevation::test_nft_command().is_none();
     let Some(output) = run_check(command, &payload, ELEVATED_CHECK_TIMEOUT).await? else {

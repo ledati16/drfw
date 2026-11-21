@@ -4,6 +4,7 @@
 //!
 //! All of DRFW lives in this library; the `drfw` binary (`src/main.rs`) is the
 //! command-line front end and calls [`run_gui`] when no subcommand is given.
+//! The `drfw-helper` binary (`src/helper_main.rs`) is [`helper::main`].
 //!
 //! # Architecture
 //!
@@ -12,6 +13,8 @@
 //! - [`build_info`] - Version strings with the git commit and build time
 //! - [`command`] - Undo/redo command pattern
 //! - [`elevation`] - Privilege escalation (`run0`, `sudo`, `pkexec`)
+//! - [`helper`] - The root helper `drfw-helper` (`src/helper_main.rs`), the
+//!   only program elevated when installed
 //! - [`audit`] - Security audit logging for all privileged operations
 //! - [`validators`] - Input validation and sanitization
 //! - [`config`] - Configuration persistence
@@ -37,6 +40,7 @@ pub mod core;
 pub mod distro;
 pub mod elevation;
 pub mod fonts;
+pub mod helper;
 pub mod theme;
 pub mod utils;
 pub mod validators;
