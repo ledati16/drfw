@@ -7,7 +7,7 @@
 //! - Visual rule management with real-time preview
 //! - Undo/redo support for all operations
 //! - Rule grouping and tagging
-//! - Snapshot and restore functionality
+//! - Auto-revert of unconfirmed changes, guarded on the root side
 //! - Syntax-highlighted nftables configuration
 //! - IPv4/IPv6 support
 //! - Boot persistence management
@@ -28,7 +28,7 @@
 //! - Runs as unprivileged user, elevates only for rule application
 //! - All inputs validated before elevation
 //! - Audit trail of all privileged operations
-//! - Atomic rule application with automatic snapshots
+//! - Atomic rule application with a root-side auto-revert guard
 //!
 //! # Usage
 //!
@@ -47,6 +47,10 @@
 //!
 //! `drfw apply` changes the running kernel ruleset only; it does not persist
 //! across reboots. Use "Save to System" in the GUI for boot persistence.
+//!
+//! The auto-revert runs as a separate root process (see
+//! `core::apply_guard`): if the terminal closes or the SSH connection drops
+//! during the countdown, the rules still revert on time.
 
 mod app;
 mod audit;
@@ -98,12 +102,21 @@ use iced::Size;
 use std::io::stdout;
 use std::process::ExitCode;
 
-/// Result of the countdown confirmation process
-enum ConfirmResult {
-    Confirmed,
-    Reverted,
-    Error(String),
+/// What ended the countdown
+#[derive(Debug, PartialEq, Eq)]
+enum CountdownEnd {
+    /// The user asked to keep the new rules
+    Confirm,
+    /// The user asked to restore the previous rules now
+    Revert,
+    /// The timer ran out; the root-side guard reverts on its own
+    Expired,
+    /// No interactive terminal to ask on
+    NoTerminal(String),
 }
+
+/// Longest pause between countdown redraws/key polls.
+const COUNTDOWN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// What a keypress during the countdown asks for
 #[derive(Debug, PartialEq, Eq)]
@@ -146,67 +159,145 @@ fn is_running_via_sudo() -> bool {
 
 /// Interactive countdown with confirmation/revert controls
 ///
-/// Displays a countdown timer and polls for keypresses:
-/// - 'c' or Enter: Confirm changes immediately
-/// - 'r', Esc or Ctrl-C: Revert changes immediately
-/// - Any other key: Ignored (countdown continues)
-/// - Timeout: Auto-revert
-async fn countdown_confirmation(timeout_secs: u64, snapshot: &serde_json::Value) -> ConfirmResult {
+/// Displays the time left until `deadline` (measured with `Instant`, so slow
+/// redraws or key repeats never stretch it) and polls for keypresses:
+/// - 'c' or Enter: confirm
+/// - 'r', Esc or Ctrl-C: revert now
+/// - any other key: ignored
+///
+/// Blocking (crossterm polling); run it with `spawn_blocking`.
+fn run_countdown(deadline: std::time::Instant) -> CountdownEnd {
     use crossterm::event::{self, Event, KeyEventKind};
     use std::io::Write;
 
-    // Enable raw mode for immediate keypress detection
     if let Err(e) = crossterm::terminal::enable_raw_mode() {
-        return ConfirmResult::Error(format!("Failed to enable raw mode: {e}"));
+        return CountdownEnd::NoTerminal(e.to_string());
     }
 
-    let result = async {
-        for remaining in (1..=timeout_secs).rev() {
-            // Countdown with only the timer colored
+    let mut shown = None;
+    let end = loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let secs = countdown_display_secs(remaining);
+        if secs == 0 {
+            break CountdownEnd::Expired;
+        }
+        if shown != Some(secs) {
+            shown = Some(secs);
             print!("\rAuto-revert in ");
             let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-            print!("{remaining:2}s");
+            print!("{secs:3}s");
             let _ = stdout().execute(ResetColor);
             print!("  [c/Enter=confirm, r/Esc/Ctrl-C=revert now]   ");
             std::io::stdout().flush().ok();
+        }
 
-            // Poll for keypresses for 1 second
-            if let Ok(true) = event::poll(std::time::Duration::from_secs(1))
-                && let Ok(Event::Key(key)) = event::read()
-                && key.kind != KeyEventKind::Release
-            {
-                match classify_countdown_key(&key) {
-                    CountdownKey::Confirm => {
-                        return ConfirmResult::Confirmed;
-                    }
-                    CountdownKey::Revert => {
-                        print!("\r\x1b[K"); // Clear line
-                        println!("Reverting...");
-                        match core::nft_json::restore_snapshot(snapshot).await {
-                            Ok(()) => return ConfirmResult::Reverted,
-                            Err(e) => return ConfirmResult::Error(format!("Revert failed: {e}")),
-                        }
-                    }
-                    CountdownKey::Ignore => {
-                        // Any other key ignored, continue countdown
-                    }
-                }
+        if let Ok(true) = event::poll(remaining.min(COUNTDOWN_POLL))
+            && let Ok(Event::Key(key)) = event::read()
+            && key.kind != KeyEventKind::Release
+        {
+            match classify_countdown_key(&key) {
+                CountdownKey::Confirm => break CountdownEnd::Confirm,
+                CountdownKey::Revert => break CountdownEnd::Revert,
+                CountdownKey::Ignore => {}
             }
         }
-
-        // Timeout expired - auto-revert
-        print!("\r\x1b[K"); // Clear line
-        println!("Timeout - reverting...");
-        match core::nft_json::restore_snapshot(snapshot).await {
-            Ok(()) => ConfirmResult::Reverted,
-            Err(e) => ConfirmResult::Error(format!("Auto-revert failed: {e}")),
-        }
-    }
-    .await;
+    };
 
     // Always restore terminal to normal mode
     let _ = crossterm::terminal::disable_raw_mode();
-    result
+    print!("\r\x1b[K"); // Clear line
+    std::io::stdout().flush().ok();
+    end
+}
+
+/// Whole seconds shown for `remaining`, rounded up (N … 1, then 0 = expired).
+fn countdown_display_secs(remaining: std::time::Duration) -> u64 {
+    remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
+}
+
+/// Prints a colored status mark followed by a message.
+fn print_status(mark: &str, color: Color, message: &str) {
+    let _ = stdout().execute(SetForegroundColor(color));
+    print!("{mark}");
+    let _ = stdout().execute(ResetColor);
+    println!(" {message}");
+}
+
+/// Waits for the guard's verdict after `end`, prints it and writes the audit log.
+async fn finish_guarded_apply(
+    handle: &core::apply_guard::GuardHandle,
+    end: CountdownEnd,
+    enable_event_log: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use core::apply_guard::{GuardOutcome, OUTCOME_GRACE};
+
+    let timeout_secs = handle.timeout().as_secs();
+    let outcome = match end {
+        CountdownEnd::Confirm => {
+            handle.confirm()?;
+            handle.wait_outcome(OUTCOME_GRACE).await
+        }
+        CountdownEnd::Revert => {
+            println!("Reverting...");
+            handle.revert_now()?;
+            handle.wait_outcome(OUTCOME_GRACE).await
+        }
+        CountdownEnd::Expired => {
+            println!("Timeout - waiting for the guard to revert...");
+            audit::log_auto_revert_timed_out(enable_event_log, timeout_secs).await;
+            handle.wait_for_timeout_outcome().await
+        }
+        CountdownEnd::NoTerminal(reason) => {
+            eprintln!("Cannot ask for confirmation without a terminal ({reason}).");
+            eprintln!("Reverting now; use --no-confirm for unattended applies.");
+            handle.revert_now()?;
+            handle.wait_outcome(OUTCOME_GRACE).await
+        }
+    };
+
+    match outcome {
+        Ok(GuardOutcome::Confirmed) => {
+            audit::log_auto_revert_confirmed(enable_event_log, timeout_secs).await;
+            print_status(
+                "✓",
+                Color::Green,
+                "Changes confirmed (active until reboot; use Save to System to persist).",
+            );
+            Ok(())
+        }
+        Ok(GuardOutcome::Reverted) => {
+            audit::log_revert(enable_event_log, true, None).await;
+            print_status("✓", Color::Yellow, "Reverted to the previous rules.");
+            Ok(())
+        }
+        Ok(GuardOutcome::Removed(err)) => {
+            let msg = format!(
+                "The previous rules could not be restored ({err}); the drfw table was removed instead, so drfw is not filtering anything now."
+            );
+            audit::log_revert(enable_event_log, true, Some(msg.clone())).await;
+            print_status("!", Color::Yellow, &msg);
+            Ok(())
+        }
+        Ok(GuardOutcome::RevertFailed(err)) => {
+            let msg = format!("Revert FAILED; the new rules are STILL ACTIVE: {err}");
+            audit::log_revert(enable_event_log, false, Some(msg.clone())).await;
+            print_status("✗", Color::Red, &msg);
+            Err(msg.into())
+        }
+        Ok(GuardOutcome::Superseded) => {
+            print_status(
+                "!",
+                Color::Yellow,
+                "Another apply replaced these rules before they were confirmed.",
+            );
+            Ok(())
+        }
+        Err(e) => {
+            audit::log_revert(enable_event_log, false, Some(e.to_string())).await;
+            print_status("✗", Color::Red, &e.to_string());
+            Err(e.into())
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -225,7 +316,11 @@ enum Commands {
     /// Apply a firewall profile to the kernel
     ///
     /// SAFETY: By default, rules auto-revert after 15 seconds unless confirmed.
-    /// This prevents accidental lockouts. Use --no-confirm to disable.
+    /// The revert is armed as root, independently of this command: if this
+    /// terminal closes, the SSH connection drops or drfw is killed during the
+    /// countdown, the previous rules are still restored on time. Applying asks
+    /// for authentication once; confirming or reverting needs none.
+    /// Use --no-confirm to disable.
     Apply {
         /// Name of the profile to apply
         name: String,
@@ -302,6 +397,9 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
                 Err(e) => return Err(e.into()),
             };
             let nft_json = ruleset.to_nftables_json();
+            let rule_count = ruleset.rules.len();
+            let enabled_count = ruleset.rules.iter().filter(|r| r.enabled).count();
+            let enable_event_log = config::load_config().await.enable_event_log;
 
             // Verify first
             println!("Verifying profile '{name}'...");
@@ -321,57 +419,34 @@ async fn handle_cli(command: Commands) -> Result<(), Box<dyn std::error::Error>>
 
             println!();
             println!("Applying ruleset...");
-            let snapshot = core::nft_json::apply_with_snapshot(nft_json).await?;
-            let _ = core::nft_json::save_snapshot_to_disk(&snapshot);
+            let timeout_secs = if no_confirm { 0 } else { confirm.clamp(5, 120) };
+            let result = core::apply_guard::apply_guarded(&nft_json, timeout_secs).await;
+            audit::log_apply(
+                enable_event_log,
+                rule_count,
+                enabled_count,
+                result.is_ok(),
+                result.as_ref().err().map(ToString::to_string),
+            )
+            .await;
 
-            if no_confirm {
-                // Skip auto-revert (power user mode)
-                let _ = stdout().execute(SetForegroundColor(Color::Green));
-                print!("✓");
-                let _ = stdout().execute(ResetColor);
-                println!(
-                    " Rules applied (no auto-revert; active until reboot, use Save to System to persist)."
-                );
-            } else {
-                // Safe by default: use auto-revert
-                let timeout_secs = confirm.clamp(5, 120);
-
-                let _ = stdout().execute(SetForegroundColor(Color::Green));
-                print!("✓");
-                let _ = stdout().execute(ResetColor);
-                println!(" Firewall rules applied!");
-                println!();
-
-                match countdown_confirmation(timeout_secs, &snapshot).await {
-                    ConfirmResult::Confirmed => {
-                        println!();
-                        let _ = stdout().execute(SetForegroundColor(Color::Green));
-                        print!("✓");
-                        let _ = stdout().execute(ResetColor);
-                        println!(
-                            " Changes confirmed (active until reboot; use Save to System to persist)."
-                        );
-                    }
-                    ConfirmResult::Reverted => {
-                        println!();
-                        let _ = stdout().execute(SetForegroundColor(Color::Yellow));
-                        print!("✓");
-                        let _ = stdout().execute(ResetColor);
-                        println!(" Reverted to previous state.");
-                    }
-                    ConfirmResult::Error(e) => {
-                        println!();
-                        let _ = stdout().execute(SetForegroundColor(Color::Red));
-                        print!("✗");
-                        let _ = stdout().execute(ResetColor);
-                        println!(" Error during confirmation: {e}");
-                        println!("Attempting emergency revert...");
-                        core::nft_json::restore_snapshot(&snapshot).await?;
-                        let _ = stdout().execute(SetForegroundColor(Color::Green));
-                        print!("✓");
-                        let _ = stdout().execute(ResetColor);
-                        println!(" Emergency revert complete.");
-                    }
+            match result? {
+                None => print_status(
+                    "✓",
+                    Color::Green,
+                    "Rules applied (no auto-revert; active until reboot, use Save to System to persist).",
+                ),
+                Some(handle) => {
+                    print_status("✓", Color::Green, "Firewall rules applied!");
+                    println!(
+                        "  They revert automatically in {timeout_secs}s unless confirmed, even if this terminal or SSH session is lost."
+                    );
+                    println!();
+                    let deadline = handle.deadline();
+                    let end = tokio::task::spawn_blocking(move || run_countdown(deadline))
+                        .await
+                        .unwrap_or_else(|e| CountdownEnd::NoTerminal(e.to_string()));
+                    finish_guarded_apply(&handle, end, enable_event_log).await?;
                 }
             }
         }
@@ -507,6 +582,16 @@ mod tests {
             classify_countdown_key(&key(KeyCode::Enter, KeyModifiers::CONTROL)),
             CountdownKey::Ignore
         );
+    }
+
+    #[test]
+    fn test_countdown_display_secs_rounds_up() {
+        use std::time::Duration;
+        assert_eq!(countdown_display_secs(Duration::from_secs(15)), 15);
+        assert_eq!(countdown_display_secs(Duration::from_millis(14_001)), 15);
+        assert_eq!(countdown_display_secs(Duration::from_millis(999)), 1);
+        assert_eq!(countdown_display_secs(Duration::from_millis(1)), 1);
+        assert_eq!(countdown_display_secs(Duration::ZERO), 0);
     }
 
     #[test]

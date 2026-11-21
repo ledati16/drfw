@@ -14,7 +14,6 @@ use helpers::{
 };
 
 use crate::core::firewall::{FirewallRuleset, Protocol};
-use chrono::Utc;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
@@ -49,7 +48,10 @@ impl NotificationBanner {
 
 pub struct State {
     pub ruleset: FirewallRuleset,
+    /// What DRFW last applied to the kernel; `None` = unknown (e.g. at startup)
     pub last_applied_ruleset: Option<FirewallRuleset>,
+    /// Ruleset snapshot carried through verify -> apply -> confirm/revert
+    pub apply_session: Option<handlers::ApplySession>,
     pub cached_disk_profile: Option<FirewallRuleset>,
     pub status: AppStatus,
     pub banners: std::collections::VecDeque<NotificationBanner>,
@@ -254,10 +256,13 @@ pub enum AppStatus {
     Verifying,
     AwaitingApply,
     Applying,
+    /// Applied; the root-side guard reverts unless confirmed in time
     PendingConfirmation {
-        deadline: chrono::DateTime<Utc>,
-        snapshot: serde_json::Value,
+        guard: crate::core::apply_guard::GuardHandle,
     },
+    /// Confirm token created; waiting for the guard's verdict
+    Confirming,
+    /// Revert requested or timed out; waiting for the guard's verdict
     Reverting,
     /// Waiting for user to confirm Save to System operation
     AwaitingSaveToSystem,
@@ -287,17 +292,24 @@ pub enum Message {
     CancelDelete,
     DeleteRule(uuid::Uuid),
     ApplyClicked,
-    VerifyCompleted(Result<crate::core::verify::VerifyResult, String>),
+    VerifyCompleted(Result<crate::core::verify::VerifyResult, crate::core::verify::VerifyError>),
     ProceedToApply,
-    ApplyResult(Result<serde_json::Value, String>),
+    ApplyResult(
+        Result<Option<crate::core::apply_guard::GuardHandle>, crate::core::apply_guard::ApplyError>,
+    ),
     ConfirmClicked,
     RevertClicked,
-    RevertResult(Result<(), String>),
+    /// The revert guard's verdict after confirm, rollback or timeout
+    GuardFinished(
+        Result<crate::core::apply_guard::GuardOutcome, crate::core::apply_guard::GuardError>,
+    ),
     CountdownTick,
     TabChanged(WorkspaceTab),
     ToggleExportModal(bool),
     SaveToSystemClicked,
-    SaveToSystemVerifyResult(Result<crate::core::verify::VerifyResult, String>),
+    SaveToSystemVerifyResult(
+        Result<crate::core::verify::VerifyResult, crate::core::verify::VerifyError>,
+    ),
     SaveToSystemConfirmed,
     SaveToSystemCancelled,
     /// Ok carries the backup path of the previous file, if there was one
@@ -463,7 +475,9 @@ impl State {
         let available_fonts = crate::fonts::all_options();
 
         let mut state = Self {
-            last_applied_ruleset: Some(ruleset.clone()),
+            // Unknown until DRFW applies something: the kernel may hold anything
+            last_applied_ruleset: None,
+            apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
             status: AppStatus::Idle,
@@ -559,6 +573,7 @@ impl State {
 
         let mut state = Self {
             last_applied_ruleset: Some(ruleset.clone()),
+            apply_session: None,
             cached_disk_profile: Some(ruleset.clone()),
             ruleset,
             status: AppStatus::Idle,
@@ -639,9 +654,20 @@ impl State {
             BannerSeverity::Error => 10,
         };
 
-        // Remove oldest if at capacity
+        // Remove oldest if at capacity, sparing persistent (never-expiring) banners
         while self.banners.len() >= 2 {
-            self.banners.pop_front();
+            match self
+                .banners
+                .iter()
+                .position(|b| b.duration_secs != u64::MAX)
+            {
+                Some(index) => {
+                    self.banners.remove(index);
+                }
+                None => {
+                    self.banners.pop_front();
+                }
+            }
         }
 
         self.banners.push_back(NotificationBanner {
@@ -807,6 +833,7 @@ impl State {
             AppStatus::Verifying
                 | AppStatus::Applying
                 | AppStatus::PendingConfirmation { .. }
+                | AppStatus::Confirming
                 | AppStatus::Reverting
                 | AppStatus::AwaitingSaveToSystem
                 | AppStatus::SavingToSystem
@@ -865,6 +892,10 @@ impl State {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if handlers::is_ruleset_edit(&message) && handlers::edits_locked(self) {
+            handlers::handle_edit_while_locked(self);
+            return Task::none();
+        }
         match message {
             // Rules domain
             Message::AddRuleClicked => handlers::handle_add_rule_clicked(self),
@@ -911,15 +942,12 @@ impl State {
                 return handlers::handle_verify_completed(self, result);
             }
             Message::ProceedToApply => return handlers::handle_proceed_to_apply(self),
-            Message::ApplyResult(Err(e)) | Message::RevertResult(Err(e)) => {
-                return handlers::handle_apply_or_revert_error(self, &e);
-            }
-            Message::ApplyResult(Ok(snapshot)) => {
-                return handlers::handle_apply_result(self, snapshot);
-            }
+            Message::ApplyResult(result) => return handlers::handle_apply_result(self, result),
             Message::ConfirmClicked => return handlers::handle_confirm_clicked(self),
             Message::RevertClicked => return handlers::handle_revert_clicked(self),
-            Message::RevertResult(result) => handlers::handle_revert_result(self, result),
+            Message::GuardFinished(result) => {
+                return handlers::handle_guard_finished(self, result);
+            }
             Message::CountdownTick => return handlers::handle_countdown_tick(self),
             Message::SaveToSystemClicked => return handlers::handle_save_to_system_clicked(self),
             Message::SaveToSystemVerifyResult(result) => {
@@ -1133,8 +1161,8 @@ impl State {
             .map(Message::EventOccurred),
             match self.status {
                 AppStatus::PendingConfirmation { .. } => {
-                    // Update at 60 FPS for smooth animation
-                    iced::time::every(Duration::from_millis(17)).map(|_| Message::CountdownTick)
+                    // The number changes once per second; so does the bar
+                    iced::time::every(Duration::from_secs(1)).map(|_| Message::CountdownTick)
                 }
                 _ => iced::Subscription::none(),
             },

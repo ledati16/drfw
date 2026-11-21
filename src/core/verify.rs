@@ -1,13 +1,26 @@
-/// Verification module for nftables rulesets
-///
-/// This module provides validation of rulesets before they are applied,
-/// helping prevent broken firewall configurations.
-use crate::core::error::{Error, Result};
+//! Verification of rulesets before they are applied
+//!
+//! [`verify_ruleset`] runs `nft --json --check` on the generated JSON. It first
+//! tries **without privileges**, in a private user + network namespace
+//! (`unshare -rn`): if the kernel accepts the batch there, it is valid and no
+//! authentication prompt is needed. A failure there is only *inconclusive*
+//! (e.g. kernel modules cannot be autoloaded from a user namespace, or
+//! unprivileged user namespaces are disabled), so it falls back to the elevated
+//! check, whose verdict is authoritative.
+
+use crate::elevation::AuthError;
 use std::time::Duration;
 use tracing::{info, warn};
 
-/// Timeout for nft --check operations (syntax verification is fast)
-const NFT_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for the unprivileged check (no prompt involved; nft is near-instant).
+const UNPRIVILEGED_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Timeout for the elevated check, including time spent in the
+/// authentication dialog.
+const ELEVATED_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Arguments for a check-only run of nft reading JSON from stdin.
+const CHECK_ARGS: [&str; 4] = ["--json", "--check", "-f", "-"];
 
 /// Result of a ruleset verification operation
 #[derive(Debug, Clone)]
@@ -34,74 +47,132 @@ impl VerifyResult {
     }
 }
 
-/// Verifies a ruleset without applying it using `nft --json --check`
-/// Phase 1 Optimization: Takes JSON directly to avoid cloning ruleset
+/// Why a ruleset could not be verified at all (as opposed to being invalid,
+/// which is a successful verification with [`VerifyResult::success`] false).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum VerifyError {
+    /// Elevation for the authoritative check failed or was cancelled
+    #[error("{0}")]
+    Auth(#[from] AuthError),
+    /// nft could not be run or its output not read
+    #[error("Verification could not run: {0}")]
+    Failed(String),
+}
+
+/// Runs `command` (already set up with [`CHECK_ARGS`]) with `payload` on stdin.
+async fn run_check(
+    mut command: tokio::process::Command,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<Option<std::process::Output>, VerifyError> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| VerifyError::Failed(format!("cannot start nft: {e}")))?;
+
+    let work = async {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(payload).await?;
+        }
+        child.wait_with_output().await
+    };
+    match tokio::time::timeout(timeout, work).await {
+        Ok(Ok(output)) => Ok(Some(output)),
+        Ok(Err(e)) => Err(VerifyError::Failed(format!("nft I/O: {e}"))),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Interprets an authoritative check's output.
+fn check_verdict(
+    output: &std::process::Output,
+    elevated: bool,
+) -> Result<VerifyResult, VerifyError> {
+    if output.status.success() {
+        info!("Ruleset verification passed");
+        return Ok(VerifyResult::success());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if elevated
+        && let Some(auth) = crate::elevation::auth_failure_from_exit(output.status.code(), &stderr)
+    {
+        return Err(VerifyError::Auth(auth));
+    }
+    warn!("Ruleset verification failed: {stderr}");
+    Ok(VerifyResult::failure(parse_nft_errors(&stderr)))
+}
+
+/// Tries the check without privileges in a private namespace.
+///
+/// Returns `true` only if nft accepted the ruleset there; every other outcome
+/// is inconclusive.
+async fn unprivileged_check_passes(payload: &[u8]) -> bool {
+    // nft usually lives in sbin, which is not on every user's PATH (Debian)
+    let nft = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .unwrap_or("nft");
+    let mut command = tokio::process::Command::new("unshare");
+    command.arg("-rn").arg(nft).args(CHECK_ARGS);
+    match run_check(command, payload, UNPRIVILEGED_CHECK_TIMEOUT).await {
+        Ok(Some(output)) if output.status.success() => true,
+        Ok(Some(output)) => {
+            info!(
+                "Unprivileged check inconclusive, falling back to elevated check: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            false
+        }
+        Ok(None) => {
+            info!("Unprivileged check timed out, falling back to elevated check");
+            false
+        }
+        Err(e) => {
+            info!("Unprivileged check unavailable ({e}), falling back to elevated check");
+            false
+        }
+    }
+}
+
+/// Verifies a ruleset without applying it using `nft --json --check`.
+///
+/// Tries an unprivileged check in a private namespace first (no prompt); if
+/// that does not pass, runs the elevated check, which is authoritative.
+/// With `DRFW_NFT_COMMAND` set (tests), only that command is used.
 ///
 /// # Errors
 ///
-/// Returns `Err` if:
-/// - nft command cannot be executed
-/// - JSON serialization fails
-/// - Communication with nft process fails
-pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyResult> {
-    let json_string = serde_json::to_string(&json_payload)?;
+/// - [`VerifyError::Auth`] if the elevated check could not authenticate
+///   (cancelled, refused, no agent, timed out)
+/// - [`VerifyError::Failed`] if nft cannot be run or JSON serialization fails
+///
+/// An invalid ruleset is **not** an error: it yields `Ok` with
+/// [`VerifyResult::success`] false and nft's messages.
+pub async fn verify_ruleset(json_payload: serde_json::Value) -> Result<VerifyResult, VerifyError> {
+    let payload =
+        serde_json::to_vec(&json_payload).map_err(|e| VerifyError::Failed(e.to_string()))?;
+
+    if crate::elevation::test_nft_command().is_none() && unprivileged_check_passes(&payload).await {
+        info!("Ruleset verification passed (unprivileged namespace check)");
+        return Ok(VerifyResult::success());
+    }
 
     info!("Verifying ruleset via nft --json --check (elevated)");
-
-    let mut child =
-        crate::elevation::create_elevated_nft_command(&["--json", "--check", "-f", "-"])
-            .map_err(|e| Error::Internal(format!("Privilege escalation unavailable: {e}")))?
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::Internal(format!("Failed to spawn nft: {e}")))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        stdin
-            .write_all(json_string.as_bytes())
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to write to nft stdin: {e}")))?;
-    }
-
-    let output = match tokio::time::timeout(NFT_VERIFY_TIMEOUT, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            return Err(Error::Internal(format!("Failed to read nft output: {e}")));
-        }
-        Err(_) => {
-            warn!(
-                "nft --check timed out after {} seconds (likely no authentication agent)",
-                NFT_VERIFY_TIMEOUT.as_secs()
-            );
-            // nft --check is near-instant; a timeout here means pkexec hung
-            // waiting for an authentication agent that never responded
-            return Err(Error::Internal(
-                "No authentication agent available. Install and start a polkit authentication agent.".to_string()
-            ));
-        }
+    let command = crate::elevation::create_elevated_nft_command(&CHECK_ARGS)
+        .map_err(|e| VerifyError::Auth(AuthError::Unavailable(e.to_string())))?;
+    let elevated = crate::elevation::test_nft_command().is_none();
+    let Some(output) = run_check(command, &payload, ELEVATED_CHECK_TIMEOUT).await? else {
+        warn!("Elevated nft --check timed out");
+        return Err(VerifyError::Auth(AuthError::TimedOut(
+            ELEVATED_CHECK_TIMEOUT.as_secs(),
+        )));
     };
-
-    if output.status.success() {
-        info!("Ruleset verification passed");
-        Ok(VerifyResult::success())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        // Detect pkexec authentication failures before treating as nft errors
-        if stderr.contains("No authentication agent") || stderr.contains("No polkit") {
-            return Err(Error::Internal(
-                "No authentication agent available. Install and start a polkit authentication agent.".to_string()
-            ));
-        }
-
-        warn!("Ruleset verification failed: {}", stderr);
-
-        let errors = parse_nft_errors(&stderr);
-
-        Ok(VerifyResult::failure(errors))
-    }
+    check_verdict(&output, elevated)
 }
 
 /// Parses nft error output into user-friendly messages
@@ -134,8 +205,6 @@ fn parse_nft_errors(stderr: &str) -> Vec<String> {
         .collect()
 }
 
-/// Validates a single rule using nft --check
-///
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +256,36 @@ mod tests {
         assert_eq!(errors.len(), 2);
         assert!(errors[0].contains("Operation not permitted"));
         assert!(errors[1].contains("Permission denied"));
+    }
+
+    #[cfg(unix)]
+    fn output(code: i32, stderr: &str) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_verdict_classifies_by_exit_code() {
+        assert!(check_verdict(&output(0, ""), true).unwrap().success);
+        assert_eq!(
+            check_verdict(&output(126, ""), true).unwrap_err(),
+            VerifyError::Auth(AuthError::Cancelled)
+        );
+        assert_eq!(
+            check_verdict(&output(127, "No authentication agent found."), true).unwrap_err(),
+            VerifyError::Auth(AuthError::NoAgent)
+        );
+        // nft's own failure (exit 1) is an invalid ruleset, not an error
+        let invalid = check_verdict(&output(1, "Error: syntax error\n"), true).unwrap();
+        assert!(!invalid.success);
+        assert_eq!(invalid.errors, vec!["syntax error".to_string()]);
+        // Unelevated (test mode): 126/127 are nft's own statuses
+        assert!(!check_verdict(&output(126, "x"), false).unwrap().success);
     }
 
     #[test]

@@ -17,7 +17,7 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 
 - **GUI-first**: Simple, focused interface for managing firewall rules
 - **JSON-first**: Uses nftables' JSON API exclusively (no shell interpolation, no command injection risks)
-- **Safety-first**: Automatic snapshots, pre-apply verification, and dead-man switch with auto-revert
+- **Safety-first**: Pre-apply verification and a root-side dead-man switch that auto-reverts even if DRFW or your SSH session dies
 - **Desktop-friendly**: Conservative defaults that work out-of-the-box for most users
 
 ## Screenshots
@@ -48,10 +48,10 @@ DRFW follows the "dumb firewall" principle: **explicit is better than implicit**
 - **Output interface**: Filter outbound traffic by interface (Server Mode only)
 
 ### Safety Features
-- **Pre-apply verification**: `nft --check` validates syntax before applying
-- **Automatic snapshots**: Captures current ruleset before every apply
-- **Dead-man switch**: Configurable countdown (5-120s) with auto-revert if not confirmed
-- **Manual revert**: One-click restore to previous snapshot
+- **Pre-apply verification**: `nft --check` validates the ruleset before applying (unprivileged, in a private namespace, when possible)
+- **Dead-man switch**: Configurable countdown (5-120s, on by default) with auto-revert if not confirmed. The revert is armed as root when the rules are applied, so it still happens if DRFW is closed or crashes, or the terminal/SSH session is lost, and it needs no second password prompt
+- **Exact rollback**: The previous `inet drfw` table is restored exactly (or removed, if there was none)
+- **Manual revert**: One-click rollback during the countdown
 - **Undo/Redo**: Full history for all rule modifications (Ctrl+Z / Ctrl+Shift+Z)
 
 ### Default Protection (Always On)
@@ -162,7 +162,7 @@ drfw
 1. **Launch DRFW**: `drfw`
 2. **Add a rule**: Click **[+ Add Rule]**, configure protocol/port/source/interface
 3. **Preview**: View syntax-highlighted nftables output in the preview pane
-4. **Apply**: Click **[Apply]** — DRFW verifies, snapshots, then applies with elevation
+4. **Apply**: Click **[Apply]** — DRFW verifies, then applies with one elevation prompt
 5. **Confirm**: Click **[Confirm]** within the countdown, or rules auto-revert
 
 ### Example Rules
@@ -228,15 +228,14 @@ DRFW creates its own nftables table (`drfw`) at **priority -10**, evaluated befo
 ## Recovery
 
 ### Auto-Revert
-If you don't confirm within the countdown (default 15s), rules automatically revert.
+If you don't confirm within the countdown (default 15s), rules automatically
+revert. The revert runs as a separate root process (a `drfw-revert-*` systemd
+unit, or a detached process without systemd), so closing DRFW or losing the
+SSH connection does not stop it. Its outcome is recorded in
+`/run/drfw/status-<id>`.
 
 ### Manual Revert
-Click **[Revert]** in the confirmation dialog, or restore from snapshot:
-
-```bash
-ls -lt ~/.local/state/drfw/snapshot_*.json
-sudo nft --json -f ~/.local/state/drfw/snapshot_<TIMESTAMP>.json
-```
+Click **[Rollback]** in the confirmation dialog (or press `r`/Esc in the CLI).
 
 ### Emergency Flush
 ```bash
@@ -255,7 +254,7 @@ jq . ~/.local/state/drfw/audit.log
 |---------|----------|
 | App config | `~/.config/drfw/config.json` |
 | Profiles | `~/.local/share/drfw/profiles/*.json` |
-| Snapshots | `~/.local/state/drfw/snapshot_*.json` |
+| Revert guard state (root, tmpfs) | `/run/drfw/` |
 | Audit log | `~/.local/state/drfw/audit.log` |
 
 All files created with `0o600` permissions.

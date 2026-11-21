@@ -159,6 +159,12 @@ fn build_confirmation_body(
         ])
         .width(360)
         .align_x(Alignment::Center),
+        text("Closing DRFW or losing the connection is safe: the rules still revert on time.")
+            .size(12)
+            .font(font)
+            .color(theme.fg_muted)
+            .width(360)
+            .align_x(Alignment::Center),
         // Progress bar showing time remaining (inset/recessed style)
         container(
             progress_bar(0.0..=1.0, progress)

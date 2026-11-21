@@ -1,25 +1,43 @@
-// DRFW polkit rules - credential caching for elevated firewall commands
+// DRFW polkit rules - credential caching for elevated nft commands
 //
 // When DRFW is launched from a desktop entry (no TTY), it uses pkexec for
-// elevation. This rule enables AUTH_ADMIN_KEEP so users authenticate once
-// per application session rather than for every nft/install operation.
+// elevation. This rule enables AUTH_ADMIN_KEEP for the nft binary only.
 //
-// CACHING BEHAVIOR:
+// PROMPTS PER OPERATION:
+// - Verify: normally none. DRFW first checks the ruleset unprivileged in a
+//   private namespace (`unshare -rn nft --check`); only if that is
+//   inconclusive does it run `pkexec nft --check`, which this rule caches.
+// - Apply: exactly one prompt. Apply runs `pkexec /bin/sh -c <fixed script>`,
+//   which saves the current table, applies the rules and starts the root-side
+//   revert guard in one step.
+// - Confirm: none. DRFW only creates a token file in the user's runtime dir.
+// - Auto-revert (timeout, Rollback button, closed window, crash, lost SSH
+//   session): none. The root-side guard started by Apply does it on its own.
+// - Save to System: one prompt (`pkexec /bin/sh -c <fixed script>`).
+//
+// WHY /bin/sh IS NOT CACHED HERE:
+// Caching "/bin/sh" would let the DRFW process (or anything that can make it
+// call pkexec within the cache window) run ARBITRARY shell commands as root
+// without a prompt: polkit matches only the program, not the script text.
+// Apply and Save to System therefore always ask, once per operation.
+//
+// CACHING BEHAVIOR (nft):
 // - AUTH_ADMIN_KEEP caches per-process (PID), not per-desktop-session
-// - Once DRFW authenticates, all pkexec calls from that process are cached
 // - Cache expires after ~5 minutes OR when DRFW closes (whichever first)
 // - Restarting DRFW requires reauthentication (new PID = new subject)
 //
 // SECURITY:
 // - subject.active: Only active sessions (not background/locked)
 // - subject.local: Only local console sessions (not SSH/VNC)
-// - Full paths prevent PATH manipulation attacks
+// - Full paths prevent PATH manipulation attacks; nft lives in /usr/bin on
+//   some distributions and /usr/sbin on others
 //
 // Install to: /usr/share/polkit-1/rules.d/50-drfw.rules
 
 polkit.addRule(function(action, subject) {
+    var program = action.lookup("program");
     if (action.id == "org.freedesktop.policykit.exec" &&
-        action.lookup("program") == "/usr/bin/nft" &&
+        (program == "/usr/bin/nft" || program == "/usr/sbin/nft") &&
         subject.active && subject.local) {
         return polkit.Result.AUTH_ADMIN_KEEP;
     }

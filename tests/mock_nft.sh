@@ -40,6 +40,27 @@ case "$1" in
         fi
         ;;
 
+    list)
+        # Guarded apply (APPLY_SCRIPT): `nft list tables` / `nft list table inet drfw`.
+        # The mock kernel is always empty.
+        if [ "$2" = "tables" ]; then
+            exit 0
+        fi
+        echo "Error: No such file or directory (mock)" >&2
+        exit 1
+        ;;
+
+    -f)
+        # Revert batch from the guard's watcher: `nft -f FILE` or `nft -f -`
+        if [ "$2" = "-" ]; then
+            cat > "$MOCK_NFT_DIR/last_revert.nft"
+            exit 0
+        elif [ -r "$2" ]; then
+            cp "$2" "$MOCK_NFT_DIR/last_revert.nft"
+            exit 0
+        fi
+        ;;
+
     -c|--check)
         # Text file syntax check (Save to System): `nft -c -f FILE`.
         # Accepts any readable file whose first line is the DRFW shebang.

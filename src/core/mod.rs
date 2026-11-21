@@ -4,7 +4,7 @@
 //! It provides:
 //!
 //! - [`firewall`]: Data structures for representing firewall rules and rulesets
-//! - [`nft_json`]: JSON-based nftables rule application and snapshot management
+//! - [`apply_guard`]: Applying rules with a root-side auto-revert guard
 //! - [`nft_text`]: Renders the generated JSON commands as an `nft -f` file
 //! - [`system_config`]: Safe, verified writes of the system nftables configuration
 //! - [`verify`]: Ruleset validation and syntax checking
@@ -12,9 +12,9 @@
 //! - [`profiles`]: Firewall profile management
 //! - [`rule_constraints`]: Business rules for valid field combinations
 
+pub mod apply_guard;
 pub mod error;
 pub mod firewall;
-pub mod nft_json;
 pub mod nft_text;
 pub mod profiles;
 pub mod rule_constraints;

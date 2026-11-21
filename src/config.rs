@@ -17,8 +17,11 @@ pub struct AppConfig {
     pub show_diff: bool,
     #[serde(default = "default_true")]
     pub show_zebra_striping: bool,
-    /// Enable auto-revert countdown when applying rules (GUI only, CLI is always safe)
-    #[serde(default)]
+    /// Enable auto-revert countdown when applying rules (GUI; the CLI uses
+    /// `--confirm`/`--no-confirm`). On by default: an unconfirmed apply is
+    /// reverted by a root-side guard, which protects against lockouts.
+    /// Configs written before this default changed keep their explicit value.
+    #[serde(default = "default_true")]
     pub auto_revert_enabled: bool,
     /// Timeout in seconds for auto-revert countdown (default: 15s, max: 3600s)
     ///
@@ -45,7 +48,7 @@ impl Default for AppConfig {
             mono_font: crate::fonts::MonoFontChoice::default(),
             show_diff: true,
             show_zebra_striping: true,
-            auto_revert_enabled: false, // OFF by default for GUI (desktop context)
+            auto_revert_enabled: true, // Lockout protection on by default
             auto_revert_timeout_secs: 15,
             enable_event_log: true, // Useful for troubleshooting, local-only so no privacy concern
             reduced_colors: false,  // Full syntax highlighting by default

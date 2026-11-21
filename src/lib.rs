@@ -12,10 +12,9 @@
 //!
 //! # Safety Features
 //!
-//! - Pre-apply verification with `nft --check`
-//! - 15-second dead-man switch for auto-rollback
-//! - Emergency default ruleset fallback
-//! - SHA-256 snapshot checksums
+//! - Pre-apply verification with `nft --check` (unprivileged when possible)
+//! - Root-side dead-man switch: unconfirmed applies revert even if DRFW dies
+//! - SHA-256 profile checksums
 //! - Input sanitization and validation
 //! - Atomic file operations with secure permissions
 

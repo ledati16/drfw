@@ -7,7 +7,7 @@
 //!
 //! - Config: `~/.config/drfw/` - User configuration files
 //! - Data: `~/.local/share/drfw/` - Application data (saved rulesets)
-//! - State: `~/.local/state/drfw/` - Runtime state (snapshots, audit logs)
+//! - State: `~/.local/state/drfw/` - Runtime state (audit logs, GUI log)
 //!
 //! # Example
 //!

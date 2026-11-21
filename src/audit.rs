@@ -462,18 +462,6 @@ pub async fn log_save_to_system(
     .await;
 }
 
-/// Logs a snapshot save failure
-pub async fn log_snapshot_failed(enable_event_log: bool, error: String) {
-    log_event_internal(
-        enable_event_log,
-        EventType::SnapshotFailed,
-        false,
-        serde_json::json!({ "error": &error }),
-        Some(error),
-    )
-    .await;
-}
-
 /// Logs a profile delete failure
 pub async fn log_profile_delete_failed(enable_event_log: bool, profile_name: &str, error: String) {
     log_event_internal(

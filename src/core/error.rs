@@ -11,22 +11,10 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    /// nftables command execution failed
-    #[error("nftables error: {message}")]
-    Nftables {
-        message: String,
-        stderr: Option<String>,
-        exit_code: Option<i32>,
-    },
-
     /// Input validation failed
     #[error("Validation error in {field}: {message}")]
     #[allow(dead_code)] // Constructed in tests to verify translation
     Validation { field: String, message: String },
-
-    /// Snapshot operation failed
-    #[error("Snapshot error: {0}")]
-    Snapshot(#[from] SnapshotError),
 
     /// Privilege escalation failed
     #[error("Elevation error: {0}")]
@@ -36,29 +24,6 @@ pub enum Error {
     /// Internal logic error
     #[error("Internal error: {0}")]
     Internal(String),
-}
-
-/// Snapshot-specific errors
-#[derive(Debug, Error)]
-#[allow(dead_code)] // Constructed in tests to verify translation messages
-pub enum SnapshotError {
-    #[error("Snapshot corrupted: invalid structure")]
-    Corrupted,
-
-    #[error("Snapshot checksum mismatch: expected {expected}, got {actual}")]
-    ChecksumMismatch { expected: String, actual: String },
-
-    #[error("Snapshot not found: {0}")]
-    NotFound(String),
-
-    #[error("Snapshot format version mismatch: found v{found}, expected v{expected}")]
-    VersionMismatch { found: u32, expected: u32 },
-
-    #[error("Snapshot is empty")]
-    Empty,
-
-    #[error("Snapshot restore failed: {0}")]
-    RestoreFailed(String),
 }
 
 /// Represents a translated error with helpful context

@@ -1,18 +1,25 @@
 //! Apply, verify, and revert workflow
 //!
 //! Handles the complete firewall application lifecycle:
-//! - Verification of rules before application
-//! - Elevated application with snapshot creation
-//! - Auto-revert countdown and confirmation
-//! - Manual revert operations
+//! - Verification of rules before application (unprivileged when possible)
+//! - Elevated application with a root-side revert guard
+//!   ([`crate::core::apply_guard`])
+//! - Auto-revert countdown, confirmation and manual revert (no elevation:
+//!   they only signal the guard)
 //! - Save to system configuration
+//!
+//! The ruleset is snapshotted when the user clicks Apply: exactly that
+//! snapshot is verified and applied, and ruleset edits are refused until the
+//! apply flow is over, so nothing unverified can slip in.
 
 use crate::app::{AppStatus, BannerSeverity, Message, State};
 use crate::audit;
-use chrono::Utc;
+use crate::core::apply_guard::{ApplyError, GuardError, GuardHandle, GuardOutcome};
+use crate::core::firewall::FirewallRuleset;
+use crate::core::verify::{VerifyError, VerifyResult};
+use crate::elevation::AuthError;
 use iced::Task;
-use std::time::Duration;
-use tracing::warn;
+use std::time::Instant;
 
 // ============================================================================
 // Helper Functions
@@ -62,21 +69,149 @@ fn interpret_elevated_command_output(output: &std::process::Output) -> Result<()
     }
 }
 
-/// Handles apply button click (starts verification)
+/// The ruleset being verified/applied, snapshotted when Apply was clicked.
+#[derive(Debug, Clone)]
+pub struct ApplySession {
+    /// Exactly what was verified and will be applied
+    verified: FirewallRuleset,
+    /// `verified.to_nftables_json()`, computed once
+    json: serde_json::Value,
+    /// `last_applied_ruleset` before this apply, restored if it is reverted
+    previous_applied: Option<FirewallRuleset>,
+}
+
+/// Longest banner text for apply errors.
+const BANNER_MAX_LEN: usize = 100;
+
+/// Banner lifetime that never expires (dismiss by clicking it).
+const PERSISTENT_BANNER_SECS: u64 = u64::MAX;
+
+/// Pushes an error banner that stays until the user dismisses it.
+fn push_persistent_banner(state: &mut State, message: String) {
+    state.push_banner(message, BannerSeverity::Error);
+    if let Some(banner) = state.banners.back_mut() {
+        banner.duration_secs = PERSISTENT_BANNER_SECS;
+    }
+}
+
+/// Wraps an audit future as a task that marks the audit cache dirty.
+fn audit_task(future: impl std::future::Future<Output = ()> + Send + 'static) -> Task<Message> {
+    Task::perform(future, |()| Message::AuditLogWritten)
+}
+
+/// The revert timeout to use, or 0 when auto-revert is disabled.
+fn guard_timeout_secs(state: &State) -> u64 {
+    if state.auto_revert_enabled {
+        state.auto_revert_timeout_secs.clamp(1, 120)
+    } else {
+        0
+    }
+}
+
+/// Banner + audit entry for an authentication failure.
+fn auth_error_feedback(state: &mut State, error: &AuthError) -> Task<Message> {
+    let enable_event_log = state.enable_event_log;
+    let detail = error.to_string();
+    if *error == AuthError::Cancelled {
+        state.push_banner(
+            "Authentication was cancelled; nothing was changed",
+            BannerSeverity::Warning,
+        );
+        return audit_task(audit::log_elevation_cancelled(enable_event_log, detail));
+    }
+    state.push_banner(
+        truncate_error_message("", &detail, BANNER_MAX_LEN),
+        BannerSeverity::Error,
+    );
+    audit_task(audit::log_elevation_failed(enable_event_log, detail))
+}
+
+/// Banner + audit entry for a verification that could not run.
+fn verify_error_feedback(state: &mut State, error: &VerifyError) -> Task<Message> {
+    let enable_event_log = state.enable_event_log;
+    let audit = audit_task(audit::log_verify(
+        enable_event_log,
+        false,
+        0,
+        Some(error.to_string()),
+    ));
+    let feedback = match error {
+        VerifyError::Auth(auth) => auth_error_feedback(state, auth),
+        VerifyError::Failed(msg) => {
+            state.push_banner(
+                truncate_error_message("Verification error: ", msg, BANNER_MAX_LEN),
+                BannerSeverity::Error,
+            );
+            Task::none()
+        }
+    };
+    Task::batch([audit, feedback])
+}
+
+/// True while the apply flow (or Save to System) owns the ruleset.
+pub(crate) fn edits_locked(state: &State) -> bool {
+    state.is_busy() || state.status == AppStatus::AwaitingApply
+}
+
+/// Messages that change the ruleset (or switch to another one).
+pub(crate) fn is_ruleset_edit(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::SaveRuleForm
+            | Message::ToggleRuleEnabled(_)
+            | Message::DeleteRule(_)
+            | Message::RuleDropped(_)
+            | Message::Undo
+            | Message::Redo
+            | Message::ToggleStrictIcmpRequested(_)
+            | Message::ConfirmStrictIcmp
+            | Message::IcmpRateLimitChanged(_)
+            | Message::ToggleRpfRequested(_)
+            | Message::ConfirmEnableRpf
+            | Message::ToggleBlockForwarding(_)
+            | Message::ToggleDroppedLogging(_)
+            | Message::LogRateChanged(_)
+            | Message::LogPrefixChanged(_)
+            | Message::ServerModeToggled(_)
+            | Message::ConfirmServerMode
+            | Message::ProfileSelected(_)
+            | Message::ProfileSwitched(..)
+            | Message::SaveProfileAs(_)
+            | Message::ConfirmProfileSwitch
+            | Message::DiscardProfileSwitch
+            | Message::ProfileSwitchAfterSave(_)
+            | Message::ConfirmDeleteProfile
+    )
+}
+
+/// Refuses a ruleset edit while the apply flow is running.
+pub(crate) fn handle_edit_while_locked(state: &mut State) {
+    const MSG: &str =
+        "Rules can't be changed while an apply is in progress. Finish or cancel it first.";
+    state.clear_drag_state();
+    if state.banners.back().is_none_or(|b| b.message != MSG) {
+        state.push_banner(MSG, BannerSeverity::Warning);
+    }
+}
+
+/// Handles apply button click: snapshots the ruleset and verifies it
 pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
     if state.is_busy() {
         return Task::none();
     }
 
+    let verified = state.ruleset.clone();
+    let json = verified.to_nftables_json();
+    let payload = json.clone();
+    state.apply_session = Some(ApplySession {
+        verified,
+        json,
+        previous_applied: None,
+    });
     state.status = AppStatus::Verifying;
-    let nft_json = state.ruleset.to_nftables_json();
 
     Task::perform(
-        async move {
-            crate::core::verify::verify_ruleset(nft_json)
-                .await
-                .map_err(|e| e.to_string())
-        },
+        crate::core::verify::verify_ruleset(payload),
         Message::VerifyCompleted,
     )
 }
@@ -84,22 +219,20 @@ pub(crate) fn handle_apply_clicked(state: &mut State) -> Task<Message> {
 /// Handles verification completion
 pub(crate) fn handle_verify_completed(
     state: &mut State,
-    result: Result<crate::core::verify::VerifyResult, String>,
+    result: Result<VerifyResult, VerifyError>,
 ) -> Task<Message> {
+    if state.status != AppStatus::Verifying {
+        return Task::none();
+    }
+    let enable_event_log = state.enable_event_log;
     match result {
         Ok(verify_result) if verify_result.success => {
             state.status = AppStatus::AwaitingApply;
-            let enable_event_log = state.enable_event_log;
-            let error_count = verify_result.errors.len();
-            Task::perform(
-                async move {
-                    audit::log_verify(enable_event_log, true, error_count, None).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            audit_task(audit::log_verify(enable_event_log, true, 0, None))
         }
         Ok(verify_result) => {
             state.status = AppStatus::Idle;
+            state.apply_session = None;
             let error_summary = if verify_result.errors.is_empty() {
                 "Ruleset verification failed".to_string()
             } else {
@@ -109,235 +242,295 @@ pub(crate) fn handle_verify_completed(
                 )
             };
             state.push_banner(&error_summary, BannerSeverity::Error);
-            let enable_event_log = state.enable_event_log;
             let error_count = verify_result.errors.len();
             let error = Some(verify_result.errors.join("; "));
-            Task::perform(
-                async move {
-                    audit::log_verify(enable_event_log, false, error_count, error).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            audit_task(audit::log_verify(
+                enable_event_log,
+                false,
+                error_count,
+                error,
+            ))
         }
         Err(e) => {
             state.status = AppStatus::Idle;
-            // Detect authentication agent errors from verify timeout
-            let banner_msg = if e.contains("No authentication agent") || e.contains("No polkit") {
-                "No authentication agent available. Install and start a polkit agent.".to_string()
-            } else {
-                truncate_error_message("Verification error: ", &e, 80)
-            };
-            state.push_banner(&banner_msg, BannerSeverity::Error);
-            let enable_event_log = state.enable_event_log;
-            Task::perform(
-                async move {
-                    audit::log_verify(enable_event_log, false, 0, Some(e)).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            state.apply_session = None;
+            verify_error_feedback(state, &e)
         }
     }
 }
 
 /// Handles proceeding to apply after successful verification
 pub(crate) fn handle_proceed_to_apply(state: &mut State) -> Task<Message> {
+    if state.status != AppStatus::AwaitingApply {
+        return Task::none();
+    }
+    let Some(session) = state.apply_session.as_mut() else {
+        tracing::error!("ProceedToApply without a verified ruleset");
+        state.status = AppStatus::Idle;
+        return Task::none();
+    };
+    session
+        .previous_applied
+        .clone_from(&state.last_applied_ruleset);
+
     state.status = AppStatus::Applying;
-    let nft_json = state.ruleset.to_nftables_json();
-    let rule_count = state.ruleset.rules.len();
-    let enabled_count = state.ruleset.rules.iter().filter(|r| r.enabled).count();
+    let json = session.json.clone();
+    let rule_count = session.verified.rules.len();
+    let enabled_count = session.verified.rules.iter().filter(|r| r.enabled).count();
     let enable_event_log = state.enable_event_log;
+    let timeout_secs = guard_timeout_secs(state);
 
     Task::perform(
         async move {
-            let result = crate::core::nft_json::apply_with_snapshot(nft_json).await;
-            let success = result.is_ok();
-            let error = result.as_ref().err().map(std::string::ToString::to_string);
+            let result = crate::core::apply_guard::apply_guarded(&json, timeout_secs).await;
             audit::log_apply(
                 enable_event_log,
                 rule_count,
                 enabled_count,
-                success,
-                error.clone(),
+                result.is_ok(),
+                result.as_ref().err().map(ToString::to_string),
             )
             .await;
-            result.map_err(|e| e.to_string())
+            result
         },
         Message::ApplyResult,
     )
     .chain(Task::done(Message::AuditLogWritten))
 }
 
-/// Handles apply result (success or failure)
-pub(crate) fn handle_apply_result(state: &mut State, snapshot: serde_json::Value) -> Task<Message> {
-    state.last_applied_ruleset = Some(state.ruleset.clone());
-
-    let snapshot_task = if let Err(e) = crate::core::nft_json::save_snapshot_to_disk(&snapshot) {
-        warn!("Failed to save snapshot to disk: {e}");
-        let error_str = e.to_string();
-        let msg = if error_str.len() > 45 {
-            "Warning: Failed to save snapshot. Rollback may be unavailable.".to_string()
-        } else {
-            format!("Warning: Failed to save snapshot: {e}")
-        };
-        state.push_banner(&msg, BannerSeverity::Warning);
-        let enable_event_log = state.enable_event_log;
-        Some(Task::perform(
-            async move {
-                audit::log_snapshot_failed(enable_event_log, error_str).await;
-            },
-            |()| Message::AuditLogWritten,
-        ))
-    } else {
-        None
+/// Handles the result of the elevated apply
+pub(crate) fn handle_apply_result(
+    state: &mut State,
+    result: Result<Option<GuardHandle>, ApplyError>,
+) -> Task<Message> {
+    if state.status != AppStatus::Applying {
+        return Task::none();
+    }
+    let Some(session) = state.apply_session.as_ref() else {
+        tracing::error!("ApplyResult without an apply session");
+        state.status = AppStatus::Idle;
+        return Task::none();
     };
 
-    if state.auto_revert_enabled {
-        // Auto-revert enabled: show countdown modal
-        state.countdown_remaining = state.auto_revert_timeout_secs.min(120) as u32;
-        let timeout = state.auto_revert_timeout_secs.min(120);
-        state.progress_animation = iced::Animation::new(1.0)
-            .easing(iced::animation::Easing::Linear)
-            .duration(Duration::from_secs(timeout))
-            .go(0.0, iced::time::Instant::now());
-        state.status = AppStatus::PendingConfirmation {
-            deadline: Utc::now() + Duration::from_secs(timeout),
-            snapshot,
-        };
-        state.push_banner(
-            format!(
-                "Firewall rules applied! Changes will auto-revert in {}s if not confirmed.",
-                state.auto_revert_timeout_secs.min(120)
-            ),
-            BannerSeverity::Info,
-        );
-    } else {
-        // Auto-revert disabled: show success banner and return to idle
+    let guard = match result {
+        Ok(guard) => guard,
+        Err(error) => {
+            state.status = AppStatus::Idle;
+            if error.rules_may_be_active() {
+                // Unknown whether the old or new rules are live
+                state.last_applied_ruleset = None;
+                state.update_cached_text();
+            }
+            state.apply_session = None;
+            return apply_error_feedback(state, &error);
+        }
+    };
+
+    state.last_applied_ruleset = Some(session.verified.clone());
+    state.update_cached_text();
+
+    let Some(guard) = guard else {
         state.status = AppStatus::Idle;
+        state.apply_session = None;
         state.push_banner(
             "Firewall rules applied successfully!",
             BannerSeverity::Success,
         );
-    }
+        return Task::none();
+    };
 
-    snapshot_task.unwrap_or_else(Task::none)
+    let timeout = guard.timeout();
+    state.countdown_remaining = u32::try_from(timeout.as_secs()).unwrap_or(u32::MAX);
+    state.progress_animation = iced::Animation::new(1.0)
+        .easing(iced::animation::Easing::Linear)
+        .duration(timeout)
+        .go(0.0, iced::time::Instant::now());
+    state.push_banner(
+        format!(
+            "Firewall rules applied! They revert in {}s unless confirmed.",
+            timeout.as_secs()
+        ),
+        BannerSeverity::Info,
+    );
+    state.status = AppStatus::PendingConfirmation { guard };
+    Task::none()
 }
 
-/// Handles manual revert button click
-pub(crate) fn handle_revert_clicked(state: &mut State) -> Task<Message> {
-    if let AppStatus::PendingConfirmation { snapshot, .. } = &state.status {
-        let snapshot = snapshot.clone();
-        let enable_event_log = state.enable_event_log;
-        state.status = AppStatus::Reverting;
-        return Task::perform(
-            async move {
-                let result = crate::core::nft_json::restore_snapshot(&snapshot).await;
-                let final_result = if result.is_err() {
-                    crate::core::nft_json::restore_with_fallback().await
-                } else {
-                    result
-                };
-                let success = final_result.is_ok();
-                let error = final_result
-                    .as_ref()
-                    .err()
-                    .map(std::string::ToString::to_string);
-                audit::log_revert(enable_event_log, success, error.clone()).await;
-                final_result.map_err(|e| e.to_string())
-            },
-            Message::RevertResult,
-        )
-        .chain(Task::done(Message::AuditLogWritten));
+/// Banner + audit entry for a failed apply.
+fn apply_error_feedback(state: &mut State, error: &ApplyError) -> Task<Message> {
+    match error {
+        ApplyError::Auth(auth) => return auth_error_feedback(state, auth),
+        ApplyError::GuardFailedRulesActive(_) => {
+            push_persistent_banner(state, truncate_error_message("", &error.to_string(), 160));
+        }
+        ApplyError::GuardFailedRolledBack(_) => state.push_banner(
+            truncate_error_message("", &error.to_string(), BANNER_MAX_LEN),
+            BannerSeverity::Warning,
+        ),
+        ApplyError::Rejected(_) | ApplyError::Failed(_) => state.push_banner(
+            truncate_error_message("", &error.to_string(), BANNER_MAX_LEN),
+            BannerSeverity::Error,
+        ),
     }
     Task::none()
 }
 
-/// Handles countdown tick for auto-revert
+/// Handles the Rollback button: asks the guard to revert now (no elevation)
+pub(crate) fn handle_revert_clicked(state: &mut State) -> Task<Message> {
+    let AppStatus::PendingConfirmation { guard } = &state.status else {
+        return Task::none();
+    };
+    let guard = guard.clone();
+    if let Err(e) = guard.revert_now() {
+        state.push_banner(
+            truncate_error_message("", &e.to_string(), BANNER_MAX_LEN),
+            BannerSeverity::Error,
+        );
+        return Task::none();
+    }
+    state.status = AppStatus::Reverting;
+    Task::perform(
+        async move {
+            guard
+                .wait_outcome(crate::core::apply_guard::OUTCOME_GRACE)
+                .await
+        },
+        Message::GuardFinished,
+    )
+}
+
+/// Handles the countdown tick (1 Hz): updates the display; at zero, waits
+/// for the root-side guard to report the revert
 pub(crate) fn handle_countdown_tick(state: &mut State) -> Task<Message> {
-    if let AppStatus::PendingConfirmation { deadline, snapshot } = &state.status {
-        let now = Utc::now();
-        if now >= *deadline {
-            // Extract snapshot BEFORE changing status (fixes race condition)
-            let snapshot = snapshot.clone();
-            let enable_event_log = state.enable_event_log;
-            let timeout_secs = state.auto_revert_timeout_secs;
-            state.status = AppStatus::Reverting;
-            state.countdown_remaining = 0;
+    let AppStatus::PendingConfirmation { guard } = &state.status else {
+        return Task::none();
+    };
+    let remaining = guard.remaining_secs(Instant::now());
+    state.countdown_remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
+
+    if remaining > 0 {
+        if remaining == 5 {
             state.push_banner(
-                "Firewall rules automatically reverted due to timeout.",
+                "Firewall will revert in 5 seconds! Click Confirm to keep changes.",
                 BannerSeverity::Warning,
             );
-
-            // Spawn revert task with audit logging
-            return Task::perform(
-                async move {
-                    // Log timeout event
-                    audit::log_auto_revert_timed_out(enable_event_log, timeout_secs).await;
-
-                    // Perform revert
-                    let result = crate::core::nft_json::restore_snapshot(&snapshot).await;
-                    let final_result = if result.is_err() {
-                        crate::core::nft_json::restore_with_fallback().await
-                    } else {
-                        result
-                    };
-                    let success = final_result.is_ok();
-                    let error = final_result
-                        .as_ref()
-                        .err()
-                        .map(std::string::ToString::to_string);
-
-                    // Log revert result
-                    audit::log_revert(enable_event_log, success, error.clone()).await;
-                    final_result.map_err(|e| e.to_string())
-                },
-                Message::RevertResult,
-            )
-            .chain(Task::done(Message::AuditLogWritten));
         }
-
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let remaining = (*deadline - now).num_seconds().max(0) as u32;
-        if state.countdown_remaining != remaining {
-            state.countdown_remaining = remaining;
-            if remaining == 5 {
-                state.push_banner(
-                    "Firewall will revert in 5 seconds! Click Confirm to keep changes.",
-                    BannerSeverity::Warning,
-                );
-            }
-        }
+        return Task::none();
     }
-    Task::none()
+
+    let guard = guard.clone();
+    let enable_event_log = state.enable_event_log;
+    let timeout_secs = guard.timeout().as_secs();
+    state.status = AppStatus::Reverting;
+    state.push_banner(
+        "Time is up: waiting for the guard to restore the previous rules...",
+        BannerSeverity::Info,
+    );
+    Task::batch([
+        audit_task(audit::log_auto_revert_timed_out(
+            enable_event_log,
+            timeout_secs,
+        )),
+        Task::perform(
+            async move { guard.wait_for_timeout_outcome().await },
+            Message::GuardFinished,
+        ),
+    ])
 }
 
-/// Handles confirmation of applied changes (stops auto-revert)
+/// Handles Confirm: tells the guard to keep the rules (no elevation)
 pub(crate) fn handle_confirm_clicked(state: &mut State) -> Task<Message> {
-    if matches!(state.status, AppStatus::PendingConfirmation { .. }) {
-        state.status = AppStatus::Idle;
-        state.push_banner("Changes confirmed and saved!", BannerSeverity::Success);
-        let enable_event_log = state.enable_event_log;
-        let timeout_secs = state.auto_revert_timeout_secs;
-        return Task::perform(
-            async move {
-                audit::log_auto_revert_confirmed(enable_event_log, timeout_secs).await;
-            },
-            |()| Message::AuditLogWritten,
+    let AppStatus::PendingConfirmation { guard } = &state.status else {
+        return Task::none();
+    };
+    let guard = guard.clone();
+    if let Err(e) = guard.confirm() {
+        // The guard will revert on timeout; let the user retry or roll back
+        state.push_banner(
+            truncate_error_message("", &e.to_string(), BANNER_MAX_LEN),
+            BannerSeverity::Error,
         );
+        return Task::none();
     }
-    Task::none()
+    state.status = AppStatus::Confirming;
+    Task::perform(
+        async move {
+            guard
+                .wait_outcome(crate::core::apply_guard::OUTCOME_GRACE)
+                .await
+        },
+        Message::GuardFinished,
+    )
 }
 
-/// Handles revert result (success or failure)
-pub(crate) fn handle_revert_result(state: &mut State, result: Result<(), String>) {
+/// Handles the guard's verdict (after confirm, rollback or timeout)
+pub(crate) fn handle_guard_finished(
+    state: &mut State,
+    result: Result<GuardOutcome, GuardError>,
+) -> Task<Message> {
+    if !matches!(state.status, AppStatus::Confirming | AppStatus::Reverting) {
+        return Task::none();
+    }
+    state.status = AppStatus::Idle;
+    let previous_applied = state
+        .apply_session
+        .take()
+        .and_then(|session| session.previous_applied);
+    let enable_event_log = state.enable_event_log;
+    let timeout_secs = guard_timeout_secs(state);
+
     match result {
-        Ok(()) => {
-            state.status = AppStatus::Idle;
-            state.push_banner("Firewall rules reverted successfully", BannerSeverity::Info);
+        Ok(GuardOutcome::Confirmed) => {
+            state.push_banner("Changes confirmed!", BannerSeverity::Success);
+            audit_task(audit::log_auto_revert_confirmed(
+                enable_event_log,
+                timeout_secs,
+            ))
+        }
+        Ok(GuardOutcome::Reverted) => {
+            state.last_applied_ruleset = previous_applied;
+            state.update_cached_text();
+            state.push_banner(
+                "Firewall rules reverted to the previous state",
+                BannerSeverity::Info,
+            );
+            audit_task(audit::log_revert(enable_event_log, true, None))
+        }
+        Ok(GuardOutcome::Removed(err)) => {
+            // Neither the old nor the new drfw rules are loaded now
+            state.last_applied_ruleset = None;
+            state.update_cached_text();
+            push_persistent_banner(
+                state,
+                "Previous rules could not be restored; the drfw table was removed, so drfw is not filtering anything".to_string(),
+            );
+            audit_task(audit::log_revert(enable_event_log, true, Some(err)))
+        }
+        Ok(GuardOutcome::RevertFailed(err)) => {
+            push_persistent_banner(
+                state,
+                truncate_error_message(
+                    "Revert FAILED: the new rules are STILL ACTIVE. ",
+                    &err,
+                    160,
+                ),
+            );
+            audit_task(audit::log_revert(enable_event_log, false, Some(err)))
+        }
+        Ok(GuardOutcome::Superseded) => {
+            state.last_applied_ruleset = None;
+            state.update_cached_text();
+            state.push_banner(
+                "Another apply replaced these rules before they were confirmed",
+                BannerSeverity::Warning,
+            );
+            Task::none()
         }
         Err(e) => {
-            state.status = AppStatus::Idle;
-            let msg = truncate_error_message("Revert failed: ", &e, 80);
-            state.push_banner(&msg, BannerSeverity::Error);
+            state.last_applied_ruleset = None;
+            state.update_cached_text();
+            push_persistent_banner(state, e.to_string());
+            audit_task(audit::log_generic_error(enable_event_log, e.to_string()))
         }
     }
 }
@@ -352,11 +545,7 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
     let nft_json = state.ruleset.to_nftables_json();
 
     Task::perform(
-        async move {
-            crate::core::verify::verify_ruleset(nft_json)
-                .await
-                .map_err(|e| e.to_string())
-        },
+        crate::core::verify::verify_ruleset(nft_json),
         Message::SaveToSystemVerifyResult,
     )
 }
@@ -364,8 +553,11 @@ pub(crate) fn handle_save_to_system_clicked(state: &mut State) -> Task<Message> 
 /// Handles Save to System verification result
 pub(crate) fn handle_save_to_system_verify_result(
     state: &mut State,
-    result: Result<crate::core::verify::VerifyResult, String>,
+    result: Result<VerifyResult, VerifyError>,
 ) -> Task<Message> {
+    if state.status != AppStatus::Verifying {
+        return Task::none();
+    }
     match result {
         Ok(verify_result) if verify_result.success => {
             // Verification passed - show confirmation modal
@@ -393,21 +585,9 @@ pub(crate) fn handle_save_to_system_verify_result(
             )
         }
         Err(e) => {
-            // Verification error (e.g., nft command failed)
+            // Verification could not run (authentication, nft missing, ...)
             state.status = AppStatus::Idle;
-            let banner_msg = if e.contains("No authentication agent") || e.contains("No polkit") {
-                "No authentication agent available. Install and start a polkit agent.".to_string()
-            } else {
-                truncate_error_message("Verification error: ", &e, 80)
-            };
-            state.push_banner(&banner_msg, BannerSeverity::Error);
-            let enable_event_log = state.enable_event_log;
-            Task::perform(
-                async move {
-                    audit::log_verify(enable_event_log, false, 0, Some(e)).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            verify_error_feedback(state, &e)
         }
     }
 }
@@ -420,6 +600,9 @@ pub(crate) fn handle_save_to_system_verify_result(
 /// earlier JSON verification only gates the modal; the text check here is the
 /// authoritative one because it covers the exact bytes being installed.
 pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message> {
+    if state.status != AppStatus::AwaitingSaveToSystem {
+        return Task::none();
+    }
     state.status = AppStatus::SavingToSystem;
 
     let text = state.ruleset.to_nft_text();
@@ -440,7 +623,9 @@ pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message
 
 /// Handles user cancelling Save to System modal
 pub(crate) fn handle_save_to_system_cancelled(state: &mut State) {
-    state.status = AppStatus::Idle;
+    if state.status == AppStatus::AwaitingSaveToSystem {
+        state.status = AppStatus::Idle;
+    }
 }
 
 /// Handles save to system result
@@ -448,6 +633,9 @@ pub(crate) fn handle_save_to_system_result(
     state: &mut State,
     result: Result<Option<String>, String>,
 ) -> Task<Message> {
+    if state.status != AppStatus::SavingToSystem {
+        return Task::none();
+    }
     state.status = AppStatus::Idle;
     let enable_event_log = state.enable_event_log;
     let target_path = drfw::SYSTEM_NFT_PATH.to_string();
@@ -480,86 +668,6 @@ pub(crate) fn handle_save_to_system_result(
             )
         }
     }
-}
-
-/// Handles apply/revert errors with user-friendly messages and audit logging
-pub(crate) fn handle_apply_or_revert_error(state: &mut State, error: &str) -> Task<Message> {
-    use crate::app::{AppStatus, BannerSeverity};
-
-    state.status = AppStatus::Idle;
-
-    // Detect elevation-specific errors and handle accordingly
-    // Note: "No authentication agent" must be checked before "Authentication failed"
-    // because pkexec exit 127 produces "Authentication failed: No authentication agent..."
-    if error.contains("No authentication agent") || error.contains("No polkit") {
-        state.push_banner(
-            "No authentication agent available. Install polkit.",
-            BannerSeverity::Error,
-        );
-        let enable_event_log = state.enable_event_log;
-        let error_msg = error.to_owned();
-        return Task::perform(
-            async move {
-                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    } else if error.contains("Authentication cancelled") {
-        state.push_banner("Authentication was cancelled", BannerSeverity::Warning);
-        let enable_event_log = state.enable_event_log;
-        return Task::perform(
-            async move {
-                crate::audit::log_elevation_cancelled(
-                    enable_event_log,
-                    "User cancelled authentication".to_string(),
-                )
-                .await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    } else if error.contains("Authentication failed") {
-        state.push_banner("Authentication failed", BannerSeverity::Error);
-        let enable_event_log = state.enable_event_log;
-        let error_msg = error.to_owned();
-        return Task::perform(
-            async move {
-                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    } else if error.contains("timed out") || error.contains("Operation timed out") {
-        state.push_banner("Authentication timed out", BannerSeverity::Error);
-        let enable_event_log = state.enable_event_log;
-        let error_msg = error.to_owned();
-        return Task::perform(
-            async move {
-                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    } else if error.contains("nft binary not found") || error.contains("nftables") {
-        state.push_banner("nftables not installed", BannerSeverity::Error);
-        let enable_event_log = state.enable_event_log;
-        let error_msg = error.to_owned();
-        return Task::perform(
-            async move {
-                crate::audit::log_elevation_failed(enable_event_log, error_msg).await;
-            },
-            |()| Message::AuditLogWritten,
-        );
-    }
-
-    // Generic error - show error message (no prefix for generic errors)
-    let msg = truncate_error_message("", error, 80);
-    state.push_banner(&msg, BannerSeverity::Error);
-    let enable_event_log = state.enable_event_log;
-    let error_msg = error.to_owned();
-    Task::perform(
-        async move {
-            audit::log_generic_error(enable_event_log, error_msg).await;
-        },
-        |()| Message::AuditLogWritten,
-    )
 }
 
 #[cfg(test)]
@@ -683,5 +791,236 @@ mod tests {
         state.status = AppStatus::Idle;
         let _task = handle_apply_clicked(&mut state);
         assert_eq!(state.status, AppStatus::Verifying);
+    }
+
+    // =========================================================================
+    // Apply flow: snapshot, edit lock, guard outcomes, error classification
+    // =========================================================================
+
+    use crate::core::test_helpers::create_test_rule;
+    use std::time::Duration;
+
+    fn last_banner(state: &State) -> (&str, BannerSeverity) {
+        let banner = state.banners.back().expect("a banner");
+        (banner.message.as_str(), banner.severity)
+    }
+
+    /// Runs Apply -> verified -> Proceed, with a different ruleset applied before.
+    fn state_applying() -> State {
+        let mut state = create_test_state();
+        let mut previous = FirewallRuleset::new();
+        previous.rules.push(create_test_rule("Previous", Some(22)));
+        state.last_applied_ruleset = Some(previous);
+        state.ruleset.rules.push(create_test_rule("New", Some(80)));
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert_eq!(state.status, AppStatus::AwaitingApply);
+        let _ = handle_proceed_to_apply(&mut state);
+        assert_eq!(state.status, AppStatus::Applying);
+        state
+    }
+
+    fn applied_labels(state: &State) -> Vec<String> {
+        state
+            .last_applied_ruleset
+            .as_ref()
+            .map_or_else(Vec::new, |r| {
+                r.rules.iter().map(|rule| rule.label.clone()).collect()
+            })
+    }
+
+    #[test]
+    fn test_ruleset_edits_are_refused_while_busy() {
+        let mut state = create_test_state();
+        state.ruleset.rules.push(create_test_rule("Keep", Some(22)));
+        let id = state.ruleset.rules[0].id;
+        let _ = handle_apply_clicked(&mut state);
+
+        let _ = state.update(Message::ToggleRuleEnabled(id));
+        let _ = state.update(Message::DeleteRule(id));
+        assert_eq!(state.ruleset.rules.len(), 1);
+        assert!(state.ruleset.rules[0].enabled, "edit must be ignored");
+        let (message, severity) = last_banner(&state);
+        assert!(message.contains("can't be changed"));
+        assert_eq!(severity, BannerSeverity::Warning);
+        // Repeated attempts (e.g. a slider) do not stack identical banners
+        assert_eq!(state.banners.len(), 1);
+
+        // Also locked while the verified ruleset awaits the user's go-ahead
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert!(edits_locked(&state));
+        state.status = AppStatus::Idle;
+        assert!(!edits_locked(&state));
+        assert!(!is_ruleset_edit(&Message::ConfirmClicked));
+    }
+
+    #[test]
+    fn test_apply_uses_the_verified_snapshot() {
+        let mut state = state_applying();
+        // An edit that slipped in anyway must not be reported as applied
+        state
+            .ruleset
+            .rules
+            .push(create_test_rule("Unverified", Some(81)));
+        let _ = handle_apply_result(&mut state, Ok(None));
+        assert_eq!(state.status, AppStatus::Idle);
+        assert_eq!(applied_labels(&state), vec!["New".to_string()]);
+    }
+
+    #[test]
+    fn test_stale_results_are_ignored() {
+        let mut state = create_test_state();
+        let _ = handle_verify_completed(&mut state, Ok(VerifyResult::success()));
+        assert_eq!(state.status, AppStatus::Idle, "verify result while idle");
+        let _ = handle_apply_result(&mut state, Ok(None));
+        assert_eq!(state.status, AppStatus::Idle);
+        let _ = handle_guard_finished(&mut state, Ok(GuardOutcome::Reverted));
+        assert!(state.banners.is_empty());
+    }
+
+    #[test]
+    fn test_guarded_apply_then_revert_restores_previous_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_applying();
+        let guard = GuardHandle::new_for_testing(dir.path(), Duration::from_secs(15));
+        let _ = handle_apply_result(&mut state, Ok(Some(guard)));
+        assert!(matches!(
+            state.status,
+            AppStatus::PendingConfirmation { .. }
+        ));
+        assert_eq!(state.countdown_remaining, 15);
+        assert_eq!(applied_labels(&state), vec!["New".to_string()]);
+
+        // The guard (not the UI) decides; nothing claims "reverted" before it reports
+        state.status = AppStatus::Reverting;
+        let _ = handle_guard_finished(&mut state, Ok(GuardOutcome::Reverted));
+        assert_eq!(state.status, AppStatus::Idle);
+        assert_eq!(applied_labels(&state), vec!["Previous".to_string()]);
+        assert!(last_banner(&state).0.contains("reverted"));
+    }
+
+    #[test]
+    fn test_countdown_tick_uses_monotonic_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = create_test_state();
+        state.status = AppStatus::PendingConfirmation {
+            guard: GuardHandle::new_for_testing(dir.path(), Duration::from_secs(30)),
+        };
+        let _ = handle_countdown_tick(&mut state);
+        assert_eq!(state.countdown_remaining, 30);
+        assert!(matches!(
+            state.status,
+            AppStatus::PendingConfirmation { .. }
+        ));
+
+        // Deadline passed: wait for the guard instead of claiming a revert
+        state.status = AppStatus::PendingConfirmation {
+            guard: GuardHandle::new_for_testing(dir.path(), Duration::ZERO),
+        };
+        let _ = handle_countdown_tick(&mut state);
+        assert_eq!(state.status, AppStatus::Reverting);
+        assert!(!last_banner(&state).0.contains("reverted"));
+    }
+
+    #[test]
+    fn test_confirm_creates_token_and_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("confirm")).unwrap();
+        let mut state = create_test_state();
+        state.status = AppStatus::PendingConfirmation {
+            guard: GuardHandle::new_for_testing(dir.path(), Duration::from_secs(30)),
+        };
+        let _ = handle_confirm_clicked(&mut state);
+        assert_eq!(state.status, AppStatus::Confirming);
+        assert!(
+            dir.path()
+                .join("confirm/drfw-confirm-0123456789abcdef0123456789abcdef")
+                .exists()
+        );
+        let _ = handle_guard_finished(&mut state, Ok(GuardOutcome::Confirmed));
+        assert_eq!(state.status, AppStatus::Idle);
+        assert_eq!(last_banner(&state).1, BannerSeverity::Success);
+    }
+
+    #[test]
+    fn test_revert_failure_is_persistent_and_prominent() {
+        let mut state = state_applying();
+        let _ = handle_apply_result(&mut state, Ok(None));
+        state.status = AppStatus::Reverting;
+        let _ = handle_guard_finished(
+            &mut state,
+            Ok(GuardOutcome::RevertFailed("netlink: busy".to_string())),
+        );
+        let (message, severity) = last_banner(&state);
+        assert!(message.contains("STILL ACTIVE"), "{message}");
+        assert_eq!(severity, BannerSeverity::Error);
+        // Rules are still the new ones
+        assert_eq!(applied_labels(&state), vec!["New".to_string()]);
+        // Never expires, and later banners do not push it out
+        state.push_banner("one", BannerSeverity::Info);
+        state.push_banner("two", BannerSeverity::Info);
+        assert!(
+            state
+                .banners
+                .iter()
+                .any(|b| b.message.contains("STILL ACTIVE") && !b.is_expired())
+        );
+    }
+
+    #[test]
+    fn test_apply_errors_are_classified_by_type() {
+        let cases = [
+            (
+                ApplyError::Auth(AuthError::Cancelled),
+                "cancelled",
+                BannerSeverity::Warning,
+            ),
+            (
+                ApplyError::Auth(AuthError::NoAgent),
+                "authentication agent",
+                BannerSeverity::Error,
+            ),
+            (
+                ApplyError::Rejected("Error: nftables syntax".to_string()),
+                "rejected",
+                BannerSeverity::Error,
+            ),
+            (
+                ApplyError::GuardFailedRolledBack("x".to_string()),
+                "rolled back",
+                BannerSeverity::Warning,
+            ),
+            (
+                ApplyError::GuardFailedRulesActive("x".to_string()),
+                "STILL ACTIVE",
+                BannerSeverity::Error,
+            ),
+        ];
+        for (error, expected, severity) in cases {
+            let mut state = state_applying();
+            let rules_active = error.rules_may_be_active();
+            let _ = handle_apply_result(&mut state, Err(error));
+            assert_eq!(state.status, AppStatus::Idle);
+            let (message, got) = last_banner(&state);
+            assert!(message.contains(expected), "{message:?} lacks {expected:?}");
+            assert!(!message.contains("not installed"), "{message}");
+            assert_eq!(got, severity, "{message}");
+            if rules_active {
+                assert!(state.last_applied_ruleset.is_none(), "state is unknown");
+            } else {
+                assert_eq!(applied_labels(&state), vec!["Previous".to_string()]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_verify_auth_cancel_says_so() {
+        let mut state = create_test_state();
+        let _ = handle_apply_clicked(&mut state);
+        let _ = handle_verify_completed(&mut state, Err(VerifyError::Auth(AuthError::Cancelled)));
+        assert_eq!(state.status, AppStatus::Idle);
+        let (message, severity) = last_banner(&state);
+        assert!(message.contains("cancelled"));
+        assert_eq!(severity, BannerSeverity::Warning);
     }
 }

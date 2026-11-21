@@ -17,6 +17,9 @@
 //! - Mixed IPv4/IPv6 rules never widen.
 //! - Server Mode keeps loopback working.
 //! - The Save to System script, end to end, with the real `nft -c`.
+//! - The revert guard (apply script + detached watcher): timeout after a
+//!   first apply removes the table, an existing table is restored exactly,
+//!   confirm/revert tokens, superseding applies, rejected rulesets.
 //!
 //! This file has its own rule helpers: integration tests cannot see the
 //! library's `#[cfg(test)]` helpers.
@@ -585,6 +588,339 @@ fn set_mode(path: &Path, mode: u32) {
 fn mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+}
+
+// ============================================================================
+// Revert guard (APPLY_SCRIPT + watcher) against the real kernel
+// ============================================================================
+//
+// Each test runs the apply script, its detached (`setsid`) watcher and all
+// checks inside ONE `unshare -rn` session, so the watcher acts on the same
+// private network namespace the test inspects. The script runs unelevated with
+// the real `nft`, exactly as with `DRFW_NFT_COMMAND`.
+
+/// Shell helpers available to every guard session:
+/// - `guard_apply FILE TIMEOUT NONCE`: runs `APPLY_SCRIPT` with FILE on stdin
+/// - `wait_status NONCE`: waits (max 10 s) for the watcher's status and prints it
+const GUARD_HELPERS: &str = r#"
+set -u
+mkdir -p confirm
+guard_apply() {
+    sh -c "$DRFW_APPLY_SCRIPT" drfw-apply "$PWD/state" "$2" "$3" "$PWD/confirm" nft setsid < "$1"
+}
+wait_status() {
+    i=0
+    while [ ! -e "state/status-$1" ] && [ "$i" -lt 100 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    cat "state/status-$1"
+}
+"#;
+
+const NONCE_A: &str = "0123456789abcdef0123456789abcdef";
+const NONCE_B: &str = "fedcba9876543210fedcba9876543210";
+
+/// Runs `body` (after [`GUARD_HELPERS`]) in one private namespace session.
+fn run_guard_session(dir: &Path, body: &str) -> Output {
+    let script = format!("{GUARD_HELPERS}\n{body}");
+    let output = Command::new("unshare")
+        .args(["-rn", "/bin/sh", "-c", &script])
+        .env("DRFW_APPLY_SCRIPT", drfw::elevation::APPLY_SCRIPT)
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn unshare");
+    assert!(
+        output.status.success(),
+        "guard session failed: {body}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// Reads a file the session wrote into `dir`.
+fn read(dir: &Path, name: &str) -> String {
+    std::fs::read_to_string(dir.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"))
+}
+
+/// Normalized `nft -j list` output the session wrote into `dir`.
+fn listing(dir: &Path, name: &str) -> serde_json::Value {
+    normalize_listing(&std::fs::read(dir.join(name)).expect("read listing"))
+}
+
+/// Writes `ruleset`'s JSON into `dir/name`.
+fn write_json(dir: &Path, name: &str, ruleset: &FirewallRuleset) {
+    std::fs::write(
+        dir.join(name),
+        serde_json::to_string(&ruleset.to_nftables_json()).expect("serialize JSON"),
+    )
+    .expect("write JSON");
+}
+
+/// A ruleset that differs visibly from [`kitchen_sink_rules`].
+fn other_ruleset() -> FirewallRuleset {
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.rules = vec![rule(
+        "Only HTTPS",
+        Protocol::Tcp,
+        vec![PortEntry::Single(443)],
+    )];
+    ruleset.advanced_security.egress_profile = EgressProfile::Server;
+    ruleset
+}
+
+fn kitchen_sink_ruleset() -> FirewallRuleset {
+    let mut ruleset = FirewallRuleset::new();
+    ruleset.rules = kitchen_sink_rules();
+    ruleset
+}
+
+/// The old lockout bug: the very first apply (no drfw table yet) timing out
+/// must remove the table, not leave empty drop-policy chains behind.
+#[test]
+fn test_guard_first_apply_timeout_removes_table() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    let out = run_guard_session(
+        dir.path(),
+        &format!(
+            "guard_apply new.json 1 {NONCE_A} > apply.out
+             nft list tables > during.out
+             wait_status {NONCE_A} > status.out
+             nft list tables > after.out"
+        ),
+    );
+    let apply_out = read(dir.path(), "apply.out");
+    assert!(
+        apply_out.contains("watcher=setsid:"),
+        "apply output: {apply_out}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(read(dir.path(), "during.out").contains("table inet drfw"));
+    assert_eq!(read(dir.path(), "status.out"), "reverted\n");
+    assert!(
+        !read(dir.path(), "after.out").contains("table inet drfw"),
+        "the drfw table must be gone after reverting a first apply"
+    );
+    // The watcher cleans up after itself
+    assert!(
+        !dir.path()
+            .join(format!("state/revert-{NONCE_A}.nft"))
+            .exists()
+    );
+    assert!(
+        !dir.path()
+            .join(format!("state/watcher-{NONCE_A}.sh"))
+            .exists()
+    );
+    assert!(!dir.path().join("state/active").exists());
+}
+
+/// An existing drfw table is restored exactly when the guard times out.
+#[test]
+fn test_guard_timeout_restores_previous_ruleset_exactly() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "old.json", &kitchen_sink_ruleset());
+    write_json(dir.path(), "new.json", &other_ruleset());
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "nft -j -f old.json
+             nft -j list table inet drfw > before.json
+             guard_apply new.json 1 {NONCE_A} > /dev/null
+             nft -j list table inet drfw > during.json
+             wait_status {NONCE_A} > status.out
+             nft -j list table inet drfw > after.json"
+        ),
+    );
+    assert_eq!(read(dir.path(), "status.out"), "reverted\n");
+    let before = listing(dir.path(), "before.json");
+    let during = listing(dir.path(), "during.json");
+    let after = listing(dir.path(), "after.json");
+    assert_ne!(before, during, "the new ruleset must have been applied");
+    assert!(
+        listing_difference(&before, &after).is_none(),
+        "revert must restore exactly the previous table: {}",
+        listing_difference(&before, &after).unwrap_or_default()
+    );
+}
+
+/// A confirm token before the timeout keeps the new rules.
+#[test]
+fn test_guard_confirm_token_keeps_new_rules() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "old.json", &other_ruleset());
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "nft -j -f old.json
+             guard_apply new.json 3 {NONCE_A} > /dev/null
+             nft -j list table inet drfw > during.json
+             touch confirm/drfw-confirm-{NONCE_A}
+             wait_status {NONCE_A} > status.out
+             sleep 3
+             nft -j list table inet drfw > after.json"
+        ),
+    );
+    assert_eq!(read(dir.path(), "status.out"), "confirmed\n");
+    assert_eq!(
+        listing(dir.path(), "during.json"),
+        listing(dir.path(), "after.json"),
+        "confirmed rules must stay after the timeout would have passed"
+    );
+    // The watcher never deletes (or otherwise touches) the user's token
+    assert!(
+        dir.path()
+            .join(format!("confirm/drfw-confirm-{NONCE_A}"))
+            .exists()
+    );
+}
+
+/// A revert token reverts immediately, long before the timeout.
+#[test]
+fn test_guard_revert_token_reverts_immediately() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &kitchen_sink_ruleset());
+    let start = std::time::Instant::now();
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "guard_apply new.json 60 {NONCE_A} > /dev/null
+             touch confirm/drfw-revert-{NONCE_A}
+             wait_status {NONCE_A} > status.out
+             nft list tables > after.out"
+        ),
+    );
+    assert_eq!(read(dir.path(), "status.out"), "reverted\n");
+    assert!(!read(dir.path(), "after.out").contains("table inet drfw"));
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(15),
+        "revert token must not wait for the 60 s timeout"
+    );
+}
+
+/// A second apply supersedes the first guard and inherits its baseline: if
+/// the second one times out, the state from before the FIRST (unconfirmed)
+/// apply comes back.
+#[test]
+fn test_guard_second_apply_supersedes_first() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    let mut base = FirewallRuleset::new();
+    base.rules = vec![rule("SSH", Protocol::Tcp, vec![PortEntry::Single(22)])];
+    write_json(dir.path(), "base.json", &base);
+    write_json(dir.path(), "first.json", &kitchen_sink_ruleset());
+    write_json(dir.path(), "second.json", &other_ruleset());
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "nft -j -f base.json
+             nft -j list table inet drfw > before.json
+             guard_apply first.json 60 {NONCE_A} > /dev/null
+             guard_apply second.json 1 {NONCE_B} > /dev/null
+             wait_status {NONCE_A} > status_a.out
+             wait_status {NONCE_B} > status_b.out
+             sleep 2
+             cat state/status-{NONCE_A} > status_a_later.out
+             nft -j list table inet drfw > after.json"
+        ),
+    );
+    assert_eq!(read(dir.path(), "status_a.out"), "superseded\n");
+    assert_eq!(read(dir.path(), "status_b.out"), "reverted\n");
+    assert_eq!(
+        read(dir.path(), "status_a_later.out"),
+        "superseded\n",
+        "the superseded watcher must not act any more"
+    );
+    let before = listing(dir.path(), "before.json");
+    let after = listing(dir.path(), "after.json");
+    assert!(
+        listing_difference(&before, &after).is_none(),
+        "must return to the last confirmed state: {}",
+        listing_difference(&before, &after).unwrap_or_default()
+    );
+}
+
+/// An invalid ruleset is rejected with exit 3; nothing changes and no
+/// watcher is started.
+#[test]
+fn test_guard_invalid_ruleset_exits_3_without_watcher() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    std::fs::write(
+        dir.path().join("bad.json"),
+        r#"{"nftables":[{"add":{"table":{"family":"inet","name":"drfw"}}},{"add":{"rule":{"family":"inet","table":"drfw","chain":"nope","expr":[{"accept":null}]}}}]}"#,
+    )
+    .expect("write bad.json");
+    write_json(dir.path(), "old.json", &other_ruleset());
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "nft -j -f old.json
+             nft -j list table inet drfw > before.json
+             rc=0
+             guard_apply bad.json 1 {NONCE_A} > apply.out 2> apply.err || rc=$?
+             echo $rc > rc.out
+             sleep 2
+             ls -A state > state.ls
+             nft -j list table inet drfw > after.json"
+        ),
+    );
+    assert_eq!(
+        read(dir.path(), "rc.out"),
+        "3\n",
+        "stderr: {}",
+        read(dir.path(), "apply.err")
+    );
+    assert!(read(dir.path(), "apply.err").contains("nft rejected the ruleset"));
+    let state = read(dir.path(), "state.ls");
+    assert!(
+        !state.contains("watcher-") && !state.contains("status-") && !state.contains("revert-"),
+        "no guard may be left behind: {state}"
+    );
+    assert_eq!(
+        listing(dir.path(), "before.json"),
+        listing(dir.path(), "after.json")
+    );
+}
+
+/// Unguarded apply (timeout 0) just applies and starts nothing.
+#[test]
+fn test_guard_timeout_zero_just_applies() {
+    if !real_nft_available() {
+        return;
+    }
+    let dir = work_dir();
+    write_json(dir.path(), "new.json", &other_ruleset());
+    run_guard_session(
+        dir.path(),
+        &format!(
+            "guard_apply new.json 0 {NONCE_A} > apply.out
+             ls -A state > state.ls
+             nft list tables > after.out"
+        ),
+    );
+    assert_eq!(read(dir.path(), "apply.out"), "watcher=none\n");
+    assert!(read(dir.path(), "after.out").contains("table inet drfw"));
+    assert!(!read(dir.path(), "state.ls").contains(NONCE_A));
 }
 
 // ============================================================================

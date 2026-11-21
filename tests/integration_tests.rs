@@ -4,8 +4,9 @@
 //! error handling, CLI operations, and verification with mock nft.
 //!
 //! **Test Organization:**
-//! - Snapshot validation tests are in `src/core/nft_json.rs` (authoritative)
 //! - Verification tests with mock nft are here (authoritative)
+//! - Guarded apply plumbing (tokens, watcher, status) with mock nft is here;
+//!   real-kernel revert behavior is in `tests/real_nft.rs`
 //! - CLI command integration tests are here
 //! - Profile operations are here
 //! - JSON generation tests are in `src/core/tests.rs` (close to implementation)
@@ -29,7 +30,6 @@
 #![allow(clippy::uninlined_format_args)]
 
 use drfw::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
-use drfw::core::nft_json;
 use drfw::core::verify;
 use std::env;
 use std::path::PathBuf;
@@ -231,14 +231,6 @@ async fn test_multiple_rules_verification() {
     assert!(result.is_ok(), "Multi-rule verification should succeed");
 }
 
-// ============================================================================
-// NOTE: Snapshot validation and checksum tests are in src/core/nft_json.rs
-// These tests were removed to avoid duplication. See nft_json.rs for:
-// - test_validate_snapshot_*
-// - test_compute_checksum_*
-// - test_emergency_default_*
-// ============================================================================
-
 #[test]
 fn test_json_generation_deterministic() {
     let ruleset = create_test_ruleset();
@@ -309,8 +301,10 @@ fn test_complex_rule_configurations() {
     ));
 
     let json = ruleset.to_nftables_json();
-    let validation = nft_json::validate_snapshot(&json);
-    assert!(validation.is_ok(), "Complex configurations should validate");
+    assert!(
+        json["nftables"].as_array().is_some_and(|a| !a.is_empty()),
+        "Complex configurations should produce an nftables command list"
+    );
 
     // Verify JSON is valid
     let json_str = serde_json::to_string(&json);
@@ -558,4 +552,44 @@ async fn test_save_config_file_with_mock_nft() {
         Some(backup.clone())
     );
     assert_eq!(std::fs::read_to_string(&backup).unwrap(), text);
+}
+
+/// Guarded apply with the mock nft: the real apply script and a real
+/// (`setsid`) watcher, confirm/timeout/no-guard paths. Real-kernel revert
+/// semantics are covered in `tests/real_nft.rs`.
+#[tokio::test]
+async fn test_guarded_apply_with_mock_nft() {
+    use drfw::core::apply_guard::{GuardOutcome, OUTCOME_GRACE, apply_guarded};
+    setup_mock_nft();
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime_dir = dir.path().join("run");
+    let state_dir = dir.path().join("guard");
+    std::fs::create_dir(&runtime_dir).unwrap();
+    // SAFETY: only this test reads these variables
+    unsafe {
+        env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
+        env::set_var("DRFW_GUARD_STATE_DIR", &state_dir);
+    }
+    let json = create_test_ruleset().to_nftables_json();
+
+    // No guard: just applied
+    assert_eq!(apply_guarded(&json, 0).await, Ok(None));
+
+    // Confirmed before the timeout: the watcher reports it
+    let handle = apply_guarded(&json, 30).await.unwrap().expect("guard");
+    handle.confirm().unwrap();
+    assert_eq!(
+        handle.wait_outcome(OUTCOME_GRACE).await,
+        Ok(GuardOutcome::Confirmed)
+    );
+    // Tokens are cleaned up by the user side, never by the watcher
+    assert_eq!(std::fs::read_dir(&runtime_dir).unwrap().count(), 0);
+
+    // Not confirmed: the watcher reverts on its own
+    let handle = apply_guarded(&json, 1).await.unwrap().expect("guard");
+    assert_eq!(
+        handle.wait_for_timeout_outcome().await,
+        Ok(GuardOutcome::Reverted)
+    );
 }
