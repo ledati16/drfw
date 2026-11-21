@@ -609,7 +609,29 @@ fn random_sources(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
     sources
 }
 
-fn random_destinations(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
+/// Random destinations that share at least one IP family with `sources`.
+///
+/// A rule whose sources and destinations have no family in common can never
+/// match, and DRFW's validator refuses to apply it, so normal (non edge-case)
+/// profiles must not contain one.
+fn random_destinations(
+    rng: &mut impl Rng,
+    protocol: Protocol,
+    sources: &[IpNetwork],
+) -> Vec<IpNetwork> {
+    let mut dests = random_destinations_any_family(rng, protocol);
+    let shares_family = |d: &IpNetwork| sources.iter().any(|s| s.is_ipv4() == d.is_ipv4());
+    if !sources.is_empty() && !dests.is_empty() && !dests.iter().any(shares_family) {
+        dests.push(if sources[0].is_ipv4() {
+            random_ipv4(rng)
+        } else {
+            random_ipv6(rng)
+        });
+    }
+    dests
+}
+
+fn random_destinations_any_family(rng: &mut impl Rng, protocol: Protocol) -> Vec<IpNetwork> {
     if rng.random_bool(0.6) {
         return Vec::new(); // Less common to have destination filters
     }
@@ -1030,7 +1052,8 @@ fn generate_edge_case_rule(rng: &mut impl Rng, index: usize) -> Rule {
         destinations: if rng.random_bool(0.4) {
             edge_case_sources(rng, protocol) // Reuse edge case sources for destinations
         } else {
-            random_destinations(rng, protocol)
+            // Edge cases may deliberately mix families (the validator flags them)
+            random_destinations_any_family(rng, protocol)
         },
         interface,
         output_interface,
@@ -1061,7 +1084,7 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
         (None, random_interface(rng))
     };
 
-    RuleConfig {
+    let mut config = RuleConfig {
         protocol,
         action,
         chain,
@@ -1072,8 +1095,8 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
         },
         label: random_label(rng, index),
         ports: random_ports(rng, protocol),
+        destinations: Vec::new(),
         sources: random_sources(rng, protocol),
-        destinations: random_destinations(rng, protocol),
         interface,
         output_interface,
         rate_limit: random_rate_limit(rng),
@@ -1083,8 +1106,9 @@ fn generate_rule(rng: &mut impl Rng, index: usize, vary_timestamps: bool) -> Rul
         enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
         timestamp: random_timestamp(rng, vary_timestamps),
-    }
-    .into_rule()
+    };
+    config.destinations = random_destinations(rng, protocol, &config.sources);
+    config.into_rule()
 }
 
 /// Generate a rule with specific forced variants for coverage guarantee
@@ -1134,15 +1158,15 @@ fn generate_coverage_rule(
         random_rate_limit(rng)
     };
 
-    RuleConfig {
+    let mut config = RuleConfig {
         protocol,
         action,
         chain,
         reject_type: reject_type.unwrap_or(RejectType::Default),
         label: random_label(rng, index),
         ports,
+        destinations: Vec::new(),
         sources: random_sources(rng, protocol),
-        destinations: random_destinations(rng, protocol),
         interface,
         output_interface,
         rate_limit,
@@ -1152,8 +1176,9 @@ fn generate_coverage_rule(
         enabled: rng.random_bool(0.95),
         tags: random_tags(rng),
         timestamp: Timestamp::now(),
-    }
-    .into_rule()
+    };
+    config.destinations = random_destinations(rng, protocol, &config.sources);
+    config.into_rule()
 }
 
 /// Generates a complete ruleset with coverage guarantees.
