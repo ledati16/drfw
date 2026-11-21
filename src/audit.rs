@@ -27,6 +27,7 @@ pub enum EventType {
     ProfileSwitched,
     ProfileDeleteFailed,
     ProfileRenameFailed,
+    ProfileCreateFailed,
 
     // Settings changes (user-facing)
     SettingsSaved,
@@ -141,7 +142,9 @@ impl AuditLog {
 
     /// Appends an event to the audit log
     ///
-    /// Events are written as JSON-lines format (one JSON object per line)
+    /// Events are written as JSON-lines format (one JSON object per line).
+    /// Each line, including its newline, is a single `write` on an append-mode
+    /// file, so concurrent writers cannot interleave partial lines.
     ///
     /// # Security
     ///
@@ -153,7 +156,8 @@ impl AuditLog {
     ///
     /// Returns `Err` if file cannot be opened or written
     pub async fn log(&self, event: AuditEvent) -> std::io::Result<()> {
-        let json = serde_json::to_string(&event)?;
+        let mut line = serde_json::to_vec(&event)?;
+        line.push(b'\n');
 
         let mut options = tokio::fs::OpenOptions::new();
         options.create(true).append(true);
@@ -165,8 +169,7 @@ impl AuditLog {
         }
         let mut file = options.open(&self.log_path).await?;
 
-        file.write_all(json.as_bytes()).await?;
-        file.write_all(b"\n").await?;
+        file.write_all(&line).await?;
         file.sync_all().await?;
 
         Ok(())
@@ -251,6 +254,18 @@ pub async fn log_profile_created(enable_event_log: bool, profile_name: &str) {
         true,
         serde_json::json!({ "profile_name": profile_name }),
         None,
+    )
+    .await;
+}
+
+/// Logs a failed profile creation (e.g. the name already exists)
+pub async fn log_profile_create_failed(enable_event_log: bool, profile_name: &str, error: String) {
+    log_event_internal(
+        enable_event_log,
+        EventType::ProfileCreateFailed,
+        false,
+        serde_json::json!({ "profile_name": profile_name }),
+        Some(error),
     )
     .await;
 }

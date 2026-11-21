@@ -2,11 +2,15 @@
 //!
 //! Handles validation of firewall rule form inputs with detailed error reporting.
 //! Supports multi-value fields (ports, IPs) with helper modal editing pattern.
+//!
+//! The form only checks what is specific to text input (numbers that don't
+//! parse, an enabled rate limit without a rate). Everything else is decided by
+//! the core validator: [`RuleForm::validate`] builds the candidate [`Rule`] and
+//! calls [`Rule::validate`], so the form and the profile loader can never
+//! disagree about what is valid.
 
-use crate::core::firewall::{PortEntry, Protocol, RejectType};
-use crate::core::rule_constraints::{
-    ip_compatible_with_protocol, protocol_supports_ports, reject_type_valid_for_protocol,
-};
+use crate::core::firewall::{PortEntry, Protocol, RateLimit, RejectType, Rule};
+use crate::core::validate::RuleField;
 use ipnetwork::IpNetwork;
 
 /// Form validation errors for individual fields
@@ -20,6 +24,40 @@ pub struct FormErrors {
     pub rate_limit: Option<String>,
     pub connection_limit: Option<String>,
     pub reject_type: Option<String>,
+    /// Problems without a dedicated field in the form (label, tags, rule limit)
+    pub general: Option<String>,
+}
+
+impl FormErrors {
+    /// Stores `message` on the form field for `field` (first message wins).
+    fn set(&mut self, field: RuleField, message: String) {
+        let slot = match field {
+            RuleField::Ports => &mut self.port,
+            RuleField::Sources => &mut self.source,
+            RuleField::Destinations => &mut self.destination,
+            RuleField::Interface => &mut self.interface,
+            RuleField::OutputInterface => &mut self.output_interface,
+            RuleField::RejectType => &mut self.reject_type,
+            RuleField::RateLimit => &mut self.rate_limit,
+            RuleField::ConnectionLimit => &mut self.connection_limit,
+            RuleField::Label | RuleField::Tags => &mut self.general,
+        };
+        if slot.is_none() {
+            *slot = Some(message);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.port.is_none()
+            && self.source.is_none()
+            && self.interface.is_none()
+            && self.output_interface.is_none()
+            && self.destination.is_none()
+            && self.rate_limit.is_none()
+            && self.connection_limit.is_none()
+            && self.reject_type.is_none()
+            && self.general.is_none()
+    }
 }
 
 /// Helper modal types for multi-value field editing
@@ -111,173 +149,354 @@ impl Default for RuleForm {
 }
 
 impl RuleForm {
-    /// Validates all form fields
+    /// Builds a form pre-filled from an existing rule (for editing).
+    pub fn from_rule(rule: &Rule) -> Self {
+        use crate::core::firewall::Action;
+        let has_advanced = !rule.destinations.is_empty()
+            || rule.action != Action::Accept
+            || rule.rate_limit.is_some()
+            || rule.connection_limit > 0
+            || rule.output_interface.is_some()
+            || rule.reject_type != RejectType::Default
+            || rule.log_enabled;
+
+        Self {
+            id: Some(rule.id),
+            label: rule.label.clone(),
+            protocol: rule.protocol,
+            ports: rule.ports.clone(),
+            sources: rule.sources.clone(),
+            destinations: rule.destinations.clone(),
+            tags: rule.tags.clone(),
+            interface: rule.interface.clone().unwrap_or_default(),
+            output_interface: rule.output_interface.clone().unwrap_or_default(),
+            chain: rule.chain,
+            action: rule.action,
+            reject_type: rule.reject_type,
+            rate_limit_enabled: rule.rate_limit.is_some(),
+            rate_limit_count: rule
+                .rate_limit
+                .map_or_else(String::new, |rl| rl.count.to_string()),
+            rate_limit_unit: rule
+                .rate_limit
+                .map_or(crate::core::firewall::TimeUnit::Second, |rl| rl.unit),
+            rate_limit_burst: rule
+                .rate_limit
+                .and_then(|rl| rl.burst)
+                .map_or_else(String::new, |b| b.to_string()),
+            connection_limit: if rule.connection_limit > 0 {
+                rule.connection_limit.to_string()
+            } else {
+                String::new()
+            },
+            log_enabled: rule.log_enabled,
+            show_advanced: has_advanced,
+        }
+    }
+
+    /// Parses the free-text numeric fields, recording form-specific errors.
     ///
-    /// Multi-value fields (ports, sources, destinations) are validated as Vec
-    /// and returned directly since they're already parsed during helper modal input.
-    ///
-    /// Returns Option<FormErrors> - None if validation passed
-    pub fn validate(&self) -> Option<FormErrors> {
-        let mut errors = FormErrors::default();
-        let mut has_errors = false;
-
-        self.validate_ports(&mut errors, &mut has_errors);
-        self.validate_sources(&mut errors, &mut has_errors);
-        self.validate_destinations(&mut errors, &mut has_errors);
-        self.validate_interface(&mut errors, &mut has_errors);
-        self.validate_output_interface(&mut errors, &mut has_errors);
-        self.validate_interface_chain_compat(&mut errors, &mut has_errors);
-        self.validate_reject_type(&mut errors, &mut has_errors);
-        self.validate_rate_limit(&mut errors, &mut has_errors);
-        self.validate_connection_limit(&mut errors, &mut has_errors);
-
-        if has_errors { Some(errors) } else { None }
-    }
-
-    fn validate_ports(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Use centralized constraint for port support
-        if !protocol_supports_ports(self.protocol) {
-            return;
-        }
-
-        // Multi-value ports are already validated when added via helper
-        // Just check for any obvious issues
-        for port in &self.ports {
-            match port {
-                PortEntry::Single(p) if *p == 0 => {
-                    errors.port = Some("Port cannot be 0".to_string());
-                    *has_errors = true;
-                    return;
-                }
-                PortEntry::Range { start, end } if start > end => {
-                    errors.port = Some("Port range start must be <= end".to_string());
-                    *has_errors = true;
-                    return;
-                }
-                _ => {}
+    /// Returns the rate limit (if enabled and parseable) and the connection
+    /// limit (0 when empty or unparseable). Range checks are left to the core
+    /// validator.
+    fn parse_numbers(&self, errors: &mut FormErrors) -> (Option<RateLimit>, u32) {
+        let rate_limit = if self.rate_limit_enabled {
+            let count = self.rate_limit_count.trim();
+            let burst = self.rate_limit_burst.trim();
+            let parsed_burst = if burst.is_empty() {
+                Ok(None)
+            } else {
+                burst.parse::<u32>().map(Some)
+            };
+            if parsed_burst.is_err() {
+                errors.rate_limit = Some("Invalid burst number".to_string());
             }
-        }
-    }
-
-    fn validate_sources(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Use centralized constraint for ICMP/IP version compatibility
-        for ip in &self.sources {
-            if !ip_compatible_with_protocol(ip, self.protocol) {
-                let msg = if ip.is_ipv6() {
-                    "ICMP (v4) cannot be used with IPv6 addresses"
-                } else {
-                    "ICMPv6 cannot be used with IPv4 addresses"
-                };
-                errors.source = Some(msg.to_string());
-                *has_errors = true;
-                return;
-            }
-        }
-    }
-
-    fn validate_destinations(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Use centralized constraint for ICMP/IP version compatibility
-        for ip in &self.destinations {
-            if !ip_compatible_with_protocol(ip, self.protocol) {
-                let msg = if ip.is_ipv6() {
-                    "ICMP (v4) cannot be used with IPv6 addresses"
-                } else {
-                    "ICMPv6 cannot be used with IPv4 addresses"
-                };
-                errors.destination = Some(msg.to_string());
-                *has_errors = true;
-                return;
-            }
-        }
-    }
-
-    fn validate_interface(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        if !self.interface.is_empty()
-            && let Err(msg) = crate::validators::validate_interface(&self.interface)
-        {
-            errors.interface = Some(msg.to_string());
-            *has_errors = true;
-        }
-    }
-
-    fn validate_output_interface(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        if !self.output_interface.is_empty()
-            && let Err(msg) = crate::validators::validate_interface(&self.output_interface)
-        {
-            errors.output_interface = Some(msg.to_string());
-            *has_errors = true;
-        }
-    }
-
-    /// Validates interface/chain compatibility.
-    ///
-    /// nftables only sets certain meta keys for specific hooks:
-    /// - `iifname`: Only available in INPUT and FORWARD (not OUTPUT)
-    /// - `oifname`: Only available in OUTPUT and FORWARD (not INPUT)
-    ///
-    /// Using the wrong interface for a chain results in rules that never match.
-    fn validate_interface_chain_compat(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        use crate::core::firewall::Chain;
-
-        // Input interface on OUTPUT chain won't match (packets originate locally)
-        if !self.interface.is_empty() && self.chain == Chain::Output {
-            errors.interface = Some("Input interface not available for OUTPUT rules".to_string());
-            *has_errors = true;
-        }
-
-        // Output interface on INPUT chain won't match (packets not routed yet)
-        if !self.output_interface.is_empty() && self.chain == Chain::Input {
-            errors.output_interface =
-                Some("Output interface not available for INPUT rules".to_string());
-            *has_errors = true;
-        }
-    }
-
-    fn validate_reject_type(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        // Use centralized constraint for reject type validity
-        if !reject_type_valid_for_protocol(self.reject_type, self.protocol) {
-            errors.reject_type = Some("TCP Reset is only available for TCP protocol".to_string());
-            *has_errors = true;
-        }
-    }
-
-    fn validate_rate_limit(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        if !self.rate_limit_enabled {
-            return;
-        }
-
-        if let Ok(count) = self.rate_limit_count.parse::<u32>() {
-            // Ignore warnings (Ok result), only handle errors
-            if let Err(msg) = crate::validators::validate_rate_limit(count, self.rate_limit_unit) {
-                errors.rate_limit = Some(msg);
-                *has_errors = true;
-            }
-        } else if !self.rate_limit_count.is_empty() {
-            errors.rate_limit = Some("Invalid rate limit number".to_string());
-            *has_errors = true;
-        }
-
-        // Validate burst if provided
-        if !self.rate_limit_burst.is_empty() && self.rate_limit_burst.parse::<u32>().is_err() {
-            errors.rate_limit = Some("Invalid burst number".to_string());
-            *has_errors = true;
-        }
-    }
-
-    fn validate_connection_limit(&self, errors: &mut FormErrors, has_errors: &mut bool) {
-        if self.connection_limit.is_empty() {
-            return;
-        }
-
-        if let Ok(limit) = self.connection_limit.parse::<u32>() {
-            // Ignore warnings (Ok result), only handle errors
-            if let Err(msg) = crate::validators::validate_connection_limit(limit) {
-                errors.connection_limit = Some(msg);
-                *has_errors = true;
+            if count.is_empty() {
+                errors.rate_limit =
+                    Some("Enter a rate (at least 1), or turn rate limiting off".into());
+                None
+            } else if let Ok(count) = count.parse::<u32>() {
+                Some(RateLimit {
+                    count,
+                    unit: self.rate_limit_unit,
+                    burst: parsed_burst.unwrap_or(None),
+                })
+            } else {
+                errors.rate_limit = Some("Invalid rate limit number".to_string());
+                None
             }
         } else {
-            errors.connection_limit = Some("Invalid connection limit number".to_string());
-            *has_errors = true;
+            None
+        };
+
+        let connection_limit = match self.connection_limit.trim() {
+            "" => 0,
+            text => text.parse::<u32>().unwrap_or_else(|_| {
+                errors.connection_limit = Some("Invalid connection limit number".to_string());
+                0
+            }),
+        };
+
+        (rate_limit, connection_limit)
+    }
+
+    /// Builds the rule this form describes.
+    ///
+    /// `id`, `enabled` and `created_at` come from the caller: a new rule gets
+    /// fresh values, an edited rule keeps its own (editing must not re-enable a
+    /// disabled rule or reset its creation time). Unparseable numbers are
+    /// left out; call [`Self::validate`] first.
+    pub fn to_rule(
+        &self,
+        id: uuid::Uuid,
+        enabled: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Rule {
+        let (rate_limit, connection_limit) = self.parse_numbers(&mut FormErrors::default());
+        self.build_rule(id, enabled, created_at, rate_limit, connection_limit)
+    }
+
+    fn build_rule(
+        &self,
+        id: uuid::Uuid,
+        enabled: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+        rate_limit: Option<RateLimit>,
+        connection_limit: u32,
+    ) -> Rule {
+        let non_empty = |s: &str| {
+            let trimmed = s.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        };
+        let mut rule = Rule::with_caches(
+            id,
+            crate::validators::sanitize_label(&self.label),
+            self.protocol,
+            self.ports.clone(),
+            self.sources.clone(),
+            non_empty(&self.interface),
+            self.chain,
+            enabled,
+            created_at,
+            self.tags.clone(),
+        );
+        rule.output_interface = non_empty(&self.output_interface);
+        rule.destinations.clone_from(&self.destinations);
+        rule.action = self.action;
+        rule.reject_type = self.reject_type;
+        rule.rate_limit = rate_limit;
+        rule.connection_limit = connection_limit;
+        rule.log_enabled = self.log_enabled;
+        rule.rebuild_caches();
+        rule
+    }
+
+    /// Validates all form fields.
+    ///
+    /// Text-input problems are reported first; then the candidate rule is
+    /// checked with [`Rule::validate`] (the same check the loader and the
+    /// apply path use) and each issue is shown on its field.
+    ///
+    /// Returns `None` if validation passed.
+    pub fn validate(&self) -> Option<FormErrors> {
+        let mut errors = FormErrors::default();
+        let (rate_limit, connection_limit) = self.parse_numbers(&mut errors);
+        let candidate = self.build_rule(
+            uuid::Uuid::nil(),
+            true,
+            chrono::DateTime::UNIX_EPOCH,
+            rate_limit,
+            connection_limit,
+        );
+        if let Err(issues) = candidate.validate() {
+            for issue in issues {
+                errors.set(issue.field, issue.message);
+            }
+        }
+
+        if errors.is_empty() {
+            None
+        } else {
+            Some(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::firewall::{Action, Chain, TimeUnit};
+
+    fn tcp_form() -> RuleForm {
+        RuleForm {
+            label: "SSH".into(),
+            ports: vec![PortEntry::single(22)],
+            ..RuleForm::default()
+        }
+    }
+
+    #[test]
+    fn test_valid_form_passes() {
+        assert!(tcp_form().validate().is_none());
+    }
+
+    #[test]
+    fn test_rate_limit_enabled_needs_count() {
+        let mut form = tcp_form();
+        form.rate_limit_enabled = true;
+        let errors = form.validate().expect("empty rate must fail");
+        assert!(errors.rate_limit.is_some());
+
+        form.rate_limit_count = "0".into();
+        assert!(form.validate().unwrap().rate_limit.is_some());
+
+        form.rate_limit_count = "5".into();
+        assert!(form.validate().is_none());
+
+        form.rate_limit_burst = "0".into();
+        assert!(form.validate().unwrap().rate_limit.is_some());
+        form.rate_limit_burst = "x".into();
+        assert!(form.validate().unwrap().rate_limit.is_some());
+        form.rate_limit_burst = "10".into();
+        assert!(form.validate().is_none());
+        let rule = form.to_rule(uuid::Uuid::nil(), true, chrono::Utc::now());
+        assert_eq!(
+            rule.rate_limit,
+            Some(RateLimit {
+                count: 5,
+                unit: TimeUnit::Second,
+                burst: Some(10)
+            })
+        );
+    }
+
+    #[test]
+    fn test_ip_family_mismatch_reported() {
+        let mut form = tcp_form();
+        form.sources = vec!["10.0.0.0/8".parse().unwrap()];
+        form.destinations = vec!["2001:db8::/32".parse().unwrap()];
+        assert!(form.validate().unwrap().destination.is_some());
+    }
+
+    #[test]
+    fn test_tcp_reset_on_tcp_udp_reported() {
+        let mut form = tcp_form();
+        form.action = Action::Reject;
+        form.reject_type = RejectType::TcpReset;
+        assert!(form.validate().is_none());
+        form.protocol = Protocol::TcpAndUdp;
+        assert!(form.validate().unwrap().reject_type.is_some());
+    }
+
+    #[test]
+    fn test_ports_on_icmp_reported() {
+        let mut form = tcp_form();
+        form.protocol = Protocol::IcmpBoth;
+        assert!(form.validate().unwrap().port.is_some());
+    }
+
+    #[test]
+    fn test_output_interface_on_input_chain() {
+        let mut form = tcp_form();
+        form.output_interface = "eth0".into();
+        assert!(form.validate().unwrap().output_interface.is_some());
+        form.chain = Chain::Output;
+        assert!(form.validate().is_none());
+    }
+
+    #[test]
+    fn test_from_rule_round_trip() {
+        let mut rule = crate::core::test_helpers::create_test_rule("Web", Some(443));
+        rule.enabled = false;
+        rule.rate_limit = Some(RateLimit {
+            count: 3,
+            unit: TimeUnit::Minute,
+            burst: Some(6),
+        });
+        rule.connection_limit = 10;
+        rule.rebuild_caches();
+        let form = RuleForm::from_rule(&rule);
+        assert!(form.show_advanced);
+        let rebuilt = form.to_rule(rule.id, rule.enabled, rule.created_at);
+        assert_eq!(rebuilt, rule);
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use crate::core::firewall::{Action, Chain, TimeUnit};
+    use proptest::prelude::*;
+
+    const PROTOCOLS: [Protocol; 7] = [
+        Protocol::Any,
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::TcpAndUdp,
+        Protocol::Icmp,
+        Protocol::Icmpv6,
+        Protocol::IcmpBoth,
+    ];
+    const REJECT_TYPES: [RejectType; 5] = [
+        RejectType::Default,
+        RejectType::PortUnreachable,
+        RejectType::HostUnreachable,
+        RejectType::AdminProhibited,
+        RejectType::TcpReset,
+    ];
+
+    prop_compose! {
+        /// Arbitrary (often invalid) form contents.
+        fn any_form()(
+            protocol in 0usize..PROTOCOLS.len(),
+            ports in prop::collection::vec((any::<u16>(), any::<u16>()), 0..3),
+            v6_source in any::<bool>(),
+            v6_dest in prop::option::of(any::<bool>()),
+            interface in prop::option::of("[a-z0-9\"*]{0,18}"),
+            output_interface in prop::option::of("[a-z0-9*]{0,18}"),
+            output in any::<bool>(),
+            action in 0usize..3,
+            reject in 0usize..REJECT_TYPES.len(),
+            rate in prop::option::of(("[0-9]{0,6}", "[0-9]{0,3}")),
+            conn in "[0-9]{0,6}",
+        ) -> RuleForm {
+            let source: IpNetwork = if v6_source { "fd00::/8".parse().unwrap() } else { "10.0.0.0/8".parse().unwrap() };
+            RuleForm {
+                label: "x".into(),
+                protocol: PROTOCOLS[protocol],
+                ports: ports.into_iter().map(|(a, b)| if a == b { PortEntry::single(a) } else { PortEntry::range(a, b) }).collect(),
+                sources: vec![source],
+                destinations: v6_dest.map(|v6| if v6 { "2001:db8::/32".parse().unwrap() } else { "192.0.2.0/24".parse().unwrap() }).into_iter().collect(),
+                interface: interface.unwrap_or_default(),
+                output_interface: output_interface.unwrap_or_default(),
+                chain: if output { Chain::Output } else { Chain::Input },
+                action: [Action::Accept, Action::Drop, Action::Reject][action],
+                reject_type: REJECT_TYPES[reject],
+                rate_limit_enabled: rate.is_some(),
+                rate_limit_count: rate.as_ref().map_or_default(|r| r.0.clone()),
+                rate_limit_burst: rate.map_or_default(|r| r.1),
+                rate_limit_unit: TimeUnit::Minute,
+                connection_limit: conn,
+                ..RuleForm::default()
+            }
+        }
+    }
+
+    proptest! {
+        /// The form and the core validator never disagree: a form that passes
+        /// produces a rule the loader/apply path accepts, and a rule the core
+        /// rejects is never accepted by the form.
+        #[test]
+        fn test_form_agrees_with_core(form in any_form()) {
+            let rule = form.to_rule(uuid::Uuid::new_v4(), true, chrono::Utc::now());
+            let core_ok = rule.validate().is_ok();
+            let form_ok = form.validate().is_none();
+            if form_ok {
+                prop_assert!(core_ok, "form accepted a rule the core rejects: {:?}", rule.validate());
+            }
+            if !core_ok {
+                prop_assert!(!form_ok);
+            }
         }
     }
 }

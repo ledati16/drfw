@@ -26,8 +26,6 @@
 //! # Dry run to preview without writing files
 //! cargo run --bin stress_gen --features stress_gen -- --scenario enterprise --dry-run
 //! ```
-//!
-//! The generator automatically creates a `.sha256` checksum file alongside the JSON.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -64,7 +62,7 @@ struct Args {
     #[arg(short, long, default_value = "100")]
     count: usize,
 
-    /// Output file path (will also create .sha256 checksum)
+    /// Output file path
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -1377,19 +1375,11 @@ fn main() {
     // Serialize to JSON
     let json = serde_json::to_string_pretty(&ruleset).expect("Failed to serialize ruleset");
 
-    // Calculate checksum
-    let checksum = drfw::utils::sha256_hex(json.as_bytes());
-
     // Write JSON file
     // Safe: validated at lines 1324-1327 (exits if output is None and not dry_run)
     let output_path = args.output.as_ref().expect("output path validated above");
     std::fs::write(output_path, &json).expect("Failed to write JSON file");
     println!("Wrote: {}", output_path.display());
-
-    // Write checksum file
-    let checksum_path = output_path.with_extension("json.sha256");
-    std::fs::write(&checksum_path, &checksum).expect("Failed to write checksum file");
-    println!("Wrote: {}", checksum_path.display());
 
     // Verification
     if args.verify {

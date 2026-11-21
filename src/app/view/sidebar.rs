@@ -14,11 +14,80 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length};
 use std::sync::Arc;
 
+/// Persistent notice for a profile that could not be loaded (read-only), with
+/// the explanation and the "Start fresh" action. Empty when not read-only.
+fn read_only_notice(state: &State) -> Element<'_, Message> {
+    let theme = &state.theme;
+    let Some(issue) = &state.unreadable_profile else {
+        return column![].into();
+    };
+    container(
+        column![
+            text(&issue.reason)
+                .size(11)
+                .font(state.font_regular)
+                .color(theme.danger),
+            text(match &issue.backup {
+                Some(_) =>
+                    "A copy of the file was saved next to it (.corrupt-…). \
+                            Editing is disabled until you switch profiles or start fresh.",
+                None => "Editing is disabled until you switch profiles or start fresh.",
+            })
+            .size(11)
+            .font(state.font_regular)
+            .color(theme.fg_muted),
+            button(text("Start fresh").size(12).font(state.font_regular))
+                .on_press(Message::StartFreshProfile)
+                .padding([6, 12])
+                .style(move |_, status| danger_button(theme, status)),
+        ]
+        .spacing(6),
+    )
+    .padding(8)
+    .width(Length::Fill)
+    .style(move |_| inset_container(theme))
+    .into()
+}
+
+/// Small "INVALID" badge whose tooltip lists why the rule can't be applied.
+fn invalid_badge<'a>(state: &'a State, reasons: &'a str) -> Element<'a, Message> {
+    let theme = &state.theme;
+    tooltip(
+        container(
+            text("INVALID")
+                .size(9)
+                .font(state.font_mono)
+                .color(theme.danger)
+                .wrapping(Wrapping::None),
+        )
+        .padding([2, 6])
+        .style(move |_| container::Style {
+            border: Border {
+                radius: 4.0.into(),
+                color: theme.danger,
+                width: 1.0,
+            },
+            ..Default::default()
+        }),
+        container(
+            text(reasons)
+                .size(12)
+                .font(state.font_regular)
+                .color(theme.fg_primary),
+        )
+        .padding([6, 10])
+        .max_width(280.0)
+        .style(move |_| popup_container(theme)),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
 pub fn view_sidebar(state: &State) -> Element<'_, Message> {
     let theme = &state.theme;
 
     // 1. Profile Header (replaces branding for cleaner layout)
-    let is_dirty = state.is_profile_dirty() || state.config_dirty;
+    let is_dirty = state.profile_dirty || state.is_profile_dirty() || state.config_dirty;
 
     let profile_header = column![
         row![
@@ -31,7 +100,17 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             .padding([2, 6])
             .style(move |_| section_header_container(theme)),
             container(row![]).width(Length::Fill),
-            if is_dirty {
+            if state.unreadable_profile.is_some() {
+                text("Read-only")
+                    .size(9)
+                    .font(state.font_mono)
+                    .color(theme.danger)
+            } else if state.profile_save_error.is_some() {
+                text("Save failed")
+                    .size(9)
+                    .font(state.font_mono)
+                    .color(theme.danger)
+            } else if is_dirty {
                 text("Unsaved Changes*")
                     .size(9)
                     .font(state.font_mono)
@@ -65,6 +144,7 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
         .width(Length::Fill)
         .padding(8)
         .style(move |_, status| secondary_button(theme, status)),
+        read_only_notice(state),
         // Separator line after profile section
         container(rule::horizontal(1).style(move |_| themed_horizontal_rule(theme)))
             .padding(iced::Padding::new(0.0).top(8.0)),
@@ -179,6 +259,20 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
             .color(theme.fg_muted),
     ]
     .align_y(Alignment::Center);
+
+    // Why the ruleset can't be applied right now (cached in update())
+    let list_header: Element<'_, Message> = match &state.cached_validation_notice {
+        Some(notice) => column![
+            list_header,
+            text(notice)
+                .size(11)
+                .font(state.font_regular)
+                .color(theme.danger)
+        ]
+        .spacing(4)
+        .into(),
+        None => list_header.into(),
+    };
 
     // 5. Rule List (Scrollable)
     let rule_list: Element<'_, Message> = if filtered_rules.is_empty() {
@@ -515,6 +609,11 @@ pub fn view_sidebar(state: &State) -> Element<'_, Message> {
                 // 2. Action badge (Next to interface)
                 if let Some(action_badge_elem) = action_badge {
                     detail_items.push(action_badge_elem.into());
+                }
+
+                // Invalid-rule badge; reasons in the tooltip (cached in update())
+                if let Some(reasons) = state.cached_rule_issues.get(&rule.id) {
+                    detail_items.push(invalid_badge(state, reasons));
                 }
 
                 // 3. Spacer (Fills middle to push protocol to right)

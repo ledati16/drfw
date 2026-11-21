@@ -68,82 +68,170 @@ fn default_auto_revert_timeout() -> u64 {
     15
 }
 
-/// Saves the complete app config to disk using an atomic write pattern.
-/// 1. Writes to a temporary file.
-/// 2. Sets restrictive permissions (0o600).
-/// 3. Atomically renames to the target path.
+/// Returns the path of `config.json` (in the data directory, e.g.
+/// `~/.local/share/drfw/config.json`).
+fn config_path() -> Option<std::path::PathBuf> {
+    get_data_dir().map(|dir| dir.join("config.json"))
+}
+
+/// Saves the complete app config to disk atomically (unique temp file, mode
+/// 0600, sync, rename).
 ///
 /// # Security
 ///
 /// On Unix systems, files are created with mode 0o600 (user read/write only).
 /// On Windows, files inherit directory permissions. Users should ensure the
-/// config directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\config`
+/// data directory has appropriate ACLs: `%LOCALAPPDATA%\drfw\drfw\data`
 ///
-/// # Async
-/// Uses `tokio::fs` for non-blocking I/O to avoid blocking the event loop.
+/// # Errors
+///
+/// Returns `Err` if the config cannot be serialized or written (a full disk is
+/// reported with a readable message).
 pub async fn save_config(config: &AppConfig) -> std::io::Result<()> {
-    if let Some(mut path) = get_data_dir() {
-        let json = serde_json::to_string_pretty(config)?;
-
-        let mut temp_path = path.clone();
-        temp_path.push("config.json.tmp");
-
-        path.push("config.json");
-
-        // Create file with restrictive permissions from the start to prevent
-        // race condition where file is briefly world-readable
-        {
-            use tokio::io::AsyncWriteExt;
-
-            let mut options = tokio::fs::OpenOptions::new();
-            options.create(true).write(true).truncate(true);
-            cfg_select! {
-                unix => {
-                    options.mode(0o600); // Set permissions BEFORE any data is written
-                }
-                _ => {}
-            }
-            let mut file = options.open(&temp_path).await?;
-
-            file.write_all(json.as_bytes()).await?;
-            file.sync_all().await?; // Ensure data is flushed to physical media
-        }
-
-        // Atomic rename
-        tokio::fs::rename(temp_path, path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::StorageFull {
-                std::io::Error::new(
-                    std::io::ErrorKind::StorageFull,
-                    "Disk full: cannot save configuration. Free up space and try again.",
-                )
-            } else {
-                e
-            }
-        })?;
-    }
-    Ok(())
+    let Some(path) = config_path() else {
+        return Ok(());
+    };
+    let json = serde_json::to_vec_pretty(config)?;
+    crate::utils::write_atomic_private_async(path, json).await
 }
 
-/// Loads the app config from disk, or returns default if not found.
+/// Result of [`load_config_checked`].
+#[derive(Debug, Clone)]
+pub struct LoadedConfig {
+    /// The config to use (defaults when the file was unreadable)
+    pub config: AppConfig,
+    /// User-facing explanation when `config.json` existed but could not be
+    /// used; `None` when it loaded fine or simply did not exist.
+    pub problem: Option<String>,
+}
+
+/// Loads the app config for the GUI without ever losing the user's file.
+///
+/// - Missing file: defaults, no problem (first run).
+/// - Unreadable file (bad JSON, values from a newer version): the file is
+///   copied to `config.json.corrupt-<UTC timestamp>` (0600), defaults are used
+///   (keeping `active_profile` if it can still be read), and `problem`
+///   explains what happened. The original file is not touched; it is only
+///   replaced when the user next changes a setting.
+///
+/// # Async
+/// Uses `tokio::fs`; the backup copy runs on the blocking pool.
+pub async fn load_config_checked() -> LoadedConfig {
+    let Some(path) = config_path() else {
+        return LoadedConfig {
+            config: AppConfig::default(),
+            problem: None,
+        };
+    };
+    let json = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return LoadedConfig {
+                config: AppConfig::default(),
+                problem: None,
+            };
+        }
+        Err(e) => {
+            tracing::error!("Failed to read configuration: {e}");
+            return LoadedConfig {
+                config: AppConfig::default(),
+                problem: Some(format!(
+                    "Settings could not be read ({e}); using defaults for this session."
+                )),
+            };
+        }
+    };
+
+    match serde_json::from_slice::<AppConfig>(&json) {
+        Ok(config) => LoadedConfig {
+            config,
+            problem: None,
+        },
+        Err(e) => {
+            tracing::error!("Configuration file is unreadable: {e}");
+            let mut config = AppConfig::default();
+            if let Some(name) = salvage_active_profile(&json) {
+                config.active_profile = name;
+            }
+            let copy_path = path.clone();
+            let copy = tokio::task::spawn_blocking(move || {
+                crate::utils::preserve_unreadable_file(&copy_path)
+            })
+            .await;
+            let copy_note = match copy {
+                Ok(Ok(backup)) => format!("A copy was saved to {}.", backup.display()),
+                Ok(Err(err)) => {
+                    tracing::error!("Could not back up configuration: {err}");
+                    "A backup copy could not be made.".to_string()
+                }
+                Err(err) => {
+                    tracing::error!("Could not back up configuration: {err}");
+                    "A backup copy could not be made.".to_string()
+                }
+            };
+            LoadedConfig {
+                config,
+                problem: Some(format!(
+                    "Settings file could not be read ({e}). {copy_note} Default settings are \
+                     in use; the file is only replaced when you change a setting."
+                )),
+            }
+        }
+    }
+}
+
+/// Reads `active_profile` from an otherwise unreadable config, so a broken
+/// setting elsewhere does not also switch the user to another profile.
+fn salvage_active_profile(json: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let name = value.get("active_profile")?.as_str()?;
+    crate::core::profiles::validate_profile_name(name).ok()?;
+    Some(name.to_string())
+}
+
+/// Loads the app config from disk, or returns defaults if it is missing or
+/// unreadable (used by the CLI, which never writes the config).
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking I/O to avoid blocking the event loop.
 pub async fn load_config() -> AppConfig {
-    if let Some(mut path) = get_data_dir() {
-        path.push("config.json");
-        if let Ok(json) = tokio::fs::read_to_string(&path).await
-            && let Ok(config) = serde_json::from_str::<AppConfig>(&json)
-        {
-            return config;
+    if let Some(path) = config_path()
+        && let Ok(json) = tokio::fs::read(&path).await
+    {
+        match serde_json::from_slice::<AppConfig>(&json) {
+            Ok(config) => return config,
+            Err(e) => {
+                tracing::warn!("Configuration file is unreadable, using defaults: {e}");
+                let mut config = AppConfig::default();
+                if let Some(name) = salvage_active_profile(&json) {
+                    config.active_profile = name;
+                }
+                return config;
+            }
         }
     }
     AppConfig::default()
 }
 
-/// Synchronous wrapper for `load_config()` for use during startup initialization.
-///
-/// This blocks the current thread and should only be used in `State::new()` where
-/// async initialization isn't possible. Everywhere else should use async `load_config()`.
-pub fn load_config_blocking() -> AppConfig {
-    crate::utils::block_on_async(load_config())
+/// Synchronous wrapper for [`load_config_checked`] for use during startup
+/// initialization (`State::new()`).
+pub fn load_config_checked_blocking() -> LoadedConfig {
+    crate::utils::block_on_async(load_config_checked())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_salvage_active_profile() {
+        let json = br#"{ "active_profile": "work", "theme_choice": "FromTheFuture" }"#;
+        assert!(serde_json::from_slice::<AppConfig>(json).is_err());
+        assert_eq!(salvage_active_profile(json), Some("work".to_string()));
+        assert_eq!(
+            salvage_active_profile(br#"{ "active_profile": "../x" }"#),
+            None
+        );
+        assert_eq!(salvage_active_profile(b"{ broken"), None);
+    }
 }

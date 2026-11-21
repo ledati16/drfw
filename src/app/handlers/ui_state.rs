@@ -363,12 +363,14 @@ pub(crate) async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
         return Vec::new();
     };
 
+    // Split on raw bytes: a damaged line (invalid UTF-8, truncated JSON) is
+    // skipped instead of ending the whole read.
     let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
+    let mut lines = reader.split(b'\n');
     let mut events = Vec::new();
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        if let Ok(event) = serde_json::from_str::<crate::audit::AuditEvent>(&line) {
+    while let Ok(Some(line)) = lines.next_segment().await {
+        if let Ok(event) = serde_json::from_slice::<crate::audit::AuditEvent>(&line) {
             events.push(event);
         }
     }
@@ -381,6 +383,57 @@ pub(crate) async fn load_audit_entries() -> Vec<crate::audit::AuditEvent> {
     // Most recent first
     events.reverse();
     events
+}
+
+/// Upper bound for flushing saves when the window closes, so a hung disk
+/// cannot keep the app from closing.
+const CLOSE_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Handles a window close request: writes pending profile and config changes
+/// (bounded by [`CLOSE_FLUSH_TIMEOUT`]), then exits via `Message::CloseFlushed`.
+///
+/// The debounced autosave would otherwise lose the last second of edits.
+/// A read-only (unreadable) profile is never written.
+pub(crate) fn handle_close_requested(state: &mut State, _id: iced::window::Id) -> Task<Message> {
+    if state.closing {
+        return Task::none();
+    }
+    state.closing = true;
+
+    // Re-save while a save is in flight too: the profile save lock orders it
+    // after the running one, so the newest snapshot always lands last.
+    let profile = ((state.profile_dirty || state.profile_save_in_flight)
+        && state.unreadable_profile.is_none())
+    .then(|| (state.active_profile_name.clone(), state.ruleset.clone()));
+    let config = state.config_dirty.then(|| state.config_snapshot());
+
+    if profile.is_none() && config.is_none() {
+        return Task::done(Message::CloseFlushed);
+    }
+
+    Task::perform(
+        async move {
+            let flush = async {
+                if let Some((name, ruleset)) = profile
+                    && let Err(e) = crate::core::profiles::save_profile(&name, &ruleset).await
+                {
+                    tracing::error!("Failed to save profile '{name}' on close: {e}");
+                }
+                if let Some(config) = config
+                    && let Err(e) = crate::config::save_config(&config).await
+                {
+                    tracing::error!("Failed to save configuration on close: {e}");
+                }
+            };
+            if tokio::time::timeout(CLOSE_FLUSH_TIMEOUT, flush)
+                .await
+                .is_err()
+            {
+                tracing::error!("Saving on close timed out; exiting anyway");
+            }
+        },
+        |()| Message::CloseFlushed,
+    )
 }
 
 /// Handles keyboard events (shortcuts)
@@ -475,6 +528,16 @@ mod tests {
         let mut state = create_test_state();
         handle_tab_changed(&mut state, WorkspaceTab::Settings);
         assert_eq!(state.active_tab, WorkspaceTab::Settings);
+    }
+
+    #[test]
+    fn test_close_without_pending_changes_exits_immediately() {
+        let mut state = create_test_state();
+        let _ = handle_close_requested(&mut state, iced::window::Id::unique());
+        assert!(state.closing);
+        // A second request while closing is ignored
+        let _ = handle_close_requested(&mut state, iced::window::Id::unique());
+        assert!(state.closing);
     }
 
     #[test]

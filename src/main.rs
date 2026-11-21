@@ -486,7 +486,8 @@ fn launch_gui() -> ExitCode {
     // Set up logging to file
     if let Some(mut log_path) = crate::utils::get_state_dir() {
         log_path.push("drfw.log");
-        if let Ok(file) = std::fs::File::create(log_path) {
+        // 0600, appended (not truncated per launch), rotated to drfw.log.1 past 5 MiB
+        if let Ok(file) = crate::utils::open_private_log(&log_path, 5 * 1024 * 1024) {
             tracing_subscriber::fmt().with_writer(file).init();
         } else {
             tracing_subscriber::fmt::init();
@@ -499,6 +500,8 @@ fn launch_gui() -> ExitCode {
         .subscription(app::State::subscription)
         .window(iced::window::Settings {
             size: Size::new(1000.0, 700.0),
+            // Close requests are handled in `State::update` (pending saves are flushed first)
+            exit_on_close_request: false,
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: "drfw".to_string(),
                 ..Default::default()

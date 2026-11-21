@@ -45,6 +45,14 @@ pub fn view_rule_form<'a>(
     let connection_limit_error = errors.and_then(|e| e.connection_limit.as_ref());
     let reject_type_error = errors.and_then(|e| e.reject_type.as_ref());
     let output_interface_error = errors.and_then(|e| e.output_interface.as_ref());
+    let interface_error = errors.and_then(|e| e.interface.as_ref());
+    // Errors without a visible field: label/tags/rule limit, and an output
+    // interface on a rule loaded from disk while Server Mode (and its field) is off
+    let general_error = errors.and_then(|e| e.general.as_ref()).or(if server_mode {
+        None
+    } else {
+        output_interface_error
+    });
 
     // Summary strings for multi-value fields
     let ports_summary = helper_modals::ports_summary(&form.ports);
@@ -184,7 +192,7 @@ pub fn view_rule_form<'a>(
                     form,
                     interface_combo,
                     output_interface_combo,
-                    output_interface_error,
+                    (interface_error, output_interface_error),
                     theme,
                     regular_font,
                     server_mode,
@@ -254,6 +262,12 @@ pub fn view_rule_form<'a>(
             regular_font,
             mono_font,
         ),
+        // Problems without their own field
+        if let Some(err) = general_error {
+            Element::from(text(err).size(12).font(regular_font).color(theme.danger))
+        } else {
+            Element::from(Space::new())
+        },
         // Footer Actions
         row![
             button(text("Cancel").size(14).font(regular_font))
@@ -352,7 +366,7 @@ fn view_interface_fields<'a>(
     form: &'a RuleForm,
     interface_combo: &'a combo_box::State<String>,
     output_interface_combo: &'a combo_box::State<String>,
-    output_interface_error: Option<&'a String>,
+    (interface_error, output_interface_error): (Option<&'a String>, Option<&'a String>),
     theme: &'a crate::theme::AppTheme,
     regular_font: iced::Font,
     server_mode: bool,
@@ -363,7 +377,7 @@ fn view_interface_fields<'a>(
         "INTERFACE"
     };
 
-    let input_iface_col = column![
+    let mut input_iface_col = column![
         container(
             text(input_label)
                 .size(11)
@@ -391,6 +405,11 @@ fn view_interface_fields<'a>(
     ]
     .spacing(4)
     .width(Length::Fill);
+
+    if let Some(err) = interface_error {
+        input_iface_col =
+            input_iface_col.push(text(err).size(12).font(regular_font).color(theme.danger));
+    }
 
     if server_mode {
         let mut output_iface_col = column![

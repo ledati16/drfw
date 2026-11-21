@@ -11,6 +11,7 @@
 //! - [`error`]: Error types for firewall operations
 //! - [`profiles`]: Firewall profile management
 //! - [`rule_constraints`]: Business rules for valid field combinations
+//! - [`validate`]: Rule and ruleset validation (shared by the form, loader and apply)
 
 pub mod apply_guard;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod nft_text;
 pub mod profiles;
 pub mod rule_constraints;
 pub mod system_config;
+pub mod validate;
 pub mod verify;
 
 #[cfg(test)]

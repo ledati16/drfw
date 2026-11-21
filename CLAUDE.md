@@ -257,6 +257,21 @@ fn bad_sanitize(input: &str) -> String {
 - **Enforce limits early:** Interface names (15 chars), labels (64 chars), ports (1-65535)
 - **Validate at boundaries:** Parse user input, files, IPC immediately—not in business logic
 
+### Rule Validation (single source of truth)
+`src/core/validate.rs` decides what a valid rule/ruleset is: `Rule::validate()`,
+`AdvancedSecuritySettings::validate()`, `FirewallRuleset::validate()` (full report) and
+`FirewallRuleset::validate_for_apply()` (only what blocks applying).
+
+- **The form delegates:** `RuleForm::validate` builds the candidate `Rule` and calls
+  `Rule::validate`; it only adds text-input errors (unparseable numbers, rate limit
+  enabled without a rate). Never add a rule check to the form alone.
+- **Loading never drops data:** invalid rules stay in the profile and are flagged in the
+  sidebar (cached in `update_cached_text()`); duplicate ids are regenerated and labels/tags
+  sanitized by `FirewallRuleset::normalize_loaded()`.
+- **Applying is refused** while an applied rule (enabled; OUTPUT rules only in Server
+  Mode) is invalid or a ruleset-level issue exists. Every path that sends a ruleset to the
+  kernel or the system config must call `validate_for_apply()` first.
+
 ### Command Injection Prevention
 ```rust
 // ✅ Safe: Direct argument passing
@@ -293,7 +308,22 @@ temp.as_file().sync_all()?;  // Force to disk
 temp.persist(&final_path)?;   // Atomic rename
 ```
 
+Use `utils::write_atomic_private[_async]()` (unique temp file, 0600, sync, rename) rather
+than a fixed `*.tmp` name: two overlapping saves must never share a temp file.
+
 **Required for:** Config files, profiles, snapshots, audit logs
+
+**Never replace user data silently:**
+- Creating or renaming a profile never overwrites an existing one (names compared
+  case-insensitively; `persist_noclobber`, `renameat2(RENAME_NOREPLACE)` or link+unlink).
+- A profile or `config.json` that exists but can't be read (corrupt, newer `version`, too
+  large) is copied to `<file>.corrupt-<UTC timestamp>` (0600) before any fallback. The GUI
+  opens such a profile read-only (no edits, no autosave) until the user switches profile or
+  chooses "Start fresh"; a missing file is the normal default path.
+- Profiles carry `"version"` (`PROFILE_FORMAT_VERSION`, files without it are version 1);
+  bump it when older builds would misread new files.
+- There are no profile checksums (the old `.sha256` files are removed on save/startup): a
+  checksum next to the data protects nothing.
 
 **Windows note:** Document ACL requirements since Unix permissions don't apply
 
@@ -410,6 +440,8 @@ self.modify_state(cached_value);
 | `src/core/verify.rs` | Unit tests for error parsing functions | `parse_nft_errors()`, `VerifyResult` constructors |
 | `src/core/nft_json.rs` | Module tests for snapshot and checksum functions | Snapshot validation, checksums, emergency ruleset |
 | `tests/integration_tests.rs` | End-to-end tests with mock nft, CLI operations, profiles | **Verification flow** (valid/empty/multi-rule), CLI exports, profile operations, audit logging |
+| `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
+| `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
 | `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
 | `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
@@ -724,6 +756,16 @@ if self.config_dirty {
 }
 ```
 
+**Honest autosave (profiles, `handlers/profiles.rs`):**
+- Clear `profile_dirty` only when the save result is `Ok` and the ruleset didn't change
+  meanwhile; a failure shows a banner, keeps the flag and retries after a delay.
+- Async results carry `profile_generation` / `switch_request`; drop results for a profile
+  that is no longer active.
+- Autosave pauses while the "unsaved changes" dialog is open (so Discard discards), during
+  a rename, and while the profile is read-only. "Save & Switch" aborts if the save fails.
+- On window close (`exit_on_close_request: false`) pending profile/config saves are
+  flushed with a bounded wait before exiting.
+
 ### Profiling Before Optimizing
 1. Use real workloads (100+ rules, not 5)
 2. Build with `--release` for accurate measurements
@@ -780,13 +822,17 @@ Optimize for common traffic patterns:
 - **Format:** JSON Lines (one event per line)
 - **Location:** `~/.local/state/drfw/audit.log` (XDG compliant)
 - **Permissions:** `0o600` on creation (user read/write only)
+- **One write per line:** event + newline in a single `write` (lines can't interleave);
+  the reader skips damaged lines instead of stopping
+- **No per-keystroke events:** text and slider settings go through `schedule_slider_log()`
 - **Contents:** Timestamps (UTC), event type, success/failure, error messages
 - **Exclude:** Passwords, API keys, private network details
 
 ### Events to Log
 - Rule applications (success/failure, rule count)
 - Snapshot operations (save/restore)
-- Profile operations (create/delete/switch)
+- Profile operations (create/delete/rename/switch), logged with their **real** outcome
+  (from the async result, never optimistically before the operation ran)
 - Settings changes
 - Auto-revert events (confirmed/timed out)
 
@@ -939,19 +985,20 @@ fn handle_message(&mut self) -> Task<Message> {
 ## Appendix: File Permission Reference
 
 **Unix file modes:**
-- `0o600` - User read/write (configs, audit logs, profiles)
-- `0o700` - User read/write/execute (directories)
+- `0o600` - User read/write (configs, audit logs, profiles, `drfw.log`)
+- `0o700` - User read/write/execute (directories; `ensure_dirs()` also tightens existing ones)
 
 **Required locations:**
 - Audit log: `~/.local/state/drfw/audit.log` (0o600)
-- Config: `~/.config/drfw/config.json` (0o600)
-- Profiles: `~/.local/share/drfw/profiles/*.json` (0o600)
+- App log: `~/.local/state/drfw/drfw.log` (0o600, appended, rotated to `drfw.log.1` past 5 MiB)
+- Config: `~/.local/share/drfw/config.json` (0o600)
+- Profiles: `~/.local/share/drfw/profiles/*.json` (0o600; directory 0o700)
 - Snapshots: `~/.local/state/drfw/snapshots/*.json` (0o600)
 
 **Windows:** Document that users should configure ACLs on data directories (`%LOCALAPPDATA%\drfw\drfw\data`).
 
 ---
 
-**Last Updated:** 2026-11-20 (Toolchain pinned to Rust 1.100 via rust-toolchain.toml; cargo-deny added)
+**Last Updated:** 2026-11-20 (Central rule validator, no-loss profile/config loading, profile format version, checksums removed, honest autosave)
 **DRFW Version:** 0.9.0
 **Iced Version:** 0.14

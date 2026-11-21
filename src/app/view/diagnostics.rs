@@ -235,6 +235,14 @@ pub fn format_audit_event<'a>(
                 format_error_for_display(event.error.as_deref())
             ),
         ),
+        (EventType::ProfileCreateFailed, _) => (
+            theme.danger,
+            format!(
+                "Failed to create profile '{}': {}",
+                event.details["profile_name"].as_str().unwrap_or(""),
+                format_error_for_display(event.error.as_deref())
+            ),
+        ),
         (EventType::ProfileRenameFailed, _) => (
             theme.danger,
             format!(

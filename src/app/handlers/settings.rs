@@ -310,14 +310,9 @@ pub(crate) fn handle_log_prefix_changed(state: &mut State, prefix: &str) -> Task
                 .log_prefix
                 .clone_from(&sanitized);
             state.mark_profile_dirty();
-            let enable_event_log = state.enable_event_log;
-            let desc = format!("Log prefix changed to '{sanitized}'");
-            Task::perform(
-                async move {
-                    crate::audit::log_settings_saved(enable_event_log, &desc).await;
-                },
-                |()| Message::AuditLogWritten,
-            )
+            // Debounced like the sliders: one audit entry per edit, not per keystroke
+            state.schedule_slider_log(format!("Log prefix changed to '{sanitized}'"));
+            Task::none()
         }
         Err(e) => {
             // Invalid prefix - don't save, just log the error
@@ -387,6 +382,18 @@ pub(crate) fn handle_check_config_save(state: &mut State) -> Task<Message> {
     state.save_config()
 }
 
+/// Handles the result of a config save: a failure is shown in a banner (the
+/// next settings change tries again).
+pub(crate) fn handle_config_saved(state: &mut State, result: Result<(), String>) {
+    if let Err(e) = result {
+        tracing::error!("Failed to save configuration: {e}");
+        state.push_banner(
+            format!("Could not save settings: {e}"),
+            crate::app::BannerSeverity::Error,
+        );
+    }
+}
+
 /// Handles regular font changed
 pub(crate) fn handle_regular_font_changed(
     state: &mut State,
@@ -444,6 +451,14 @@ mod tests {
         assert!(state.ruleset.advanced_security.block_forwarding);
         let _ = handle_toggle_block_forwarding(&mut state, false);
         assert!(!state.ruleset.advanced_security.block_forwarding);
+    }
+
+    #[test]
+    fn test_log_prefix_change_is_debounced() {
+        let mut state = create_test_state();
+        let _ = handle_log_prefix_changed(&mut state, "MY-DROP: ");
+        assert_eq!(state.ruleset.advanced_security.log_prefix, "MY-DROP: ");
+        assert!(state.pending_slider_log.is_some());
     }
 
     #[test]

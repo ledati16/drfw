@@ -19,7 +19,6 @@ use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
 
 /// In-app notification banner severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +123,43 @@ pub struct State {
     pub cached_audit_entries: Vec<crate::audit::AuditEvent>,
     /// Tracks if audit log needs refresh (dirty flag)
     pub audit_log_dirty: bool,
+    /// Set when the active profile exists but could not be loaded. The profile
+    /// is then open read-only (empty, edits and autosave blocked) until the user
+    /// switches profile or chooses "Start fresh".
+    pub unreadable_profile: Option<crate::core::profiles::UnreadableProfile>,
+    /// Bumped whenever the active profile is replaced (switch, create, rename,
+    /// start fresh); async save results from an older generation are ignored.
+    pub profile_generation: u64,
+    /// Id of the latest profile switch request; older load results are ignored.
+    pub switch_request: u64,
+    /// A profile save task is running (no second autosave is started meanwhile).
+    pub profile_save_in_flight: bool,
+    /// A rename task is running (autosave paused so it can't recreate the old file).
+    pub profile_rename_in_flight: bool,
+    /// Last profile save error, shown in the sidebar until a save succeeds.
+    pub profile_save_error: Option<String>,
+    /// Validation issues per rule id, recomputed whenever the ruleset changes
+    /// (the sidebar flags these rules; never computed in `view()`).
+    pub cached_rule_issues: std::collections::HashMap<uuid::Uuid, String>,
+    /// One-line notice when the ruleset cannot be applied as is (invalid
+    /// enabled rules or ruleset-level issues), recomputed with the cache above.
+    pub cached_validation_notice: Option<String>,
+    /// The window is closing; pending saves are being flushed.
+    pub closing: bool,
+}
+
+/// Result of an async profile save (autosave, "Save & Switch", close flush).
+#[derive(Debug, Clone)]
+pub struct ProfileSaveOutcome {
+    /// `State::profile_generation` when the save was started
+    pub generation: u64,
+    /// Profile that was written
+    pub name: String,
+    /// Exactly what was written
+    pub snapshot: FirewallRuleset,
+    /// Profile to switch to after a successful save ("Save & Switch")
+    pub then_switch_to: Option<String>,
+    pub result: Result<(), String>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +224,10 @@ pub struct ProfileManagerState {
     pub creating_new: bool,
     pub creating_empty: bool, // true = empty profile, false = from current rules
     pub new_name_input: String,
+    /// Why `new_name_input` can't be used (computed on input, not in `view()`)
+    pub new_name_error: Option<String>,
+    /// Why the name being typed in the rename field can't be used
+    pub rename_error: Option<String>,
 }
 
 /// Warning dialogs shown when enabling potentially disruptive features.
@@ -385,7 +425,14 @@ pub enum Message {
 
     // Profile messages
     ProfileSelected(String),
-    ProfileSwitched(String, FirewallRuleset),
+    /// Profile load finished: (switch request id, name, loaded ruleset or why not)
+    ProfileSwitched(
+        u64,
+        String,
+        Result<FirewallRuleset, crate::core::profiles::UnreadableProfile>,
+    ),
+    /// Profile creation finished: (name, created ruleset, new profile list or error)
+    ProfileCreated(String, Box<FirewallRuleset>, Result<Vec<String>, String>),
     SaveProfileAs(String),
     StartCreatingNewProfile,
     CreateEmptyProfile,
@@ -395,18 +442,20 @@ pub enum Message {
     CloseProfileManager,
     DeleteProfileRequested(String),
     ConfirmDeleteProfile,
-    ProfileDeleted(Result<Vec<String>, String>),
+    /// (deleted name, new profile list or error)
+    ProfileDeleted(String, Result<Vec<String>, String>),
     CancelDeleteProfile,
     RenameProfileRequested(String),
     ProfileNewNameChanged(String),
     ConfirmRenameProfile,
-    ProfileRenamed(Result<Vec<String>, String>),
+    /// (old name, new name, new profile list or error)
+    ProfileRenamed(String, String, Result<Vec<String>, String>),
     CancelRenameProfile,
     ConfirmProfileSwitch,
     DiscardProfileSwitch,
     CancelProfileSwitch,
-    ProfileSwitchAfterSave(String),
-    ProfileListUpdated(Vec<String>),
+    /// Replace an unreadable profile with an empty one (it was copied aside)
+    StartFreshProfile,
     /// Periodic tick to prune expired banners
     PruneBanners,
     /// Dismiss a specific banner (click to dismiss)
@@ -415,8 +464,14 @@ pub enum Message {
     CheckConfigSave,
     /// Check if profile should be saved (debounced)
     CheckProfileSave,
-    /// Disk profile loaded for cache refresh
-    DiskProfileLoaded(Option<FirewallRuleset>),
+    /// A profile save finished
+    ProfileSaved(Box<ProfileSaveOutcome>),
+    /// A config save finished
+    ConfigSaved(Result<(), String>),
+    /// The window manager asked to close the window
+    CloseRequested(iced::window::Id),
+    /// Pending saves were flushed (or timed out): exit
+    CloseFlushed,
     /// No-op message for async operations that don't need a result
     Noop,
     /// Copy a preview line to clipboard (right-click on line)
@@ -431,7 +486,10 @@ impl State {
     }
 
     pub fn new() -> (Self, Task<Message>) {
-        let config = crate::config::load_config_blocking();
+        let crate::config::LoadedConfig {
+            config,
+            problem: config_problem,
+        } = crate::config::load_config_checked_blocking();
         let current_theme = config.theme_choice;
         let mut regular_font_choice = config.regular_font;
         let mut mono_font_choice = config.mono_font;
@@ -458,8 +516,13 @@ impl State {
             audit.rotate_if_needed();
         }
 
-        let ruleset = crate::core::profiles::load_profile_blocking(&active_profile_name)
-            .unwrap_or_else(|_| FirewallRuleset::default());
+        // Never fall back silently: an unreadable profile is copied aside and
+        // opened read-only, so no autosave can overwrite the user's file.
+        let (ruleset, unreadable_profile) =
+            match crate::core::profiles::load_profile_or_preserve_blocking(&active_profile_name) {
+                Ok(ruleset) => (ruleset, None),
+                Err(issue) => (FirewallRuleset::default(), Some(issue)),
+            };
 
         let available_profiles = crate::core::profiles::list_profiles_blocking()
             .unwrap_or_else(|_| vec![crate::core::profiles::DEFAULT_PROFILE_NAME.to_string()]);
@@ -541,10 +604,27 @@ impl State {
             pending_profile_switch: None,
             cached_audit_entries: Vec::new(),
             audit_log_dirty: true, // Load on first open
+            unreadable_profile,
+            profile_generation: 0,
+            switch_request: 0,
+            profile_save_in_flight: false,
+            profile_rename_in_flight: false,
+            profile_save_error: None,
+            cached_rule_issues: std::collections::HashMap::new(),
+            cached_validation_notice: None,
+            closing: false,
         };
 
         // Initialize all caches properly via centralized logic
         state.update_cached_text();
+
+        if let Some(issue) = &state.unreadable_profile {
+            let message = issue.user_message();
+            state.push_banner(message, BannerSeverity::Error);
+        }
+        if let Some(problem) = config_problem {
+            state.push_banner(problem, BannerSeverity::Error);
+        }
 
         (state, Task::none())
     }
@@ -633,6 +713,15 @@ impl State {
             pending_profile_switch: None,
             cached_audit_entries: Vec::new(),
             audit_log_dirty: false,
+            unreadable_profile: None,
+            profile_generation: 0,
+            switch_request: 0,
+            profile_save_in_flight: false,
+            profile_rename_in_flight: false,
+            profile_save_error: None,
+            cached_rule_issues: std::collections::HashMap::new(),
+            cached_validation_notice: None,
+            closing: false,
         };
 
         state.update_cached_text();
@@ -654,6 +743,18 @@ impl State {
             BannerSeverity::Error => 10,
         };
 
+        let message = message.into();
+
+        // Same message again (e.g. repeated blocked edits): restart its timer
+        // instead of stacking duplicates.
+        if let Some(last) = self.banners.back_mut()
+            && last.message == message
+            && last.severity == severity
+        {
+            last.created_at = std::time::Instant::now();
+            return;
+        }
+
         // Remove oldest if at capacity, sparing persistent (never-expiring) banners
         while self.banners.len() >= 2 {
             match self
@@ -671,7 +772,7 @@ impl State {
         }
 
         self.banners.push_back(NotificationBanner {
-            message: message.into(),
+            message,
             severity,
             created_at: std::time::Instant::now(),
             duration_secs,
@@ -740,7 +841,28 @@ impl State {
             self.rule_search_lowercase.clear();
         }
 
+        self.update_validation_cache();
         self.update_filter_cache();
+    }
+
+    /// Recomputes which rules are invalid (and why) for the sidebar flags and
+    /// the "cannot apply" notice. Called on every ruleset change, never in `view()`.
+    fn update_validation_cache(&mut self) {
+        self.cached_rule_issues.clear();
+        self.cached_validation_notice = None;
+        let Err(report) = self.ruleset.validate() else {
+            return;
+        };
+        for problem in &report.rules {
+            let text = problem
+                .issues
+                .iter()
+                .map(|i| i.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.cached_rule_issues.insert(problem.rule_id, text);
+        }
+        self.cached_validation_notice = report.blocking_summary();
     }
 
     fn update_filter_cache(&mut self) {
@@ -840,8 +962,9 @@ impl State {
         )
     }
 
-    fn save_config(&self) -> Task<Message> {
-        let config = crate::config::AppConfig {
+    /// The config as it should be written to disk now.
+    fn config_snapshot(&self) -> crate::config::AppConfig {
+        crate::config::AppConfig {
             active_profile: self.active_profile_name.clone(),
             theme_choice: self.current_theme,
             regular_font: self.regular_font_choice.clone(),
@@ -852,50 +975,39 @@ impl State {
             auto_revert_timeout_secs: self.auto_revert_timeout_secs,
             enable_event_log: self.enable_event_log,
             reduced_colors: self.reduced_colors,
-        };
-
-        Task::perform(
-            async move {
-                if let Err(e) = crate::config::save_config(&config).await {
-                    error!("Failed to save configuration: {e}");
-                }
-            },
-            |()| Message::Noop,
-        )
+        }
     }
 
-    fn save_profile(&self) -> Task<Message> {
-        let profile_name = self.active_profile_name.clone();
-        let ruleset = self.ruleset.clone();
+    fn save_config(&self) -> Task<Message> {
+        let config = self.config_snapshot();
 
         Task::perform(
             async move {
-                if let Err(e) = crate::core::profiles::save_profile(&profile_name, &ruleset).await {
-                    error!("Failed to save profile: {e}");
-                }
-            },
-            |()| Message::Noop,
-        )
-    }
-
-    fn refresh_disk_profile_cache(&mut self) -> Task<Message> {
-        let profile_name = self.active_profile_name.clone();
-
-        Task::perform(
-            async move {
-                crate::core::profiles::load_profile(&profile_name)
+                crate::config::save_config(&config)
                     .await
-                    .ok()
+                    .map_err(|e| e.to_string())
             },
-            Message::DiskProfileLoaded,
+            Message::ConfigSaved,
         )
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // An unreadable profile is open read-only: refuse edits (and applying
+        // its placeholder empty ruleset) instead of silently losing them.
+        if self.unreadable_profile.is_some() && handlers::edits_profile(&message) {
+            self.push_banner(
+                "This profile could not be loaded and is read-only. Switch profiles, \
+                 or choose \"Start fresh\" in the sidebar.",
+                BannerSeverity::Warning,
+            );
+            return Task::none();
+        }
+
         if handlers::is_ruleset_edit(&message) && handlers::edits_locked(self) {
             handlers::handle_edit_while_locked(self);
             return Task::none();
         }
+
         match message {
             // Rules domain
             Message::AddRuleClicked => handlers::handle_add_rule_clicked(self),
@@ -1092,13 +1204,14 @@ impl State {
             }
 
             Message::ProfileSelected(name) => return handlers::handle_profile_selected(self, name),
-            Message::ProfileSwitched(name, ruleset) => {
-                return handlers::handle_profile_switched(self, name, ruleset);
+            Message::ProfileSwitched(request, name, result) => {
+                return handlers::handle_profile_switched(self, request, name, result);
             }
             Message::SaveProfileAs(name) => return handlers::handle_save_profile_as(self, name),
-            Message::ProfileListUpdated(profiles) => {
-                handlers::handle_profile_list_updated(self, profiles);
+            Message::ProfileCreated(name, ruleset, result) => {
+                return handlers::handle_profile_created(self, name, *ruleset, result);
             }
+            Message::StartFreshProfile => handlers::handle_start_fresh_profile(self),
             Message::StartCreatingNewProfile => handlers::handle_start_creating_new_profile(self),
             Message::CreateEmptyProfile => handlers::handle_create_empty_profile(self),
             Message::NewProfileNameChanged(name) => {
@@ -1111,8 +1224,8 @@ impl State {
                 handlers::handle_delete_profile_requested(self, name);
             }
             Message::ConfirmDeleteProfile => return handlers::handle_confirm_delete_profile(self),
-            Message::ProfileDeleted(result) => {
-                return handlers::handle_profile_deleted(self, result);
+            Message::ProfileDeleted(name, result) => {
+                return handlers::handle_profile_deleted(self, name, result);
             }
             Message::CancelDeleteProfile => handlers::handle_cancel_delete_profile(self),
             Message::RenameProfileRequested(name) => {
@@ -1122,23 +1235,23 @@ impl State {
                 handlers::handle_profile_new_name_changed(self, new_name);
             }
             Message::ConfirmRenameProfile => return handlers::handle_confirm_rename_profile(self),
-            Message::ProfileRenamed(result) => {
-                return handlers::handle_profile_renamed(self, result);
+            Message::ProfileRenamed(old, new, result) => {
+                return handlers::handle_profile_renamed(self, old, new, result);
             }
             Message::CancelRenameProfile => handlers::handle_cancel_rename_profile(self),
             Message::ConfirmProfileSwitch => return handlers::handle_confirm_profile_switch(self),
             Message::DiscardProfileSwitch => return handlers::handle_discard_profile_switch(self),
             Message::CancelProfileSwitch => handlers::handle_cancel_profile_switch(self),
-            Message::ProfileSwitchAfterSave(name) => {
-                return handlers::handle_profile_switch_after_save(self, name);
-            }
             Message::PruneBanners => handlers::handle_prune_banners(self),
             Message::DismissBanner(index) => handlers::handle_dismiss_banner(self, index),
             Message::CheckConfigSave => return handlers::handle_check_config_save(self),
             Message::CheckProfileSave => return handlers::handle_check_profile_save(self),
-            Message::DiskProfileLoaded(profile) => {
-                handlers::handle_disk_profile_loaded(self, profile);
+            Message::ProfileSaved(outcome) => {
+                return handlers::handle_profile_saved(self, *outcome);
             }
+            Message::ConfigSaved(result) => handlers::handle_config_saved(self, result),
+            Message::CloseRequested(id) => return handlers::handle_close_requested(self, id),
+            Message::CloseFlushed => return iced::exit(),
             Message::Noop => {
                 // No-op for async operations that don't need handling
             }
@@ -1159,6 +1272,8 @@ impl State {
                 _ => None,
             })
             .map(Message::EventOccurred),
+            // Window close: flush pending saves first (exit_on_close_request is off)
+            iced::window::close_requests().map(Message::CloseRequested),
             match self.status {
                 AppStatus::PendingConfirmation { .. } => {
                     // The number changes once per second; so does the bar

@@ -12,7 +12,8 @@ use crate::audit;
 use crate::command::{
     AddRuleCommand, DeleteRuleCommand, EditRuleCommand, ReorderRuleCommand, ToggleRuleCommand,
 };
-use crate::core::firewall::{Chain, Protocol, Rule};
+use crate::core::firewall::{Chain, MAX_RULES, Protocol};
+use crate::core::rule_constraints::{protocol_supports_ports, reject_type_valid_for_protocol};
 use crate::validators;
 use chrono::Utc;
 use iced::Task;
@@ -28,57 +29,10 @@ pub(crate) fn handle_add_rule_clicked(state: &mut State) {
 /// Handles opening the "Edit Rule" form
 pub(crate) fn handle_edit_rule_clicked(state: &mut State, id: Uuid) {
     if let Some(rule) = state.ruleset.rules.iter().find(|r| r.id == id) {
-        // Create form from existing rule
-        let has_advanced = !rule.destinations.is_empty()
-            || !matches!(rule.action, crate::core::firewall::Action::Accept)
-            || rule.rate_limit.is_some()
-            || rule.connection_limit > 0
-            || rule.output_interface.is_some()
-            || !matches!(rule.reject_type, crate::core::firewall::RejectType::Default)
-            || rule.log_enabled;
-
-        state.rule_form = Some(RuleForm {
-            id: Some(rule.id),
-            label: rule.label.clone(),
-            protocol: rule.protocol,
-            // Multi-value fields - clone directly
-            ports: rule.ports.clone(),
-            sources: rule.sources.clone(),
-            destinations: rule.destinations.clone(),
-            tags: rule.tags.clone(),
-            // Single-value fields
-            interface: rule.interface.clone().unwrap_or_default(),
-            output_interface: rule.output_interface.clone().unwrap_or_default(),
-            chain: rule.chain,
-            action: rule.action,
-            reject_type: rule.reject_type,
-            // Rate limiting
-            rate_limit_enabled: rule.rate_limit.is_some(),
-            rate_limit_count: rule
-                .rate_limit
-                .as_ref()
-                .map_or_else(String::new, |rl| rl.count.to_string()),
-            rate_limit_unit: rule
-                .rate_limit
-                .as_ref()
-                .map_or(crate::core::firewall::TimeUnit::Second, |rl| rl.unit),
-            rate_limit_burst: rule
-                .rate_limit
-                .as_ref()
-                .and_then(|rl| rl.burst)
-                .map_or_else(String::new, |b| b.to_string()),
-            // Connection limiting
-            connection_limit: if rule.connection_limit > 0 {
-                rule.connection_limit.to_string()
-            } else {
-                String::new()
-            },
-            // Per-rule logging
-            log_enabled: rule.log_enabled,
-            // UI state
-            show_advanced: has_advanced,
-        });
-        state.form_errors = None;
+        let form = RuleForm::from_rule(rule);
+        // Show why a loaded rule is invalid right away
+        state.form_errors = form.validate();
+        state.rule_form = Some(form);
     }
 }
 
@@ -105,6 +59,18 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             state.form_errors = Some(errs);
             return Task::none();
         }
+        let is_new = form_ref
+            .id
+            .is_none_or(|id| !state.ruleset.rules.iter().any(|r| r.id == id));
+        if is_new && state.ruleset.rules.len() >= MAX_RULES {
+            state.form_errors = Some(crate::app::FormErrors {
+                general: Some(format!(
+                    "This profile already has the maximum of {MAX_RULES} rules"
+                )),
+                ..Default::default()
+            });
+            return Task::none();
+        }
 
         // Extract form (consumes it)
         let Some(form) = state.rule_form.take() else {
@@ -115,75 +81,15 @@ pub(crate) fn handle_save_rule_form(state: &mut State) -> Task<Message> {
             return Task::none();
         };
 
-        let sanitized_label = validators::sanitize_label(&form.label);
-        let interface = if form.interface.is_empty() {
-            None
-        } else {
-            Some(form.interface)
-        };
-        let output_interface = if form.output_interface.is_empty() {
-            None
-        } else {
-            Some(form.output_interface)
-        };
-
-        // Parse rate limit with burst support
-        let rate_limit = if form.rate_limit_enabled && !form.rate_limit_count.is_empty() {
-            form.rate_limit_count.parse().ok().map(|count| {
-                let burst = form.rate_limit_burst.parse::<u32>().ok().filter(|&b| b > 0);
-                crate::core::firewall::RateLimit {
-                    count,
-                    unit: form.rate_limit_unit,
-                    burst,
-                }
-            })
-        } else {
-            None
-        };
-
-        let connection_limit = if form.connection_limit.is_empty() {
-            0
-        } else {
-            form.connection_limit.parse().unwrap_or(0)
-        };
-
-        let mut rule = Rule {
-            id: form.id.unwrap_or_else(Uuid::new_v4),
-            label: sanitized_label,
-            protocol: form.protocol,
-            // Multi-value fields from form
-            ports: form.ports,
-            sources: form.sources,
-            destinations: form.destinations,
-            // Single-value fields
-            interface,
-            output_interface,
-            chain: form.chain,
-            enabled: true,
-            created_at: Utc::now(),
-            tags: form.tags,
-            action: form.action,
-            reject_type: form.reject_type,
-            rate_limit,
-            connection_limit,
-            log_enabled: form.log_enabled,
-            // Cached fields - will be populated by rebuild_caches()
-            label_lowercase: String::new(),
-            interface_lowercase: None,
-            output_interface_lowercase: None,
-            tags_lowercase: Vec::new(),
-            protocol_lowercase: "",
-            port_display: String::new(),
-            sources_display: String::new(),
-            destinations_display: String::new(),
-            rate_limit_display: None,
-            action_display: String::new(),
-            interface_display: String::new(),
-            log_prefix: String::new(),
-            tags_truncated: Vec::new(),
-            badge_display: String::new(),
-        };
-        rule.rebuild_caches();
+        // Editing keeps the rule's own id, enabled state and creation time;
+        // only a new rule gets fresh ones.
+        let existing = form
+            .id
+            .and_then(|id| state.ruleset.rules.iter().find(|r| r.id == id))
+            .map(|r| (r.id, r.enabled, r.created_at));
+        let (id, enabled, created_at) =
+            existing.unwrap_or_else(|| (Uuid::new_v4(), true, Utc::now()));
+        let rule = form.to_rule(id, enabled, created_at);
 
         let is_edit = state.ruleset.rules.iter().any(|r| r.id == rule.id);
         let enable_event_log = state.enable_event_log;
@@ -399,16 +305,21 @@ pub(crate) fn handle_rule_form_protocol_changed(state: &mut State, protocol: Pro
     };
     form.protocol = protocol;
 
-    // Clear ports if switching to ICMP or Any (doesn't use ports)
-    if matches!(protocol, Protocol::Icmp | Protocol::Icmpv6 | Protocol::Any) {
+    // Clear ports for protocols the form shows as "Not applicable" (ICMP
+    // variants, Any): hidden ports would otherwise be saved and rejected.
+    if !protocol_supports_ports(protocol) {
         form.ports.clear();
     }
 
-    // TCP Reset reject type is only valid for TCP - auto-reset to Default
-    if !matches!(protocol, Protocol::Tcp | Protocol::TcpAndUdp)
-        && form.reject_type == RejectType::TcpReset
-    {
+    // Reset a reject type the new protocol can't use (TCP Reset off pure TCP),
+    // so the form never gets stuck on an error for a hidden choice.
+    if !reject_type_valid_for_protocol(form.reject_type, protocol) {
         form.reject_type = RejectType::Default;
+    }
+
+    // Re-check only if errors are already shown, so they clear as soon as fixed
+    if state.form_errors.is_some() {
+        state.form_errors = form.validate();
     }
 }
 
@@ -806,6 +717,60 @@ mod tests {
         state.rule_form = Some(RuleForm::default());
         handle_cancel_rule_form(&mut state);
         assert!(state.rule_form.is_none());
+    }
+
+    #[test]
+    fn test_edit_preserves_enabled_and_created_at() {
+        let mut state = create_test_state();
+        let mut rule = crate::core::test_helpers::create_test_rule("SSH", Some(22));
+        rule.enabled = false;
+        rule.created_at = chrono::DateTime::UNIX_EPOCH;
+        let id = rule.id;
+        state.ruleset.rules.push(rule);
+
+        handle_edit_rule_clicked(&mut state, id);
+        handle_rule_form_label_changed(&mut state, "SSH renamed".to_string());
+        let _ = handle_save_rule_form(&mut state);
+
+        let edited = &state.ruleset.rules[0];
+        assert_eq!(edited.label, "SSH renamed");
+        assert!(
+            !edited.enabled,
+            "editing must not re-enable a disabled rule"
+        );
+        assert_eq!(edited.created_at, chrono::DateTime::UNIX_EPOCH);
+        assert_eq!(edited.id, id);
+    }
+
+    #[test]
+    fn test_protocol_change_clears_hidden_fields() {
+        let mut state = create_test_state();
+        state.rule_form = Some(RuleForm {
+            ports: vec![crate::core::firewall::PortEntry::single(22)],
+            action: crate::core::firewall::Action::Reject,
+            reject_type: RejectType::TcpReset,
+            ..RuleForm::default()
+        });
+        handle_rule_form_protocol_changed(&mut state, Protocol::TcpAndUdp);
+        let form = state.rule_form.as_ref().unwrap();
+        assert_eq!(form.reject_type, RejectType::Default, "no stuck TCP Reset");
+        assert_eq!(form.ports.len(), 1);
+        handle_rule_form_protocol_changed(&mut state, Protocol::IcmpBoth);
+        assert_eq!(state.rule_form.as_ref().unwrap().ports.len(), 0);
+    }
+
+    #[test]
+    fn test_editing_invalid_loaded_rule_shows_errors() {
+        let mut state = create_test_state();
+        let mut rule = crate::core::test_helpers::create_test_rule("Zero", Some(0));
+        rule.rebuild_caches();
+        let id = rule.id;
+        state.ruleset.rules.push(rule);
+        handle_edit_rule_clicked(&mut state, id);
+        assert!(state.form_errors.as_ref().unwrap().port.is_some());
+        // Saving is refused until fixed
+        let _ = handle_save_rule_form(&mut state);
+        assert!(state.rule_form.is_some());
     }
 
     #[test]

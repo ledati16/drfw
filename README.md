@@ -252,12 +252,15 @@ jq . ~/.local/state/drfw/audit.log
 
 | Purpose | Location |
 |---------|----------|
-| App config | `~/.config/drfw/config.json` |
+| App config | `~/.local/share/drfw/config.json` |
 | Profiles | `~/.local/share/drfw/profiles/*.json` |
+| App log | `~/.local/state/drfw/drfw.log` |
 | Revert guard state (root, tmpfs) | `/run/drfw/` |
 | Audit log | `~/.local/state/drfw/audit.log` |
 
-All files created with `0o600` permissions.
+All files created with `0o600` permissions, directories with `0o700`. A profile or config
+file that can't be read (damaged, or saved by a newer DRFW) is never overwritten silently:
+it is copied to `<file>.corrupt-<timestamp>` first, and the profile opens read-only.
 
 ## Keyboard Shortcuts
 

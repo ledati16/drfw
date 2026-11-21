@@ -209,11 +209,11 @@ pub fn reject_type_valid_for_protocol(reject_type: RejectType, protocol: Protoco
     }
 }
 
-/// Returns the list of reject types available for a protocol.
+/// Returns the reject types the rule form offers for a protocol.
 ///
-/// The GUI shows a simplified list (Default, `AdminProhibited`, and `TcpReset` for TCP).
-/// `PortUnreachable` and `HostUnreachable` are not shown in the GUI picker but may
-/// exist in imported rulesets.
+/// Every reject type the generator supports is offered; `TcpReset` only for
+/// pure TCP (see [`reject_type_valid_for_protocol`]). Returns a static slice so
+/// the form's pick list does not allocate every frame.
 ///
 /// # Examples
 ///
@@ -226,16 +226,26 @@ pub fn reject_type_valid_for_protocol(reject_type: RejectType, protocol: Protoco
 ///
 /// let udp_types = available_reject_types_for_protocol(Protocol::Udp);
 /// assert!(!udp_types.contains(&RejectType::TcpReset));
+/// assert!(udp_types.contains(&RejectType::PortUnreachable));
 /// ```
-pub fn available_reject_types_for_protocol(protocol: Protocol) -> Vec<RejectType> {
+pub fn available_reject_types_for_protocol(protocol: Protocol) -> &'static [RejectType] {
+    const NON_TCP: [RejectType; 4] = [
+        RejectType::Default,
+        RejectType::PortUnreachable,
+        RejectType::HostUnreachable,
+        RejectType::AdminProhibited,
+    ];
+    const TCP: [RejectType; 5] = [
+        RejectType::Default,
+        RejectType::PortUnreachable,
+        RejectType::HostUnreachable,
+        RejectType::AdminProhibited,
+        RejectType::TcpReset,
+    ];
     if protocol == Protocol::Tcp {
-        vec![
-            RejectType::Default,
-            RejectType::AdminProhibited,
-            RejectType::TcpReset,
-        ]
+        &TCP
     } else {
-        vec![RejectType::Default, RejectType::AdminProhibited]
+        &NON_TCP
     }
 }
 
@@ -421,6 +431,8 @@ mod tests {
             let types = available_reject_types_for_protocol(protocol);
             assert!(types.contains(&RejectType::Default));
             assert!(types.contains(&RejectType::AdminProhibited));
+            assert!(types.contains(&RejectType::PortUnreachable));
+            assert!(types.contains(&RejectType::HostUnreachable));
             assert!(
                 !types.contains(&RejectType::TcpReset),
                 "TcpReset should not be in list for {protocol:?}"

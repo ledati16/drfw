@@ -73,8 +73,8 @@ pub fn view_profile_manager<'a>(
             let item: Element<'_, Message> = if let Some((old, current)) = &mgr.renaming_name
                 && old == name
             {
-                // Renaming mode: inline text input
-                let is_valid_rename = crate::core::profiles::validate_profile_name(current).is_ok();
+                // Renaming mode: inline text input (validity computed on input)
+                let is_valid_rename = mgr.rename_error.is_none();
                 let ok_button = if is_valid_rename {
                     button(text("OK").size(12).font(state.font_regular))
                         .on_press(Message::ConfirmRenameProfile)
@@ -84,30 +84,37 @@ pub fn view_profile_manager<'a>(
                         .style(move |_, status| secondary_button(theme, status))
                 };
 
-                container(
-                    row![
-                        text_input("New name...", current)
-                            .on_input(Message::ProfileNewNameChanged)
-                            .on_submit(if is_valid_rename {
-                                Message::ConfirmRenameProfile
-                            } else {
-                                Message::Noop
-                            })
-                            .padding(8)
+                let rename_row = row![
+                    text_input("New name...", current)
+                        .on_input(Message::ProfileNewNameChanged)
+                        .on_submit(if is_valid_rename {
+                            Message::ConfirmRenameProfile
+                        } else {
+                            Message::Noop
+                        })
+                        .padding(8)
+                        .font(state.font_regular)
+                        .style(move |_, status| themed_text_input(theme, status))
+                        .width(Length::Fill),
+                    ok_button,
+                    button(text("Cancel").size(12).font(state.font_regular))
+                        .on_press(Message::CancelRenameProfile)
+                        .style(move |_, status| secondary_button(theme, status)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center);
+                let mut rename_col = column![rename_row].spacing(4).padding([6, 10]);
+                if let Some(reason) = &mgr.rename_error {
+                    rename_col = rename_col.push(
+                        text(reason)
+                            .size(11)
                             .font(state.font_regular)
-                            .style(move |_, status| themed_text_input(theme, status))
-                            .width(Length::Fill),
-                        ok_button,
-                        button(text("Cancel").size(12).font(state.font_regular))
-                            .on_press(Message::CancelRenameProfile)
-                            .style(move |_, status| secondary_button(theme, status)),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .padding([6, 10]),
-                )
-                .style(move |_| card_container(theme))
-                .into()
+                            .color(theme.danger),
+                    );
+                }
+                container(rename_col)
+                    .style(move |_| card_container(theme))
+                    .into()
             } else if let Some(del_name) = &mgr.deleting_name
                 && del_name == name
             {
@@ -218,8 +225,8 @@ pub fn view_profile_manager<'a>(
             .style(move |_| section_header_container(theme)),
             profiles_list,
             if mgr.creating_new {
-                let is_valid_name =
-                    crate::core::profiles::validate_profile_name(&mgr.new_name_input).is_ok();
+                // Validity (format and existing names) is computed on input
+                let is_valid_name = mgr.new_name_error.is_none();
                 let save_button = if is_valid_name {
                     button(text("Save").size(12).font(state.font_regular))
                         .on_press(Message::SaveProfileAs(mgr.new_name_input.clone()))
@@ -229,29 +236,40 @@ pub fn view_profile_manager<'a>(
                         .style(move |_, status| secondary_button(theme, status))
                 };
 
-                container(
-                    row![
-                        text_input("New profile name...", &mgr.new_name_input)
-                            .on_input(Message::NewProfileNameChanged)
-                            .on_submit(if is_valid_name {
-                                Message::SaveProfileAs(mgr.new_name_input.clone())
-                            } else {
-                                Message::Noop
-                            })
-                            .padding(8)
+                let create_row = row![
+                    text_input("New profile name...", &mgr.new_name_input)
+                        .on_input(Message::NewProfileNameChanged)
+                        .on_submit(if is_valid_name {
+                            Message::SaveProfileAs(mgr.new_name_input.clone())
+                        } else {
+                            Message::Noop
+                        })
+                        .padding(8)
+                        .font(state.font_regular)
+                        .style(move |_, status| themed_text_input(theme, status))
+                        .width(Length::Fill),
+                    save_button,
+                    button(text("Cancel").size(12).font(state.font_regular))
+                        .on_press(Message::CancelCreatingNewProfile)
+                        .style(move |_, status| secondary_button(theme, status)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center);
+                let mut create_col = column![create_row].spacing(4);
+                // No complaint about an empty field before the user typed anything
+                if let Some(reason) = &mgr.new_name_error
+                    && !mgr.new_name_input.is_empty()
+                {
+                    create_col = create_col.push(
+                        text(reason)
+                            .size(11)
                             .font(state.font_regular)
-                            .style(move |_, status| themed_text_input(theme, status))
-                            .width(Length::Fill),
-                        save_button,
-                        button(text("Cancel").size(12).font(state.font_regular))
-                            .on_press(Message::CancelCreatingNewProfile)
-                            .style(move |_, status| secondary_button(theme, status)),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center),
-                )
-                .padding(12)
-                .style(move |_| card_container(theme))
+                            .color(theme.danger),
+                    );
+                }
+                container(create_col)
+                    .padding(12)
+                    .style(move |_| card_container(theme))
             } else {
                 container(
                     row![
