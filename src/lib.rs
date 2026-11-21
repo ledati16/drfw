@@ -2,9 +2,16 @@
 //!
 //! A graphical nftables firewall manager with a focus on safety and usability.
 //!
+//! All of DRFW lives in this library; the `drfw` binary (`src/main.rs`) is the
+//! command-line front end and calls [`run_gui`] when no subcommand is given.
+//!
 //! # Architecture
 //!
 //! - [`core`] - Core firewall logic, rule management, and nftables interaction
+//! - `app` (private) - The iced GUI: state, message handlers and views; started by [`run_gui`]
+//! - [`build_info`] - Version strings with the git commit and build time
+//! - [`command`] - Undo/redo command pattern
+//! - [`elevation`] - Privilege escalation (`run0`, `sudo`, `pkexec`)
 //! - [`audit`] - Security audit logging for all privileged operations
 //! - [`validators`] - Input validation and sanitization
 //! - [`config`] - Configuration persistence
@@ -18,15 +25,9 @@
 //! - Input sanitization and validation
 //! - Atomic file operations with secure permissions
 
-// Allow pedantic clippy warnings that are not worth fixing for this codebase
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::return_self_not_must_use)]
-#![allow(clippy::needless_lifetimes)]
-#![allow(clippy::uninlined_format_args)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::missing_errors_doc)]
-
+mod app;
 pub mod audit;
+pub mod build_info;
 pub mod command;
 pub mod config;
 pub mod core;
@@ -35,6 +36,8 @@ pub mod fonts;
 pub mod theme;
 pub mod utils;
 pub mod validators;
+
+pub use app::run_gui;
 
 // Re-export commonly used types
 pub use core::error::{Error, Result};

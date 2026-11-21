@@ -178,6 +178,11 @@ pub fn validate_port_range(start: u16, end: u16) -> Result<(u16, u16), &'static 
 ///
 /// Accepts single ports ("22") or ranges ("8000-8080").
 ///
+/// # Errors
+///
+/// Returns a user-facing message if the input is empty, is not a number or a
+/// `start-end` pair of numbers, contains port 0, or has `start > end`.
+///
 /// # Examples
 ///
 /// ```

@@ -219,7 +219,7 @@ pub fn view_workspace<'a>(
 
     // Version info - subtle, bottom-right
     let version_text = container(
-        text(crate::version_string())
+        text(crate::build_info::VERSION)
             .size(9)
             .font(state.font_mono)
             .color(theme.fg_muted),

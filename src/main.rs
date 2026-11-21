@@ -15,12 +15,14 @@
 //!
 //! # Architecture
 //!
-//! DRFW follows a modular architecture:
+//! This binary is only the command-line front end: it parses the arguments,
+//! runs the CLI commands below and starts the GUI ([`drfw::run_gui`]) when no
+//! subcommand is given. Everything else lives in the `drfw` library:
 //! - `core`: Firewall rule logic and nftables integration
-//! - `app`: GUI application state and event handling
+//! - `app` (private): GUI application state and event handling
 //! - `command`: Undo/redo command pattern implementation
 //! - `validators`: Input validation and sanitization
-//! - `elevation`: Privilege escalation via pkexec
+//! - `elevation`: Privilege escalation (`run0`, `sudo`, `pkexec`)
 //! - `audit`: Security audit logging
 //!
 //! # Security
@@ -53,53 +55,11 @@
 //! `core::apply_guard`): if the terminal closes or the SSH connection drops
 //! during the countdown, the rules still revert on time.
 
-mod app;
-mod audit;
-mod command;
-mod config;
-mod core;
-mod elevation;
-mod fonts;
-mod theme;
-mod utils;
-mod validators;
-
-// Embed build-time information (git commit, dirty status, build timestamp)
-shadow_rs::shadow!(build);
-
 use clap::{Parser, Subcommand, ValueEnum};
-
-/// Returns the version string with git info: "0.8.0 (a3f8c21)" or "0.8.0 (a3f8c21*)" if dirty
-#[must_use]
-pub fn version_string() -> String {
-    let dirty_marker = if build::GIT_CLEAN { "" } else { "*" };
-    format!(
-        "{} ({}{})",
-        build::PKG_VERSION,
-        build::SHORT_COMMIT,
-        dirty_marker
-    )
-}
-
-/// Short version for clap (must be &'static str)
-const fn short_version() -> &'static str {
-    shadow_rs::formatcp!("{} ({})", build::PKG_VERSION, build::SHORT_COMMIT)
-}
-
-/// Returns a detailed version string for --version flag
-const fn long_version() -> &'static str {
-    shadow_rs::formatcp!(
-        "{} ({})\ncommit: {}\nbranch: {}\nbuild:  {}",
-        build::PKG_VERSION,
-        build::SHORT_COMMIT,
-        build::COMMIT_HASH,
-        build::BRANCH,
-        build::BUILD_TIME_3339
-    )
-}
 use crossterm::ExecutableCommand;
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
-use iced::Size;
+use drfw::build_info::{LONG_VERSION, SHORT_VERSION};
+use drfw::{audit, config, core, elevation};
 use std::io::stdout;
 use std::process::ExitCode;
 
@@ -230,7 +190,7 @@ async fn finish_guarded_apply(
     end: CountdownEnd,
     enable_event_log: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use core::apply_guard::{GuardOutcome, OUTCOME_GRACE};
+    use drfw::core::apply_guard::{GuardOutcome, OUTCOME_GRACE};
 
     let timeout_secs = handle.timeout().as_secs();
     let outcome = match end {
@@ -303,7 +263,7 @@ async fn finish_guarded_apply(
 
 #[derive(Parser)]
 #[command(name = "drfw")]
-#[command(version = short_version(), long_version = long_version())]
+#[command(version = SHORT_VERSION, long_version = LONG_VERSION)]
 #[command(about = "Dumb Rust Firewall - A minimal nftables manager", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -366,7 +326,7 @@ enum ExportFormat {
 }
 
 fn main() -> ExitCode {
-    let _ = crate::utils::ensure_dirs();
+    let _ = drfw::utils::ensure_dirs();
     let cli = Cli::parse();
 
     if let Some(command) = cli.command {
@@ -381,7 +341,7 @@ fn main() -> ExitCode {
         }
     } else {
         // GUI runs in normal sync context (Iced has its own async runtime)
-        launch_gui()
+        drfw::run_gui()
     }
 }
 
@@ -633,42 +593,6 @@ async fn check_profile(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         "nft accepts the generated ruleset (checked without privileges; nothing was changed).",
     );
     Ok(())
-}
-
-fn launch_gui() -> ExitCode {
-    // Set up logging to file
-    if let Some(mut log_path) = crate::utils::get_state_dir() {
-        log_path.push("drfw.log");
-        // 0600, appended (not truncated per launch), rotated to drfw.log.1 past 5 MiB
-        if let Ok(file) = crate::utils::open_private_log(&log_path, 5 * 1024 * 1024) {
-            tracing_subscriber::fmt().with_writer(file).init();
-        } else {
-            tracing_subscriber::fmt::init();
-        }
-    } else {
-        tracing_subscriber::fmt::init();
-    }
-
-    let result = iced::application(app::State::new, app::State::update, app::State::view)
-        .subscription(app::State::subscription)
-        .window(iced::window::Settings {
-            size: Size::new(1000.0, 700.0),
-            // Close requests are handled in `State::update` (pending saves are flushed first)
-            exit_on_close_request: false,
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "drfw".to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .title("Dumb Rust Firewall")
-        .theme(app::State::iced_theme)
-        .run();
-
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::FAILURE,
-    }
 }
 
 #[cfg(test)]

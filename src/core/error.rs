@@ -11,14 +11,8 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    /// Input validation failed
-    #[error("Validation error in {field}: {message}")]
-    #[allow(dead_code)] // Constructed in tests to verify translation
-    Validation { field: String, message: String },
-
     /// Privilege escalation failed
     #[error("Elevation error: {0}")]
-    #[allow(dead_code)] // Constructed in tests to verify translation
     Elevation(String),
 
     /// Internal logic error
@@ -43,11 +37,13 @@ impl ErrorTranslation {
         }
     }
 
+    #[must_use]
     pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
         self.suggestions.push(suggestion.into());
         self
     }
 
+    #[must_use]
     pub fn with_help(mut self, url: impl Into<String>) -> Self {
         self.help_url = Some(url.into());
         self

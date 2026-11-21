@@ -32,10 +32,6 @@
 //! assert!(!reject_type_valid_for_protocol(RejectType::TcpReset, Protocol::Udp));
 //! ```
 
-// Allow dead_code for public API functions used by library consumers (e.g., tools/stress_gen)
-// but not by the binary itself. These are intentionally exported for external use.
-#![allow(dead_code)]
-
 use super::firewall::{Chain, Protocol, RejectType};
 use ipnetwork::IpNetwork;
 

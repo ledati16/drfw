@@ -326,7 +326,6 @@ impl CommandHistory {
     }
 
     /// Returns the number of operations in the undo stack
-    #[allow(dead_code)] // Used in tests
     pub fn undo_count(&self) -> usize {
         self.undo_stack.len()
     }

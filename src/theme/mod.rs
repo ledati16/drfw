@@ -182,6 +182,7 @@ impl AppTheme {
     /// and status colors.
     ///
     /// This is an accessibility feature for users who find syntax highlighting distracting.
+    #[must_use]
     pub fn with_reduced_colors(&self) -> Self {
         Self {
             // Collapse syntax colors to 2 levels

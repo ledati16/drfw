@@ -440,8 +440,10 @@ The configured path is baked into the binary at compile time and shown in the UI
 
 ```
 src/
-├── main.rs              # Entry point, CLI commands
-├── app/                 # GUI application
+├── main.rs              # CLI front end (commands, countdown); everything else is the library
+├── lib.rs               # Library root: all modules, `run_gui()`, compile-time paths
+├── build_info.rs        # Version strings (git commit, build time) from build.rs
+├── app/                 # GUI application (private to the library)
 │   ├── mod.rs          # State machine, messages
 │   ├── view/           # UI components (sidebar, workspace, forms, modals)
 │   └── handlers/       # Message handlers by domain

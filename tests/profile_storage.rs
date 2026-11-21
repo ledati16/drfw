@@ -10,8 +10,6 @@
 //! no-replace create/rename, profile listing hygiene, file modes, and the
 //! config recovery path.
 
-#![allow(clippy::uninlined_format_args)]
-
 use drfw::core::profiles::{self, ProfileError};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

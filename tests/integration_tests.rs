@@ -27,8 +27,6 @@
 //! `#[cfg(test)]` modules from the library. The library's `test_helpers` module
 //! is for unit tests within the library crate only.
 
-#![allow(clippy::uninlined_format_args)]
-
 use drfw::core::firewall::{Action, FirewallRuleset, PortEntry, Protocol, RejectType, Rule};
 use drfw::core::verify;
 use std::env;
@@ -220,10 +218,9 @@ async fn test_multiple_rules_verification() {
 
     // Add multiple rules
     for i in 0..5 {
-        ruleset.rules.push(create_test_rule(
-            &format!("Test Rule {}", i),
-            Some(8000 + i),
-        ));
+        ruleset
+            .rules
+            .push(create_test_rule(&format!("Test Rule {i}"), Some(8000 + i)));
     }
 
     let json = ruleset.to_nftables_json();
@@ -316,8 +313,7 @@ fn test_mock_nft_script_exists() {
     let mock_path = get_mock_nft_path();
     assert!(
         mock_path.exists(),
-        "Mock nft script should exist at {:?}",
-        mock_path
+        "Mock nft script should exist at {mock_path:?}"
     );
 
     #[cfg(unix)]
@@ -472,8 +468,7 @@ async fn test_cli_invalid_profile_name() {
         let result = profiles::load_profile(&name).await;
         assert!(
             result.is_err(),
-            "Should reject invalid profile name: {}",
-            name
+            "Should reject invalid profile name: {name}"
         );
     }
 }
@@ -494,8 +489,7 @@ async fn test_cli_profile_not_found() {
         let err_msg = e.to_string();
         assert!(
             err_msg.contains("not found") || err_msg.contains("NotFound"),
-            "Error should indicate profile not found: {}",
-            err_msg
+            "Error should indicate profile not found: {err_msg}"
         );
     }
 }

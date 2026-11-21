@@ -279,8 +279,13 @@ fn build_elevated_command_inner(program: &str, args: &[&str]) -> Result<Command,
 ///
 /// # Returns
 ///
-/// - `Ok(Command)` - Configured tokio Command ready to spawn
-/// - `Err(ElevationError)` - If pkexec/sudo or nft are not available
+/// A configured tokio `Command`, ready to spawn.
+///
+/// # Errors
+///
+/// - [`ElevationError::PkexecNotFound`] - No TTY (GUI) and `pkexec` is not installed
+/// - [`ElevationError::MethodNotAvailable`] - `DRFW_ELEVATION_METHOD` names a tool that is not installed
+/// - [`ElevationError::InvalidMethod`] - `DRFW_ELEVATION_METHOD` is not `sudo`, `run0` or `pkexec`
 ///
 /// # Example
 ///

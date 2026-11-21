@@ -636,7 +636,7 @@ pub(crate) fn handle_save_to_system_confirmed(state: &mut State) -> Task<Message
     Task::perform(
         async move {
             let output =
-                crate::core::system_config::write_config_file(&text, drfw::SYSTEM_NFT_PATH)
+                crate::core::system_config::write_config_file(&text, crate::SYSTEM_NFT_PATH)
                     .await
                     .map_err(|e| e.to_string())?;
             interpret_elevated_command_output(&output)?;
@@ -664,16 +664,16 @@ pub(crate) fn handle_save_to_system_result(
     }
     state.status = AppStatus::Idle;
     let enable_event_log = state.enable_event_log;
-    let target_path = drfw::SYSTEM_NFT_PATH.to_string();
+    let target_path = crate::SYSTEM_NFT_PATH.to_string();
 
     match result {
         Ok(backup) => {
             let message = match backup {
                 Some(backup) => format!(
                     "Configuration saved to {} (previous file kept as {backup})",
-                    drfw::SYSTEM_NFT_PATH
+                    crate::SYSTEM_NFT_PATH
                 ),
-                None => format!("Configuration saved to {}", drfw::SYSTEM_NFT_PATH),
+                None => format!("Configuration saved to {}", crate::SYSTEM_NFT_PATH),
             };
             state.push_banner(message, BannerSeverity::Success);
             audit_task(async move {

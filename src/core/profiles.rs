@@ -113,6 +113,11 @@ impl ProfileError {
 ///   cross-platform filename issues.
 /// - Max 20 chars: Allows descriptive names while staying reasonable for UI display.
 /// - Rejects "." and "..": Critical path traversal protection.
+///
+/// # Errors
+///
+/// Returns [`ProfileError::InvalidName`] (with the reason) if any constraint
+/// is violated.
 pub fn validate_profile_name(name: &str) -> Result<(), ProfileError> {
     if name.is_empty() {
         return Err(ProfileError::InvalidName("Name cannot be empty".into()));
@@ -174,6 +179,11 @@ pub fn find_name_conflict<'a>(
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking I/O.
+///
+/// # Errors
+///
+/// Returns [`ProfileError::DataDirUnavailable`] if there is no data directory,
+/// or [`ProfileError::Io`] if the directory cannot be checked or created.
 pub async fn get_profiles_dir() -> Result<PathBuf, ProfileError> {
     let mut path = get_data_dir().ok_or(ProfileError::DataDirUnavailable)?;
     path.push("profiles");
@@ -198,6 +208,11 @@ pub async fn get_profiles_dir() -> Result<PathBuf, ProfileError> {
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking directory operations.
+///
+/// # Errors
+///
+/// Returns [`ProfileError::InvalidName`] for an invalid `name`, or the errors
+/// of [`get_profiles_dir`].
 pub async fn get_profile_path(name: &str) -> Result<PathBuf, ProfileError> {
     validate_profile_name(name)?;
     let mut path = get_profiles_dir().await?;
@@ -213,6 +228,11 @@ pub async fn get_profile_path(name: &str) -> Result<PathBuf, ProfileError> {
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking directory scanning.
+///
+/// # Errors
+///
+/// Returns the errors of [`get_profiles_dir`], or [`ProfileError::Io`] if
+/// the directory cannot be read.
 pub async fn list_profiles() -> Result<Vec<String>, ProfileError> {
     let dir = get_profiles_dir().await?;
     let mut profiles = Vec::new();
@@ -547,6 +567,12 @@ pub async fn rename_profile(old_name: &str, new_name: &str) -> Result<(), Profil
 ///
 /// # Async
 /// Uses `tokio::fs` for non-blocking file I/O.
+///
+/// # Errors
+///
+/// Returns the errors of [`list_profiles`], or of [`save_profile`] when the
+/// default profile has to be created. A failed legacy-checksum cleanup is
+/// only logged.
 pub async fn ensure_profile_exists() -> Result<(), ProfileError> {
     let profiles = list_profiles().await?;
 
@@ -660,6 +686,10 @@ pub async fn load_profile_or_preserve(name: &str) -> Result<FirewallRuleset, Unr
 ///
 /// This blocks the current thread and should only be used in `State::new()` where
 /// async initialization isn't possible.
+///
+/// # Errors
+///
+/// Same as [`ensure_profile_exists`].
 pub fn ensure_profile_exists_blocking() -> Result<(), ProfileError> {
     crate::utils::block_on_async(ensure_profile_exists())
 }
@@ -668,6 +698,10 @@ pub fn ensure_profile_exists_blocking() -> Result<(), ProfileError> {
 ///
 /// This blocks the current thread and should only be used in `State::new()` where
 /// async initialization isn't possible. Everywhere else should use async `list_profiles()`.
+///
+/// # Errors
+///
+/// Same as [`list_profiles`].
 pub fn list_profiles_blocking() -> Result<Vec<String>, ProfileError> {
     crate::utils::block_on_async(list_profiles())
 }

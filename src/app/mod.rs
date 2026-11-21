@@ -20,8 +20,61 @@ pub use debounce::TimerKind;
 use iced::widget::Id;
 use iced::widget::operation::focus;
 use iced::{Animation, Element, Task};
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Largest GUI log file before it is rotated to `drfw.log.1`.
+const GUI_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Runs the GUI until its window closes; this is what `drfw` without a
+/// subcommand does.
+///
+/// Logs go to `drfw.log` in the state directory (0600, appended, rotated past
+/// 5 MiB), or to stderr if that file cannot be opened. Iced runs its own async
+/// runtime, so call this from a plain synchronous context, not from inside a
+/// Tokio runtime.
+///
+/// Returns [`ExitCode::FAILURE`] if the window or the graphics backend cannot
+/// be created.
+pub fn run_gui() -> ExitCode {
+    if let Some(mut log_path) = crate::utils::get_state_dir() {
+        log_path.push("drfw.log");
+        if let Ok(file) = crate::utils::open_private_log(&log_path, GUI_LOG_MAX_BYTES) {
+            tracing_subscriber::fmt().with_writer(file).init();
+        } else {
+            tracing_subscriber::fmt::init();
+        }
+    } else {
+        tracing_subscriber::fmt::init();
+    }
+
+    let result = iced::application(State::new, State::update, State::view)
+        .subscription(State::subscription)
+        .window(iced::window::Settings {
+            size: iced::Size::new(1000.0, 700.0),
+            // Close requests are handled in `State::update` (pending saves are flushed first)
+            exit_on_close_request: false,
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "drfw".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .title("Dumb Rust Firewall")
+        .theme(State::iced_theme)
+        .run();
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            // Also on stderr: the log file may be the very thing that failed
+            tracing::error!("GUI failed: {e}");
+            eprintln!("drfw: GUI failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 /// In-app notification banner severity levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

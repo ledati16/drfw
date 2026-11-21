@@ -104,7 +104,6 @@ pub fn setup_mock_nft() {
 ///
 /// This is the canonical helper for creating test rulesets.
 /// Use this instead of creating rulesets manually in tests.
-#[allow(dead_code)] // Available for library tests; integration_tests.rs has its own copy
 pub fn create_test_ruleset() -> FirewallRuleset {
     let mut ruleset = FirewallRuleset::new();
     ruleset.rules.push(create_test_rule("Test SSH", Some(22)));
@@ -216,7 +215,6 @@ pub fn create_full_test_rule(
 ///
 /// Returns `true` if `nft --version` succeeds, `false` otherwise.
 /// This is a synchronous check suitable for test setup.
-#[allow(dead_code)] // Available for tests that need sync nft detection
 pub fn is_nft_installed() -> bool {
     std::process::Command::new("nft")
         .arg("--version")

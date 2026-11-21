@@ -10,7 +10,7 @@
 
 ### Linting & Static Analysis
 - **Strict compliance:** Clippy pedantic lints enabled in `Cargo.toml`
-- **Centralized config:** All lint allows are in `[lints.clippy]` section with documented rationale
+- **Centralized config:** All lint allows are in `[lints.clippy]` section with documented rationale; no crate-level `#![allow(...)]` in `lib.rs`, `main.rs` or `tests/*.rs`
 - **No scattered suppressions:** Avoid per-function `#[allow(...)]` unless truly function-specific
 - **Refactor over suppress:** Fix warnings through better design, not suppression
 
@@ -469,6 +469,20 @@ self.modify_state(cached_value);
 - **Integration tests:** Full workflows with graceful privilege skipping
 - **Environment safety:** Never touch real user data; use temp dirs and `DRFW_NFT_COMMAND` for mock
 
+### Crate Layout
+
+All code lives in the library crate (`src/lib.rs`), including the GUI (private
+`app` module, started by the public `drfw::run_gui()`) and the version strings
+(`drfw::build_info`). `src/main.rs` is only the CLI front end (clap `Cli`, the
+`list`/`apply`/`status`/`check`/`export` commands, the countdown) and uses the
+library through its public API (`drfw::…`). Never re-declare library modules
+with `mod` in `main.rs`: that compiles them twice, as two incompatible copies,
+and runs their unit tests twice. Inside the library, always write `crate::…`;
+`drfw::…` belongs in `main.rs`, `tests/`, `tools/` and doctests.
+
+Unit tests therefore run exactly once: in the lib test target, except the CLI
+tests in `src/main.rs`, which run in the bin test target.
+
 ### Test File Organization
 
 | File | Purpose | Authoritative For |
@@ -483,6 +497,7 @@ self.modify_state(cached_value);
 | `tests/real_nft.rs` | Real `nft` in `unshare -rn` (own binary) | Text output loads, JSON and text give identical kernel rulesets (proptest), idempotent reload, no widening, Server-mode loopback, Save to System script, revert guard end to end |
 | `tests/profile_storage.rs` | Profile/config files on disk (own binary; tests serialized because they set `DRFW_TEST_DATA_DIR`) | Corrupt/newer/oversized profiles, duplicate ids, no-replace create/rename, file modes, config recovery |
 | `src/core/validate.rs` | Unit + property tests for the validator | Every rule/ruleset issue type, valid rules always validate |
+| `src/main.rs` | CLI unit tests (bin test target) | Countdown key classification and rounding, CLI usage examples parse |
 | `src/core/test_helpers.rs` | Shared test utilities (Rule/Ruleset creation, mock setup, `CHRONO_TIMESTAMPS`) | - |
 | `src/app/handlers/test_utils.rs` | App State creation for handler tests | - |
 | `tools/stress_gen.rs` | Stress test profile generator (feature-gated) | Coverage testing, edge cases |
@@ -509,7 +524,7 @@ use crate::core::test_helpers::setup_mock_nft;
 use crate::core::test_helpers::ENV_VAR_MUTEX;
 ```
 
-**Note:** Integration tests in `tests/` are compiled as a separate crate and **cannot access `#[cfg(test)]` modules** from the library. Therefore, `tests/integration_tests.rs` has its own copies of helper functions. This is unavoidable due to Rust's test architecture. When modifying Rule fields, update helpers in both locations.
+**Note:** Integration tests in `tests/` (like `src/main.rs` and `tools/stress_gen.rs`) are separate crates that link the library and see only its `pub` API; they **cannot access `#[cfg(test)]` modules** from the library. Therefore, `tests/integration_tests.rs` has its own copies of helper functions. This is unavoidable due to Rust's test architecture. When modifying Rule fields, update helpers in both locations.
 
 ### Environment Variables
 
@@ -973,6 +988,12 @@ cargo deny check  # advisories/licenses (config in deny.toml)
 ## 13. Common Pitfalls
 
 ### Dead Code
+The library is compiled once and its modules are `pub`, so rustc does not flag
+unused `pub` items in them; `#[allow(dead_code)]` is never needed for an item
+that only the CLI, the tests or `tools/` use. To find dead library code, make
+the `pub mod`s in `lib.rs` `pub(crate)` temporarily and run `cargo build --lib`
+(items used by `main.rs`, `tests/` or `tools/` show up too; check them).
+
 Functions marked `#[allow(dead_code)]` must be:
 - **Removed** if truly unused with no plans
 - **Documented as public API** with examples if intended for library users

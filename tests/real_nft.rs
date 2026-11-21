@@ -24,8 +24,6 @@
 //! This file has its own rule helpers: integration tests cannot see the
 //! library's `#[cfg(test)]` helpers.
 
-#![allow(clippy::uninlined_format_args)]
-
 use drfw::core::firewall::{
     Action, Chain, EgressProfile, FirewallRuleset, PortEntry, Protocol, RateLimit, RejectType,
     Rule, TimeUnit,

@@ -404,8 +404,8 @@ static SAVE_TO_SYSTEM_DETAILS: std::sync::LazyLock<String> = std::sync::LazyLock
     format!(
         "The file is checked with nft before it replaces the current one, which is \
          kept as {}.drfw-bak. {} loads it at boot when enabled.",
-        drfw::SYSTEM_NFT_PATH,
-        drfw::SYSTEM_NFT_SERVICE
+        crate::SYSTEM_NFT_PATH,
+        crate::SYSTEM_NFT_SERVICE
     )
 });
 
@@ -424,7 +424,7 @@ pub fn view_save_to_system_modal(
             .align_x(Alignment::Center),
         text(format!(
             "Save current configuration to {}?",
-            drfw::SYSTEM_NFT_PATH
+            crate::SYSTEM_NFT_PATH
         ))
         .size(14)
         .font(font)
